@@ -15,7 +15,7 @@
 	<key>CFBundleVersion</key>
 	<string>3</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.0.44</string>
+	<string>0.0.45</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>WhisperMate keyboard needs microphone access to transcribe your voice to text.</string>
 	<key>NSExtension</key>

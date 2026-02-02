@@ -57,6 +57,13 @@ public class SubscriptionManager: ObservableObject {
             return
         }
 
+        if let user = authManager.currentUser {
+            if user.subscriptionTier == .pro || user.stripeSubscriptionId != nil {
+                DebugLog.info("Upgrade skipped: user already has an active subscription", context: "SubscriptionManager")
+                return
+            }
+        }
+
         // Add user email to pre-fill Stripe checkout if available
         var urlString = stripePaymentLink
         if let user = authManager.currentUser {

@@ -26,6 +26,7 @@ public class AuthManager: ObservableObject {
     // MARK: - Private Properties
 
     private let supabase = SupabaseManager.shared
+    private var didStartAutoRefresh = false
 
     // MARK: - Initialization
 
@@ -38,25 +39,29 @@ public class AuthManager: ObservableObject {
     // MARK: - Session Management
 
     private func checkSession() async {
-        await MainActor.run {
-            self.isLoading = true
-        }
+        await refreshUser()
+    }
 
+    private func startAutoRefreshIfNeeded() async {
+        guard !didStartAutoRefresh else { return }
+        didStartAutoRefresh = true
+        await supabase.client.auth.startAutoRefresh()
+    }
+
+    private func ensureValidSession() async -> Bool {
         do {
             _ = try await supabase.client.auth.session
-            await refreshUser()
+            await startAutoRefreshIfNeeded()
+            return true
         } catch {
-            // Try to refresh session if access token expired
-            DebugLog.info("Session check failed, attempting refresh...", context: "AuthManager")
+            DebugLog.info("No active session, attempting refresh: \(error.localizedDescription)", context: "AuthManager")
             do {
                 _ = try await supabase.client.auth.refreshSession()
-                await refreshUser()
+                await startAutoRefreshIfNeeded()
+                return true
             } catch {
-                DebugLog.info("No valid session: \(error.localizedDescription)", context: "AuthManager")
-                await MainActor.run {
-                    self.isAuthenticated = false
-                    self.isLoading = false
-                }
+                DebugLog.info("Session refresh failed: \(error.localizedDescription)", context: "AuthManager")
+                return false
             }
         }
     }
@@ -105,6 +110,20 @@ public class AuthManager: ObservableObject {
             self.error = nil
         }
 
+        let hasSession = await ensureValidSession()
+        guard hasSession else {
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+                self.isLoading = false
+            }
+            return
+        }
+
+        await MainActor.run {
+            self.isAuthenticated = true
+        }
+
         do {
             let user = try await supabase.fetchUser()
             DebugLog.info("User fetched: \(user.email), tier: \(user.subscriptionTier), words: \(user.totalWordsUsed)", context: "AuthManager")
@@ -121,7 +140,6 @@ public class AuthManager: ObservableObject {
             DebugLog.info("Failed to fetch user: \(error.localizedDescription)", context: "AuthManager")
             await MainActor.run {
                 self.error = error.localizedDescription
-                self.isAuthenticated = false
                 self.isLoading = false
             }
         }

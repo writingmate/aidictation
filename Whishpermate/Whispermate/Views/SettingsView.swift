@@ -104,6 +104,7 @@ struct SettingsView: View {
     @State private var selectedAudioDevice: AudioDeviceManager.AudioDevice?
     @State private var selectedBillingPeriod: BillingPeriod = .monthly
     @State private var isCheckingPayment = false
+    @State private var paymentCheckTask: Task<Void, Never>?
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -335,6 +336,9 @@ struct SettingsView: View {
             }
 
         }
+        .onAppear {
+            resumePaymentCheckIfNeeded()
+        }
     }
 
     private var isPro: Bool {
@@ -358,6 +362,26 @@ struct SettingsView: View {
     }
 
     private func openPaymentLink() {
+        if isCheckingPayment {
+            return
+        }
+
+        if let user = authManager.currentUser, user.subscriptionTier == .pro {
+            return
+        }
+
+        if let user = authManager.currentUser, user.stripeSubscriptionId != nil {
+            DebugLog.info("Checkout blocked: existing subscription detected", context: "SettingsView")
+            startPaymentConfirmationCheck(resuming: true)
+            return
+        }
+
+        if hasPendingPaymentAttempt() {
+            DebugLog.info("Checkout blocked: payment confirmation already in progress", context: "SettingsView")
+            startPaymentConfirmationCheck(resuming: true)
+            return
+        }
+
         let paymentLinkKey: String
         switch selectedBillingPeriod {
         case .monthly:
@@ -395,20 +419,66 @@ struct SettingsView: View {
         #endif
 
         // Start checking for payment confirmation
-        startPaymentConfirmationCheck()
+        startPaymentConfirmationCheck(resuming: false)
     }
 
-    private func startPaymentConfirmationCheck() {
+    private enum PaymentTracking {
+        static let pendingKey = "paymentAttemptAt"
+        static let pendingWindow: TimeInterval = 10 * 60
+    }
+
+    private func hasPendingPaymentAttempt() -> Bool {
+        guard let lastAttempt = AppDefaults.shared.object(forKey: PaymentTracking.pendingKey) as? Date else {
+            return false
+        }
+        return Date().timeIntervalSince(lastAttempt) < PaymentTracking.pendingWindow
+    }
+
+    private func markPaymentAttempt() {
+        AppDefaults.shared.set(Date(), forKey: PaymentTracking.pendingKey)
+    }
+
+    private func clearPaymentAttempt() {
+        AppDefaults.shared.removeObject(forKey: PaymentTracking.pendingKey)
+    }
+
+    private func resumePaymentCheckIfNeeded() {
+        guard !isCheckingPayment, paymentCheckTask == nil else { return }
+        guard authManager.isAuthenticated, !isPro else {
+            clearPaymentAttempt()
+            return
+        }
+        if hasPendingPaymentAttempt() {
+            startPaymentConfirmationCheck(resuming: true)
+        }
+    }
+
+    private func startPaymentConfirmationCheck(resuming: Bool) {
+        guard !isCheckingPayment, paymentCheckTask == nil else { return }
+
+        if !resuming {
+            markPaymentAttempt()
+        }
+
         isCheckingPayment = true
         DebugLog.info("Starting payment confirmation check", context: "SettingsView")
 
-        Task {
+        paymentCheckTask = Task {
+            var wasCancelled = false
             // Poll for up to 10 minutes (120 checks every 5 seconds)
             for _ in 0 ..< 120 {
-                guard isCheckingPayment else { break }
+                if Task.isCancelled {
+                    wasCancelled = true
+                    break
+                }
 
                 // Wait 5 seconds between checks
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                } catch {
+                    wasCancelled = true
+                    break
+                }
 
                 // Refresh user data
                 await authManager.refreshUser()
@@ -419,6 +489,7 @@ struct SettingsView: View {
                     await MainActor.run {
                         isCheckingPayment = false
                     }
+                    clearPaymentAttempt()
                     break
                 }
             }
@@ -426,13 +497,20 @@ struct SettingsView: View {
             // Stop checking after 10 minutes
             await MainActor.run {
                 isCheckingPayment = false
+                paymentCheckTask = nil
+            }
+            if !wasCancelled {
+                clearPaymentAttempt()
             }
         }
     }
 
     private func stopPaymentConfirmationCheck() {
+        paymentCheckTask?.cancel()
+        paymentCheckTask = nil
         isCheckingPayment = false
     }
+
 
     // MARK: - General Section
 

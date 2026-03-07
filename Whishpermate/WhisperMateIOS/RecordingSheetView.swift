@@ -9,6 +9,7 @@ struct RecordingSheetView: View {
     @ObservedObject var dictionaryManager: DictionaryManager
     @ObservedObject var toneStyleManager: ToneStyleManager
     @ObservedObject var shortcutManager: ShortcutManager
+    @ObservedObject var languageManager: LanguageManager
 
     @State private var sheetState: SheetState = .recording
     @State private var transcription = ""
@@ -25,11 +26,12 @@ struct RecordingSheetView: View {
         case viewing
     }
 
-    init(historyManager: HistoryManager, dictionaryManager: DictionaryManager, toneStyleManager: ToneStyleManager, shortcutManager: ShortcutManager, recording: Recording? = nil) {
+    init(historyManager: HistoryManager, dictionaryManager: DictionaryManager, toneStyleManager: ToneStyleManager, shortcutManager: ShortcutManager, languageManager: LanguageManager, recording: Recording? = nil) {
         self.historyManager = historyManager
         self.dictionaryManager = dictionaryManager
         self.toneStyleManager = toneStyleManager
         self.shortcutManager = shortcutManager
+        self.languageManager = languageManager
         if let recording = recording {
             _sheetState = State(initialValue: .viewing)
             _transcription = State(initialValue: recording.transcription)
@@ -275,6 +277,15 @@ struct RecordingSheetView: View {
             return
         }
 
+        // Check subscription limits
+        let subscriptionCheck = SubscriptionManager.shared.checkCanTranscribe()
+        if !subscriptionCheck.canTranscribe {
+            errorMessage = subscriptionCheck.reason ?? "Transcription limit reached"
+            sheetState = .viewing
+            try? FileManager.default.removeItem(at: audioURL)
+            return
+        }
+
         sheetState = .processing
 
         Task {
@@ -291,6 +302,11 @@ struct RecordingSheetView: View {
 
                 // Combine prompts from all sources
                 var promptComponents: [String] = []
+
+                // Add language hint
+                if let languageCodes = languageManager.apiLanguageCode {
+                    promptComponents.append("Language: \(languageCodes)")
+                }
 
                 // Add dictionary hints for better recognition
                 let dictionaryHints = dictionaryManager.transcriptionHints
@@ -312,15 +328,35 @@ struct RecordingSheetView: View {
 
                 let promptText = promptComponents.joined(separator: ". ")
 
-                let result = try await openAIClient.transcribe(
-                    audioURL: audioURL,
-                    prompt: promptText.isEmpty ? nil : promptText
-                )
+                // Build formatting rules from tone/style
+                var formattingRules: [String] = []
+                for style in toneStyleManager.styles where style.isEnabled {
+                    formattingRules.append(style.instructions)
+                }
+
+                let result: String
+                if !formattingRules.isEmpty {
+                    result = try await openAIClient.transcribeAndFormat(
+                        audioURL: audioURL,
+                        prompt: promptText.isEmpty ? nil : promptText,
+                        formattingRules: formattingRules,
+                        languageCodes: languageManager.apiLanguageCode
+                    )
+                } else {
+                    result = try await openAIClient.transcribe(
+                        audioURL: audioURL,
+                        prompt: promptText.isEmpty ? nil : promptText
+                    )
+                }
 
                 // Apply post-processing: dictionary replacements and shortcut expansion
                 var processedResult = result
                 processedResult = dictionaryManager.applyReplacements(to: processedResult)
                 processedResult = shortcutManager.expandShortcuts(in: processedResult)
+
+                // Track word count
+                let wordCount = processedResult.split(separator: " ").count
+                await SubscriptionManager.shared.recordWords(wordCount)
 
                 await MainActor.run {
                     transcription = processedResult
@@ -339,7 +375,7 @@ struct RecordingSheetView: View {
                     // Save to history with audio file URL
                     let recording = Recording(
                         id: recordingID,
-                        transcription: result,
+                        transcription: processedResult,
                         duration: duration,
                         audioFileURL: permanentAudioURL
                     )

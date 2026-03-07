@@ -4,6 +4,9 @@ import Supabase
 #if canImport(AppKit)
     import AppKit
 #endif
+#if canImport(UIKit)
+    import UIKit
+#endif
 
 /// Manages user authentication state and session lifecycle via Supabase
 public class AuthManager: ObservableObject {
@@ -77,9 +80,15 @@ public class AuthManager: ObservableObject {
 
         let authURL = "\(authWebURL)?redirect_to=\(Constants.authCallbackScheme.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Constants.authCallbackScheme)"
 
-        #if canImport(AppKit)
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             if let url = URL(string: authURL) {
                 NSWorkspace.shared.open(url)
+            }
+        #elseif canImport(UIKit)
+            if let url = URL(string: authURL) {
+                Task { @MainActor in
+                    UIApplication.shared.open(url)
+                }
             }
         #endif
     }

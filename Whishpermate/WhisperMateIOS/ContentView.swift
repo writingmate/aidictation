@@ -7,6 +7,9 @@ struct ContentView: View {
     @StateObject private var dictionaryManager = DictionaryManager.shared
     @StateObject private var toneStyleManager = ToneStyleManager.shared
     @StateObject private var shortcutManager = ShortcutManager.shared
+    @StateObject private var languageManager = LanguageManager()
+    @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var selectedTab: Int = 0
     @State private var showRecordingSheet = false
     @State private var selectedRecording: Recording?
@@ -42,10 +45,10 @@ struct ContentView: View {
             }
             .navigationTitle("WhisperMate")
             .sheet(isPresented: $showRecordingSheet) {
-                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)
+                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, languageManager: languageManager)
             }
             .sheet(item: $selectedRecording) { recording in
-                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, recording: recording)
+                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, languageManager: languageManager, recording: recording)
             }
         }
         .navigationViewStyle(.stack)
@@ -110,7 +113,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showRecordingSheet) {
-            RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)
+            RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, languageManager: languageManager)
         }
     }
 
@@ -378,7 +381,7 @@ struct ContentView: View {
             }
             .navigationTitle("History")
             .sheet(item: $selectedRecording) { recording in
-                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, recording: recording)
+                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, languageManager: languageManager, recording: recording)
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
@@ -389,6 +392,84 @@ struct ContentView: View {
     private var settingsView: some View {
         NavigationView {
             Form {
+                // Account Section
+                Section("Account") {
+                    if authManager.isAuthenticated, let user = authManager.currentUser {
+                        HStack {
+                            Image(systemName: "person.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(user.email)
+                                    .font(.body)
+                                Text(user.subscriptionTier.displayName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        // Usage info
+                        let usage = subscriptionManager.getUsageStatus()
+                        if !usage.isPro {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Words used")
+                                        .font(.subheadline)
+                                    Spacer()
+                                    Text("\(usage.used) / \(usage.limit)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                }
+                                ProgressView(value: min(usage.percentage, 1.0))
+                                    .tint(usage.percentage >= 0.9 ? .red : .blue)
+                            }
+
+                            Button(action: {
+                                subscriptionManager.openUpgrade()
+                            }) {
+                                Label("Upgrade to Pro", systemImage: "star.fill")
+                                    .foregroundColor(.orange)
+                            }
+                        }
+
+                        Button("Sign Out", role: .destructive) {
+                            Task {
+                                await authManager.logout()
+                            }
+                        }
+                    } else {
+                        Button(action: {
+                            authManager.openSignUp()
+                        }) {
+                            HStack {
+                                Image(systemName: "person.circle")
+                                    .font(.title2)
+                                    .foregroundColor(.blue)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Sign In / Create Account")
+                                        .font(.body)
+                                    Text("Get \(UsageLimits.freeMonthlyWordLimit) free words/month")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Language Section
+                Section("Language") {
+                    NavigationLink(destination: LanguageSelectionView(languageManager: languageManager)) {
+                        HStack {
+                            Label("Transcription Language", systemImage: "globe")
+                            Spacer()
+                            Text(languageDisplayText)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
                 Section("Permissions") {
                     Button(action: openAppSettings) {
                         HStack {
@@ -409,18 +490,18 @@ struct ContentView: View {
                     }
                 }
 
+                Section("Transcription") {
+                    NavigationLink(destination: TranscriptionSettingsView(dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)) {
+                        Label("Dictionary & Shortcuts", systemImage: "text.badge.checkmark")
+                    }
+                }
+
                 Section("About") {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("0.0.20")
+                        Text(appVersion)
                             .foregroundColor(.secondary)
-                    }
-                }
-
-                Section("Transcription") {
-                    NavigationLink(destination: TranscriptionSettingsView(dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)) {
-                        Label("Transcription Settings", systemImage: "text.badge.checkmark")
                     }
                 }
 
@@ -434,6 +515,20 @@ struct ContentView: View {
             .navigationTitle("Settings")
         }
         .navigationViewStyle(StackNavigationViewStyle())
+    }
+
+    // MARK: - Computed Properties
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.1"
+    }
+
+    private var languageDisplayText: String {
+        if languageManager.selectedLanguages.contains(.auto) {
+            return "Auto-detect"
+        }
+        let names = languageManager.selectedLanguages.map { $0.displayName }
+        return names.sorted().joined(separator: ", ")
     }
 
     // MARK: - Permission Helpers
@@ -561,4 +656,6 @@ enum PermissionStatus {
 
 #Preview {
     ContentView()
+        .environmentObject(AuthManager.shared)
+        .environmentObject(SubscriptionManager.shared)
 }

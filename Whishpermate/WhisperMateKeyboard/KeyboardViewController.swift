@@ -12,6 +12,9 @@ class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardRecordingView>!
     private var statusLabel: UILabel!
     private var cancellables = Set<AnyCancellable>()
+    private let dictionaryManager = DictionaryManager.shared
+    private let shortcutManager = ShortcutManager.shared
+    private let languageManager = LanguageManager()
 
     // MARK: - Lifecycle
 
@@ -186,12 +189,42 @@ class KeyboardViewController: UIInputViewController {
 
         Task {
             do {
-                let transcription = try await openAIClient.transcribe(audioURL: recordingURL)
+                // Build prompt with language, dictionary, and shortcut hints
+                var promptComponents: [String] = []
+
+                if let languageCodes = languageManager.apiLanguageCode {
+                    promptComponents.append("Language: \(languageCodes)")
+                }
+
+                let dictionaryHints = dictionaryManager.transcriptionHints
+                if !dictionaryHints.isEmpty {
+                    promptComponents.append("Vocabulary: \(dictionaryHints)")
+                }
+
+                let shortcutHints = shortcutManager.transcriptionHints
+                if !shortcutHints.isEmpty {
+                    promptComponents.append("Phrases: \(shortcutHints)")
+                }
+
+                let promptText = promptComponents.joined(separator: ". ")
+
+                var transcription = try await openAIClient.transcribe(
+                    audioURL: recordingURL,
+                    prompt: promptText.isEmpty ? nil : promptText
+                )
+
+                // Apply post-processing
+                transcription = dictionaryManager.applyReplacements(to: transcription)
+                transcription = shortcutManager.expandShortcuts(in: transcription)
+
+                // Track word count
+                let wordCount = transcription.split(separator: " ").count
+                await SubscriptionManager.shared.recordWords(wordCount)
 
                 // Insert transcription into text field
                 await MainActor.run {
                     self.textDocumentProxy.insertText(transcription)
-                    self.statusLabel.text = "✓ Transcribed"
+                    self.statusLabel.text = "Transcribed"
                     self.statusLabel.textColor = UIColor.systemGreen
 
                     // Save to history

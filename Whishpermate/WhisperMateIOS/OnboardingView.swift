@@ -4,6 +4,7 @@ import WhisperMateShared
 
 struct OnboardingView: View {
     @ObservedObject var onboardingManager: OnboardingManager
+    @StateObject private var languageManager = LanguageManager()
     @State private var currentStep: OnboardingStep = .welcome
     @State private var isCheckingMicrophone = false
     @State private var refreshTrigger = false
@@ -11,6 +12,7 @@ struct OnboardingView: View {
     enum OnboardingStep {
         case welcome
         case microphone
+        case language
         case keyboardSetup
     }
 
@@ -24,6 +26,8 @@ struct OnboardingView: View {
                     welcomeStep
                 case .microphone:
                     microphoneStep
+                case .language:
+                    languageStep
                 case .keyboardSetup:
                     keyboardSetupStep
                 }
@@ -119,6 +123,58 @@ struct OnboardingView: View {
         }
     }
 
+    private var languageStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "globe")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 80, height: 80)
+                .foregroundColor(.blue)
+
+            Text("Select Languages")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Text("Choose the languages you'll be speaking. You can change this later in Settings.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(Language.allCases) { language in
+                        Button(action: {
+                            languageManager.toggleLanguage(language)
+                        }) {
+                            HStack {
+                                Text(language.flag)
+                                    .font(.title3)
+                                Text(language.displayName)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if languageManager.isSelected(language) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.blue)
+                                } else {
+                                    Image(systemName: "circle")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(languageManager.isSelected(language) ? Color.blue.opacity(0.1) : Color(uiColor: .secondarySystemGroupedBackground))
+                            )
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .frame(maxHeight: 300)
+        }
+    }
+
     private var keyboardSetupStep: some View {
         VStack(spacing: 20) {
             Image(systemName: "keyboard")
@@ -173,12 +229,27 @@ struct OnboardingView: View {
         case .microphone:
             Button(action: {
                 if isMicrophoneGranted() {
-                    currentStep = .keyboardSetup
+                    currentStep = .language
                 } else {
                     requestMicrophonePermission()
                 }
             }) {
                 Text(isMicrophoneGranted() ? "Continue" : "Enable Microphone")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(
+                        Capsule()
+                            .fill(Color.blue)
+                    )
+            }
+
+        case .language:
+            Button(action: {
+                currentStep = .keyboardSetup
+            }) {
+                Text("Continue")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
@@ -234,7 +305,7 @@ struct OnboardingView: View {
         if isMicrophoneGranted() {
             // Auto-advance to next step
             isCheckingMicrophone = false
-            currentStep = .keyboardSetup
+            currentStep = .language
             return
         }
 

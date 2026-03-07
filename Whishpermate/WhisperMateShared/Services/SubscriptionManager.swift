@@ -10,6 +10,9 @@ import Foundation
 #if canImport(AppKit)
     import AppKit
 #endif
+#if canImport(UIKit)
+    import UIKit
+#endif
 
 public class SubscriptionManager: ObservableObject {
     public static let shared = SubscriptionManager()
@@ -73,9 +76,15 @@ public class SubscriptionManager: ObservableObject {
             }
         }
 
-        #if canImport(AppKit)
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             if let url = URL(string: urlString) {
                 NSWorkspace.shared.open(url)
+            }
+        #elseif canImport(UIKit)
+            if let url = URL(string: urlString) {
+                Task { @MainActor in
+                    UIApplication.shared.open(url)
+                }
             }
         #endif
     }

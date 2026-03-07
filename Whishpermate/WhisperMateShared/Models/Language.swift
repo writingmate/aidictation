@@ -77,11 +77,11 @@ public enum Language: String, CaseIterable, Identifiable {
 }
 
 public class LanguageManager: ObservableObject {
-    @Published var selectedLanguages: Set<Language> = []
+    @Published public var selectedLanguages: Set<Language> = []
 
     private let userDefaultsKey = "selected_languages"
 
-    init() {
+    public init() {
         loadLanguages()
     }
 

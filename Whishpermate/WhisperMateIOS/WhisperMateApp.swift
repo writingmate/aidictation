@@ -5,6 +5,8 @@ import WhisperMateShared
 @main
 struct WhisperMateApp: App {
     @StateObject private var onboardingManager = OnboardingManager()
+    @StateObject private var authManager = AuthManager.shared
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
 
     init() {}
 
@@ -12,6 +14,8 @@ struct WhisperMateApp: App {
         WindowGroup {
             if onboardingManager.hasCompletedOnboarding {
                 ContentView()
+                    .environmentObject(authManager)
+                    .environmentObject(subscriptionManager)
             } else {
                 OnboardingView(onboardingManager: onboardingManager)
             }

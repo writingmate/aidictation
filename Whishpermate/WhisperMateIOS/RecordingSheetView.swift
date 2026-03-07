@@ -10,6 +10,7 @@ struct RecordingSheetView: View {
     @ObservedObject var toneStyleManager: ToneStyleManager
     @ObservedObject var shortcutManager: ShortcutManager
     @ObservedObject var languageManager: LanguageManager
+    @AppStorage("useOnDeviceTranscription", store: AppDefaults.shared) private var useOnDeviceTranscription = false
 
     @State private var sheetState: SheetState = .recording
     @State private var transcription = ""
@@ -266,6 +267,60 @@ struct RecordingSheetView: View {
     }
 
     private func transcribeAudio(audioURL: URL) {
+        if useOnDeviceTranscription {
+            transcribeWithParakeet(audioURL: audioURL)
+        } else {
+            transcribeWithCloud(audioURL: audioURL)
+        }
+    }
+
+    private func transcribeWithParakeet(audioURL: URL) {
+        sheetState = .processing
+
+        Task {
+            do {
+                let result = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+
+                // Apply post-processing
+                var processedResult = result
+                processedResult = dictionaryManager.applyReplacements(to: processedResult)
+                processedResult = shortcutManager.expandShortcuts(in: processedResult)
+
+                // Track word count
+                let wordCount = processedResult.split(separator: " ").count
+                await SubscriptionManager.shared.recordWords(wordCount)
+
+                await MainActor.run {
+                    transcription = processedResult
+                    sheetState = .viewing
+                    errorMessage = ""
+
+                    let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
+                    let recordingID = UUID()
+                    let permanentAudioURL = historyManager.saveAudioFile(from: audioURL, for: recordingID)
+
+                    let recording = Recording(
+                        id: recordingID,
+                        transcription: processedResult,
+                        duration: duration,
+                        audioFileURL: permanentAudioURL
+                    )
+                    historyManager.addRecording(recording)
+                    currentRecording = recording
+
+                    try? FileManager.default.removeItem(at: audioURL)
+                }
+            } catch {
+                await MainActor.run {
+                    transcription = ""
+                    sheetState = .viewing
+                    errorMessage = "On-device transcription failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func transcribeWithCloud(audioURL: URL) {
         // Get API key from Secrets.plist or keychain
         let apiKey = KeychainHelper.get(key: "custom_transcription_api_key") ?? SecretsLoader.transcriptionKey(for: .custom)
         let endpoint = SecretsLoader.customTranscriptionEndpoint() ?? "https://writingmate.ai/api/openai/v1/audio/transcriptions"

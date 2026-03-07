@@ -8,8 +8,10 @@ struct ContentView: View {
     @StateObject private var toneStyleManager = ToneStyleManager.shared
     @StateObject private var shortcutManager = ShortcutManager.shared
     @StateObject private var languageManager = LanguageManager()
+    @StateObject private var parakeetService = ParakeetTranscriptionService.shared
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
+    @AppStorage("useOnDeviceTranscription", store: AppDefaults.shared) private var useOnDeviceTranscription = false
     @State private var selectedTab: Int = 0
     @State private var showRecordingSheet = false
     @State private var selectedRecording: Recording?
@@ -468,6 +470,80 @@ struct ContentView: View {
                                 .lineLimit(1)
                         }
                     }
+                }
+
+                // Transcription Engine Section
+                Section {
+                    Toggle(isOn: $useOnDeviceTranscription) {
+                        Label("On-Device (Parakeet)", systemImage: "iphone")
+                    }
+                    .onChange(of: useOnDeviceTranscription) { enabled in
+                        if enabled {
+                            Task {
+                                try? await parakeetService.initialize()
+                            }
+                        }
+                    }
+
+                    switch parakeetService.state {
+                    case .notInitialized:
+                        if useOnDeviceTranscription {
+                            HStack {
+                                Text("Model not downloaded")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button("Download") {
+                                    Task {
+                                        try? await parakeetService.initialize()
+                                    }
+                                }
+                                .font(.caption)
+                            }
+                        }
+                    case .downloading:
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Downloading model...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    case .initializing:
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Initializing...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    case .ready:
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Model ready")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    case .transcribing:
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Transcribing...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    case .error(let message):
+                        Text(message)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                } header: {
+                    Text("Transcription Engine")
+                } footer: {
+                    Text(useOnDeviceTranscription
+                        ? "Transcription runs privately on your device. No internet required."
+                        : "Transcription uses cloud API. Requires internet connection.")
                 }
 
                 Section("Permissions") {

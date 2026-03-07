@@ -14,6 +14,7 @@
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
 		C1FA00032F0B000000000003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		C3FA00042F0B000000000004 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C3FA00052F0B000000000005 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -180,6 +181,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C3FA00042F0B000000000004 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -300,6 +302,9 @@
 				C1E7D2EF2EBA92A500A07338 /* WhisperMateIOS */,
 			);
 			name = WhisperMateIOS;
+			packageProductDependencies = (
+				C3FA00052F0B000000000005 /* FluidAudio */,
+			);
 			productName = WhisperMateIOS;
 			productReference = C1CE64402ED8417000D24235 /* WhisperMateIOS.app */;
 			productType = "com.apple.product-type.application";
@@ -1022,6 +1027,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		C3FA00052F0B000000000005 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1FA00012F0B000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

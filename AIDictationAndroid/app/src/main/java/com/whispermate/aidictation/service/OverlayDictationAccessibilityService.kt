@@ -245,16 +245,24 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (sourceFocused != null && isEligibleEditableNode(sourceFocused)) {
             return sourceFocused
         }
+        @Suppress("DEPRECATION")
+        sourceFocused?.recycle()
 
-        // Search across all windows. On foldables (Flip/Fold), the target app 
+        // Search across all windows. On foldables (Flip/Fold), the target app
         // might be in a different window type when closed/on cover screen.
         val windows = windows
         for (window in windows) {
             val root = window.root ?: continue
             val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             if (focused != null && isEligibleEditableNode(focused)) {
+                @Suppress("DEPRECATION")
+                root.recycle()
                 return focused
             }
+            @Suppress("DEPRECATION")
+            root.recycle()
+            @Suppress("DEPRECATION")
+            focused?.recycle()
         }
 
         val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)

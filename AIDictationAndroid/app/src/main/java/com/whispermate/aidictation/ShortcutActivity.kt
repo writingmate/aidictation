@@ -34,11 +34,6 @@ class ShortcutActivity : Activity() {
     }
 
 
-    override fun onPause() {
-        super.onPause()
-        finish()
-    }
-
     private fun isAccessibilityServiceEnabled(): Boolean {
         val enabled = Settings.Secure.getInt(
             contentResolver,

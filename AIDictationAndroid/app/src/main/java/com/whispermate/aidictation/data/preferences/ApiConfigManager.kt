@@ -125,7 +125,7 @@ class ApiConfigManager @Inject constructor(
                     ?: defaultTranscriptionModel(provider)
                 val apiKey = runCatching {
                     securePrefs.getString(SecureKeys.TRANSCRIPTION_API_KEY, null)
-                }.getOrNull() ?: BuildConfig.TRANSCRIPTION_API_KEY
+                }.getOrNull() ?: BuildConfig.TRANSCRIPTION_API_KEY.ifEmpty { "" }
                 _transcriptionConfig.value = ApiConfig(
                     provider = provider,
                     apiKey = apiKey,
@@ -143,7 +143,7 @@ class ApiConfigManager @Inject constructor(
                     ?: defaultPostProcessingModel(provider)
                 val apiKey = runCatching {
                     securePrefs.getString(SecureKeys.POSTPROCESSING_API_KEY, null)
-                }.getOrNull() ?: BuildConfig.GROQ_API_KEY
+                }.getOrNull() ?: BuildConfig.GROQ_API_KEY.ifEmpty { "" }
                 _postProcessingConfig.value = ApiConfig(
                     provider = provider,
                     apiKey = apiKey,

@@ -1,0 +1,44 @@
+name: Windows Smoke Test
+
+on:
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: './publish-smoke'
+  ARTIFACTS_DIR: './smoke-artifacts'
+
+jobs:
+  smoke-test:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.PROJECT_PATH }}
+
+    - name: Build
+      run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+
+    - name: Publish
+      run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ${{ env.PUBLISH_DIR }} --self-contained true -r win-x64 -p:PublishSingleFile=true
+
+    - name: Smoke test published app
+      shell: pwsh
+      run: ./.github/scripts/windows-smoke-test.ps1 -AppPath (Resolve-Path "${{ env.PUBLISH_DIR }}/AIDictation.exe") -ArtifactsDir "${{ env.ARTIFACTS_DIR }}"
+
+    - name: Upload smoke artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-smoke-artifacts
+        path: ${{ env.ARTIFACTS_DIR }}
+        retention-days: 14

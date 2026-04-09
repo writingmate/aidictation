@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using AIDictation.Services;
+using AIDictation.Views;
 using H.NotifyIcon;
 using Microsoft.Win32;
 
@@ -29,6 +30,7 @@ public partial class App : Application
 
     private static Mutex? _singleInstanceMutex;
     private TaskbarIcon? _trayIcon;
+    private SettingsWindow? _settingsWindow;
 
     // MARK: - Application Lifecycle
 
@@ -259,7 +261,7 @@ public partial class App : Application
 
     // MARK: - Window Management
 
-    private async Task ShowStartupWindowAsync()
+    private Task ShowStartupWindowAsync()
     {
         var settings = SettingsService.Instance.Settings;
 
@@ -272,34 +274,49 @@ public partial class App : Application
             ShowLoginWindow();
         }
         // If authenticated and onboarded, app runs in tray only
+
+        return Task.CompletedTask;
     }
 
     private void ShowOnboardingWindow()
     {
-        // TODO: Create and show OnboardingWindow
-        // var onboarding = new Views.OnboardingWindow();
-        // onboarding.Show();
+        var onboarding = new OnboardingWindow();
+        MainWindow = onboarding;
+
+        onboarding.ShowDialog();
+
+        if (SettingsService.Instance.Settings.OnboardingCompleted)
+        {
+            ShowLoginWindow();
+        }
     }
 
     private void ShowLoginWindow()
     {
-        // TODO: Create and show LoginWindow
-        // var login = new Views.LoginWindow();
-        // login.Show();
+        // The Windows login/account flow is not implemented yet.
+        // Open settings so the user still lands in a visible, configurable surface.
+        ShowSettingsWindow();
     }
 
     private void ShowSettingsWindow()
     {
-        // TODO: Create and show SettingsWindow
-        // Check if already open
-        // var existing = Windows.OfType<Views.SettingsWindow>().FirstOrDefault();
-        // if (existing != null)
-        // {
-        //     existing.Activate();
-        //     return;
-        // }
-        // var settings = new Views.SettingsWindow();
-        // settings.Show();
+        if (_settingsWindow is { IsLoaded: true })
+        {
+            if (!_settingsWindow.IsVisible)
+            {
+                _settingsWindow.Show();
+            }
+
+            _settingsWindow.Activate();
+            MainWindow = _settingsWindow;
+            return;
+        }
+
+        _settingsWindow = new SettingsWindow();
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        MainWindow = _settingsWindow;
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
     }
 
     // MARK: - Native Methods

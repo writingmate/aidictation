@@ -1,0 +1,57 @@
+name: Windows Interactive Debug
+
+on:
+  push:
+    branches:
+      - windows-gh-smoke
+    paths:
+      - '.github/workflows/windows-interactive-debug.yml'
+      - 'AIDictation.Windows/**'
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: './publish-debug'
+
+jobs:
+  interactive-debug:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.PROJECT_PATH }}
+
+    - name: Build
+      run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+
+    - name: Publish
+      run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ${{ env.PUBLISH_DIR }} --self-contained true -r win-x64 -p:PublishSingleFile=true
+
+    - name: Setup interactive tmate session
+      id: tmate
+      uses: mxschmitt/action-tmate@v3
+      with:
+        detached: true
+
+    - name: Print connection details
+      shell: pwsh
+      run: |
+        Write-Host "SSH command: ${{ steps.tmate.outputs.ssh-command }}"
+        Write-Host "Web shell URL: ${{ steps.tmate.outputs.web-url }}"
+        Write-Host "Published app path: $(Resolve-Path '${{ env.PUBLISH_DIR }}/AIDictation.exe')"
+
+    - name: Keep Windows runner alive for interactive debugging
+      shell: pwsh
+      run: |
+        Write-Host "Interactive session is available for 30 minutes."
+        Start-Sleep -Seconds 1800

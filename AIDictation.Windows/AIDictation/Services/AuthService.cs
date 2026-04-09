@@ -362,7 +362,8 @@ public partial class AuthService : ObservableObject
         var storedSession = CredentialHelper.LoadSession();
         if (storedSession == null) return false;
 
-        return await RefreshSessionAsync(storedSession.Value.RefreshToken);
+        await RefreshSessionAsync(storedSession.Value.RefreshToken);
+        return true;
     }
 
     /// <summary>
@@ -421,33 +422,29 @@ public partial class AuthService : ObservableObject
         AuthStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task FetchUserProfileAsync(string? userId)
+    private Task FetchUserProfileAsync(string? userId)
     {
         if (string.IsNullOrEmpty(userId) || _supabaseClient == null)
         {
             CurrentUser = null;
-            return;
+            return Task.CompletedTask;
         }
 
-        try
+        if (!Guid.TryParse(userId, out var parsedUserId))
         {
-            var response = await _supabaseClient
-                .From<AppUser>()
-                .Where(u => u.UserId == Guid.Parse(userId))
-                .Single();
+            CurrentUser = null;
+            return Task.CompletedTask;
+        }
 
-            CurrentUser = response;
-        }
-        catch (Exception ex)
+        // The Windows build currently does not have a PostgREST model wired for profile queries.
+        // Use the authenticated session user as a minimal profile until the account surface is implemented.
+        CurrentUser = new AppUser
         {
-            Debug.WriteLine($"[AuthService] Fetch user profile error: {ex.Message}");
-            // Create a minimal user object from auth data
-            CurrentUser = new AppUser
-            {
-                UserId = Guid.Parse(userId),
-                Email = _supabaseClient.Auth.CurrentUser?.Email ?? ""
-            };
-        }
+            UserId = parsedUserId,
+            Email = _supabaseClient.Auth.CurrentUser?.Email ?? string.Empty
+        };
+
+        return Task.CompletedTask;
     }
 
     private void OnAuthStateChanged(IGotrueClient<Supabase.Gotrue.User, Session> sender, AuthState state)

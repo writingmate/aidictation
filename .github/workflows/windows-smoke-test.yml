@@ -1,6 +1,13 @@
 name: Windows Smoke Test
 
 on:
+  push:
+    branches:
+      - windows-gh-smoke
+    paths:
+      - '.github/workflows/windows-smoke-test.yml'
+      - '.github/scripts/windows-smoke-test.ps1'
+      - 'AIDictation.Windows/**'
   workflow_dispatch:
 
 env:

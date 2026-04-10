@@ -1,23 +1,23 @@
-name: Windows Interactive Debug
+name: Windows RDP via Tailscale
 
 on:
   push:
     branches:
       - windows-gh-smoke
     paths:
-      - '.github/workflows/windows-interactive-debug.yml'
+      - '.github/workflows/windows-rdp-tailscale.yml'
       - 'AIDictation.Windows/**'
   workflow_dispatch:
 
 env:
   DOTNET_VERSION: '8.0.x'
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
-  PUBLISH_DIR: './publish-debug'
+  PUBLISH_DIR: './publish-rdp'
 
 jobs:
-  interactive-debug:
+  rdp:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
     - name: Checkout
@@ -28,6 +28,15 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
+    - name: Validate Tailscale auth key secret
+      shell: pwsh
+      env:
+        TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+          throw "Missing repository secret TAILSCALE_AUTHKEY. Add a reusable ephemeral Tailscale auth key before running this workflow."
+        }
+
     - name: Restore dependencies
       run: dotnet restore ${{ env.PROJECT_PATH }}
 
@@ -37,7 +46,13 @@ jobs:
     - name: Publish
       run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ${{ env.PUBLISH_DIR }} --self-contained true -r win-x64 -p:PublishSingleFile=true
 
-    - name: Enable RDP and generate temporary credentials
+    - name: Connect runner to Tailscale
+      uses: tailscale/github-action@v4
+      with:
+        authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+        version: latest
+
+    - name: Enable RDP and generate credentials
       id: rdp
       shell: pwsh
       run: |
@@ -48,32 +63,30 @@ jobs:
         Start-Service -Name TermService
         "password=$password" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-    - name: Setup interactive tmate session
-      id: tmate
-      uses: mxschmitt/action-tmate@v3
-      with:
-        detached: true
-
-    - name: Create connection bundle
+    - name: Start published app
       shell: pwsh
       run: |
-        $sshCommand = "${{ steps.tmate.outputs.ssh-command }}"
-        $webUrl = "${{ steps.tmate.outputs.web-url }}"
         $appPath = Resolve-Path '${{ env.PUBLISH_DIR }}/AIDictation.exe'
-        $rdpTunnelCommand = "$sshCommand -L 13389:localhost:3389"
+        Start-Process -FilePath $appPath
+
+    - name: Print Tailscale RDP details
+      shell: pwsh
+      run: |
+        $ip = tailscale ip -4 | Select-Object -First 1
+        $appPath = Resolve-Path '${{ env.PUBLISH_DIR }}/AIDictation.exe'
+
+        Write-Host "Tailscale IP: $ip"
+        Write-Host "RDP target: $ip:3389"
+        Write-Host "RDP username: runneradmin"
+        Write-Host "RDP password: ${{ steps.rdp.outputs.password }}"
+        Write-Host "Published app path: $appPath"
 
         @"
-        SSH command:
-        $sshCommand
-
-        Web shell URL:
-        $webUrl
-
-        RDP local-forward command:
-        $rdpTunnelCommand
+        Tailscale IP:
+        $ip
 
         RDP target:
-        localhost:13389
+        $ip:3389
 
         Username:
         runneradmin
@@ -83,27 +96,17 @@ jobs:
 
         Published app path:
         $appPath
-        "@ | Set-Content -Path rdp-connection.txt
+        "@ | Set-Content -Path tailscale-rdp-connection.txt
 
     - name: Upload connection bundle
       uses: actions/upload-artifact@v4
       with:
-        name: windows-rdp-connection
-        path: rdp-connection.txt
+        name: tailscale-rdp-connection
+        path: tailscale-rdp-connection.txt
         retention-days: 1
 
-    - name: Print connection details
+    - name: Keep Windows runner alive for Tailscale RDP
       shell: pwsh
       run: |
-        Write-Host "SSH command: ${{ steps.tmate.outputs.ssh-command }}"
-        Write-Host "Web shell URL: ${{ steps.tmate.outputs.web-url }}"
-        Write-Host "RDP local-forward command: ${{ steps.tmate.outputs.ssh-command }} -L 13389:localhost:3389"
-        Write-Host "RDP username: runneradmin"
-        Write-Host "RDP password: ${{ steps.rdp.outputs.password }}"
-        Write-Host "Published app path: $(Resolve-Path '${{ env.PUBLISH_DIR }}/AIDictation.exe')"
-
-    - name: Keep Windows runner alive for interactive debugging
-      shell: pwsh
-      run: |
-        Write-Host "Interactive session is available for 30 minutes."
-        Start-Sleep -Seconds 1800
+        Write-Host "Tailscale RDP session is available for 60 minutes."
+        Start-Sleep -Seconds 3600

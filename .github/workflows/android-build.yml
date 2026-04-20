@@ -2,7 +2,9 @@ name: Android Build
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - 'claude/**'
     paths:
       - 'AIDictationAndroid/**'
       - '.github/workflows/android-build.yml'

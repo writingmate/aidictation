@@ -103,7 +103,7 @@ jobs:
   release:
     name: Release (signed)
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/')))
     runs-on: ubuntu-latest
 
     defaults:
@@ -125,6 +125,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Report secret presence
+        run: |
+          present() { [ -n "$1" ] && echo SET || echo MISSING; }
+          echo "TRANSCRIPTION_API_KEY:     $(present "$TRANSCRIPTION_API_KEY")"
+          echo "TRANSCRIPTION_ENDPOINT:    $(present "$TRANSCRIPTION_ENDPOINT")"
+          echo "TRANSCRIPTION_MODEL:       $(present "$TRANSCRIPTION_MODEL")"
+          echo "GROQ_API_KEY:              $(present "$GROQ_API_KEY")"
+          echo "GROQ_ENDPOINT:             $(present "$GROQ_ENDPOINT")"
+          echo "GROQ_MODEL:                $(present "$GROQ_MODEL")"
+          echo "ANDROID_KEYSTORE_BASE64:   $(present "$ANDROID_KEYSTORE_BASE64")"
+          echo "ANDROID_KEYSTORE_PASSWORD: $(present "$KEYSTORE_PASSWORD")"
+          echo "ANDROID_KEY_ALIAS:         $(present "$KEY_ALIAS")"
+          echo "ANDROID_KEY_PASSWORD:      $(present "$KEY_PASSWORD")"
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4

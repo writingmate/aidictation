@@ -118,37 +118,51 @@ class ApiConfigManager @Inject constructor(
         instance = this
         scope.launch {
             context.apiConfigDataStore.data.collect { prefs ->
-                val provider = prefs[Keys.TRANSCRIPTION_PROVIDER]
+                val userPickedProvider = prefs[Keys.TRANSCRIPTION_PROVIDER]
                     ?.let { runCatching { ApiProvider.valueOf(it) }.getOrNull() }
-                    ?: defaultTranscriptionProvider()
+                val provider = userPickedProvider ?: defaultTranscriptionProvider()
                 val model = prefs[Keys.TRANSCRIPTION_MODEL]
-                    ?: defaultTranscriptionModel(provider)
+                    ?: BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) }
                 val apiKey = runCatching {
                     securePrefs.getString(SecureKeys.TRANSCRIPTION_API_KEY, null)
                 }.getOrNull() ?: BuildConfig.TRANSCRIPTION_API_KEY.ifEmpty { "" }
+                // Preserve the BuildConfig endpoint (e.g. a reverse proxy) when the
+                // user hasn't explicitly picked a provider — otherwise hardcoded
+                // provider URLs would override it and requests would go to the
+                // wrong host with a key that's only valid for the proxy.
+                val endpoint = if (userPickedProvider == null && BuildConfig.TRANSCRIPTION_ENDPOINT.isNotEmpty()) {
+                    BuildConfig.TRANSCRIPTION_ENDPOINT
+                } else {
+                    provider.transcriptionEndpoint()
+                }
                 _transcriptionConfig.value = ApiConfig(
                     provider = provider,
                     apiKey = apiKey,
                     model = model,
-                    endpoint = provider.transcriptionEndpoint()
+                    endpoint = endpoint
                 )
             }
         }
         scope.launch {
             context.apiConfigDataStore.data.collect { prefs ->
-                val provider = prefs[Keys.POSTPROCESSING_PROVIDER]
+                val userPickedProvider = prefs[Keys.POSTPROCESSING_PROVIDER]
                     ?.let { runCatching { ApiProvider.valueOf(it) }.getOrNull() }
-                    ?: defaultPostProcessingProvider()
+                val provider = userPickedProvider ?: defaultPostProcessingProvider()
                 val model = prefs[Keys.POSTPROCESSING_MODEL]
-                    ?: defaultPostProcessingModel(provider)
+                    ?: BuildConfig.GROQ_MODEL.ifEmpty { defaultPostProcessingModel(provider) }
                 val apiKey = runCatching {
                     securePrefs.getString(SecureKeys.POSTPROCESSING_API_KEY, null)
                 }.getOrNull() ?: BuildConfig.GROQ_API_KEY.ifEmpty { "" }
+                val endpoint = if (userPickedProvider == null && BuildConfig.GROQ_ENDPOINT.isNotEmpty()) {
+                    BuildConfig.GROQ_ENDPOINT
+                } else {
+                    provider.llmEndpoint()
+                }
                 _postProcessingConfig.value = ApiConfig(
                     provider = provider,
                     apiKey = apiKey,
                     model = model,
-                    endpoint = provider.llmEndpoint()
+                    endpoint = endpoint
                 )
             }
         }

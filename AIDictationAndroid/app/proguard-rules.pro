@@ -21,3 +21,10 @@
 # Keep ONNX Runtime classes
 -keep class ai.onnxruntime.** { *; }
 -keepclassmembers class ai.onnxruntime.** { *; }
+
+# Tink (via androidx.security.crypto) references errorprone annotations at
+# compile time; they're not shipped at runtime, so tell R8 to ignore them.
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn com.google.crypto.tink.**
+-keep class com.google.crypto.tink.** { *; }

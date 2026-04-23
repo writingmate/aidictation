@@ -38,12 +38,15 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // API keys from local.properties (do not commit)
+        // API keys from local.properties (do not commit). Defaults mirror the Mac
+        // app, which ships with Writingmate AI as the default transcription provider
+        // (gpt-4o-transcribe) so a fresh install points at Writingmate unless a custom
+        // endpoint is set in local.properties.
         buildConfigField("String", "TRANSCRIPTION_API_KEY", "\"${localProperties.getProperty("TRANSCRIPTION_API_KEY", "")}\"")
-        buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${localProperties.getProperty("TRANSCRIPTION_ENDPOINT", "https://api.openai.com/v1/audio/transcriptions")}\"")
-        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${localProperties.getProperty("TRANSCRIPTION_MODEL", "whisper-1")}\"")
+        buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${localProperties.getProperty("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")}\"")
+        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${localProperties.getProperty("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")}\"")
 
-        // LLM API for word suggestions
+        // LLM API for post-processing (Mac app defaults to Groq here).
         buildConfigField("String", "GROQ_API_KEY", "\"${localProperties.getProperty("GROQ_API_KEY", "")}\"")
         buildConfigField("String", "GROQ_ENDPOINT", "\"${localProperties.getProperty("GROQ_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions")}\"")
         buildConfigField("String", "GROQ_MODEL", "\"${localProperties.getProperty("GROQ_MODEL", "openai/gpt-oss-20b")}\"")

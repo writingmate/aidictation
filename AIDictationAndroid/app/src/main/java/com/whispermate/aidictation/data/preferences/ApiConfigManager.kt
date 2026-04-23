@@ -22,20 +22,24 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 enum class ApiProvider(val displayName: String) {
+    WRITINGMATE("Writingmate"),
     OPENAI("OpenAI"),
     GROQ("Groq");
 
     fun transcriptionEndpoint(): String = when (this) {
+        WRITINGMATE -> "https://writingmate.ai/api/openai/v1/audio/transcriptions"
         OPENAI -> "https://api.openai.com/v1/audio/transcriptions"
         GROQ -> "https://api.groq.com/openai/v1/audio/transcriptions"
     }
 
     fun llmEndpoint(): String = when (this) {
+        WRITINGMATE -> "https://writingmate.ai/api/openai/v1/chat/completions"
         OPENAI -> "https://api.openai.com/v1/chat/completions"
         GROQ -> "https://api.groq.com/openai/v1/chat/completions"
     }
 
     fun baseUrl(): String = when (this) {
+        WRITINGMATE -> "https://writingmate.ai/api/openai"
         OPENAI -> "https://api.openai.com"
         GROQ -> "https://api.groq.com/openai"
     }
@@ -65,11 +69,13 @@ class ApiConfigManager @Inject constructor(
             private set
 
         fun defaultTranscriptionModel(provider: ApiProvider): String = when (provider) {
+            ApiProvider.WRITINGMATE -> "gpt-4o-transcribe"
             ApiProvider.OPENAI -> "whisper-1"
             ApiProvider.GROQ -> "whisper-large-v3-turbo"
         }
 
         fun defaultPostProcessingModel(provider: ApiProvider): String = when (provider) {
+            ApiProvider.WRITINGMATE -> "gpt-4o-mini"
             ApiProvider.OPENAI -> "gpt-4o-mini"
             ApiProvider.GROQ -> "openai/gpt-oss-20b"
         }
@@ -232,11 +238,24 @@ class ApiConfigManager @Inject constructor(
     // MARK: - Private Methods
 
     private fun defaultTranscriptionProvider(): ApiProvider {
-        return if (BuildConfig.TRANSCRIPTION_ENDPOINT.contains("groq")) ApiProvider.GROQ else ApiProvider.OPENAI
+        val endpoint = BuildConfig.TRANSCRIPTION_ENDPOINT
+        return when {
+            endpoint.contains("writingmate", ignoreCase = true) -> ApiProvider.WRITINGMATE
+            endpoint.contains("groq", ignoreCase = true) -> ApiProvider.GROQ
+            endpoint.contains("openai", ignoreCase = true) -> ApiProvider.OPENAI
+            // Match the Mac app, which ships with Writingmate as the default.
+            else -> ApiProvider.WRITINGMATE
+        }
     }
 
     private fun defaultPostProcessingProvider(): ApiProvider {
-        return if (BuildConfig.GROQ_ENDPOINT.contains("groq")) ApiProvider.GROQ else ApiProvider.OPENAI
+        val endpoint = BuildConfig.GROQ_ENDPOINT
+        return when {
+            endpoint.contains("writingmate", ignoreCase = true) -> ApiProvider.WRITINGMATE
+            endpoint.contains("groq", ignoreCase = true) -> ApiProvider.GROQ
+            endpoint.contains("openai", ignoreCase = true) -> ApiProvider.OPENAI
+            else -> ApiProvider.GROQ
+        }
     }
 
     private fun buildDefaultTranscriptionConfig(): ApiConfig {

@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class ApiConfigUiState(
-    val transcriptionProvider: ApiProvider = ApiProvider.OPENAI,
+    val transcriptionProvider: ApiProvider = ApiProvider.WRITINGMATE,
     val transcriptionApiKey: String = "",
     val transcriptionModel: String = "",
     val transcriptionModels: List<String> = emptyList(),

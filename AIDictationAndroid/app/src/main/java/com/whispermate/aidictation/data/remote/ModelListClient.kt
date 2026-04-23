@@ -25,11 +25,13 @@ object ModelListClient {
     // MARK: - Fallback lists
 
     private val transcriptionFallbacks = mapOf(
+        ApiProvider.WRITINGMATE to listOf("gpt-4o-transcribe", "whisper-1"),
         ApiProvider.OPENAI to listOf("whisper-1"),
         ApiProvider.GROQ to listOf("whisper-large-v3-turbo", "whisper-large-v3", "distil-whisper-large-v3-en")
     )
 
     private val postProcessingFallbacks = mapOf(
+        ApiProvider.WRITINGMATE to listOf("gpt-4o-mini", "gpt-4o", "gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1"),
         ApiProvider.OPENAI to listOf("gpt-4o-mini", "gpt-4o", "gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1"),
         ApiProvider.GROQ to listOf(
             "openai/gpt-oss-20b",

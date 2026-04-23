@@ -61,7 +61,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val MIN_RECORDING_MS = 500L
         private const val BUBBLE_SIZE_DP = 44
         private const val BUBBLE_MARGIN_DP = 8
-        private const val BUBBLE_VISIBILITY_DELAY_MS = 80L
+        // Keyboard-dismissal fires bursts of accessibility events, during which focus can
+        // briefly be unreadable. We must wait long enough for the dismissal animation to
+        // settle before committing to a hide, otherwise the bubble fades out and back in.
+        private const val BUBBLE_VISIBILITY_DELAY_MS = 300L
         private const val BUBBLE_ANIMATION_MS = 140L
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
@@ -289,16 +292,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleShouldBeVisible = true
         val token = ++bubbleVisibilityToken
         if (isBubbleAttached) {
-            // Smoothly fade back in if a hide animation is in flight; don't snap —
-            // snapping from a mid-fade alpha to 1f causes a visible flash (e.g. when
-            // keyboard dismissal fires bursts of accessibility events).
-            if (bubble.alpha < 0.999f) {
-                bubble.animate().cancel()
-                bubble.animate()
-                    .alpha(1f)
-                    .setDuration(BUBBLE_ANIMATION_MS)
-                    .start()
-            }
+            // A pending fade-out got cancelled (e.g. transient focus loss during keyboard
+            // dismissal). Snap back to fully visible instead of running a fade-in during
+            // the fade-out — the debounce keeps the snap imperceptible, whereas a reverse
+            // animation reads as a visible flicker.
+            bubble.animate().cancel()
+            bubble.alpha = 1f
             updateCommandActionsPosition()
             updateBubbleUi()
             return

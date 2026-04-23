@@ -70,8 +70,8 @@ jobs:
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
-          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://api.openai.com/v1/audio/transcriptions}
-          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-whisper-1}
+          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}
+          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-gpt-4o-transcribe}
           GROQ_API_KEY=${GROQ_API_KEY}
           GROQ_ENDPOINT=${GROQ_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
           GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-20b}
@@ -169,8 +169,8 @@ jobs:
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
-          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://api.openai.com/v1/audio/transcriptions}
-          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-whisper-1}
+          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}
+          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-gpt-4o-transcribe}
           GROQ_API_KEY=${GROQ_API_KEY}
           GROQ_ENDPOINT=${GROQ_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
           GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-20b}

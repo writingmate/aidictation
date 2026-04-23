@@ -288,13 +288,22 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         bubbleShouldBeVisible = true
         val token = ++bubbleVisibilityToken
-        bubble.animate().cancel()
         if (isBubbleAttached) {
-            bubble.alpha = 1f
+            // Smoothly fade back in if a hide animation is in flight; don't snap —
+            // snapping from a mid-fade alpha to 1f causes a visible flash (e.g. when
+            // keyboard dismissal fires bursts of accessibility events).
+            if (bubble.alpha < 0.999f) {
+                bubble.animate().cancel()
+                bubble.animate()
+                    .alpha(1f)
+                    .setDuration(BUBBLE_ANIMATION_MS)
+                    .start()
+            }
             updateCommandActionsPosition()
             updateBubbleUi()
             return
         }
+        bubble.animate().cancel()
 
         try {
             bubble.alpha = 0f
@@ -332,11 +341,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .setDuration(BUBBLE_ANIMATION_MS)
             .withEndAction {
                 if (token != bubbleVisibilityToken) return@withEndAction
-                if (bubbleShouldBeVisible || shouldShowBubble(null)) {
-                    showBubble()
-                    return@withEndAction
+                // Only remove if nothing flipped the intent back during the fade.
+                // Re-checking shouldShowBubble here and re-entering showBubble used
+                // to snap alpha 0 -> 1 and caused the keyboard-dismiss flicker; any
+                // legitimate reshow will be driven by the next accessibility event.
+                if (!bubbleShouldBeVisible) {
+                    removeBubbleView()
                 }
-                removeBubbleView()
             }
             .start()
     }

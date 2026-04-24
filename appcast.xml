@@ -8,6 +8,18 @@
         <description>Latest AIDictation releases.</description>
         <language>en</language>
         <item>
+            <title>AIDictation 0.0.60</title>
+            <pubDate>Fri, 24 Apr 2026 16:38:44 +0000</pubDate>
+            <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.60</link>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/writingmate/aidictation/releases/download/v0.0.60/AIDictation-v0.0.60.dmg"
+                sparkle:version="60"
+                sparkle:shortVersionString="0.0.60"
+                length="10981774"
+                type="application/octet-stream" />
+        </item>
+        <item>
             <title>AIDictation 0.0.59</title>
             <pubDate>Fri, 24 Apr 2026 15:08:58 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.59</link>

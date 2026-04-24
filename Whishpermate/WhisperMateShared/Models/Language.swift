@@ -1,5 +1,8 @@
 import Foundation
 public import Combine
+#if os(macOS)
+import Carbon
+#endif
 
 public enum Language: String, CaseIterable, Identifiable {
     case auto
@@ -74,14 +77,28 @@ public enum Language: String, CaseIterable, Identifiable {
         case .finnish: return "🇫🇮"
         }
     }
+
+    init?(systemLanguageCode: String) {
+        let normalizedCode = systemLanguageCode
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .first
+            .map(String.init)?
+            .lowercased()
+
+        guard let normalizedCode else { return nil }
+        self.init(rawValue: normalizedCode)
+    }
 }
 
 public class LanguageManager: ObservableObject {
-    @Published var selectedLanguages: Set<Language> = []
+    public static let shared = LanguageManager()
+
+    @Published public var selectedLanguages: Set<Language> = []
 
     private let userDefaultsKey = "selected_languages"
 
-    init() {
+    private init() {
         loadLanguages()
     }
 
@@ -90,9 +107,8 @@ public class LanguageManager: ObservableObject {
             selectedLanguages = Set(savedLanguages.compactMap { Language(rawValue: $0) })
             DebugLog.info("Loaded languages: \(selectedLanguages.map { $0.displayName })", context: "LanguageManager LOG")
         } else {
-            // Default to auto-detect
-            selectedLanguages = [.auto]
-            DebugLog.info("No saved languages, defaulting to auto-detect", context: "LanguageManager LOG")
+            selectedLanguages = Self.defaultLanguages()
+            DebugLog.info("No saved languages, defaulting to \(selectedLanguages.map { $0.displayName })", context: "LanguageManager LOG")
         }
     }
 
@@ -142,4 +158,49 @@ public class LanguageManager: ObservableObject {
 
         return languageCodes.isEmpty ? nil : languageCodes.joined(separator: ",")
     }
+
+    private static func defaultLanguages() -> Set<Language> {
+        #if os(macOS)
+        let keyboardLanguages = systemKeyboardLanguages()
+        if !keyboardLanguages.isEmpty {
+            return keyboardLanguages
+        }
+        #endif
+
+        return [.auto]
+    }
+
+    #if os(macOS)
+    private static func systemKeyboardLanguages() -> Set<Language> {
+        let properties = [kTISPropertyInputSourceIsEnabled: true] as CFDictionary
+        guard let sources = TISCreateInputSourceList(properties, false)?.takeRetainedValue() as? [TISInputSource] else {
+            return []
+        }
+
+        var languages: [Language] = []
+        for source in sources {
+            guard let typePointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else {
+                continue
+            }
+
+            let type = Unmanaged<CFString>.fromOpaque(typePointer).takeUnretainedValue() as String
+            guard type == kTISTypeKeyboardLayout as String || type == kTISTypeKeyboardInputMode as String else {
+                continue
+            }
+
+            guard let languagesPointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) else {
+                continue
+            }
+
+            let sourceLanguages = Unmanaged<CFArray>.fromOpaque(languagesPointer).takeUnretainedValue() as? [String] ?? []
+            if let language = sourceLanguages.lazy.compactMap(Language.init(systemLanguageCode:)).first,
+               !languages.contains(language)
+            {
+                languages.append(language)
+            }
+        }
+
+        return Set(languages)
+    }
+    #endif
 }

@@ -44,7 +44,7 @@ class OverlayWindowManager: ObservableObject {
         static let positionPreviewDuration: TimeInterval = 2.0
         static let windowCreationDelay: TimeInterval = 0.05
         static let activeStateWidth: CGFloat = 118 * overlayScale
-        static let recordingControlsStateWidth: CGFloat = 172 * overlayScale
+        static let recordingControlsStateWidth: CGFloat = 182 * overlayScale
         static let activeStateHeight: CGFloat = 30 * overlayScale
         static let activePadding: CGFloat = 15 * overlayScale
         static let recordingControlsPadding: CGFloat = 6 * overlayScale

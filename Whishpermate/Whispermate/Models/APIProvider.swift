@@ -186,15 +186,9 @@ class TranscriptionProviderManager: ObservableObject {
             return false
         }()
 
-        if mode == .local && !modelReady {
-            setTranscriptionMode(.cloud)
-            initializeParakeetIfNeeded(parakeetService)
-            return mode
-        }
-
         setTranscriptionMode(mode)
 
-        if mode == .auto && !modelReady {
+        if (mode == .local || mode == .auto) && !modelReady {
             initializeParakeetIfNeeded(parakeetService)
         }
 

@@ -49,6 +49,8 @@ class AppState: ObservableObject {
     private var capturedScreenContext: String?
     private var recordingMode: RecordingMode = .dictation
     private var shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
+    private var realtimeTranscriptionClient: OpenAIRealtimeTranscriptionClient?
+    private var realtimeTranscript: String = ""
 
     // MARK: - Dependencies (singletons)
 
@@ -136,6 +138,8 @@ class AppState: ObservableObject {
         // Store previous app for pasting
         ClipboardManager.storePreviousApp()
 
+        startRealtimeTranscriptionIfAvailable()
+
         // Start audio recording
         audioRecorder.startRecording()
 
@@ -152,6 +156,8 @@ class AppState: ObservableObject {
             }
         } else {
             DebugLog.info("❌ Recording failed to start", context: "AppState")
+            let realtimeClient = stopRealtimeTranscription()
+            realtimeClient?.close()
             recordingState = .idle
             errorMessage = "Failed to start recording"
             shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
@@ -190,6 +196,8 @@ class AppState: ObservableObject {
                 recordingStartTime = nil
                 recordingMode = .dictation
                 _ = audioRecorder.stopRecording()
+                let realtimeClient = stopRealtimeTranscription()
+                realtimeClient?.close()
 
                 finishOverlayAfterRecording()
                 return
@@ -199,12 +207,16 @@ class AppState: ObservableObject {
         // Stop audio recording
         guard let audioURL = audioRecorder.stopRecording() else {
             DebugLog.info("❌ Failed to get audio URL", context: "AppState")
+            let realtimeClient = stopRealtimeTranscription()
+            realtimeClient?.close()
             recordingState = .idle
             recordingMode = .dictation
             errorMessage = "Failed to save recording"
             finishOverlayAfterRecording()
             return
         }
+
+        let realtimeClient = stopRealtimeTranscription()
 
         // Check file size
         do {
@@ -217,6 +229,7 @@ class AppState: ObservableObject {
                 shouldAutoPaste = false
                 recordingMode = .dictation
                 try? FileManager.default.removeItem(at: audioURL)
+                realtimeClient?.close()
                 finishOverlayAfterRecording()
                 return
             }
@@ -225,7 +238,7 @@ class AppState: ObservableObject {
         }
 
         // Begin transcription
-        transcribe(audioURL: audioURL)
+        transcribe(audioURL: audioURL, realtimeClient: realtimeClient)
     }
 
     /// Cancel recording, discard captured audio, and return to idle without transcription.
@@ -238,6 +251,8 @@ class AppState: ObservableObject {
         }
 
         let audioURL = audioRecorder.stopRecording()
+        let realtimeClient = stopRealtimeTranscription()
+        realtimeClient?.close()
         if let audioURL {
             try? FileManager.default.removeItem(at: audioURL)
         }
@@ -344,7 +359,7 @@ class AppState: ObservableObject {
 
     }
 
-    private func transcribe(audioURL: URL) {
+    private func transcribe(audioURL: URL, realtimeClient: OpenAIRealtimeTranscriptionClient? = nil) {
         DebugLog.info("📝 AppState.transcribe()", context: "AppState")
 
         recordingState = .transcribing
@@ -375,8 +390,16 @@ class AppState: ObservableObject {
                     return
                 }
 
-                // VAD check first
-                if vadSettingsManager.vadEnabled {
+                let realtimeResult: String?
+                if let realtimeClient {
+                    realtimeResult = await realtimeClient.finish(timeout: 1.2)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    realtimeResult = nil
+                }
+
+                // VAD check first unless realtime already returned text.
+                if (realtimeResult?.isEmpty ?? true), vadSettingsManager.vadEnabled {
                     let vadStart = CFAbsoluteTimeGetCurrent()
 
                     let hasSpeech = try await VoiceActivityDetector.hasSpeech(
@@ -415,12 +438,18 @@ class AppState: ObservableObject {
                 }
 
                 let transcriptionStart = CFAbsoluteTimeGetCurrent()
-                let result = try await performTranscription(
-                    audioURL: audioURL,
-                    appContext: capturedAppContext,
-                    clipboardContent: clipboardContent,
-                    screenContext: screenContextForTranscription
-                )
+                let result: String
+                if let realtimeResult, !realtimeResult.isEmpty {
+                    DebugLog.info("Using realtime transcription result", context: "AppState")
+                    result = dictionaryManager.applyReplacements(to: TranscriptionOutputFilter.filter(realtimeResult))
+                } else {
+                    result = try await performTranscription(
+                        audioURL: audioURL,
+                        appContext: capturedAppContext,
+                        clipboardContent: clipboardContent,
+                        screenContext: screenContextForTranscription
+                    )
+                }
                 let transcriptionMs = Int((CFAbsoluteTimeGetCurrent() - transcriptionStart) * 1000)
                 DebugLog.info("⏱️ Transcription took \(transcriptionMs)ms", context: "AppState")
 
@@ -525,14 +554,98 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Core transcription logic shared by live recording and re-transcription
-    private func performTranscription(
-        audioURL: URL,
-        appContext: String?,
-        clipboardContent: String?,
-        screenContext: String?
-    ) async throws -> String {
-        // Build context components
+    private func startRealtimeTranscriptionIfAvailable() {
+        realtimeTranscript = ""
+        realtimeTranscriptionClient?.close()
+        realtimeTranscriptionClient = nil
+        audioRecorder.realtimeAudioChunkHandler = nil
+
+        let mode = transcriptionProviderManager.transcriptionMode
+        let provider = transcriptionProviderManager.selectedProvider
+
+        guard mode != .local,
+              !provider.isOnDevice,
+              NetworkMonitor.shared.isConnected
+        else {
+            return
+        }
+
+        let prompt = buildTranscriptionPromptComponents().joined(separator: "\n")
+        let realtimePrompt = prompt.isEmpty ? nil : prompt
+        let languageCode = languageManager.apiLanguageCode
+        let client: OpenAIRealtimeTranscriptionClient
+
+        switch provider {
+        case .openai:
+            guard let apiKey = resolvedTranscriptionApiKey(), !apiKey.isEmpty else {
+                return
+            }
+            client = OpenAIRealtimeTranscriptionClient(
+                apiKey: apiKey,
+                prompt: realtimePrompt,
+                onPartialTranscript: { [weak self] partial in
+                    self?.handleRealtimePartial(partial)
+                },
+                onError: { message in
+                    DebugLog.warning(message, context: "AppState")
+                }
+            )
+        case .custom:
+            guard let apiKey = resolvedTranscriptionApiKey(), !apiKey.isEmpty else {
+                return
+            }
+            guard let endpoint = WritingmateRealtimeClientSecretProvider.endpoint(
+                from: transcriptionProviderManager.effectiveEndpoint
+            ) else {
+                DebugLog.warning("Invalid realtime token endpoint", context: "AppState")
+                return
+            }
+
+            client = OpenAIRealtimeTranscriptionClient(
+                authorizationProvider: {
+                    try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
+                        endpoint: endpoint,
+                        apiKey: apiKey,
+                        prompt: realtimePrompt,
+                        language: languageCode
+                    )
+                },
+                prompt: realtimePrompt,
+                onPartialTranscript: { [weak self] partial in
+                    self?.handleRealtimePartial(partial)
+                },
+                onError: { message in
+                    DebugLog.warning(message, context: "AppState")
+                }
+            )
+        case .groq, .parakeet:
+            return
+        }
+
+        realtimeTranscriptionClient = client
+        audioRecorder.realtimeAudioChunkHandler = { [weak client] chunk in
+            client?.sendAudio(chunk)
+        }
+        client.start()
+        DebugLog.info("Started realtime transcription stream for \(provider.displayName)", context: "AppState")
+    }
+
+    private func stopRealtimeTranscription() -> OpenAIRealtimeTranscriptionClient? {
+        audioRecorder.realtimeAudioChunkHandler = nil
+        let client = realtimeTranscriptionClient
+        realtimeTranscriptionClient = nil
+        return client
+    }
+
+    private func handleRealtimePartial(_ partial: String) {
+        let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        realtimeTranscript = text
+        transcriptionText = text
+        DebugLog.info("Realtime transcription partial: \(text)", context: "AppState")
+    }
+
+    private func buildTranscriptionPromptComponents() -> [String] {
         var promptComponents: [String] = []
 
         if !dictionaryManager.transcriptionHints.isEmpty {
@@ -550,6 +663,18 @@ class AppState: ObservableObject {
         if let instructions = contextRulesManager.instructions(for: capturedAppBundleId, windowTitle: capturedWindowTitle) {
             promptComponents.append(instructions)
         }
+
+        return promptComponents
+    }
+
+    /// Core transcription logic shared by live recording and re-transcription
+    private func performTranscription(
+        audioURL: URL,
+        appContext: String?,
+        clipboardContent: String?,
+        screenContext: String?
+    ) async throws -> String {
+        let promptComponents = buildTranscriptionPromptComponents()
 
         let mode = transcriptionProviderManager.transcriptionMode
         var provider = transcriptionProviderManager.selectedProvider

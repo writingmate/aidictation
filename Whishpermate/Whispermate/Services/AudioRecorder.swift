@@ -11,6 +11,7 @@ class AudioRecorder: NSObject, ObservableObject {
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount) // Frequency spectrum data
+    var realtimeAudioChunkHandler: ((Data) -> Void)?
 
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
@@ -22,6 +23,13 @@ class AudioRecorder: NSObject, ObservableObject {
     private var pendingEngineRefresh = false
     private var refreshWorkItem: DispatchWorkItem?
     private var retiredEngines: [AVAudioEngine] = []
+    private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
+    private let realtimeOutputFormat = AVAudioFormat(
+        commonFormat: .pcmFormatInt16,
+        sampleRate: 24_000,
+        channels: 1,
+        interleaved: true
+    )
 
     override private init() {
         super.init()
@@ -165,6 +173,12 @@ class AudioRecorder: NSObject, ObservableObject {
                     }
                 } catch {
                     DebugLog.info("❌ Failed to write audio buffer: \(error)", context: "AudioRecorder LOG")
+                }
+
+                if let chunk = self.realtimePCMChunk(from: buffer), let handler = self.realtimeAudioChunkHandler {
+                    self.realtimeAudioQueue.async {
+                        handler(chunk)
+                    }
                 }
             }
 
@@ -316,6 +330,45 @@ class AudioRecorder: NSObject, ObservableObject {
         let boosted = min(normalized * 1.5, 1.0)
 
         return max(0.0, min(1.0, boosted))
+    }
+
+    private func realtimePCMChunk(from buffer: AVAudioPCMBuffer) -> Data? {
+        guard let realtimeOutputFormat else { return nil }
+
+        let inputFormat = buffer.format
+        guard let converter = AVAudioConverter(from: inputFormat, to: realtimeOutputFormat) else {
+            return nil
+        }
+
+        let ratio = realtimeOutputFormat.sampleRate / inputFormat.sampleRate
+        let frameCapacity = AVAudioFrameCount(max(1, ceil(Double(buffer.frameLength) * ratio)))
+        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: realtimeOutputFormat, frameCapacity: frameCapacity) else {
+            return nil
+        }
+
+        var conversionError: NSError?
+        var didProvideInput = false
+        converter.convert(to: convertedBuffer, error: &conversionError) { _, outStatus in
+            if didProvideInput {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+
+            didProvideInput = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        if let conversionError {
+            DebugLog.info("Realtime audio conversion failed: \(conversionError)", context: "AudioRecorder")
+            return nil
+        }
+
+        guard let channelData = convertedBuffer.int16ChannelData else { return nil }
+        let byteCount = Int(convertedBuffer.frameLength) * MemoryLayout<Int16>.size
+        guard byteCount > 0 else { return nil }
+
+        return Data(bytes: channelData.pointee, count: byteCount)
     }
 
     func stopRecording() -> URL? {

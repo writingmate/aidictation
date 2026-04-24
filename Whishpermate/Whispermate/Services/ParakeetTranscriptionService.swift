@@ -32,7 +32,6 @@ class ParakeetTranscriptionService: ObservableObject {
     // MARK: - Private Properties
 
     private var asrManager: AsrManager?
-    private var models: AsrModels?
     private let audioConverter = AudioConverter()
 
     // MARK: - Initialization
@@ -58,16 +57,13 @@ class ParakeetTranscriptionService: ObservableObject {
             // Download v3 multilingual model (will use cache if already downloaded)
             let downloadedModels = try await AsrModels.downloadAndLoad(version: .v3)
 
-            await MainActor.run {
-                self.state = .initializing
-                self.models = downloadedModels
-            }
+            await MainActor.run { self.state = .initializing }
 
             DebugLog.info("Initializing ASR manager...", context: "ParakeetTranscriptionService")
 
             // Initialize ASR manager
             let manager = AsrManager(config: .default)
-            try await manager.initialize(models: downloadedModels)
+            try await manager.loadModels(downloadedModels)
 
             await MainActor.run {
                 self.asrManager = manager
@@ -119,7 +115,8 @@ class ParakeetTranscriptionService: ObservableObject {
             DebugLog.info("Transcribing \(samples.count) samples...", context: "ParakeetTranscriptionService")
 
             // Perform transcription
-            let result = try await manager.transcribe(samples)
+            var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+            let result = try await manager.transcribe(samples, decoderState: &decoderState)
 
             DebugLog.info("Transcription complete: \(result.text.prefix(100))...", context: "ParakeetTranscriptionService")
 
@@ -135,7 +132,6 @@ class ParakeetTranscriptionService: ObservableObject {
     func cleanup() {
         let manager = asrManager
         asrManager = nil
-        models = nil
         Task {
             await manager?.cleanup()
             await MainActor.run {

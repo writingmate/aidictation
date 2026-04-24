@@ -8,7 +8,7 @@ Usage:
 
 Behavior:
   - Builds and exports a signed Release archive for AIDictation.
-  - Creates AIDictation-<tag>.dmg with volume name AIDictation.
+  - Creates a draggable AIDictation-<tag>.dmg with the app and Applications shortcut.
   - Notarizes and staples the app and DMG.
   - Optionally publishes/updates the GitHub release.
 
@@ -135,8 +135,22 @@ ARCHIVE_PATH="$RELEASE_DIR/$APP_NAME.xcarchive"
 EXPORT_DIR="$RELEASE_DIR/export"
 APP_PATH="$EXPORT_DIR/$APP_NAME.app"
 DMG_PATH="$RELEASE_DIR/$APP_NAME-$TAG.dmg"
+DMG_RW_PATH="$RELEASE_DIR/$APP_NAME-$TAG-rw.dmg"
+DMG_MOUNT_DIR="$RELEASE_DIR/dmg-mount"
 APP_ZIP="$RELEASE_DIR/$APP_NAME-$VERSION.zip"
 EXPORT_OPTIONS="$RELEASE_DIR/exportOptions.plist"
+DMG_DEVICE=""
+
+detach_dmg() {
+  if [[ -n "$DMG_DEVICE" ]]; then
+    hdiutil detach "$DMG_DEVICE" -quiet >/dev/null 2>&1 \
+      || hdiutil detach "$DMG_MOUNT_DIR" -force -quiet >/dev/null 2>&1 \
+      || true
+    DMG_DEVICE=""
+  fi
+}
+
+trap detach_dmg EXIT
 
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
@@ -201,12 +215,63 @@ xcrun notarytool submit "$APP_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP_PATH"
 rm -f "$APP_ZIP"
 
-echo "==> Creating DMG $DMG_PATH"
+echo "==> Creating draggable DMG $DMG_PATH"
+rm -rf "$DMG_MOUNT_DIR" "$DMG_RW_PATH" "$DMG_PATH"
+mkdir -p "$DMG_MOUNT_DIR"
+APP_SIZE_MB="$(du -sm "$APP_PATH" | awk '{ print $1 }')"
+DMG_SIZE_MB=$((APP_SIZE_MB + 128))
+if [[ "$DMG_SIZE_MB" -lt 256 ]]; then
+  DMG_SIZE_MB=256
+fi
+
 hdiutil create \
   -volname "$APP_NAME" \
-  -srcfolder "$APP_PATH" \
-  -ov -format UDZO \
-  "$DMG_PATH"
+  -size "${DMG_SIZE_MB}m" \
+  -fs HFS+ \
+  -fsargs "-c c=64,a=16,e=16" \
+  -ov \
+  "$DMG_RW_PATH"
+
+DMG_ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW_PATH" -readwrite -noverify -noautoopen -mountpoint "$DMG_MOUNT_DIR")"
+DMG_DEVICE="$(awk '/Apple_HFS/ { print $1; exit }' <<<"$DMG_ATTACH_OUTPUT")"
+[[ -n "$DMG_DEVICE" ]] || fatal "Could not determine mounted DMG device."
+
+ditto "$APP_PATH" "$DMG_MOUNT_DIR/$APP_NAME.app"
+ln -s /Applications "$DMG_MOUNT_DIR/Applications"
+
+if command -v osascript >/dev/null 2>&1; then
+  osascript <<APPLESCRIPT || echo "warning: could not set Finder DMG layout" >&2
+tell application "Finder"
+  tell disk "$APP_NAME"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {360, 180, 880, 500}
+    set viewOptions to icon view options of container window
+    set arrangement of viewOptions to not arranged
+    set icon size of viewOptions to 112
+    set text size of viewOptions to 13
+    set position of item "$APP_NAME.app" to {150, 160}
+    set position of item "Applications" to {370, 160}
+    close
+    open
+    update without registering applications
+    delay 1
+  end tell
+end tell
+APPLESCRIPT
+fi
+
+sync
+detach_dmg
+
+hdiutil convert "$DMG_RW_PATH" \
+  -format UDZO \
+  -imagekey zlib-level=9 \
+  -o "$DMG_PATH"
+
+rm -rf "$DMG_MOUNT_DIR" "$DMG_RW_PATH"
 
 echo "==> Signing DMG"
 codesign --force --sign "$DMG_SIGN_IDENTITY" --timestamp "$DMG_PATH"

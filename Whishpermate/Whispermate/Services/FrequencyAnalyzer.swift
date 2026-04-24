@@ -9,7 +9,7 @@ class FrequencyAnalyzer {
     private let smoothingFactor: Float = 0.3 // Lower smoothing = more responsive to changes
 
     // Number of frequency bands to output
-    let bandCount = 14
+    let bandCount = 10
 
     init() {
         // Create FFT setup

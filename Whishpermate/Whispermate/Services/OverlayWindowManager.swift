@@ -43,8 +43,8 @@ class OverlayWindowManager: ObservableObject {
         static let stateChangeAnimationDelay: TimeInterval = 0.2
         static let positionPreviewDuration: TimeInterval = 2.0
         static let windowCreationDelay: TimeInterval = 0.05
-        static let activeStateWidth: CGFloat = 168 * overlayScale
-        static let recordingControlsStateWidth: CGFloat = 246 * overlayScale
+        static let activeStateWidth: CGFloat = 118 * overlayScale
+        static let recordingControlsStateWidth: CGFloat = 172 * overlayScale
         static let activeStateHeight: CGFloat = 30 * overlayScale
         static let activePadding: CGFloat = 15 * overlayScale
         static let recordingControlsPadding: CGFloat = 6 * overlayScale
@@ -57,7 +57,7 @@ class OverlayWindowManager: ObservableObject {
         static let verticalPaddingIdle: CGFloat = 3
         static let windowSafetyPadding: CGFloat = 10
         static let hoverFrameInset: CGFloat = 4 * overlayScale
-        static let frequencyBandCount: Int = 14
+        static let frequencyBandCount: Int = 10
         static let windowResizeAnimationDuration: TimeInterval = 0.25
         static let hoverCollapseResizeDelay: TimeInterval = 0.18
     }

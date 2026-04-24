@@ -6,10 +6,11 @@ internal import Combine
 class AudioRecorder: NSObject, ObservableObject {
     // Shared instance to prevent multiple instances when view is recreated
     static let shared = AudioRecorder()
+    private static let frequencyBandCount = 10
 
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
-    @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: 14) // Frequency spectrum data
+    @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount) // Frequency spectrum data
 
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
@@ -282,12 +283,12 @@ class AudioRecorder: NSObject, ObservableObject {
         if Thread.isMainThread {
             isRecording = false
             audioLevel = 0.0
-            frequencyBands = Array(repeating: 0.0, count: 14)
+            frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
         } else {
             DispatchQueue.main.sync {
                 self.isRecording = false
                 self.audioLevel = 0.0
-                self.frequencyBands = Array(repeating: 0.0, count: 14)
+                self.frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
             }
         }
         volumeManager.restoreVolume()
@@ -340,12 +341,12 @@ class AudioRecorder: NSObject, ObservableObject {
         if Thread.isMainThread {
             isRecording = false
             audioLevel = 0.0
-            frequencyBands = Array(repeating: 0.0, count: 14)
+            frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
         } else {
             DispatchQueue.main.sync {
                 self.isRecording = false
                 self.audioLevel = 0.0
-                self.frequencyBands = Array(repeating: 0.0, count: 14)
+                self.frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
             }
         }
 

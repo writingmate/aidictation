@@ -19,8 +19,8 @@ struct RecordingOverlayView: View {
     private static let overlayScale: CGFloat = 0.75
 
     // Recording/Processing state
-    private let activeStateWidth: CGFloat = 168 * RecordingOverlayView.overlayScale
-    private let recordingControlsStateWidth: CGFloat = 246 * RecordingOverlayView.overlayScale
+    private let activeStateWidth: CGFloat = 118 * RecordingOverlayView.overlayScale
+    private let recordingControlsStateWidth: CGFloat = 172 * RecordingOverlayView.overlayScale
     private let activeStateHeight: CGFloat = 30 * RecordingOverlayView.overlayScale
     private let waveSpanWidth: CGFloat = OverlayWaveMetrics.rowWidth
 
@@ -432,7 +432,7 @@ struct RecordingOverlayView: View {
 }
 
 private enum OverlayWaveMetrics {
-    static let count = 14
+    static let count = 10
     static let dotSize: CGFloat = 4
     static let spacing: CGFloat = 4.75
     static let rowWidth: CGFloat = (dotSize * CGFloat(count)) + (spacing * CGFloat(count - 1))

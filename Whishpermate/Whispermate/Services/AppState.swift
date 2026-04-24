@@ -48,6 +48,7 @@ class AppState: ObservableObject {
     private var capturedWindowTitle: String?
     private var capturedScreenContext: String?
     private var recordingMode: RecordingMode = .dictation
+    private var shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
 
     // MARK: - Dependencies (singletons)
 
@@ -56,7 +57,7 @@ class AppState: ObservableObject {
     private let overlayManager = OverlayWindowManager.shared
     private let vadSettingsManager = VADSettingsManager.shared
     private let onboardingManager = OnboardingManager.shared
-    let transcriptionProviderManager = TranscriptionProviderManager()
+    let transcriptionProviderManager = TranscriptionProviderManager.shared
     private let llmProviderManager = LLMProviderManager.shared
     private let dictionaryManager = DictionaryManager.shared
     private let contextRulesManager = ContextRulesManager.shared
@@ -77,8 +78,8 @@ class AppState: ObservableObject {
     /// - Parameters:
     ///   - continuous: Whether this is continuous recording mode
     ///   - isCommandMode: Whether this is command mode (set by startCommandRecording)
-    func startRecording(continuous: Bool = false, isCommandMode: Bool = false) {
-        DebugLog.info("🎬 AppState.startRecording(continuous: \(continuous), isCommandMode: \(isCommandMode))", context: "AppState")
+    func startRecording(continuous: Bool = false, isCommandMode: Bool = false, showOverlayControls: Bool = false) {
+        DebugLog.info("🎬 AppState.startRecording(continuous: \(continuous), isCommandMode: \(isCommandMode), showOverlayControls: \(showOverlayControls))", context: "AppState")
 
         // Don't start if already recording
         guard recordingState == .idle else {
@@ -90,6 +91,9 @@ class AppState: ObservableObject {
         if !isCommandMode {
             recordingMode = .dictation
         }
+
+        let shouldShowOverlayControls = showOverlayControls && !isCommandMode
+        shouldKeepOverlayIdleVisibleAfterCurrentRecording = shouldShowOverlayControls
 
         // Set state
         recordingState = .recording
@@ -139,6 +143,10 @@ class AppState: ObservableObject {
             DebugLog.info("✅ Recording started successfully", context: "AppState")
             if overlayManager.isOverlayMode {
                 let isCommand = (recordingMode == .command)
+                overlayManager.setRecordingControlsVisible(shouldShowOverlayControls && !isCommand)
+                if !shouldShowOverlayControls {
+                    overlayManager.setHoverExpanded(true)
+                }
                 overlayManager.transition(to: .recording(isCommandMode: isCommand))
                 DebugLog.info("Overlay transitioned to recording (command: \(isCommand))", context: "AppState")
             }
@@ -146,6 +154,8 @@ class AppState: ObservableObject {
             DebugLog.info("❌ Recording failed to start", context: "AppState")
             recordingState = .idle
             errorMessage = "Failed to start recording"
+            shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
+            finishOverlayAfterRecording()
         }
     }
 
@@ -157,7 +167,7 @@ class AppState: ObservableObject {
         // Capture target text (selected text or last dictation) before recording starts
         CommandModeManager.shared.prepareForCommand()
         DebugLog.info("🎯 Target text captured: '\(CommandModeManager.shared.targetText.prefix(100))...'", context: "AppState")
-        startRecording(continuous: false, isCommandMode: true)
+        startRecording(continuous: false, isCommandMode: true, showOverlayControls: false)
     }
 
     /// Stop recording and begin transcription
@@ -181,9 +191,7 @@ class AppState: ObservableObject {
                 recordingMode = .dictation
                 _ = audioRecorder.stopRecording()
 
-                if overlayManager.isOverlayMode {
-                    overlayManager.transition(to: .hidden)
-                }
+                finishOverlayAfterRecording()
                 return
             }
         }
@@ -194,9 +202,7 @@ class AppState: ObservableObject {
             recordingState = .idle
             recordingMode = .dictation
             errorMessage = "Failed to save recording"
-            if overlayManager.isOverlayMode {
-                overlayManager.transition(to: .hidden)
-            }
+            finishOverlayAfterRecording()
             return
         }
 
@@ -211,9 +217,7 @@ class AppState: ObservableObject {
                 shouldAutoPaste = false
                 recordingMode = .dictation
                 try? FileManager.default.removeItem(at: audioURL)
-                if overlayManager.isOverlayMode {
-                    overlayManager.transition(to: .hidden)
-                }
+                finishOverlayAfterRecording()
                 return
             }
         } catch {
@@ -222,6 +226,29 @@ class AppState: ObservableObject {
 
         // Begin transcription
         transcribe(audioURL: audioURL)
+    }
+
+    /// Cancel recording, discard captured audio, and return to idle without transcription.
+    func cancelRecording() {
+        DebugLog.info("✕ AppState.cancelRecording()", context: "AppState")
+
+        guard recordingState == .recording else {
+            DebugLog.info("⚠️ Not recording, current state: \(recordingState)", context: "AppState")
+            return
+        }
+
+        let audioURL = audioRecorder.stopRecording()
+        if let audioURL {
+            try? FileManager.default.removeItem(at: audioURL)
+        }
+
+        recordingState = .idle
+        isContinuousRecording = false
+        shouldAutoPaste = false
+        recordingStartTime = nil
+        recordingMode = .dictation
+
+        finishOverlayAfterRecording()
     }
 
     /// Toggle continuous recording mode
@@ -237,7 +264,7 @@ class AppState: ObservableObject {
             stopRecording()
         } else if recordingState == .idle {
             // Start continuous recording
-            startRecording(continuous: true)
+            startRecording(continuous: true, showOverlayControls: false)
         }
     }
 
@@ -314,6 +341,7 @@ class AppState: ObservableObject {
             self?.appContext = .foreground
             DebugLog.info("App came to foreground", context: "AppState")
         }
+
     }
 
     private func transcribe(audioURL: URL) {
@@ -338,9 +366,7 @@ class AppState: ObservableObject {
                         self.isProcessing = false
                     }
                     try? FileManager.default.removeItem(at: audioURL)
-                    if overlayManager.isOverlayMode {
-                        overlayManager.transition(to: .idle)
-                    }
+                    finishOverlayAfterRecording()
 
                     // Open Settings to Account section
                     await MainActor.run {
@@ -368,9 +394,7 @@ class AppState: ObservableObject {
                             self.shouldAutoPaste = false
                         }
                         try? FileManager.default.removeItem(at: audioURL)
-                        if overlayManager.isOverlayMode {
-                            overlayManager.transition(to: .hidden)
-                        }
+                        finishOverlayAfterRecording()
                         return
                     }
                 }
@@ -477,13 +501,27 @@ class AppState: ObservableObject {
                 }
 
                 if overlayManager.isOverlayMode {
-                    overlayManager.transition(to: .hidden)
+                    finishOverlayAfterRecording()
                 }
             }
 
             // Reset state
             shouldAutoPaste = false
             recordingStartTime = nil
+        }
+    }
+
+    private func finishOverlayAfterRecording() {
+        guard overlayManager.isOverlayMode else {
+            shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
+            return
+        }
+
+        if shouldKeepOverlayIdleVisibleAfterCurrentRecording {
+            shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
+            overlayManager.transitionToVisibleIdle()
+        } else {
+            overlayManager.transition(to: overlayManager.hideIdleState ? .hidden : .idle)
         }
     }
 
@@ -703,11 +741,11 @@ class AppState: ObservableObject {
             ClipboardManager.copyAndPaste(transcription)
             await MainActor.run {
                 self.recordingState = .idle
-                self.overlayManager.transition(to: self.overlayManager.hideIdleState ? .hidden : .idle)
+                self.finishOverlayAfterRecording()
             }
         } else if overlayManager.isOverlayMode {
             // Not auto-pasting, just reset overlay state
-            overlayManager.transition(to: overlayManager.hideIdleState ? .hidden : .idle)
+            finishOverlayAfterRecording()
         }
     }
 

@@ -9,6 +9,15 @@ enum OverlayPosition: String, CaseIterable, Codable {
     case bottom = "Bottom"
 }
 
+enum OverlayColorTheme: String, CaseIterable, Codable {
+    case primary = "Primary"
+    case blue = "Blue"
+    case green = "Green"
+    case orange = "Orange"
+    case pink = "Pink"
+    case graphite = "Graphite"
+}
+
 /// Custom NSWindow that doesn't become key or main, preventing app activation on click
 private class NonActivatingWindow: NSPanel {
     override var canBecomeKey: Bool { false }
@@ -24,26 +33,33 @@ class OverlayWindowManager: ObservableObject {
     private enum Keys {
         static let overlayPosition = "overlayPosition"
         static let hideIdleState = "hideIdleState"
+        static let overlayColorTheme = "overlayColorTheme"
     }
 
     // MARK: - Constants
 
     private enum Constants {
+        static let overlayScale: CGFloat = 0.75
         static let stateChangeAnimationDelay: TimeInterval = 0.2
         static let positionPreviewDuration: TimeInterval = 2.0
         static let windowCreationDelay: TimeInterval = 0.05
-        static let activeStateWidth: CGFloat = 95
-        static let activeStateHeight: CGFloat = 24
-        static let activePadding: CGFloat = 15
+        static let activeStateWidth: CGFloat = 168 * overlayScale
+        static let recordingControlsStateWidth: CGFloat = 246 * overlayScale
+        static let activeStateHeight: CGFloat = 30 * overlayScale
+        static let activePadding: CGFloat = 15 * overlayScale
+        static let recordingControlsPadding: CGFloat = 6 * overlayScale
         static let idleStateWidth: CGFloat = 21
         static let idleStateHeight: CGFloat = 1
-        static let idlePaddingHover: CGFloat = 8
-        static let expandButtonSize: CGFloat = 17
-        static let itemSpacing: CGFloat = 6
-        static let edgeMargin: CGFloat = 2
-        static let verticalPaddingActive: CGFloat = 4.5
+        static let idleHoverHitSlop: CGFloat = 16
+        static let idlePaddingNormal: CGFloat = 16
+        static let edgeMargin: CGFloat = 2 * overlayScale
+        static let verticalPaddingActive: CGFloat = 4.5 * overlayScale
         static let verticalPaddingIdle: CGFloat = 3
+        static let windowSafetyPadding: CGFloat = 10
+        static let hoverFrameInset: CGFloat = 4 * overlayScale
         static let frequencyBandCount: Int = 14
+        static let windowResizeAnimationDuration: TimeInterval = 0.25
+        static let hoverCollapseResizeDelay: TimeInterval = 0.18
     }
 
     // MARK: - Published Properties (derived from overlayState for view compatibility)
@@ -103,6 +119,21 @@ class OverlayWindowManager: ObservableObject {
 
     /// Is currently in command mode (recording voice instruction)
     @Published var isCommandMode: Bool = false
+    @Published private(set) var isHoverExpanded = false
+    @Published private(set) var showsRecordingControls = false
+
+    @Published var colorTheme: OverlayColorTheme = {
+        if let savedRawValue = AppDefaults.shared.string(forKey: Keys.overlayColorTheme),
+           let savedTheme = OverlayColorTheme(rawValue: savedRawValue)
+        {
+            return savedTheme
+        }
+        return .primary
+    }() {
+        didSet {
+            AppDefaults.shared.set(colorTheme.rawValue, forKey: Keys.overlayColorTheme)
+        }
+    }
 
     // MARK: - Overlay State (single source of truth)
 
@@ -121,8 +152,15 @@ class OverlayWindowManager: ObservableObject {
     private var screenChangeObserver: Any?
     private var spaceChangeObserver: Any?
     private var appActivationObserver: Any?
+    private var localMouseMonitor: Any?
+    private var globalMouseMonitor: Any?
+    private var hoverTrackingTimer: Timer?
+    private var frameAnimationTimer: Timer?
+    private var hoverCollapseResizeWorkItem: DispatchWorkItem?
     private var audioLevelCancellable: AnyCancellable?
     private var frequencyBandsCancellable: AnyCancellable?
+    private var suppressHoverExpansionUntilMouseExit = false
+    private var keepIdleVisibleAfterCollapse = false
 
     // MARK: - Initialization
 
@@ -130,6 +168,7 @@ class OverlayWindowManager: ObservableObject {
         setupScreenChangeObserver()
         setupSpaceChangeObserver()
         setupAppActivationObserver()
+        setupMouseHoverMonitor()
         setupAudioObservers()
     }
 
@@ -182,16 +221,22 @@ class OverlayWindowManager: ObservableObject {
         // Update derived properties for backward compatibility with views
         switch newState {
         case .hidden:
+            hoverCollapseResizeWorkItem?.cancel()
+            keepIdleVisibleAfterCollapse = false
             isRecording = false
             isProcessing = false
             isCommandMode = false
+            showsRecordingControls = false
             overlayWindow?.orderOut(nil)
             DebugLog.info("transition: window hidden", context: "OverlayWindowManager")
 
         case .idle:
+            hoverCollapseResizeWorkItem?.cancel()
             isRecording = false
             isProcessing = false
             isCommandMode = false
+            showsRecordingControls = false
+            isHoverExpanded = false
             ensureWindowExists()
             overlayWindow?.orderFrontRegardless()
             // If coming from active state, keep window large for collapse animation
@@ -202,27 +247,48 @@ class OverlayWindowManager: ObservableObject {
                 previousState == .processing(isCommandMode: false)
             if !comingFromActive {
                 updateWindowSizeForState(newState, animated: false)
+                keepIdleVisibleAfterCollapse = false
             }
 
         case let .recording(commandMode):
+            hoverCollapseResizeWorkItem?.cancel()
+            keepIdleVisibleAfterCollapse = false
             isRecording = true
             isProcessing = false
             isCommandMode = commandMode
             ensureWindowExists()
             overlayWindow?.orderFrontRegardless()
-            updateWindowSizeForState(newState, animated: true)
+            if showsRecordingControls {
+                isHoverExpanded = false
+                updateWindowSizeForState(newState, animated: false, preserveAnchor: true)
+            } else {
+                if !isHoverExpanded {
+                    isHoverExpanded = true
+                    updateWindowSizeForState(.idle, animated: false, preserveAnchor: true)
+                }
+            }
 
         case let .processing(commandMode):
+            hoverCollapseResizeWorkItem?.cancel()
+            keepIdleVisibleAfterCollapse = false
             isRecording = false
             isProcessing = true
             isCommandMode = commandMode
+            isHoverExpanded = false
+            showsRecordingControls = false
+            suppressHoverExpansionUntilMouseExit = true
             ensureWindowExists()
             overlayWindow?.orderFrontRegardless()
-            updateWindowSizeForState(newState, animated: true)
+            updateWindowSizeForState(newState, animated: true, preserveAnchor: true)
         }
 
         ensureWindowOnActiveSpace(reason: "transition")
         logWindowState("transition-after")
+    }
+
+    func transitionToVisibleIdle() {
+        keepIdleVisibleAfterCollapse = true
+        transition(to: .idle)
     }
 
     private func ensureWindowExists() {
@@ -232,7 +298,7 @@ class OverlayWindowManager: ObservableObject {
         }
     }
 
-    private func updateWindowSizeForState(_ state: OverlayState, animated: Bool) {
+    private func updateWindowSizeForState(_ state: OverlayState, animated: Bool, preserveAnchor: Bool = false) {
         guard let window = overlayWindow, let screen = targetScreen() else {
             DebugLog.warning("updateWindowSizeForState skipped: window or target screen missing", context: "OverlayWindowManager")
             return
@@ -245,28 +311,48 @@ class OverlayWindowManager: ObservableObject {
             state == .processing(isCommandMode: false)
 
         let (windowWidth, windowHeight): (CGFloat, CGFloat)
-        if isActive {
+        if case .recording = state {
+            // Use the same invisible max-width stage for hover, Fn-held recording, and
+            // overlay-click recording. The SwiftUI pill draws the smaller no-button
+            // shape inside this stage when controls are hidden.
+            windowWidth = Constants.recordingControlsStateWidth + (Constants.recordingControlsPadding * 2)
+            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
+        } else if case .processing = state {
+            windowWidth = Constants.recordingControlsStateWidth + (Constants.recordingControlsPadding * 2)
+            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
+        } else if isActive {
             windowWidth = Constants.activeStateWidth + (Constants.activePadding * 2)
             windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
+        } else if isHoverExpanded {
+            windowWidth = Constants.recordingControlsStateWidth + (Constants.recordingControlsPadding * 2)
+            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
         } else {
-            let maxWidth = Constants.idleStateWidth + (Constants.idlePaddingHover * 2) + Constants.itemSpacing + Constants.expandButtonSize
-            windowWidth = maxWidth + 10
-            windowHeight = max(Constants.idleStateHeight, Constants.expandButtonSize) + (Constants.verticalPaddingIdle * 2) + (Constants.edgeMargin * 2)
+            let maxWidth = Constants.idleStateWidth + (Constants.idlePaddingNormal * 2)
+            windowWidth = maxWidth + Constants.windowSafetyPadding
+            windowHeight = Constants.idleStateHeight + Constants.idleHoverHitSlop + (Constants.verticalPaddingIdle * 2) + (Constants.edgeMargin * 2)
         }
 
-        let (xPos, yPos) = calculatePosition(for: position, screenFrame: screenFrame, windowWidth: windowWidth, windowHeight: windowHeight)
-        let newFrame = NSRect(x: xPos, y: yPos, width: windowWidth, height: windowHeight)
         let oldFrame = window.frame
+        let newFrame: NSRect
+        if preserveAnchor {
+            let anchorX = oldFrame.midX
+            let verticalAnchor = position == .bottom ? oldFrame.minY : oldFrame.maxY
+            newFrame = NSRect(
+                x: anchorX - (windowWidth / 2),
+                y: position == .bottom ? verticalAnchor : verticalAnchor - windowHeight,
+                width: windowWidth,
+                height: windowHeight
+            )
+        } else {
+            let (xPos, yPos) = calculatePosition(for: position, screenFrame: screenFrame, windowWidth: windowWidth, windowHeight: windowHeight)
+            newFrame = NSRect(x: xPos, y: yPos, width: windowWidth, height: windowHeight)
+        }
         DebugLog.info(
-            "updateWindowSizeForState state=\(state), animated=\(animated), screen=\(describeScreen(screen)), oldFrame=\(formatRect(oldFrame)), newFrame=\(formatRect(newFrame))",
+            "updateWindowSizeForState state=\(state), animated=\(animated), preserveAnchor=\(preserveAnchor), screen=\(describeScreen(screen)), oldFrame=\(formatRect(oldFrame)), newFrame=\(formatRect(newFrame))",
             context: "OverlayWindowManager"
         )
 
-        if animated {
-            window.setFrame(newFrame, display: true, animate: false)
-        } else {
-            window.setFrame(newFrame, display: true)
-        }
+        setWindowFrame(newFrame, animated: false)
         logWindowState("updateWindowSizeForState-after-setFrame")
     }
 
@@ -305,6 +391,33 @@ class OverlayWindowManager: ObservableObject {
         }
     }
 
+    func setHoverExpanded(_ expanded: Bool) {
+        guard overlayState == .idle else { return }
+        guard isHoverExpanded != expanded else { return }
+        hoverCollapseResizeWorkItem?.cancel()
+        hoverCollapseResizeWorkItem = nil
+        isHoverExpanded = expanded
+        if expanded {
+            updateWindowSizeForState(.idle, animated: false, preserveAnchor: true)
+        } else {
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self, self.overlayState == .idle, !self.isHoverExpanded else { return }
+                self.updateWindowSizeForState(.idle, animated: false, preserveAnchor: true)
+            }
+            hoverCollapseResizeWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + Constants.hoverCollapseResizeDelay, execute: workItem)
+        }
+    }
+
+    func setRecordingControlsVisible(_ visible: Bool) {
+        showsRecordingControls = visible
+    }
+
+    func startRecordingFromOverlay() {
+        guard overlayState == .idle else { return }
+        AppState.shared.startRecording(showOverlayControls: true)
+    }
+
     func contractToOverlay() {
         DebugLog.info("contractToOverlay() - sending app to background", context: "OverlayWindowManager")
         if let window = findMainWindow() {
@@ -317,8 +430,10 @@ class OverlayWindowManager: ObservableObject {
     func onCollapseAnimationComplete() {
         guard overlayState == .idle else { return }
         DebugLog.info("onCollapseAnimationComplete", context: "OverlayWindowManager")
-        updateWindowSizeForState(.idle, animated: false)
-        if hideIdleState {
+        updateWindowSizeForState(.idle, animated: false, preserveAnchor: true)
+        let shouldHideIdle = hideIdleState && !keepIdleVisibleAfterCollapse
+        keepIdleVisibleAfterCollapse = false
+        if shouldHideIdle {
             overlayWindow?.orderOut(nil)
         }
     }
@@ -344,6 +459,65 @@ class OverlayWindowManager: ObservableObject {
 
     private func logWindowState(_ reason: String) {
         DebugLog.info("window[\(reason)] \(describeWindow(overlayWindow))", context: "OverlayWindowManager")
+    }
+
+    private func setWindowFrame(_ targetFrame: NSRect, animated: Bool) {
+        guard let window = overlayWindow else { return }
+        frameAnimationTimer?.invalidate()
+        frameAnimationTimer = nil
+
+        guard animated else {
+            window.setFrame(targetFrame, display: true)
+            return
+        }
+
+        let startFrame = window.frame
+        let targetCenterX = targetFrame.midX
+        let targetVerticalAnchor = position == .bottom ? targetFrame.minY : targetFrame.maxY
+        let startedAt = Date.timeIntervalSinceReferenceDate
+        let duration = Constants.windowResizeAnimationDuration
+
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self, weak window] timer in
+            guard let self, let window else {
+                timer.invalidate()
+                return
+            }
+
+            let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
+            let progress = min(1, max(0, elapsed / duration))
+            let eased = self.cssMorphEase(progress)
+            let width = self.interpolate(from: startFrame.width, to: targetFrame.width, progress: eased)
+            let height = self.interpolate(from: startFrame.height, to: targetFrame.height, progress: eased)
+            let centerX = targetCenterX
+            let originY = self.position == .bottom ? targetVerticalAnchor : targetVerticalAnchor - height
+            let frame = NSRect(
+                x: centerX - (width / 2),
+                y: originY,
+                width: width,
+                height: height
+            )
+
+            window.setFrame(frame, display: true)
+
+            if progress >= 1 {
+                timer.invalidate()
+                self.frameAnimationTimer = nil
+                window.setFrame(targetFrame, display: true)
+            }
+        }
+
+        frameAnimationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func interpolate(from start: CGFloat, to end: CGFloat, progress: Double) -> CGFloat {
+        start + ((end - start) * CGFloat(progress))
+    }
+
+    private func cssMorphEase(_ progress: Double) -> Double {
+        // Approximation of CSS cubic-bezier(.2, .8, .2, 1).
+        let clamped = min(1, max(0, progress))
+        return 1 - pow(1 - clamped, 4)
     }
 
     private func setupAudioObservers() {
@@ -391,9 +565,9 @@ class OverlayWindowManager: ObservableObject {
 
         let screenFrame = screen.visibleFrame
         // Use idle size for initial window creation
-        let maxWidth = Constants.idleStateWidth + (Constants.idlePaddingHover * 2) + Constants.itemSpacing + Constants.expandButtonSize
-        let windowWidth = maxWidth + 10
-        let windowHeight = max(Constants.idleStateHeight, Constants.expandButtonSize) + (Constants.verticalPaddingIdle * 2) + (Constants.edgeMargin * 2)
+        let maxWidth = Constants.idleStateWidth + (Constants.idlePaddingNormal * 2)
+        let windowWidth = maxWidth + Constants.windowSafetyPadding
+        let windowHeight = Constants.idleStateHeight + Constants.idleHoverHitSlop + (Constants.verticalPaddingIdle * 2) + (Constants.edgeMargin * 2)
 
         // Calculate position based on selected position
         let (xPos, yPos) = calculatePosition(for: position, screenFrame: screenFrame, windowWidth: windowWidth, windowHeight: windowHeight)
@@ -414,6 +588,7 @@ class OverlayWindowManager: ObservableObject {
         window.backgroundColor = NSColor.clear
         window.hasShadow = false
         window.ignoresMouseEvents = false // Allow mouse events for hover and clicks
+        window.acceptsMouseMovedEvents = true
         var collectionBehavior: NSWindow.CollectionBehavior = [
             NSWindow.CollectionBehavior.canJoinAllSpaces,
             NSWindow.CollectionBehavior.fullScreenAuxiliary,
@@ -491,6 +666,65 @@ class OverlayWindowManager: ObservableObject {
             self.ensureWindowOnActiveSpace(reason: "observer-activate")
             self.logWindowState("observer-activate-after-orderFront")
         }
+    }
+
+    private func setupMouseHoverMonitor() {
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+            self?.updateHoverExpansionFromMouseLocation()
+            return event
+        }
+
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            self?.updateHoverExpansionFromMouseLocation()
+        }
+
+        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            self?.updateHoverExpansionFromMouseLocation()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        hoverTrackingTimer = timer
+    }
+
+    private func updateHoverExpansionFromMouseLocation() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.updateHoverExpansionFromMouseLocation()
+            }
+            return
+        }
+
+        guard overlayState == .idle, let overlayWindow, overlayWindow.isVisible else {
+            if case .recording = overlayState, isHoverExpanded, !showsRecordingControls {
+                return
+            }
+            if isHoverExpanded {
+                isHoverExpanded = false
+            }
+            return
+        }
+
+        let hoverFrame = idleInteractionFrame(for: overlayWindow).insetBy(dx: -Constants.hoverFrameInset, dy: -Constants.hoverFrameInset)
+        let isMouseInside = hoverFrame.contains(NSEvent.mouseLocation)
+        if suppressHoverExpansionUntilMouseExit {
+            if isMouseInside {
+                setHoverExpanded(false)
+                return
+            }
+            suppressHoverExpansionUntilMouseExit = false
+        }
+
+        setHoverExpanded(isMouseInside)
+    }
+
+    private func idleInteractionFrame(for window: NSWindow) -> NSRect {
+        guard isHoverExpanded else { return window.frame }
+
+        let visibleWidth = Constants.activeStateWidth + (Constants.activePadding * 2)
+        let visibleHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
+
+        let x = window.frame.midX - (visibleWidth / 2)
+        let y = position == .bottom ? window.frame.minY : window.frame.maxY - visibleHeight
+        return NSRect(x: x, y: y, width: visibleWidth, height: visibleHeight)
     }
 
     private func screenForFrontmostApplication() -> NSScreen? {
@@ -620,6 +854,15 @@ class OverlayWindowManager: ObservableObject {
         if let observer = appActivationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
+        if let monitor = localMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = globalMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        hoverCollapseResizeWorkItem?.cancel()
+        frameAnimationTimer?.invalidate()
+        hoverTrackingTimer?.invalidate()
         overlayWindow?.close()
     }
 }

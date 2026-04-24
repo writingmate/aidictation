@@ -34,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Set up hotkey callbacks once at app startup
         // This ensures they persist throughout the app lifecycle
         setupHotkeyCallbacks()
+        AudioDeviceManager.shared.applyPreferredOrAutomaticDevice()
 
         // Listen for onboarding completion to close the onboarding window and show main.
         // This must be in AppDelegate because the main window's SwiftUI view may not be

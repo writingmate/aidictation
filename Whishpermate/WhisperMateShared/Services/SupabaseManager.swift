@@ -11,8 +11,7 @@ import Supabase
 
 // MARK: - UserDefaults-based Auth Storage
 
-/// Custom storage that uses UserDefaults instead of Keychain to avoid password prompts
-/// Uses AppDefaults.shared to separate Debug and Release build storage
+/// Legacy storage used by older builds.
 final class UserDefaultsAuthLocalStorage: AuthLocalStorage, @unchecked Sendable {
     private let defaults = AppDefaults.shared
     private let keyPrefix = "supabase.auth."
@@ -27,6 +26,36 @@ final class UserDefaultsAuthLocalStorage: AuthLocalStorage, @unchecked Sendable 
 
     func remove(key: String) throws {
         defaults.removeObject(forKey: keyPrefix + key)
+    }
+}
+
+/// Keychain-backed auth storage with a UserDefaults fallback for migrating existing sessions.
+final class PersistentAuthLocalStorage: AuthLocalStorage, @unchecked Sendable {
+    private let keychain = KeychainLocalStorage(service: "com.whispermate.supabase.auth")
+    private let legacy = UserDefaultsAuthLocalStorage()
+
+    func store(key: String, value: Data) throws {
+        try keychain.store(key: key, value: value)
+        try? legacy.remove(key: key)
+    }
+
+    func retrieve(key: String) throws -> Data? {
+        if let value = try? keychain.retrieve(key: key) {
+            return value
+        }
+
+        if let legacyValue = try legacy.retrieve(key: key) {
+            try? keychain.store(key: key, value: legacyValue)
+            try? legacy.remove(key: key)
+            return legacyValue
+        }
+
+        return nil
+    }
+
+    func remove(key: String) throws {
+        try? keychain.remove(key: key)
+        try? legacy.remove(key: key)
     }
 }
 
@@ -45,14 +74,14 @@ public class SupabaseManager {
             return
         }
 
-        // Configure client with implicit flow for web-based auth
-        // Use UserDefaults storage to avoid keychain password prompts
+        // Configure client with implicit flow for web-based auth.
+        // Store sessions in Keychain so login survives app restarts and bundle preference changes.
         client = SupabaseClient(
             supabaseURL: url,
             supabaseKey: supabaseKey,
             options: SupabaseClientOptions(
                 auth: .init(
-                    storage: UserDefaultsAuthLocalStorage(),
+                    storage: PersistentAuthLocalStorage(),
                     flowType: .implicit
                 )
             )

@@ -37,6 +37,7 @@ class AudioRecorder: NSObject, ObservableObject {
         // Only pre-initialize the audio engine if microphone permission is already granted
         // This prevents triggering the permission dialog on app launch
         if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+            AudioDeviceManager.shared.applyPreferredOrAutomaticDevice()
             setupAudioEngine()
         }
     }
@@ -178,6 +179,13 @@ class AudioRecorder: NSObject, ObservableObject {
     func startRecording() {
         DebugLog.info("⚡ startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
 
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            DebugLog.info("❌ Microphone permission is not authorized", context: "AudioRecorder LOG")
+            return
+        }
+
+        AudioDeviceManager.shared.applyPreferredOrAutomaticDevice()
+
         if pendingEngineRefresh {
             DebugLog.info("Applying deferred audio engine refresh before recording", context: "AudioRecorder LOG")
             pendingEngineRefresh = false
@@ -195,26 +203,6 @@ class AudioRecorder: NSObject, ObservableObject {
         guard let engine = audioEngine else {
             DebugLog.info("❌ Engine not available", context: "AudioRecorder LOG")
             return
-        }
-
-        let engineWasStarted = engine.isRunning
-        if !engineWasStarted {
-            do {
-                try engine.start()
-                DebugLog.info("✅ Audio engine started", context: "AudioRecorder LOG")
-                // Give the engine a moment to start processing audio
-                usleep(50000) // 50ms delay to let audio pipeline stabilize
-            } catch {
-                DebugLog.info("❌ Failed to start audio engine: \(error)", context: "AudioRecorder LOG")
-                return
-            }
-        }
-
-        // Lower system volume to duck other audio (if enabled in settings)
-        let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
-        DebugLog.info("Mute audio setting: \(shouldMuteAudio)", context: "AudioRecorder")
-        if shouldMuteAudio {
-            volumeManager.lowerVolume()
         }
 
         // Prepare recording file
@@ -257,10 +245,52 @@ class AudioRecorder: NSObject, ObservableObject {
                 }
             }
 
+            let engineWasStarted = engine.isRunning
+            if !engineWasStarted {
+                do {
+                    try engine.start()
+                    DebugLog.info("✅ Audio engine started", context: "AudioRecorder LOG")
+                    // Give the engine a moment to start processing audio
+                    usleep(50000) // 50ms delay to let audio pipeline stabilize
+                } catch {
+                    DebugLog.info("❌ Failed to start audio engine: \(error)", context: "AudioRecorder LOG")
+                    resetFailedStart()
+                    return
+                }
+            }
+
+            // Lower system volume to duck other audio only after recording has actually started.
+            let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
+            DebugLog.info("Mute audio setting: \(shouldMuteAudio)", context: "AudioRecorder")
+            if shouldMuteAudio {
+                volumeManager.lowerVolume()
+            }
+
             DebugLog.info("✅ Recording started", context: "AudioRecorder LOG")
         } catch {
             DebugLog.info("❌ Failed to create audio file: \(error)", context: "AudioRecorder LOG")
+            resetFailedStart()
         }
+    }
+
+    private func resetFailedStart() {
+        audioFile = nil
+        if let recordingURL {
+            try? FileManager.default.removeItem(at: recordingURL)
+        }
+        recordingURL = nil
+        if Thread.isMainThread {
+            isRecording = false
+            audioLevel = 0.0
+            frequencyBands = Array(repeating: 0.0, count: 14)
+        } else {
+            DispatchQueue.main.sync {
+                self.isRecording = false
+                self.audioLevel = 0.0
+                self.frequencyBands = Array(repeating: 0.0, count: 14)
+            }
+        }
+        volumeManager.restoreVolume()
     }
 
     private func calculateAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {

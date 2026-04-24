@@ -50,7 +50,7 @@ extension NSNotification.Name {
 // MARK: - StatusBarManager
 
 /// Manages the macOS menu bar icon and dropdown menu
-class StatusBarManager {
+class StatusBarManager: NSObject, NSMenuDelegate {
     // MARK: - Properties
 
     weak var appWindow: NSWindow?
@@ -82,6 +82,7 @@ class StatusBarManager {
 
         // Create menu
         menu = NSMenu()
+        menu?.delegate = self
 
         // Show/Hide Window
         let showHideItem = NSMenuItem(
@@ -91,6 +92,11 @@ class StatusBarManager {
         )
         showHideItem.target = self
         menu?.addItem(showHideItem)
+
+        menu?.addItem(NSMenuItem.separator())
+
+        addMicrophoneMenu()
+        addTranscriptionModeMenu()
 
         menu?.addItem(NSMenuItem.separator())
 
@@ -147,7 +153,122 @@ class StatusBarManager {
         DebugLog.info("Menu bar icon created successfully", context: "StatusBarManager")
     }
 
+    func menuWillOpen(_: NSMenu) {
+        rebuildMenu()
+    }
+
     // MARK: - Private Methods
+
+    private func rebuildMenu() {
+        menu?.removeAllItems()
+
+        let showHideItem = NSMenuItem(
+            title: "Show AIDictation",
+            action: #selector(toggleWindow),
+            keyEquivalent: ""
+        )
+        showHideItem.target = self
+        menu?.addItem(showHideItem)
+
+        menu?.addItem(NSMenuItem.separator())
+        addMicrophoneMenu()
+        addTranscriptionModeMenu()
+
+        menu?.addItem(NSMenuItem.separator())
+
+        let historyItem = NSMenuItem(title: "History", action: #selector(showHistory), keyEquivalent: "h")
+        historyItem.target = self
+        menu?.addItem(historyItem)
+
+        let settingsItem = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu?.addItem(settingsItem)
+
+        let updatesItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+        updatesItem.target = self
+        menu?.addItem(updatesItem)
+
+        menu?.addItem(NSMenuItem.separator())
+
+        let onboardingItem = NSMenuItem(title: "Show Onboarding", action: #selector(showOnboarding), keyEquivalent: "")
+        onboardingItem.target = self
+        menu?.addItem(onboardingItem)
+
+        menu?.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit AIDictation", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu?.addItem(quitItem)
+    }
+
+    private func addMicrophoneMenu() {
+        let manager = AudioDeviceManager.shared
+        manager.refreshDevices()
+
+        let parent = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        let autoItem = NSMenuItem(title: "Auto Select", action: #selector(selectAutomaticMicrophone), keyEquivalent: "")
+        autoItem.target = self
+        autoItem.state = manager.automaticallySelectDevice ? .on : .off
+        submenu.addItem(autoItem)
+
+        submenu.addItem(NSMenuItem.separator())
+
+        for device in manager.inputDevices {
+            let item = NSMenuItem(title: device.localizedName, action: #selector(selectMicrophone(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = device.uniqueID
+            item.state = (!manager.automaticallySelectDevice && manager.selectedDevice?.uniqueID == device.uniqueID) ? .on : .off
+            submenu.addItem(item)
+        }
+
+        if manager.inputDevices.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Input Devices", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            submenu.addItem(emptyItem)
+        }
+
+        parent.submenu = submenu
+        menu?.addItem(parent)
+    }
+
+    private func addTranscriptionModeMenu() {
+        let providerManager = AppState.shared.transcriptionProviderManager
+        let parent = NSMenuItem(title: "Transcription Mode", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        for mode in TranscriptionMode.allCases {
+            let item = NSMenuItem(title: mode.displayName, action: #selector(selectTranscriptionMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = providerManager.transcriptionMode == mode ? .on : .off
+            submenu.addItem(item)
+        }
+
+        parent.submenu = submenu
+        menu?.addItem(parent)
+    }
+
+    @objc private func selectAutomaticMicrophone() {
+        AudioDeviceManager.shared.setAutomaticSelection(true)
+    }
+
+    @objc private func selectMicrophone(_ sender: NSMenuItem) {
+        guard let uniqueID = sender.representedObject as? String else { return }
+        let manager = AudioDeviceManager.shared
+        manager.refreshDevices()
+        guard let device = manager.inputDevices.first(where: { $0.uniqueID == uniqueID }) else { return }
+        _ = manager.selectDevice(device)
+    }
+
+    @objc private func selectTranscriptionMode(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = TranscriptionMode(rawValue: rawValue)
+        else { return }
+
+        _ = AppState.shared.transcriptionProviderManager.requestTranscriptionMode(mode)
+    }
 
     @objc private func toggleWindow() {
         // Don't show settings while onboarding is active

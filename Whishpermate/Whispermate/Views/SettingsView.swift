@@ -90,6 +90,7 @@ struct SettingsView: View {
     @ObservedObject var shortcutManager: ShortcutManager
     @ObservedObject var overlayManager = OverlayWindowManager.shared
     @ObservedObject var launchAtLoginManager = LaunchAtLoginManager.shared
+    @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @ObservedObject var authManager = AuthManager.shared
     @ObservedObject var screenCaptureManager = ScreenCaptureManager.shared
     @ObservedObject var parakeetService = ParakeetTranscriptionService.shared
@@ -576,6 +577,30 @@ struct SettingsView: View {
                             .labelsHidden()
                     }
                     .padding(.vertical, 2)
+
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    // Overlay Color
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Overlay Color")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Accent color for recording and detected context")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Picker("", selection: $overlayManager.colorTheme) {
+                            ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
+                                Text(theme.rawValue).tag(theme)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                    }
+                    .padding(.vertical, 2)
                 }
             }
 
@@ -595,27 +620,7 @@ struct SettingsView: View {
                         Picker("", selection: Binding(
                             get: { transcriptionProviderManager.transcriptionMode },
                             set: { newMode in
-                                let modelReady: Bool = {
-                                    if case .ready = parakeetService.state { return true }
-                                    return false
-                                }()
-                                if newMode != .cloud && !modelReady {
-                                    // Remember what the user wanted
-                                    pendingTranscriptionMode = newMode
-                                    // Force back to cloud until model is ready
-                                    transcriptionProviderManager.setTranscriptionMode(.cloud)
-                                    // Start downloading the model
-                                    let service = parakeetService
-                                    Task {
-                                        if case .error = await MainActor.run(body: { service.state }) {
-                                            await MainActor.run { service.cleanup() }
-                                        }
-                                        try? await service.initialize()
-                                    }
-                                    return
-                                }
-                                pendingTranscriptionMode = nil
-                                transcriptionProviderManager.setTranscriptionMode(newMode)
+                                pendingTranscriptionMode = transcriptionProviderManager.requestTranscriptionMode(newMode, parakeetService: parakeetService)
                             }
                         )) {
                             ForEach(TranscriptionMode.allCases, id: \.self) { mode in
@@ -1241,6 +1246,7 @@ struct SettingsView: View {
                         }
                         Spacer()
                         Picker("", selection: $selectedAudioDevice) {
+                            Text("Auto Select").tag(nil as AudioDeviceManager.AudioDevice?)
                             ForEach(audioDevices) { device in
                                 Text(device.localizedName).tag(device as AudioDeviceManager.AudioDevice?)
                             }
@@ -1387,38 +1393,24 @@ struct SettingsView: View {
 
     private func loadAudioDevices() {
         // Get all available audio input devices using Core Audio
-        audioDevices = AudioDeviceManager.shared.getInputDevices()
+        audioDeviceManager.refreshDevices()
+        audioDevices = audioDeviceManager.inputDevices
 
-        // Select saved device or default
-        if selectedAudioDevice == nil {
-            if let savedDeviceID = AppDefaults.shared.string(forKey: "selectedAudioDeviceID"),
-               let savedDevice = audioDevices.first(where: { $0.uniqueID == savedDeviceID })
-            {
-                selectedAudioDevice = savedDevice
-            } else {
-                selectedAudioDevice = AudioDeviceManager.shared.getDefaultInputDevice()
-            }
-        }
+        selectedAudioDevice = audioDeviceManager.automaticallySelectDevice ? nil : audioDeviceManager.selectedDevice
     }
 
     private func saveSelectedAudioDevice(_ device: AudioDeviceManager.AudioDevice?) {
         if let device = device {
-            AppDefaults.shared.set(device.uniqueID, forKey: "selectedAudioDeviceID")
             DebugLog.info("Setting audio device: \(device.localizedName)", context: "SettingsView")
 
-            // Set as system default so AVAudioEngine will use it
-            let success = AudioDeviceManager.shared.setDefaultInputDevice(deviceID: device.id)
+            let success = audioDeviceManager.selectDevice(device)
             if success {
                 DebugLog.info("Successfully set default input device", context: "SettingsView")
-
-                // Notify AudioRecorder about the change
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("AudioInputDeviceChanged"),
-                    object: device.uniqueID
-                )
             } else {
                 DebugLog.info("Failed to set default input device", context: "SettingsView")
             }
+        } else {
+            audioDeviceManager.setAutomaticSelection(true)
         }
     }
 

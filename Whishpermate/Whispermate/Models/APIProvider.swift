@@ -116,6 +116,8 @@ enum TranscriptionMode: String, CaseIterable {
 }
 
 class TranscriptionProviderManager: ObservableObject {
+    static let shared = TranscriptionProviderManager()
+
     @Published var selectedProvider: TranscriptionProvider = .custom
     @Published var transcriptionMode: TranscriptionMode = .auto
     @Published var customEndpoint: String = ""
@@ -175,6 +177,37 @@ class TranscriptionProviderManager: ObservableObject {
             }
         }
         DebugLog.info("Set mode: \(mode.displayName), provider: \(selectedProvider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    @discardableResult
+    func requestTranscriptionMode(_ mode: TranscriptionMode, parakeetService: ParakeetTranscriptionService = .shared) -> TranscriptionMode? {
+        let modelReady: Bool = {
+            if case .ready = parakeetService.state { return true }
+            return false
+        }()
+
+        if mode == .local && !modelReady {
+            setTranscriptionMode(.cloud)
+            initializeParakeetIfNeeded(parakeetService)
+            return mode
+        }
+
+        setTranscriptionMode(mode)
+
+        if mode == .auto && !modelReady {
+            initializeParakeetIfNeeded(parakeetService)
+        }
+
+        return nil
+    }
+
+    private func initializeParakeetIfNeeded(_ service: ParakeetTranscriptionService) {
+        Task {
+            if case .error = await MainActor.run(body: { service.state }) {
+                await MainActor.run { service.cleanup() }
+            }
+            try? await service.initialize()
+        }
     }
 
     func setProvider(_ provider: TranscriptionProvider) {

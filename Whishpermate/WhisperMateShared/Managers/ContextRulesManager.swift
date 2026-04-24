@@ -125,8 +125,29 @@ public class ContextRulesManager: ObservableObject {
         DebugLog.info("Window Title: '\(windowTitle ?? "none")'", context: "ContextRulesManager")
         DebugLog.info("Total rules: \(rules.count), Enabled: \(rules.filter { $0.isEnabled }.count)", context: "ContextRulesManager")
 
-        // Find all enabled rules that match
-        let matchingRules = rules.filter { rule in
+        let matchingRules = matchingRules(for: appBundleId, windowTitle: windowTitle)
+
+        // Return combined instructions
+        if matchingRules.isEmpty {
+            DebugLog.info("=== No matching rules found ===", context: "ContextRulesManager")
+            return nil
+        }
+
+        let ruleNames = matchingRules.map { $0.name }.joined(separator: ", ")
+        DebugLog.info("", context: "ContextRulesManager")
+        DebugLog.info("=== Matched \(matchingRules.count) rule(s): \(ruleNames) ===", context: "ContextRulesManager")
+
+        let instructions = matchingRules.map { $0.instructions }.joined(separator: ". ")
+        DebugLog.info("Combined instructions: \(instructions)", context: "ContextRulesManager")
+        return instructions
+    }
+
+    public func matchingRuleNames(for appBundleId: String?, windowTitle: String? = nil) -> [String] {
+        matchingRules(for: appBundleId, windowTitle: windowTitle).map(\.name)
+    }
+
+    private func matchingRules(for appBundleId: String?, windowTitle: String?) -> [ContextRule] {
+        rules.filter { rule in
             DebugLog.info("", context: "ContextRulesManager")
             DebugLog.info("Evaluating rule: '\(rule.name)' (enabled: \(rule.isEnabled))", context: "ContextRulesManager")
 
@@ -183,20 +204,6 @@ public class ContextRulesManager: ObservableObject {
             DebugLog.info("  Final result: \(finalMatch ? "✓ RULE MATCHES" : "✗ RULE DOES NOT MATCH") (app: \(appMatches), title: \(titleMatches)) [OR logic]", context: "ContextRulesManager")
             return finalMatch
         }
-
-        // Return combined instructions
-        if matchingRules.isEmpty {
-            DebugLog.info("=== No matching rules found ===", context: "ContextRulesManager")
-            return nil
-        }
-
-        let ruleNames = matchingRules.map { $0.name }.joined(separator: ", ")
-        DebugLog.info("", context: "ContextRulesManager")
-        DebugLog.info("=== Matched \(matchingRules.count) rule(s): \(ruleNames) ===", context: "ContextRulesManager")
-
-        let instructions = matchingRules.map { $0.instructions }.joined(separator: ". ")
-        DebugLog.info("Combined instructions: \(instructions)", context: "ContextRulesManager")
-        return instructions
     }
 
     /// Match a window title against a pattern

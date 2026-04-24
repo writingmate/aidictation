@@ -2,10 +2,20 @@ import AVFoundation
 import CoreAudio
 import Foundation
 import WhisperMateShared
+internal import Combine
 
 /// Manages audio input device enumeration and selection using Core Audio
-class AudioDeviceManager {
+class AudioDeviceManager: ObservableObject {
     static let shared = AudioDeviceManager()
+
+    private enum Keys {
+        static let selectedAudioDeviceID = "selectedAudioDeviceID"
+        static let automaticallySelectAudioDevice = "automaticallySelectAudioDevice"
+    }
+
+    @Published private(set) var inputDevices: [AudioDevice] = []
+    @Published private(set) var selectedDevice: AudioDevice?
+    @Published private(set) var automaticallySelectDevice: Bool
 
     // MARK: - Types
 
@@ -28,10 +38,74 @@ class AudioDeviceManager {
     // MARK: - Initialization
 
     private init() {
+        automaticallySelectDevice = AppDefaults.shared.object(forKey: Keys.automaticallySelectAudioDevice) as? Bool ?? true
+        refreshDevices()
         setupDeviceChangeListener()
     }
 
     // MARK: - Public API
+
+    func refreshDevices() {
+        inputDevices = getInputDevices()
+        selectedDevice = currentSelectedDevice(in: inputDevices)
+    }
+
+    func setAutomaticSelection(_ enabled: Bool) {
+        automaticallySelectDevice = enabled
+        AppDefaults.shared.set(enabled, forKey: Keys.automaticallySelectAudioDevice)
+        if enabled {
+            AppDefaults.shared.removeObject(forKey: Keys.selectedAudioDeviceID)
+        }
+        _ = applyPreferredOrAutomaticDevice()
+    }
+
+    func selectDevice(_ device: AudioDevice) -> Bool {
+        let success = setDefaultInputDevice(deviceID: device.id)
+        guard success else {
+            refreshDevices()
+            return false
+        }
+
+        automaticallySelectDevice = false
+        AppDefaults.shared.set(false, forKey: Keys.automaticallySelectAudioDevice)
+        AppDefaults.shared.set(device.uniqueID, forKey: Keys.selectedAudioDeviceID)
+        selectedDevice = device
+
+        NotificationCenter.default.post(
+            name: NSNotification.Name("AudioInputDeviceChanged"),
+            object: device.uniqueID
+        )
+        return true
+    }
+
+    @discardableResult
+    func applyPreferredOrAutomaticDevice() -> AudioDevice? {
+        refreshDevices()
+
+        let target: AudioDevice?
+        if automaticallySelectDevice {
+            target = bestAutomaticInputDevice(in: inputDevices)
+        } else {
+            target = selectedDevice ?? bestAutomaticInputDevice(in: inputDevices)
+        }
+
+        guard let target else { return nil }
+
+        if getDefaultInputDevice()?.uniqueID != target.uniqueID {
+            DebugLog.info("Applying input device: \(target.name)", context: "AudioDeviceManager")
+            guard setDefaultInputDevice(deviceID: target.id) else {
+                refreshDevices()
+                return selectedDevice
+            }
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AudioInputDeviceChanged"),
+                object: target.uniqueID
+            )
+        }
+
+        selectedDevice = target
+        return target
+    }
 
     func getInputDevices() -> [AudioDevice] {
         var devices: [AudioDevice] = []
@@ -147,10 +221,21 @@ class AudioDeviceManager {
 
     /// Re-apply the user's preferred device when the device list changes (e.g. mic connected/disconnected)
     func reapplyPreferredDevice() {
-        guard let savedUID = AppDefaults.shared.string(forKey: "selectedAudioDeviceID") else { return }
+        refreshDevices()
 
-        let devices = getInputDevices()
-        if let preferred = devices.first(where: { $0.uniqueID == savedUID }) {
+        if automaticallySelectDevice {
+            if let device = applyPreferredOrAutomaticDevice() {
+                DebugLog.info("Automatic input device selected: \(device.name)", context: "AudioDeviceManager")
+            }
+            return
+        }
+
+        guard let savedUID = AppDefaults.shared.string(forKey: Keys.selectedAudioDeviceID) else {
+            _ = applyPreferredOrAutomaticDevice()
+            return
+        }
+
+        if let preferred = inputDevices.first(where: { $0.uniqueID == savedUID }) {
             // Preferred device is available - ensure it's set as default
             let current = getDefaultInputDevice()
             if current?.uniqueID != preferred.uniqueID {
@@ -161,9 +246,11 @@ class AudioDeviceManager {
                     object: preferred.uniqueID
                 )
             }
+            selectedDevice = preferred
         } else {
             // Preferred device disconnected - notify so AudioRecorder reinitializes with system default
             DebugLog.info("Preferred device disconnected, falling back to system default", context: "AudioDeviceManager")
+            selectedDevice = bestAutomaticInputDevice(in: inputDevices)
             NotificationCenter.default.post(
                 name: NSNotification.Name("AudioInputDeviceChanged"),
                 object: nil
@@ -172,6 +259,35 @@ class AudioDeviceManager {
     }
 
     // MARK: - Private Methods
+
+    private func currentSelectedDevice(in devices: [AudioDevice]) -> AudioDevice? {
+        if !automaticallySelectDevice,
+           let savedUID = AppDefaults.shared.string(forKey: Keys.selectedAudioDeviceID),
+           let savedDevice = devices.first(where: { $0.uniqueID == savedUID })
+        {
+            return savedDevice
+        }
+        return getDefaultInputDevice() ?? bestAutomaticInputDevice(in: devices)
+    }
+
+    private func bestAutomaticInputDevice(in devices: [AudioDevice]) -> AudioDevice? {
+        if let defaultDevice = getDefaultInputDevice(),
+           devices.contains(defaultDevice)
+        {
+            return defaultDevice
+        }
+
+        let virtualNameFragments = ["blackhole", "loopback", "soundflower", "aggregate", "multi-output"]
+        let physicalCandidates = devices.filter { device in
+            let lowercasedName = device.name.lowercased()
+            return !virtualNameFragments.contains { lowercasedName.contains($0) }
+        }
+
+        return physicalCandidates.first { device in
+            let lowercasedName = device.name.lowercased()
+            return lowercasedName.contains("microphone") || lowercasedName.contains("mic")
+        } ?? physicalCandidates.first ?? devices.first
+    }
 
     private func hasInputStreams(deviceID: AudioDeviceID) -> Bool {
         var propertyAddress = AudioObjectPropertyAddress(

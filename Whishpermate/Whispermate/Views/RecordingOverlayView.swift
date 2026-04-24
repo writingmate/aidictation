@@ -8,55 +8,88 @@ struct RecordingOverlayView: View {
     @State private var shouldShowContent = false
     @State private var expansionWorkItem: DispatchWorkItem?
     @State private var contentWorkItem: DispatchWorkItem?
+    @State private var buttonRevealWorkItem: DispatchWorkItem?
+    @State private var shouldShowRecordingButtons = false
+    @State private var isPointingHandCursorActive = false
+    @State private var isCancelButtonHovering = false
+    @State private var isStopButtonHovering = false
 
     // MARK: - Size Constants (single source of truth)
 
+    private static let overlayScale: CGFloat = 0.75
+
     // Recording/Processing state
-    private let activeStateWidth: CGFloat = 95 // Narrow for 14 bars
-    private let activeStateHeight: CGFloat = 24
+    private let activeStateWidth: CGFloat = 168 * RecordingOverlayView.overlayScale
+    private let recordingControlsStateWidth: CGFloat = 246 * RecordingOverlayView.overlayScale
+    private let activeStateHeight: CGFloat = 30 * RecordingOverlayView.overlayScale
+    private let waveSpanWidth: CGFloat = OverlayWaveMetrics.rowWidth
 
     // Idle state
     private let idleStateWidth: CGFloat = 21
     private let idleStateHeight: CGFloat = 1
-
-    // Expand button
-    private let expandButtonSize: CGFloat = 17
+    private let idleHoverHitSlop: CGFloat = 16
 
     // Spacing and padding
-    private let itemSpacing: CGFloat = 6
-    private let activePadding: CGFloat = 15
+    private let activePadding: CGFloat = 15 * RecordingOverlayView.overlayScale
+    private let recordingControlsPadding: CGFloat = 6 * RecordingOverlayView.overlayScale
     private let idlePaddingNormal: CGFloat = 16
-    private let idlePaddingHover: CGFloat = 8
-    private let edgeMargin: CGFloat = 2
+    private let edgeMargin: CGFloat = 2 * RecordingOverlayView.overlayScale
+    private let buttonSize: CGFloat = 28 * RecordingOverlayView.overlayScale
+    private let cancelIconSize: CGFloat = 12 * RecordingOverlayView.overlayScale
+    private let stopIconSize: CGFloat = 11 * RecordingOverlayView.overlayScale
 
     // MARK: - Computed Properties
 
-    private var horizontalPadding: CGFloat {
-        if manager.isRecording || manager.isProcessing { return activePadding }
-        return isHovering ? idlePaddingHover : idlePaddingNormal
+    private var recordingWithControls: Bool {
+        manager.isRecording && manager.showsRecordingControls
+    }
+
+    private var usesExpandedGeometry: Bool {
+        shouldShowExpandedPill || manager.isProcessing || recordingWithControls
+    }
+
+    private var idleHoverTopHitPadding: CGFloat {
+        if usesExpandedGeometry {
+            return 0
+        }
+        return idleHoverHitSlop
     }
 
     private var verticalPadding: CGFloat {
-        manager.isRecording || manager.isProcessing ? 4.5 : 3
+        usesExpandedGeometry ? 4.5 * RecordingOverlayView.overlayScale : 3
     }
 
     private var backgroundColor: Color {
         if manager.isCommandMode {
             return Color.blue // System blue for command mode
         }
-        if manager.isRecording { return Color.dsPrimary }
-        if manager.isProcessing { return Color.dsPrimary }
+        if manager.isRecording || manager.isProcessing || shouldShowExpandedPill {
+            return themedColor
+        }
         return Color.dsMuted.opacity(0.85)
     }
 
-    private var shouldShowExpandButton: Bool {
-        isHovering && !manager.isRecording && !manager.isProcessing
+    private var themedColor: Color {
+        switch manager.colorTheme {
+        case .primary: return Color.dsPrimary
+        case .blue: return .blue
+        case .green: return .green
+        case .orange: return .orange
+        case .pink: return .pink
+        case .graphite: return Color(nsColor: .darkGray)
+        }
     }
 
     // MARK: - Animation Constants
 
-    private let expandDuration: TimeInterval = 0.25
     private let collapseDuration: TimeInterval = 0.15
+    private let contentRevealDelay: TimeInterval = 0.26
+    private let contentFadeDuration: TimeInterval = 0.14
+    private let buttonRevealDelay: TimeInterval = 0.09
+
+    private var morphAnimation: Animation {
+        .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.26)
+    }
 
     // MARK: - Body
 
@@ -73,36 +106,18 @@ struct RecordingOverlayView: View {
             if manager.isRecording || manager.isProcessing {
                 shouldShowExpandedPill = true
                 shouldShowContent = true
+                shouldShowRecordingButtons = manager.isRecording && manager.showsRecordingControls
             }
         }
         .onChange(of: manager.isRecording) { newValue in
             if newValue {
-                // Only animate if we're coming from idle state
-                if !shouldShowExpandedPill {
-                    shouldShowExpandedPill = false
-                    shouldShowContent = false
-
-                    // Cancel any pending collapse work items
-                    expansionWorkItem?.cancel()
-                    contentWorkItem?.cancel()
-
-                    // Create new work item for expansion
-                    let expansionWork = DispatchWorkItem { [self] in
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            shouldShowExpandedPill = true
-                        }
-
-                        // Create work item for content reveal
-                        let contentWork = DispatchWorkItem {
-                            shouldShowContent = true
-                        }
-                        contentWorkItem = contentWork
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: contentWork)
-                    }
-                    expansionWorkItem = expansionWork
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: expansionWork)
+                updateHoverCursor(isActive: false)
+                if manager.showsRecordingControls {
+                    scheduleRecordingButtonsIfNeeded()
+                    expandUsingRecordingPath(revealContent: true)
                 }
             } else if !manager.isProcessing {
+                hideRecordingButtons()
                 // Cancel any pending expansion work items
                 expansionWorkItem?.cancel()
                 contentWorkItem?.cancel()
@@ -121,36 +136,17 @@ struct RecordingOverlayView: View {
         }
         .onChange(of: manager.isProcessing) { newValue in
             if newValue {
-                // Only animate if we're coming from idle state (not from recording)
-                if !manager.isRecording && !shouldShowExpandedPill {
-                    shouldShowExpandedPill = false
-                    shouldShowContent = false
-
-                    // Cancel any pending work items
-                    expansionWorkItem?.cancel()
-                    contentWorkItem?.cancel()
-
-                    // Create new work item for expansion
-                    let expansionWork = DispatchWorkItem { [self] in
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            shouldShowExpandedPill = true
-                        }
-
-                        // Create work item for content reveal
-                        let contentWork = DispatchWorkItem {
-                            shouldShowContent = true
-                        }
-                        contentWorkItem = contentWork
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: contentWork)
-                    }
-                    expansionWorkItem = expansionWork
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: expansionWork)
+                updateHoverCursor(isActive: false)
+                hideRecordingButtons()
+                if !manager.isRecording {
+                    expandUsingRecordingPath(revealContent: true)
                 } else if manager.isRecording {
                     // Already expanded from recording, just keep expanded and keep showing content
                     shouldShowExpandedPill = true
                     shouldShowContent = true
                 }
             } else if !manager.isRecording {
+                hideRecordingButtons()
                 // Cancel any pending work items
                 expansionWorkItem?.cancel()
                 contentWorkItem?.cancel()
@@ -167,74 +163,378 @@ struct RecordingOverlayView: View {
                 }
             }
         }
+        .onChange(of: manager.showsRecordingControls) { visible in
+            if manager.isRecording && visible {
+                scheduleRecordingButtonsIfNeeded()
+            } else {
+                hideRecordingButtons()
+            }
+        }
+        .onDisappear {
+            hideRecordingButtons()
+            updateHoverCursor(isActive: false)
+        }
     }
 
     @ViewBuilder
     private func overlayContent(geometry _: GeometryProxy) -> some View {
         // Horizontal layout for top/bottom positions
-        HStack(spacing: itemSpacing) {
-            contentView
-
-            if shouldShowExpandButton {
-                expandButton
-                    .padding(.trailing, -5) // Negative padding to compensate for capsule radius
+        contentView
+        .padding(.top, idleHoverTopHitPadding)
+        .fixedSize()
+        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .center) // Center horizontally only
+        .onHover { hovering in
+            isHovering = hovering || manager.isHoverExpanded
+            updateHoverCursor(isActive: hovering && !manager.isRecording && !manager.isProcessing)
+        }
+        .onTapGesture {
+            if !manager.isRecording && !manager.isProcessing {
+                updateHoverCursor(isActive: false)
+                manager.startRecordingFromOverlay()
             }
         }
-        .padding(.horizontal, horizontalPadding)
-        .padding(.vertical, verticalPadding)
-        .background(
-            Capsule()
-                .fill(backgroundColor)
-                .shadow(color: .black.opacity(0.08), radius: 2, x: 0, y: 1)
-        )
-        .fixedSize()
-        .frame(maxWidth: .infinity, alignment: .center) // Center horizontally only
-        .onHover { isHovering = $0 }
-        .animation(.easeInOut(duration: 0.2), value: isHovering)
         .padding(manager.position == .top ? .top : .bottom, edgeMargin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: manager.position == .top ? .top : .bottom) // Position vertically
+        .onChange(of: manager.isHoverExpanded) { expanded in
+            guard !manager.isProcessing, !manager.showsRecordingControls else { return }
+            isHovering = expanded
+            if expanded {
+                expandUsingRecordingPath(revealContent: true, delayed: false, contentDelay: 0)
+            } else {
+                collapseIdleHover()
+            }
+        }
     }
 
     // MARK: - Subviews
 
     @ViewBuilder
     private var contentView: some View {
-        let targetWidth = shouldShowExpandedPill ? activeStateWidth : idleStateWidth
-        let targetHeight = shouldShowExpandedPill ? activeStateHeight : idleStateHeight
+        let targetContentWidth = shouldShowExpandedPill ? (recordingWithControls ? recordingControlsStateWidth : activeStateWidth) : idleStateWidth
+        let targetContentHeight = shouldShowExpandedPill ? activeStateHeight : idleStateHeight
+        let targetHorizontalPadding = shouldShowExpandedPill ? (recordingWithControls ? recordingControlsPadding : activePadding) : idlePaddingNormal
+        let targetVerticalPadding = verticalPadding
+        let targetPillWidth = targetContentWidth + (targetHorizontalPadding * 2)
+        let targetPillHeight = targetContentHeight + (targetVerticalPadding * 2)
 
         ZStack {
-            // Always render the frame container with animation
-            Color.clear
-                .frame(width: targetWidth, height: targetHeight)
+            Capsule()
+                .fill(backgroundColor)
+                .shadow(
+                    color: .black.opacity(0.08),
+                    radius: 2 * RecordingOverlayView.overlayScale,
+                    x: 0,
+                    y: 1 * RecordingOverlayView.overlayScale
+                )
+                .frame(width: targetPillWidth, height: targetPillHeight)
 
             // Overlay the actual content only when expanded and showing
-            if manager.isRecording && shouldShowContent {
-                AudioVisualizationView(audioLevel: manager.audioLevel, color: .white, frequencyBands: manager.frequencyBands)
-                    .frame(maxHeight: activeStateHeight)
+            if manager.isRecording && manager.showsRecordingControls && shouldShowContent {
+                ZStack {
+                    centeredWaveContent(
+                        OverlayLiveWaveView(audioLevel: manager.audioLevel, frequencyBands: manager.frequencyBands, color: .white.opacity(0.95)),
+                        targetWidth: targetPillWidth,
+                        targetHeight: targetPillHeight
+                    )
+
+                    HStack(spacing: 0) {
+                        cancelButton
+                            .opacity(shouldShowRecordingButtons ? 1 : 0)
+                            .scaleEffect(shouldShowRecordingButtons ? 1 : 0.74)
+                        Spacer(minLength: 0)
+                        stopButton
+                            .opacity(shouldShowRecordingButtons ? 1 : 0)
+                            .scaleEffect(shouldShowRecordingButtons ? 1 : 0.74)
+                    }
+                    .padding(.horizontal, recordingControlsPadding)
+                    .frame(width: targetPillWidth, height: targetPillHeight)
+                    .allowsHitTesting(shouldShowRecordingButtons)
+                    .animation(morphAnimation, value: shouldShowRecordingButtons)
+                }
+                .frame(width: targetPillWidth, height: targetPillHeight)
+            } else if manager.isRecording && shouldShowContent {
+                centeredWaveContent(
+                    OverlayLiveWaveView(audioLevel: manager.audioLevel, frequencyBands: manager.frequencyBands, color: .white.opacity(0.95)),
+                    targetWidth: targetPillWidth,
+                    targetHeight: targetPillHeight
+                )
             } else if manager.isProcessing && shouldShowContent {
-                ProcessingWaveView(color: .white)
-                    .frame(maxHeight: activeStateHeight)
+                centeredWaveContent(
+                    OverlayLoadingDotsView(color: .white.opacity(0.72)),
+                    targetWidth: targetPillWidth,
+                    targetHeight: targetPillHeight
+                )
+            } else if shouldShowExpandedPill && shouldShowContent {
+                centeredWaveContent(
+                    OverlayIdleDotsView(color: .white.opacity(0.92)),
+                    targetWidth: targetPillWidth,
+                    targetHeight: targetPillHeight
+                )
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: shouldShowExpandedPill)
+        .frame(width: targetPillWidth, height: targetPillHeight)
+        .animation(morphAnimation, value: shouldShowExpandedPill)
+        .animation(morphAnimation, value: manager.isRecording)
+        .animation(morphAnimation, value: manager.showsRecordingControls)
+        .animation(.easeInOut(duration: contentFadeDuration), value: shouldShowContent)
     }
 
-    private var expandButton: some View {
+    private func centeredWaveContent<Wave: View>(
+        _ wave: Wave,
+        targetWidth: CGFloat,
+        targetHeight: CGFloat
+    ) -> some View {
+        HStack(spacing: 8 * RecordingOverlayView.overlayScale) {
+            Spacer(minLength: 0)
+            wave
+                .frame(width: waveSpanWidth, height: activeStateHeight)
+            Spacer(minLength: 0)
+        }
+        .frame(width: targetWidth, height: targetHeight)
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+    }
+
+    private var cancelButton: some View {
         Button(action: {
-            manager.expandToFullMode()
+            updateHoverCursor(isActive: false)
+            AppState.shared.cancelRecording()
         }) {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .dsFont(.micro)
-                .foregroundStyle(.white.opacity(0.9))
-                .padding(4)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(0.2))
-                )
+            Image(systemName: "xmark")
+                .font(.system(size: cancelIconSize, weight: .bold))
+                .foregroundStyle(.white.opacity(0.92))
+                .frame(width: buttonSize, height: buttonSize)
+                .background(Circle().fill(Color.white.opacity(isCancelButtonHovering ? 0.28 : 0.18)))
         }
         .buttonStyle(.plain)
-        .frame(width: expandButtonSize, height: expandButtonSize)
-        .transition(.scale.combined(with: .opacity))
+        .scaleEffect(isCancelButtonHovering ? 1.06 : 1)
+        .contentShape(Circle())
+        .onHover { hovering in
+            isCancelButtonHovering = hovering
+            updateHoverCursor(isActive: hovering)
+        }
+        .animation(.easeInOut(duration: 0.12), value: isCancelButtonHovering)
+        .accessibilityLabel("Cancel recording")
+    }
+
+    private var stopButton: some View {
+        Button(action: {
+            updateHoverCursor(isActive: false)
+            AppState.shared.stopRecording()
+        }) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: stopIconSize, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: buttonSize, height: buttonSize)
+                .background(Circle().fill(Color.black.opacity(isStopButtonHovering ? 0.4 : 0.28)))
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isStopButtonHovering ? 1.06 : 1)
+        .contentShape(Circle())
+        .onHover { hovering in
+            isStopButtonHovering = hovering
+            updateHoverCursor(isActive: hovering)
+        }
+        .animation(.easeInOut(duration: 0.12), value: isStopButtonHovering)
+        .accessibilityLabel("Stop recording")
+    }
+
+    private func expandUsingRecordingPath(revealContent: Bool, delayed: Bool = true, contentDelay: TimeInterval? = nil) {
+        expansionWorkItem?.cancel()
+        contentWorkItem?.cancel()
+
+        if shouldShowExpandedPill {
+            if revealContent {
+                revealContentAfterDelay(shouldShowContent ? 0 : 0.02)
+            } else {
+                withAnimation(.easeInOut(duration: contentFadeDuration)) {
+                    shouldShowContent = false
+                }
+            }
+            return
+        }
+
+        shouldShowContent = false
+        let expand = { [self] in
+            withAnimation(morphAnimation) {
+                shouldShowExpandedPill = true
+            }
+
+            if revealContent {
+                revealContentAfterDelay(contentDelay ?? contentRevealDelay)
+            }
+        }
+
+        if delayed {
+            let expansionWork = DispatchWorkItem(block: expand)
+            expansionWorkItem = expansionWork
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: expansionWork)
+        } else {
+            expand()
+        }
+    }
+
+    private func revealContentAfterDelay(_ delay: TimeInterval) {
+        contentWorkItem?.cancel()
+        let contentWork = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: contentFadeDuration)) {
+                shouldShowContent = true
+            }
+        }
+        contentWorkItem = contentWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: contentWork)
+    }
+
+    private func scheduleRecordingButtonsIfNeeded() {
+        guard manager.isRecording, manager.showsRecordingControls else { return }
+        buttonRevealWorkItem?.cancel()
+        shouldShowRecordingButtons = false
+        let workItem = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                shouldShowRecordingButtons = true
+            }
+        }
+        buttonRevealWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + buttonRevealDelay, execute: workItem)
+    }
+
+    private func hideRecordingButtons() {
+        buttonRevealWorkItem?.cancel()
+        buttonRevealWorkItem = nil
+        shouldShowRecordingButtons = false
+        isCancelButtonHovering = false
+        isStopButtonHovering = false
+    }
+
+    private func collapseIdleHover() {
+        expansionWorkItem?.cancel()
+        contentWorkItem?.cancel()
+        buttonRevealWorkItem?.cancel()
+        expansionWorkItem = nil
+        contentWorkItem = nil
+        buttonRevealWorkItem = nil
+        shouldShowRecordingButtons = false
+        shouldShowContent = false
+        withAnimation(.easeOut(duration: collapseDuration)) {
+            shouldShowExpandedPill = false
+        }
+    }
+
+    private func updateHoverCursor(isActive: Bool) {
+        guard isActive != isPointingHandCursorActive else { return }
+        if isActive {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
+        }
+        isPointingHandCursorActive = isActive
+    }
+}
+
+private enum OverlayWaveMetrics {
+    static let count = 14
+    static let dotSize: CGFloat = 4
+    static let spacing: CGFloat = 4.75
+    static let rowWidth: CGFloat = (dotSize * CGFloat(count)) + (spacing * CGFloat(count - 1))
+    static let maxBarHeight: CGFloat = 18 * 0.75
+    static let cornerRadius: CGFloat = dotSize / 2
+}
+
+private struct OverlayIdleDotsView: View {
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: OverlayWaveMetrics.spacing) {
+            ForEach(0 ..< OverlayWaveMetrics.count, id: \.self) { _ in
+                Circle()
+                    .fill(color)
+                    .frame(width: OverlayWaveMetrics.dotSize, height: OverlayWaveMetrics.dotSize)
+            }
+        }
+    }
+}
+
+private struct OverlayLiveWaveView: View {
+    let audioLevel: Float
+    let frequencyBands: [Float]
+    let color: Color
+
+    private func height(for index: Int) -> CGFloat {
+        if frequencyBands.count == OverlayWaveMetrics.count {
+            let magnitude = max(0, min(1, CGFloat(frequencyBands[index])))
+            return OverlayWaveMetrics.dotSize + ((OverlayWaveMetrics.maxBarHeight - OverlayWaveMetrics.dotSize) * magnitude)
+        }
+
+        let center = CGFloat(OverlayWaveMetrics.count - 1) / 2
+        let distanceFromCenter = abs(CGFloat(index) - center) / center
+        let waveformFactor = 1 - (distanceFromCenter * distanceFromCenter)
+        let level = max(0, min(1, CGFloat(audioLevel)))
+        return OverlayWaveMetrics.dotSize + ((OverlayWaveMetrics.maxBarHeight - OverlayWaveMetrics.dotSize) * level * waveformFactor)
+    }
+
+    var body: some View {
+        HStack(spacing: OverlayWaveMetrics.spacing) {
+            ForEach(0 ..< OverlayWaveMetrics.count, id: \.self) { index in
+                RoundedRectangle(cornerRadius: OverlayWaveMetrics.cornerRadius)
+                    .fill(color)
+                    .frame(width: OverlayWaveMetrics.dotSize, height: max(OverlayWaveMetrics.dotSize, height(for: index)))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: audioLevel)
+        .animation(.easeOut(duration: 0.12), value: frequencyBands)
+    }
+}
+
+private struct OverlayLoadingDotsView: View {
+    let color: Color
+    private let cycleDuration: TimeInterval = 2.2
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let progress = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+            let litRange = litRange(for: progress)
+
+            HStack(spacing: OverlayWaveMetrics.spacing) {
+                ForEach(0 ..< OverlayWaveMetrics.count, id: \.self) { index in
+                    let isLit = litRange.contains(index)
+                    Circle()
+                        .fill(color)
+                        .frame(width: OverlayWaveMetrics.dotSize, height: OverlayWaveMetrics.dotSize)
+                        .opacity(isLit ? 1 : 0.28)
+                        .scaleEffect(isLit ? 1.04 : 1)
+                }
+            }
+        }
+    }
+
+    private func litRange(for progress: Double) -> ClosedRange<Int> {
+        let lastIndex = OverlayWaveMetrics.count - 1
+
+        if progress < 0.32 {
+            let local = easeInOut(progress / 0.32)
+            return 0 ... Int(round(local * Double(lastIndex)))
+        }
+
+        if progress < 0.5 {
+            let local = easeInOut((progress - 0.32) / 0.18)
+            return Int(round(local * Double(lastIndex))) ... lastIndex
+        }
+
+        if progress < 0.82 {
+            let local = easeInOut((progress - 0.5) / 0.32)
+            return Int(round((1 - local) * Double(lastIndex))) ... lastIndex
+        }
+
+        let local = easeInOut((progress - 0.82) / 0.18)
+        return 0 ... Int(round((1 - local) * Double(lastIndex)))
+    }
+
+    private func easeInOut(_ value: Double) -> Double {
+        if value < 0.5 {
+            return 2 * value * value
+        }
+        return 1 - pow(-2 * value + 2, 2) / 2
     }
 }
 

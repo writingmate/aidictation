@@ -12,11 +12,9 @@ public enum SecretsLoader {
 
     public static func transcriptionKey(for provider: TranscriptionProvider) -> String? {
         switch provider {
-        case .groq:
-            return secretsDictionary?["GroqTranscriptionKey"] as? String
         case .custom:
             return secretsDictionary?["CustomTranscriptionKey"] as? String
-        case .openai:
+        case .groq, .openai:
             return nil
         }
     }
@@ -31,9 +29,7 @@ public enum SecretsLoader {
 
     public static func llmKey(for provider: LLMProvider) -> String? {
         switch provider {
-        case .groq:
-            return secretsDictionary?["GroqLLMKey"] as? String
-        case .openai, .anthropic, .custom:
+        case .groq, .openai, .anthropic, .custom:
             return nil
         }
     }

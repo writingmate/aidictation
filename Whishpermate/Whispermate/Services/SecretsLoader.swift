@@ -14,11 +14,9 @@ enum SecretsLoader {
         switch provider {
         case .parakeet:
             return nil // On-device, no API key needed
-        case .groq:
-            return secretsDictionary?["GroqTranscriptionKey"] as? String
         case .custom:
             return secretsDictionary?["CustomTranscriptionKey"] as? String
-        case .openai:
+        case .groq, .openai:
             return nil
         }
     }
@@ -41,9 +39,7 @@ enum SecretsLoader {
 
     static func llmKey(for provider: LLMProvider) -> String? {
         switch provider {
-        case .groq:
-            return secretsDictionary?["GroqLLMKey"] as? String
-        case .lfm25, .openai, .anthropic, .custom:
+        case .groq, .lfm25, .openai, .anthropic, .custom:
             return nil
         }
     }

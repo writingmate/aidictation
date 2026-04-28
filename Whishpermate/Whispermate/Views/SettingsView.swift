@@ -204,7 +204,7 @@ struct SettingsView: View {
                         .contentShape(Rectangle())
                         .padding(.vertical, 4)
                         .padding(.horizontal, 6)
-                        .background(selectedSection == section ? Color.accentColor.opacity(0.18) : Color.clear)
+                        .background(selectedSection == section ? Color.dsPrimary.opacity(0.18) : Color.clear)
                         .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -362,7 +362,7 @@ struct SettingsView: View {
                                     .frame(height: 8)
 
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(percentage >= 1.0 ? Color.orange : Color.accentColor)
+                                    .fill(percentage >= 1.0 ? Color.orange : Color.dsPrimary)
                                     .frame(width: geo.size.width * min(percentage, 1.0), height: 8)
                             }
                         }
@@ -657,14 +657,17 @@ struct SettingsView: View {
                             Text("Overlay Color")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text("Accent color for recording and detected context")
+                            Text("Accent color for the recording overlay")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                         }
                         Spacer()
-                        Picker("", selection: $overlayManager.colorTheme) {
+                        Picker("", selection: Binding(
+                            get: { overlayManager.colorTheme },
+                            set: { overlayManager.setColorThemeFromMenu($0) }
+                        )) {
                             ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
-                                Text(theme.rawValue).tag(theme)
+                                Text(theme.displayName).tag(theme)
                             }
                         }
                         .pickerStyle(.menu)
@@ -925,8 +928,10 @@ struct SettingsView: View {
                                 .foregroundStyle(Color.dsSecondary)
                         } else {
                             Button("Open Settings") {
-                                let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-                                let _ = AXIsProcessTrustedWithOptions(options)
+                                PrivacyPermissionFlowManager.shared.open(
+                                    .accessibility,
+                                    permissionGranted: { AXIsProcessTrusted() }
+                                )
                             }
                             .controlSize(.small)
                         }
@@ -1577,7 +1582,7 @@ struct SidebarAccountStatusView: View {
                         .font(.caption)
                         .fontWeight(.medium)
                 }
-                .foregroundStyle(isPro ? .orange : .secondary)
+                .foregroundStyle(isPro ? Color.dsPrimary : .secondary)
 
                 if isPro {
                     Text("Unlimited transcriptions")
@@ -1593,7 +1598,7 @@ struct SidebarAccountStatusView: View {
                                     .frame(height: 4)
 
                                 RoundedRectangle(cornerRadius: 2)
-                                    .fill(percentage >= 0.9 ? Color.orange : Color.accentColor)
+                                    .fill(percentage >= 0.9 ? Color.orange : Color.dsPrimary)
                                     .frame(width: geo.size.width * min(percentage, 1.0), height: 4)
                             }
                         }

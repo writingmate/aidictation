@@ -70,14 +70,7 @@ struct RecordingOverlayView: View {
     }
 
     private var themedColor: Color {
-        switch manager.colorTheme {
-        case .primary: return Color.dsPrimary
-        case .blue: return .blue
-        case .green: return .green
-        case .orange: return .orange
-        case .pink: return .pink
-        case .graphite: return Color(nsColor: .darkGray)
-        }
+        manager.colorTheme.color
     }
 
     // MARK: - Animation Constants

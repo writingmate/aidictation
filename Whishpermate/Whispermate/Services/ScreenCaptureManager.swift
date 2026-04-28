@@ -40,11 +40,12 @@ class ScreenCaptureManager: ObservableObject {
             // First attempt - try the API
             let _ = CGRequestScreenCaptureAccess()
 
-            // Also open System Settings since the API prompt may not show
+            // Also open System Settings since the API prompt may not show.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                    NSWorkspace.shared.open(url)
-                }
+                PrivacyPermissionFlowManager.shared.open(
+                    .screenRecording,
+                    permissionGranted: { CGPreflightScreenCaptureAccess() }
+                )
             }
         }
     }

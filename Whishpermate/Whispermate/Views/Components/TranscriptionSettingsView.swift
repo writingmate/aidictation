@@ -325,7 +325,7 @@ struct AppTokenField: View {
             .cornerRadius(6)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSearchFocused ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isSearchFocused ? 2 : 1)
+                    .stroke(isSearchFocused ? Color.dsPrimary : Color(nsColor: .separatorColor), lineWidth: isSearchFocused ? 2 : 1)
             )
             .onTapGesture {
                 isSearchFocused = true
@@ -483,7 +483,7 @@ struct TitlePatternTokenField: View {
         .cornerRadius(6)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(isInputFocused ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isInputFocused ? 2 : 1)
+                .stroke(isInputFocused ? Color.dsPrimary : Color(nsColor: .separatorColor), lineWidth: isInputFocused ? 2 : 1)
         )
         .onTapGesture {
             isInputFocused = true

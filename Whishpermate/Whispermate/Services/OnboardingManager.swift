@@ -238,15 +238,15 @@ class OnboardingManager: ObservableObject {
     }
 
     func openMicrophoneSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
-        }
+        PrivacyPermissionFlowManager.shared.open(.microphone)
     }
 
     func requestAccessibilityPermission() {
         DebugLog.info("Triggering accessibility permission request", context: "OnboardingManager")
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-        _ = AXIsProcessTrustedWithOptions(options)
+        PrivacyPermissionFlowManager.shared.open(
+            .accessibility,
+            permissionGranted: { AXIsProcessTrusted() }
+        )
         DebugLog.info("Permission dialog triggered", context: "OnboardingManager")
     }
 

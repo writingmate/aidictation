@@ -15,6 +15,10 @@
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
+		D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */; };
+		D1B200012F65000200000005 /* PermissionFlowRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		D1B200012F65000200000012 /* PermissionFlow_PermissionFlow.bundle in Resources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */; };
 		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -25,6 +29,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 75F76DD9E51FB4E901E3F114;
 			remoteInfo = ParakeetRuntime;
+		};
+		8B5D8A882F6500020000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D1B200012F6500020000000B;
+			remoteInfo = PermissionFlowRuntime;
 		};
 		C1E7D30A2EBA92C900A07338 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -95,6 +106,7 @@
 			files = (
 				BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */,
 				F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */,
+				D1B200012F65000200000005 /* PermissionFlowRuntime.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -108,6 +120,9 @@
 		C1CE64402ED8417000D24235 /* WhisperMateIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperMateIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WhisperMateShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionFlowRuntimeBridge.swift; sourceTree = "<group>"; };
+		D1B200012F65000200000002 /* PermissionFlowRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = PermissionFlowRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PermissionFlow_PermissionFlow.bundle; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -186,6 +201,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1B200012F65000200000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C1E7D2AA2EBA925200A07338 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -222,6 +245,14 @@
 			path = ParakeetRuntime;
 			sourceTree = "<group>";
 		};
+		B55B10012F65000200000006 /* PermissionFlowRuntime */ = {
+			isa = PBXGroup;
+			children = (
+				D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */,
+			);
+			path = PermissionFlowRuntime;
+			sourceTree = "<group>";
+		};
 		C12A3A0E2ED4CFAA002D97E6 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -242,7 +273,10 @@
 				C1CE64402ED8417000D24235 /* WhisperMateIOS.app */,
 				C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */,
 				BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */,
+				D1B200012F65000200000002 /* PermissionFlowRuntime.framework */,
+				D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */,
 				AE72061A8B5F2469574714D4 /* ParakeetRuntime */,
+				B55B10012F65000200000006 /* PermissionFlowRuntime */,
 			);
 			sourceTree = "<group>";
 		};
@@ -265,6 +299,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		CE14152E41D664E3255E9A38 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D1B200012F65000200000007 /* Headers */ = {
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -295,6 +336,27 @@
 			productReference = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */;
 			productType = "com.apple.product-type.framework";
 		};
+		D1B200012F6500020000000B /* PermissionFlowRuntime */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D1B200012F65000200000010 /* Build configuration list for PBXNativeTarget "PermissionFlowRuntime" */;
+			buildPhases = (
+				D1B200012F65000200000007 /* Headers */,
+				D1B200012F65000200000008 /* Sources */,
+				D1B200012F65000200000009 /* Frameworks */,
+				D1B200012F6500020000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PermissionFlowRuntime;
+			packageProductDependencies = (
+				D1A1F1002F65000100000002 /* PermissionFlow */,
+			);
+			productName = PermissionFlowRuntime;
+			productReference = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */;
+			productType = "com.apple.product-type.framework";
+		};
 		C18566D22EA0D31000B46F55 /* Whispermate */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C18566DE2EA0D31100B46F55 /* Build configuration list for PBXNativeTarget "Whispermate" */;
@@ -310,6 +372,7 @@
 			dependencies = (
 				C1E7D3242EBA950800A07338 /* PBXTargetDependency */,
 				931DC8AD381DB1589850BC92 /* PBXTargetDependency */,
+				D1B200012F6500020000000D /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C18566D52EA0D31000B46F55 /* Whispermate */,
@@ -423,6 +486,7 @@
 				C12A3A0D2ED4CF91002D97E6 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				C1FA00012F0B000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C18566CA2EA0D31000B46F55;
@@ -434,6 +498,7 @@
 				C1E7D2ED2EBA92A500A07338 /* WhisperMateIOS */,
 				C1E7D3042EBA92C900A07338 /* WhisperMateKeyboard */,
 				75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */,
+				D1B200012F6500020000000B /* PermissionFlowRuntime */,
 			);
 		};
 /* End PBXProject section */
@@ -446,10 +511,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1B200012F6500020000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C18566D12EA0D31000B46F55 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D1B200012F65000200000012 /* PermissionFlow_PermissionFlow.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -509,6 +582,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1B200012F65000200000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C18566CF2EA0D31000B46F55 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -545,6 +626,12 @@
 			name = ParakeetRuntime;
 			target = 75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */;
 			targetProxy = 42E01EF2CF78A5915AA93F0E /* PBXContainerItemProxy */;
+		};
+		D1B200012F6500020000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = PermissionFlowRuntime;
+			target = D1B200012F6500020000000B /* PermissionFlowRuntime */;
+			targetProxy = 8B5D8A882F6500020000000C /* PBXContainerItemProxy */;
 		};
 		C1E7D30B2EBA92C900A07338 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -619,6 +706,64 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
+		D1B200012F6500020000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.permissionflow-runtime";
+				PRODUCT_NAME = PermissionFlowRuntime;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		D1B200012F6500020000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.permissionflow-runtime";
+				PRODUCT_NAME = PermissionFlowRuntime;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -1114,6 +1259,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		D1B200012F65000200000010 /* Build configuration list for PBXNativeTarget "PermissionFlowRuntime" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D1B200012F6500020000000F /* Release */,
+				D1B200012F6500020000000E /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -1139,6 +1293,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.6.0;
+			};
+		};
+		D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jaywcjlove/PermissionFlow.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.1.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1173,6 +1335,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		D1A1F1002F65000100000002 /* PermissionFlow */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */;
+			productName = PermissionFlow;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -18,6 +18,7 @@ struct OnboardingView: View {
     @State private var fnKeyEverDetected = false
     @ObservedObject var transcriptionProviderManager: TranscriptionProviderManager
     @ObservedObject var parakeetService = ParakeetTranscriptionService.shared
+    @ObservedObject var overlayManager = OverlayWindowManager.shared
 
     @State private var currentUIStep: OnboardingUIStep = .permissions
     @State private var selectedOnboardingMode: TranscriptionMode = .cloud
@@ -28,17 +29,17 @@ struct OnboardingView: View {
         case permissions = 0
         case languages = 1
         case transcriptionMode = 2
-        case hotkeyTest = 3
-        case firstRecording = 4
-        case complete = 5
+        case overlayColor = 3
+        case hotkeyTest = 4
+        case firstRecording = 5
+        case complete = 6
     }
 
     // Gradient colors
     private let gradientStart = Color(red: 1.0, green: 0.494, blue: 0.78) // #FF7EC7
     private let gradientEnd = Color(red: 1.0, green: 0.929, blue: 0.275) // #FFED46
 
-    // Orange accent color
-    private let accentOrange = Color(red: 0.945, green: 0.431, blue: 0.0) // #F16E00
+    private let accentColor = Color(red: 0.945, green: 0.431, blue: 0.0) // #F16E00
 
     var body: some View {
         Group {
@@ -68,8 +69,8 @@ struct OnboardingView: View {
             hotkeyManager.setDeferRegistration(false)
             stopAllChecks()
         }
-        .alert("Download Offline Model", isPresented: $showModelDownloadAlert) {
-            Button("Download") {
+        .alert("Download the offline model?", isPresented: $showModelDownloadAlert) {
+            Button("Download Model") {
                 if let mode = pendingMode {
                     selectedOnboardingMode = mode
                 }
@@ -82,11 +83,11 @@ struct OnboardingView: View {
                 }
                 pendingMode = nil
             }
-            Button("Cancel", role: .cancel) {
+            Button("Not Now", role: .cancel) {
                 pendingMode = nil
             }
         } message: {
-            Text("Auto and Local modes require a one-time download of the offline model (~200 MB). Download now?")
+            Text("Local and Auto need a one-time download of about 200 MB.")
         }
     }
 
@@ -109,9 +110,9 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             // Step indicators
             HStack(spacing: 8) {
-                ForEach(0 ..< 5, id: \.self) { index in
+                ForEach(0 ..< OnboardingUIStep.complete.rawValue, id: \.self) { index in
                     Circle()
-                        .fill(index <= currentUIStep.rawValue ? accentOrange : Color.secondary.opacity(0.3))
+                        .fill(index <= currentUIStep.rawValue ? accentColor : Color.secondary.opacity(0.3))
                         .frame(width: 8, height: 8)
                 }
             }
@@ -167,7 +168,7 @@ struct OnboardingView: View {
                         .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)
                 }
                 .id(currentUIStep)
-                .offset(y: (currentUIStep == .languages || currentUIStep == .transcriptionMode || currentUIStep == .hotkeyTest) ? 0 : -geo.size.height * 0.1)
+                .offset(y: (currentUIStep == .languages || currentUIStep == .transcriptionMode || currentUIStep == .overlayColor || currentUIStep == .hotkeyTest) ? 0 : -geo.size.height * 0.1)
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -207,6 +208,10 @@ struct OnboardingView: View {
                 .scaledToFit()
                 .frame(width: 160, height: 160)
                 .foregroundStyle(.white.opacity(0.5))
+                .padding(40)
+
+        case .overlayColor:
+            OnboardingOverlayColorDecorativeView(theme: overlayManager.colorTheme)
                 .padding(40)
 
         case .hotkeyTest:
@@ -253,6 +258,9 @@ struct OnboardingView: View {
         case .transcriptionMode:
             transcriptionModeContent
 
+        case .overlayColor:
+            overlayColorContent
+
         case .hotkeyTest:
             if showChangeHotkey {
                 changeHotkeyContent
@@ -273,20 +281,20 @@ struct OnboardingView: View {
     private var permissionsContent: some View {
         VStack(spacing: 16) {
             PermissionRow(
-                title: "Enable microphone access",
-                subtitle: "AIDictation will access your microphone only during dictation",
+                title: "Use your microphone",
+                subtitle: "AIDictation listens only while you are recording.",
                 isGranted: onboardingManager.isMicrophoneGranted(),
-                accentColor: accentOrange,
+                accentColor: accentColor,
                 onAllow: {
                     onboardingManager.requestMicrophonePermission()
                 }
             )
 
             PermissionRow(
-                title: "Enable accessibility access",
-                subtitle: "Allow AIDictation to paste text into any textbox",
+                title: "Type the result for you",
+                subtitle: "This lets AIDictation paste text wherever your cursor is.",
                 isGranted: onboardingManager.isAccessibilityGranted(),
-                accentColor: accentOrange,
+                accentColor: accentColor,
                 onAllow: {
                     onboardingManager.requestAccessibilityPermission()
                 }
@@ -340,7 +348,7 @@ struct OnboardingView: View {
             .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? accentOrange : Color.clear)
+                    .fill(isSelected ? accentColor : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
@@ -374,7 +382,7 @@ struct OnboardingView: View {
                 ForEach(0 ..< 4, id: \.self) { i in
                     Image(systemName: i < speed ? "star.fill" : "star")
                         .font(.caption2)
-                        .foregroundStyle(i < speed ? accentOrange : .secondary.opacity(0.4))
+                        .foregroundStyle(i < speed ? accentColor : .secondary.opacity(0.4))
                 }
             }
             HStack(spacing: 2) {
@@ -385,7 +393,7 @@ struct OnboardingView: View {
                 ForEach(0 ..< 4, id: \.self) { i in
                     Image(systemName: i < quality ? "star.fill" : "star")
                         .font(.caption2)
-                        .foregroundStyle(i < quality ? accentOrange : .secondary.opacity(0.4))
+                        .foregroundStyle(i < quality ? accentColor : .secondary.opacity(0.4))
                 }
             }
         }
@@ -420,7 +428,7 @@ struct OnboardingView: View {
                     HStack(spacing: 12) {
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                             .font(.title3)
-                            .foregroundStyle(isSelected ? accentOrange : .secondary)
+                            .foregroundStyle(isSelected ? accentColor : .secondary)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(mode.displayName)
@@ -440,11 +448,11 @@ struct OnboardingView: View {
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
-                            .fill(isSelected ? accentOrange.opacity(0.08) : Color(nsColor: .windowBackgroundColor))
+                            .fill(isSelected ? accentColor.opacity(0.08) : Color(nsColor: .windowBackgroundColor))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
-                            .stroke(isSelected ? accentOrange : Color.secondary.opacity(0.2), lineWidth: 1.5)
+                            .stroke(isSelected ? accentColor : Color.secondary.opacity(0.2), lineWidth: 1.5)
                     )
                 }
                 .buttonStyle(.plain)
@@ -502,13 +510,116 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // MARK: - Overlay Color Content
+
+    private var overlayColorContent: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            overlayColorPreview
+
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+            ], spacing: 10) {
+                ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
+                    overlayColorButton(theme)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: overlayManager.colorTheme)
+    }
+
+    private var overlayColorPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.secondary.opacity(0.06))
+
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(Color.white.opacity(0.95))
+                    .frame(width: 20, height: 20)
+                    .overlay(
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(overlayManager.colorTheme.onboardingColor)
+                    )
+
+                ForEach(0 ..< 10, id: \.self) { index in
+                    Capsule()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: 4, height: CGFloat([5, 12, 17, 12, 19, 17, 21, 20, 12, 5][index]))
+                }
+
+                Circle()
+                    .fill(Color.white.opacity(0.95))
+                    .frame(width: 20, height: 20)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(overlayManager.colorTheme.onboardingColor)
+                            .frame(width: 8, height: 8)
+                    )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                Capsule()
+                    .fill(overlayManager.colorTheme.onboardingColor)
+                    .shadow(color: overlayManager.colorTheme.onboardingColor.opacity(0.28), radius: 14, x: 0, y: 8)
+            )
+        }
+        .frame(height: 110)
+    }
+
+    private func overlayColorButton(_ theme: OverlayColorTheme) -> some View {
+        let color = theme.onboardingColor
+        let isSelected = overlayManager.colorTheme == theme
+
+        return Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                overlayManager.setColorTheme(theme)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 28, height: 28)
+
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+
+                Text(theme.displayName)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.primary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? color.opacity(0.12) : Color(nsColor: .windowBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? color : Color.secondary.opacity(0.2), lineWidth: isSelected ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Hotkey Test Content
 
     private var hotkeyTestContent: some View {
         VStack(alignment: .leading, spacing: 24) {
             // Title with Fn key inline
             HStack(spacing: 12) {
-                Text("Press hotkey now")
+                Text("Press Fn now")
                     .font(.title3)
                     .fontWeight(.medium)
                     .foregroundStyle(.primary)
@@ -516,15 +627,15 @@ struct OnboardingView: View {
                 Text("Fn")
                     .font(.title2)
                     .fontWeight(.medium)
-                    .foregroundStyle(fnKeyDetected ? accentOrange : .primary)
+                    .foregroundStyle(fnKeyDetected ? accentColor : .primary)
                     .frame(width: 56, height: 56)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(fnKeyDetected ? accentOrange.opacity(0.1) : Color(nsColor: .windowBackgroundColor))
+                            .fill(fnKeyDetected ? accentColor.opacity(0.1) : Color(nsColor: .windowBackgroundColor))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(fnKeyDetected ? accentOrange : Color.secondary.opacity(0.3), lineWidth: 2)
+                            .stroke(fnKeyDetected ? accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
                     )
             }
 
@@ -534,13 +645,13 @@ struct OnboardingView: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
 
-                Button("pick other hotkey") {
+                Button("choose another hotkey") {
                     showChangeHotkey = true
                     stopFnKeyMonitoring()
                 }
                 .buttonStyle(.plain)
                 .font(.body)
-                .foregroundStyle(accentOrange)
+                .foregroundStyle(accentColor)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -557,7 +668,7 @@ struct OnboardingView: View {
     private var changeHotkeyContent: some View {
         VStack(spacing: 24) {
             VStack(spacing: 16) {
-                Text("Select your preferred hotkey")
+                Text("Choose a shortcut that feels natural.")
                     .font(.body)
                     .foregroundStyle(.secondary)
 
@@ -594,7 +705,7 @@ struct OnboardingView: View {
 
             // Instructions below
             VStack(alignment: .leading, spacing: 12) {
-                Text("Press and hold \(hotkeyManager.currentHotkey?.displayString ?? "hotkey") key")
+                Text("Hold \(hotkeyManager.currentHotkey?.displayString ?? "the hotkey")")
                     .font(.body)
                     .foregroundStyle(.primary)
 
@@ -608,7 +719,7 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("Release \(hotkeyManager.currentHotkey?.displayString ?? "hotkey") key")
+                Text("Release when you are done")
                     .font(.body)
                     .foregroundStyle(.primary)
             }
@@ -671,12 +782,12 @@ struct OnboardingView: View {
                     }
 
                     VStack(spacing: 12) {
-                        Text("You're all set!")
+                        Text("You're ready")
                             .font(.title)
                             .fontWeight(.bold)
                             .foregroundStyle(.primary)
 
-                        Text("AIDictation is ready to use anywhere on your Mac.")
+                        Text("Dictate into any app on your Mac.")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -684,11 +795,11 @@ struct OnboardingView: View {
                     .opacity(completeAnimationPhase >= 3 ? 1 : 0)
 
                     if completeAnimationPhase >= 4 {
-                        Button("Get Started") {
+                        Button("Let's Go!") {
                             onboardingManager.completeOnboarding()
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(accentOrange)
+                        .tint(accentColor)
                         .compatibleExtraLargeControlSize()
                         .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
@@ -758,6 +869,8 @@ struct OnboardingView: View {
                 if selectedOnboardingMode == .cloud { return true }
                 if case .ready = parakeetService.state { return true }
                 return false
+            case .overlayColor:
+                return true
             case .hotkeyTest:
                 return showChangeHotkey ? hotkeyManager.currentHotkey != nil : fnKeyEverDetected
             case .firstRecording:
@@ -778,7 +891,7 @@ struct OnboardingView: View {
             // Next button
             Button("Next", action: goNext)
                 .buttonStyle(.borderedProminent)
-                .tint(accentOrange)
+                .tint(accentColor)
                 .controlSize(.regular)
                 .disabled(!canProceed)
 
@@ -791,15 +904,17 @@ struct OnboardingView: View {
     private var stepTitle: String {
         switch currentUIStep {
         case .permissions:
-            return "Set up AIDictation on your computer"
+            return "Let's get AIDictation ready"
         case .languages:
-            return "Select your languages"
+            return "What languages do you use?"
         case .transcriptionMode:
-            return "Choose transcription mode"
+            return "How should transcription run?"
+        case .overlayColor:
+            return "Pick your overlay color"
         case .hotkeyTest:
-            return showChangeHotkey ? "Change hotkey" : "Test your dictation hotkey"
+            return showChangeHotkey ? "Change your hotkey" : "Try your dictation hotkey"
         case .firstRecording:
-            return "Make your first recording"
+            return "Try one quick recording"
         case .complete:
             return ""
         }
@@ -808,14 +923,16 @@ struct OnboardingView: View {
     private var stepSubtitle: String? {
         switch currentUIStep {
         case .languages:
-            return "Choose all languages you speak or select auto-detect."
+            return "Choose the languages you speak. Auto-detect works well if you switch often."
         case .transcriptionMode:
-            return "Select how your speech is transcribed. You can change this later in Settings."
+            return "Use cloud for best accuracy, local for offline speed, or auto to let AIDictation choose."
+        case .overlayColor:
+            return "This changes the recording pill at the bottom of your screen."
         case .hotkeyTest:
             if showChangeHotkey {
-                return "Set your preferred key or key combination. You can always change this setting later on your Dashboard."
+                return "Pick the key or shortcut you want to use when dictating."
             } else {
-                return "We recommend using Fn or F5 (microphone key on many Apple keyboards)."
+                return "Press Fn now. You can choose another shortcut if Fn does not feel right."
             }
         default:
             return nil
@@ -848,6 +965,8 @@ struct OnboardingView: View {
                 selectedOnboardingMode = .cloud
             }
             transcriptionProviderManager.setTranscriptionMode(selectedOnboardingMode)
+            currentUIStep = .overlayColor
+        case .overlayColor:
             currentUIStep = .hotkeyTest
             startFnKeyMonitoring()
         case .hotkeyTest:
@@ -927,7 +1046,7 @@ struct OnboardingView: View {
             DebugLog.info("Fn key released", context: "OnboardingView")
             fnKeyDetected = false
         }
-        fnKeyMonitor?.startMonitoring()
+        fnKeyMonitor?.startMonitoring(consumePureFnEvents: onboardingManager.isAccessibilityGranted())
     }
 
     private func stopFnKeyMonitoring() {
@@ -999,6 +1118,82 @@ struct ScaledImage: View {
                 width: (NSImage(named: name)?.size.width ?? 0) * scale,
                 height: (NSImage(named: name)?.size.height ?? 0) * scale
             )
+    }
+}
+
+private struct OnboardingOverlayColorDecorativeView: View {
+    let theme: OverlayColorTheme
+
+    var body: some View {
+        VStack(spacing: 24) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(width: 260, height: 260)
+
+                Circle()
+                    .stroke(Color.white.opacity(0.28), lineWidth: 2)
+                    .frame(width: 210, height: 210)
+
+                VStack(spacing: 16) {
+                    overlayPill(scale: 1.25)
+
+                    HStack(spacing: 10) {
+                        ForEach(OverlayColorTheme.allCases, id: \.self) { option in
+                            Circle()
+                                .fill(option.onboardingColor)
+                                .frame(width: option == theme ? 22 : 16, height: option == theme ? 22 : 16)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.white.opacity(option == theme ? 0.9 : 0.35), lineWidth: option == theme ? 3 : 1)
+                                )
+                        }
+                    }
+                }
+            }
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: theme)
+    }
+
+    private func overlayPill(scale: CGFloat) -> some View {
+        HStack(spacing: 7 * scale) {
+            Circle()
+                .fill(Color.white.opacity(0.95))
+                .frame(width: 20 * scale, height: 20 * scale)
+                .overlay(
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9 * scale, weight: .bold))
+                        .foregroundStyle(theme.onboardingColor)
+                )
+
+            ForEach(0 ..< 10, id: \.self) { index in
+                Capsule()
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: 4 * scale, height: CGFloat([5, 12, 17, 12, 19, 17, 21, 20, 12, 5][index]) * scale)
+            }
+
+            Circle()
+                .fill(Color.white.opacity(0.95))
+                .frame(width: 20 * scale, height: 20 * scale)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2 * scale)
+                        .fill(theme.onboardingColor)
+                        .frame(width: 8 * scale, height: 8 * scale)
+                )
+        }
+        .padding(.horizontal, 14 * scale)
+        .padding(.vertical, 9 * scale)
+        .background(
+            Capsule()
+                .fill(theme.onboardingColor)
+                .shadow(color: theme.onboardingColor.opacity(0.28), radius: 18, x: 0, y: 8)
+        )
+    }
+}
+
+private extension OverlayColorTheme {
+    var onboardingColor: Color {
+        color
     }
 }
 

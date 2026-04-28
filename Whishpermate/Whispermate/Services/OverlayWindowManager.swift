@@ -13,9 +13,31 @@ enum OverlayColorTheme: String, CaseIterable, Codable {
     case primary = "Primary"
     case blue = "Blue"
     case green = "Green"
-    case orange = "Orange"
+    case purple = "Purple"
     case pink = "Pink"
     case graphite = "Graphite"
+
+    var displayName: String {
+        switch self {
+        case .primary: return "Orange"
+        case .blue: return "Blue"
+        case .green: return "Green"
+        case .purple: return "Purple"
+        case .pink: return "Pink"
+        case .graphite: return "Graphite"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .primary: return .orange
+        case .blue: return .blue
+        case .green: return .green
+        case .purple: return .purple
+        case .pink: return .pink
+        case .graphite: return Color(nsColor: .darkGray)
+        }
+    }
 }
 
 /// Custom NSWindow that doesn't become key or main, preventing app activation on click
@@ -132,6 +154,20 @@ class OverlayWindowManager: ObservableObject {
     }() {
         didSet {
             AppDefaults.shared.set(colorTheme.rawValue, forKey: Keys.overlayColorTheme)
+        }
+    }
+
+    func setColorTheme(_ theme: OverlayColorTheme) {
+        guard colorTheme != theme else { return }
+        AppDefaults.shared.set(theme.rawValue, forKey: Keys.overlayColorTheme)
+        colorTheme = theme
+    }
+
+    func setColorThemeFromMenu(_ theme: OverlayColorTheme) {
+        guard colorTheme != theme else { return }
+        AppDefaults.shared.set(theme.rawValue, forKey: Keys.overlayColorTheme)
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            self?.colorTheme = theme
         }
     }
 

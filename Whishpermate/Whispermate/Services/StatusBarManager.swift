@@ -22,11 +22,19 @@ func findMainWindow() -> NSWindow? {
         DebugLog.info("findMainWindow: found via AppDelegate.mainWindow", context: "WindowManagement")
         return window
     }
-    // 3. Fallback: .normal level window excluding known non-main windows
+    // 3. Try by title while SwiftUI is still attaching the identifier
+    if let window = NSApplication.shared.windows.first(where: { $0.level == .normal && $0.title == "AIDictation" }) {
+        DebugLog.info("findMainWindow: found by title", context: "WindowManagement")
+        return window
+    }
+    // 4. Fallback: .normal level window excluding known non-main windows
     let fallback = NSApplication.shared.windows.first(where: {
         $0.level == .normal
             && $0.identifier != WindowIdentifiers.history
             && $0.identifier != WindowIdentifiers.onboarding
+            && $0.title != "History"
+            && !$0.title.hasPrefix("Welcome")
+            && ($0.title.isEmpty || $0.title == "AIDictation")
     })
     if fallback != nil {
         DebugLog.info("findMainWindow: found by .normal level fallback", context: "WindowManagement")

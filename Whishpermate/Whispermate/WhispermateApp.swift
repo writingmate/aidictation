@@ -28,6 +28,55 @@ private enum AppWindowDefaults {
     }
 }
 
+private func isAuthCallbackURL(_ url: URL) -> Bool {
+    url.scheme == "aidictation" && (url.host == "auth-callback" || url.host == "auth")
+}
+
+private enum AuthCallbackGate {
+    private static var lastProcessedURL: String?
+    private static var lastProcessedTime: Date?
+    private static let duplicateWindow: TimeInterval = 5.0
+
+    static func shouldProcess(_ url: URL, context: String) -> Bool {
+        let urlString = url.absoluteString
+        let now = Date()
+
+        if let lastURL = lastProcessedURL,
+           let lastTime = lastProcessedTime,
+           lastURL == urlString,
+           now.timeIntervalSince(lastTime) < duplicateWindow
+        {
+            DebugLog.info("Ignoring duplicate auth callback", context: context)
+            return false
+        }
+
+        lastProcessedURL = urlString
+        lastProcessedTime = now
+        return true
+    }
+}
+
+private enum MainSettingsWindowOpenState {
+    private static var isOpening = false
+    private static var lastOpenRequest = Date.distantPast
+    private static let creationTimeout: TimeInterval = 1.5
+
+    static func shouldRequestCreation() -> Bool {
+        let now = Date()
+        if isOpening, now.timeIntervalSince(lastOpenRequest) < creationTimeout {
+            return false
+        }
+
+        isOpening = true
+        lastOpenRequest = now
+        return true
+    }
+
+    static func resolve() {
+        isOpening = false
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusBarManager = StatusBarManager()
     var mainWindow: NSWindow?
@@ -38,10 +87,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let onboardingManager = OnboardingManager.shared
     private let authManager = AuthManager.shared
     private let subscriptionManager = SubscriptionManager.shared
-
-    // Track last processed auth URL to prevent duplicates
-    private var lastProcessedAuthURL: String?
-    private var lastProcessedAuthTime: Date?
 
     func applicationDidFinishLaunching(_: Notification) {
         statusBarManager.setupMenuBar()
@@ -130,20 +175,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DebugLog.info("AppDelegate received URL: \(url.absoluteString)", context: "AppDelegate")
 
         // Handle authentication callback (aidictation://auth-callback)
-        if url.scheme == "aidictation", url.host == "auth-callback" || url.host == "auth" {
-            // Prevent duplicate processing of the same URL within 5 seconds
-            let urlString = url.absoluteString
-            let now = Date()
-            if let lastURL = lastProcessedAuthURL,
-               let lastTime = lastProcessedAuthTime,
-               lastURL == urlString,
-               now.timeIntervalSince(lastTime) < 5.0
-            {
-                DebugLog.info("Ignoring duplicate auth callback", context: "AppDelegate")
+        if isAuthCallbackURL(url) {
+            guard AuthCallbackGate.shouldProcess(url, context: "AppDelegate") else {
                 return
             }
-            lastProcessedAuthURL = urlString
-            lastProcessedAuthTime = now
 
             // Bring app to foreground and show main window
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -172,12 +207,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func configureMainWindow() {
         guard let window = findMainWindow()
-            ?? NSApplication.shared.windows.first(where: { $0.level == .normal }) else {
+            ?? mainSettingsWindowCandidates().first else {
             return
         }
 
         // Only configure once
-        guard mainWindow == nil else { return }
+        if let mainWindow {
+            deduplicateMainSettingsWindows(keeping: mainWindow)
+            return
+        }
 
         // Minimal configuration; keep the native title bar controls visible.
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
@@ -219,6 +257,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Hide window on launch - app starts in menu bar only mode
         window.setIsVisible(false)
+        deduplicateMainSettingsWindows(keeping: window)
 
         DebugLog.info("Main window configured, centered, with native traffic lights and hidden on launch", context: "AppDelegate")
     }
@@ -279,12 +318,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.close()
         }
 
-        // Show and center main window
-        if let mainWindow = NSApplication.shared.windows.first(where: { $0.identifier == WindowIdentifiers.main }) {
-            mainWindow.center()
-            mainWindow.setIsVisible(true)
-            mainWindow.makeKeyAndOrderFront(nil)
-        }
+        showMainSettingsWindow()
     }
 
     private func checkAndShowOnboarding() {
@@ -339,6 +373,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         DebugLog.info("Hotkey callbacks configured!", context: "AppDelegate")
+    }
+}
+
+private func isMainSettingsWindowCandidate(_ window: NSWindow) -> Bool {
+    guard window.level == .normal else { return false }
+
+    if window.identifier == WindowIdentifiers.history || window.identifier == WindowIdentifiers.onboarding {
+        return false
+    }
+
+    if window.identifier == WindowIdentifiers.main || window.identifier == WindowIdentifiers.settings {
+        return true
+    }
+
+    return window.title == "AIDictation"
+}
+
+private func mainSettingsWindowCandidates() -> [NSWindow] {
+    NSApplication.shared.windows.filter(isMainSettingsWindowCandidate)
+}
+
+private func presentMainSettingsWindow(_ window: NSWindow) {
+    window.setIsVisible(true)
+    window.makeKeyAndOrderFront(nil)
+    window.orderFrontRegardless()
+}
+
+private func deduplicateMainSettingsWindows(keeping keepWindow: NSWindow) {
+    let duplicates = mainSettingsWindowCandidates().filter { $0 !== keepWindow }
+    guard !duplicates.isEmpty else { return }
+
+    for window in duplicates {
+        DebugLog.info("Closing duplicate Settings window: \(window.title)", context: "WindowManagement")
+        window.delegate = nil
+        window.orderOut(nil)
+        window.close()
     }
 }
 
@@ -401,32 +471,40 @@ func showMainSettingsWindow(retryCount: Int = 0) {
 
     // Find the main window and show it
     if let window = findMainWindow() {
+        MainSettingsWindowOpenState.resolve()
         // Ensure window is configured
         if let appDelegate = NSApp.delegate as? AppDelegate, appDelegate.mainWindow == nil {
             appDelegate.configureMainWindow()
         }
-        window.setIsVisible(true)
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
+        deduplicateMainSettingsWindows(keeping: window)
+        presentMainSettingsWindow(window)
         return
     }
 
     // Also try by title (window may exist but identifier not yet set)
-    for window in NSApplication.shared.windows where window.title == "AIDictation" {
-        window.setIsVisible(true)
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
+    if let window = mainSettingsWindowCandidates().first {
+        MainSettingsWindowOpenState.resolve()
+        if let appDelegate = NSApp.delegate as? AppDelegate, appDelegate.mainWindow == nil {
+            appDelegate.configureMainWindow()
+        }
+        deduplicateMainSettingsWindows(keeping: window)
+        presentMainSettingsWindow(window)
         return
     }
 
     // Window doesn't exist yet — ask SwiftUI to create it, then retry
     if retryCount < 3 {
-        DebugLog.info("showMainSettingsWindow: window not found, requesting creation (attempt \(retryCount + 1))", context: "WindowManagement")
-        WindowBridge.openWindow?("main")
+        if MainSettingsWindowOpenState.shouldRequestCreation() {
+            DebugLog.info("showMainSettingsWindow: window not found, requesting creation (attempt \(retryCount + 1))", context: "WindowManagement")
+            WindowBridge.openWindow?("main")
+        } else {
+            DebugLog.info("showMainSettingsWindow: creation already in progress (attempt \(retryCount + 1))", context: "WindowManagement")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             showMainSettingsWindow(retryCount: retryCount + 1)
         }
     } else {
+        MainSettingsWindowOpenState.resolve()
         DebugLog.info("showMainSettingsWindow: failed to find/create window after 3 attempts", context: "WindowManagement")
     }
 }
@@ -531,40 +609,14 @@ enum WindowBridge {
 @main
 struct WhishpermateApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var authManager = AuthManager.shared
-    @StateObject private var subscriptionManager = SubscriptionManager.shared
-
-    // MARK: - URL Handling
-
-    private func handleURL(_ url: URL) {
-        DebugLog.info("Received URL callback: \(url.absoluteString)", context: "WhispermateApp")
-
-        // Handle authentication callback (aidictation://auth-callback)
-        if url.scheme == "aidictation", url.host == "auth-callback" || url.host == "auth" {
-            Task {
-                await authManager.handleAuthCallback(url: url)
-            }
-        }
-        // Handle payment success callback
-        else if url.scheme == "aidictation", url.host == "payment", url.path == "/success" {
-            Task {
-                await subscriptionManager.handlePaymentSuccess()
-            }
-        }
-        // Handle payment cancel callback
-        else if url.scheme == "aidictation", url.host == "payment", url.path == "/cancel" {
-            subscriptionManager.handlePaymentCancel()
-        }
-    }
 
     var body: some Scene {
-        LegacyAppScenes(handleURL: handleURL)
+        LegacyAppScenes()
     }
 }
 
 @available(macOS 13.0, *)
 private struct ModernAppScenes: Scene {
-    let handleURL: (URL) -> Void
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
@@ -579,7 +631,7 @@ private struct ModernAppScenes: Scene {
         .windowResizability(.contentSize)
         .windowStyle(.titleBar)
         .defaultPosition(.center)
-        .defaultSize(width: 700, height: 500)
+        .defaultSize(width: AppWindowDefaults.mainFrameSize.width, height: AppWindowDefaults.mainFrameSize.height)
         .commands {
             // Remove File > New Window command since we only want one main window
             CommandGroup(replacing: .newItem) {}
@@ -622,15 +674,12 @@ private struct ModernAppScenes: Scene {
 }
 
 private struct LegacyAppScenes: Scene {
-    let handleURL: (URL) -> Void
-
     var body: some Scene {
         let _ = { WindowBridge.openWindow = { id in WindowBridge.openLegacyWindow(id: id) } }()
 
         WindowGroup("AIDictation") {
             SettingsWindowView()
                 .windowIdentifier(WindowIdentifiers.main)
-                .onOpenURL(perform: handleURL)
         }
         .commands {
             CommandGroup(replacing: .newItem) {}

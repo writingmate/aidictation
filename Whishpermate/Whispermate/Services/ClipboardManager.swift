@@ -4,6 +4,7 @@ import CoreGraphics
 class ClipboardManager {
     private static var previousApp: NSRunningApplication?
     private static var clipboardRestoreWorkItem: DispatchWorkItem?
+    private static let clipboardRestoreDelay: TimeInterval = 2.0
 
     static func storePreviousApp() {
         // Store the currently active app (before WhisperMate gets focus)
@@ -15,7 +16,20 @@ class ClipboardManager {
     }
 
     /// Schedule clipboard restore, cancelling any pending restore from previous operation
-    private static func scheduleClipboardRestore(_ original: String?, pasteboard: NSPasteboard) {
+    @discardableResult
+    private static func writePasteText(_ text: String, to pasteboard: NSPasteboard) -> Int {
+        pasteboard.clearContents()
+        let success = pasteboard.setString(text, forType: .string)
+        DebugLog.info("Clipboard set success: \(success), changeCount: \(pasteboard.changeCount)", context: "ClipboardManager")
+        return pasteboard.changeCount
+    }
+
+    private static func scheduleClipboardRestore(
+        _ original: String?,
+        pastedText: String,
+        expectedChangeCount: Int,
+        pasteboard: NSPasteboard
+    ) {
         // Cancel any pending restore from previous operation to prevent race conditions
         clipboardRestoreWorkItem?.cancel()
         clipboardRestoreWorkItem = nil
@@ -26,12 +40,22 @@ class ClipboardManager {
         }
 
         let workItem = DispatchWorkItem {
+            let currentContent = pasteboard.string(forType: .string)
+            let pasteboardStillContainsPasteText = pasteboard.changeCount == expectedChangeCount || currentContent == pastedText
+
+            guard pasteboardStillContainsPasteText else {
+                DebugLog.info("Skipping clipboard restore because clipboard changed after paste", context: "ClipboardManager")
+                clipboardRestoreWorkItem = nil
+                return
+            }
+
             pasteboard.clearContents()
             pasteboard.setString(original, forType: .string)
             DebugLog.info("Restored original clipboard content", context: "ClipboardManager")
+            clipboardRestoreWorkItem = nil
         }
         clipboardRestoreWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + clipboardRestoreDelay, execute: workItem)
     }
 
     static func copyAndPaste(_ text: String) {
@@ -84,9 +108,7 @@ class ClipboardManager {
         DebugLog.info("Stored original clipboard content: \(originalContent != nil ? "yes (\(originalContent!.count) chars)" : "none")", context: "ClipboardManager")
 
         // Copy transcription to clipboard (use the prepared text with space if needed)
-        pasteboard.clearContents()
-        let success = pasteboard.setString(textToPaste, forType: .string)
-        DebugLog.info("Clipboard set success: \(success)", context: "ClipboardManager")
+        writePasteText(textToPaste, to: pasteboard)
 
         // Verify clipboard contents
         if let clipboardContent = pasteboard.string(forType: .string) {
@@ -107,10 +129,16 @@ class ClipboardManager {
             // Wait for app to become active, then paste
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 DebugLog.info("Delay complete, simulating paste...", context: "ClipboardManager")
+                let pasteboardChangeCount = writePasteText(textToPaste, to: pasteboard)
                 simulatePaste()
 
                 // Schedule clipboard restore (cancellable if another paste starts)
-                scheduleClipboardRestore(originalContent, pasteboard: pasteboard)
+                scheduleClipboardRestore(
+                    originalContent,
+                    pastedText: textToPaste,
+                    expectedChangeCount: pasteboardChangeCount,
+                    pasteboard: pasteboard
+                )
                 previousApp = nil // Clear stored app
             }
         } else {
@@ -306,9 +334,7 @@ class ClipboardManager {
         DebugLog.info("Stored original clipboard content: \(originalContent != nil ? "yes (\(originalContent!.count) chars)" : "none")", context: "ClipboardManager")
 
         // Copy text to clipboard (no space added - we're replacing selection)
-        pasteboard.clearContents()
-        let success = pasteboard.setString(text, forType: .string)
-        DebugLog.info("Clipboard set success: \(success)", context: "ClipboardManager")
+        writePasteText(text, to: pasteboard)
 
         // Get the app to paste into
         let targetApp = previousApp ?? NSWorkspace.shared.frontmostApplication
@@ -323,10 +349,16 @@ class ClipboardManager {
             // Cmd+V on selected text will replace it
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 DebugLog.info("Delay complete, simulating paste (will replace selection)...", context: "ClipboardManager")
+                let pasteboardChangeCount = writePasteText(text, to: pasteboard)
                 simulatePaste()
 
                 // Schedule clipboard restore (cancellable if another paste starts)
-                scheduleClipboardRestore(originalContent, pasteboard: pasteboard)
+                scheduleClipboardRestore(
+                    originalContent,
+                    pastedText: text,
+                    expectedChangeCount: pasteboardChangeCount,
+                    pasteboard: pasteboard
+                )
                 previousApp = nil
             }
         } else {

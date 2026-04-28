@@ -111,71 +111,13 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
-                List(SettingsSection.sidebarCases, selection: $selectedSection) { section in
-                    if section == .history {
-                        Button(action: {
-                            openWindow(id: "history")
-                        }) {
-                            HStack {
-                                Label(section.rawValue, systemImage: section.icon)
-                                Spacer()
-                                Image(systemName: "arrow.up.forward.square")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Label(section.rawValue, systemImage: section.icon)
-                            .tag(section)
-                    }
-                }
-                .listStyle(.sidebar)
-
-                Divider()
-
-                // Account status at bottom of sidebar
-                SidebarAccountStatusView(onTap: {
-                    selectedSection = .account
-                })
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
-        } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    switch selectedSection {
-                    case .general:
-                        generalSection
-                    case .account:
-                        accountSection
-                    case .history:
-                        // History opens in separate window, show placeholder
-                        EmptyView()
-                    case .permissions:
-                        permissionsSection
-                    // case .transcription:
-                    //     transcriptionSection
-                    case .audio:
-                        audioSection
-                    case .language:
-                        languageSection
-                    case .dictionary:
-                        dictionarySection
-                    case .contextRules:
-                        contextRulesSection
-                    case .shortcuts:
-                        shortcutsSection
-                    }
-                }
-                .padding(.horizontal, 20)
+        Group {
+            if #available(macOS 13.0, *) {
+                modernSettingsView
+            } else {
+                legacySettingsView
             }
         }
-        .navigationSplitViewStyle(.balanced)
         .onAppear {
             loadAudioDevices()
         }
@@ -188,6 +130,136 @@ struct SettingsView: View {
         .onDisappear {
             stopPaymentConfirmationCheck()
         }
+    }
+
+    @available(macOS 13.0, *)
+    private var modernSettingsView: some View {
+        NavigationSplitView {
+            modernSettingsSidebar
+                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
+        } detail: {
+            settingsDetail
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    private var legacySettingsView: some View {
+        HSplitView {
+            legacySettingsSidebar
+                .frame(minWidth: 180, idealWidth: 200, maxWidth: 220)
+            settingsDetail
+                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @available(macOS 13.0, *)
+    private var modernSettingsSidebar: some View {
+        VStack(spacing: 0) {
+            List(SettingsSection.sidebarCases, selection: $selectedSection) { section in
+                if section == .history {
+                    Button(action: {
+                        showHistoryWindow()
+                    }) {
+                        HStack {
+                            Label(section.rawValue, systemImage: section.icon)
+                            Spacer()
+                            Image(systemName: "arrow.up.forward.square")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Label(section.rawValue, systemImage: section.icon)
+                        .tag(section)
+                }
+            }
+            .listStyle(.sidebar)
+
+            settingsSidebarFooter
+        }
+    }
+
+    private var legacySettingsSidebar: some View {
+        VStack(spacing: 0) {
+            List {
+                ForEach(SettingsSection.sidebarCases) { section in
+                    Button(action: {
+                        if section == .history {
+                            showHistoryWindow()
+                        } else {
+                            selectedSection = section
+                        }
+                    }) {
+                        HStack {
+                            Label(section.rawValue, systemImage: section.icon)
+                            Spacer()
+                            if section == .history {
+                                Image(systemName: "arrow.up.forward.square")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .background(selectedSection == section ? Color.accentColor.opacity(0.18) : Color.clear)
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .listStyle(.sidebar)
+
+            settingsSidebarFooter
+        }
+    }
+
+    private var settingsSidebarFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            SidebarAccountStatusView(onTap: {
+                selectedSection = .account
+            })
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private var settingsDetail: some View {
+        ScrollView {
+            settingsDetailContent
+        }
+    }
+
+    private var settingsDetailContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            switch selectedSection {
+            case .general:
+                generalSection
+            case .account:
+                accountSection
+            case .history:
+                EmptyView()
+            case .permissions:
+                permissionsSection
+            case .audio:
+                audioSection
+            case .language:
+                languageSection
+            case .dictionary:
+                dictionarySection
+            case .contextRules:
+                contextRulesSection
+            case .shortcuts:
+                shortcutsSection
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Account Section
@@ -517,8 +589,6 @@ struct SettingsView: View {
 
     // MARK: - General Section
 
-    @Environment(\.openWindow) private var openWindow
-
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Recording Hotkey Settings Group
@@ -625,6 +695,7 @@ struct SettingsView: View {
                         )) {
                             ForEach(TranscriptionMode.allCases, id: \.self) { mode in
                                 Text(mode.displayName).tag(mode)
+                                    .disabled(!mode.isAvailable)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -916,7 +987,7 @@ struct SettingsView: View {
                             get: { transcriptionProviderManager.selectedProvider },
                             set: { transcriptionProviderManager.setProvider($0) }
                         )) {
-                            ForEach(TranscriptionProvider.allCases) { provider in
+                            ForEach(TranscriptionProvider.availableProviders) { provider in
                                 Text(provider.displayName).tag(provider)
                             }
                         }
@@ -1200,6 +1271,10 @@ struct SettingsView: View {
     }
 
     private var parakeetStatusText: String {
+        guard ParakeetTranscriptionService.isRuntimeSupported else {
+            return ParakeetTranscriptionService.unavailableMessage
+        }
+
         switch parakeetService.state {
         case .notInitialized:
             return "Model not downloaded"

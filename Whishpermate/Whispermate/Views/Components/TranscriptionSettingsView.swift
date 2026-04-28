@@ -183,7 +183,7 @@ struct DictionaryEntryRow: View {
                     Text("(no replacement)")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                        .italic()
+                        .compatibleItalic()
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -292,7 +292,7 @@ struct AppTokenField: View {
             VStack(spacing: 0) {
                 // Selected apps as tokens
                 if !selectedApps.isEmpty {
-                    FlowLayout(spacing: 6) {
+                    TokenFlowLayout(spacing: 6) {
                         ForEach(selectedApps) { app in
                             AppToken(app: app) {
                                 selectedAppBundleIds.remove(app.bundleID)
@@ -453,7 +453,7 @@ struct TitlePatternTokenField: View {
         VStack(spacing: 0) {
             // Tokens and input field
             if !titlePatterns.isEmpty {
-                FlowLayout(spacing: 6) {
+                TokenFlowLayout(spacing: 6) {
                     ForEach(titlePatterns, id: \.self) { pattern in
                         TitlePatternToken(pattern: pattern) {
                             titlePatterns.removeAll { $0 == pattern }
@@ -536,6 +536,24 @@ struct TitlePatternToken: View {
 }
 
 // Flow layout for tokens
+struct TokenFlowLayout<Content: View>: View {
+    var spacing: CGFloat = 8
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if #available(macOS 13.0, *) {
+            FlowLayout(spacing: spacing) {
+                content
+            }
+        } else {
+            VStack(alignment: .leading, spacing: spacing) {
+                content
+            }
+        }
+    }
+}
+
+@available(macOS 13.0, *)
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
@@ -606,7 +624,7 @@ struct ContextRuleRow: View {
                         Text("Applies to all apps")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                            .italic()
+                            .compatibleItalic()
                     } else if !appIcons.isEmpty {
                         HStack(spacing: 4) {
                             ForEach(appIcons.prefix(8)) { app in
@@ -1046,6 +1064,17 @@ struct ShortcutRow: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
             }
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func compatibleItalic() -> some View {
+        if #available(macOS 13.0, *) {
+            italic()
+        } else {
+            self
         }
     }
 }

@@ -42,6 +42,17 @@ enum AIApp: String, CaseIterable, Identifiable {
 
 /// Master-detail view that combines history list with recording interface
 struct HistoryMasterDetailView: View {
+    var body: some View {
+        if #available(macOS 13.0, *) {
+            ModernHistoryMasterDetailView()
+        } else {
+            LegacyHistoryMasterDetailView()
+        }
+    }
+}
+
+@available(macOS 13.0, *)
+private struct ModernHistoryMasterDetailView: View {
     @ObservedObject private var historyManager = HistoryManager.shared
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var selectedRecording: Recording?
@@ -65,7 +76,7 @@ struct HistoryMasterDetailView: View {
                 RecordingDetailView(
                     recording: recording,
                     historyManager: historyManager,
-                    columnVisibility: columnVisibility,
+                    leadingPadding: columnVisibility == .detailOnly ? 80 : 16,
                     onDelete: { recordingToDelete in
                         // Find index before deletion
                         guard let index = historyManager.recordings.firstIndex(where: { $0.id == recordingToDelete.id }) else {
@@ -132,6 +143,68 @@ struct HistoryMasterDetailView: View {
     }
 }
 
+private struct LegacyHistoryMasterDetailView: View {
+    @ObservedObject private var historyManager = HistoryManager.shared
+    @State private var selectedRecording: Recording?
+
+    var body: some View {
+        HSplitView {
+            HistorySidebarView(
+                historyManager: historyManager,
+                selectedRecording: $selectedRecording
+            )
+            .frame(minWidth: 250, idealWidth: 300, maxWidth: 400, maxHeight: .infinity)
+
+            if let selectedId = selectedRecording?.id,
+               let recording = historyManager.recordings.first(where: { $0.id == selectedId })
+            {
+                RecordingDetailView(
+                    recording: recording,
+                    historyManager: historyManager,
+                    leadingPadding: 16,
+                    onDelete: { recordingToDelete in
+                        guard let index = historyManager.recordings.firstIndex(where: { $0.id == recordingToDelete.id }) else {
+                            return
+                        }
+
+                        let nextSelection: Recording?
+                        if index < historyManager.recordings.count - 1 {
+                            nextSelection = historyManager.recordings[index + 1]
+                        } else if index > 0 {
+                            nextSelection = historyManager.recordings[index - 1]
+                        } else {
+                            nextSelection = nil
+                        }
+
+                        historyManager.deleteRecording(recordingToDelete)
+                        selectedRecording = nextSelection
+                    }
+                )
+                .id("\(recording.id)-\(recording.status)-\(recording.transcription?.hashValue ?? 0)")
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "mic.circle")
+                        .dsFont(.iconLarge)
+                        .foregroundStyle(.tertiary)
+                    Text("Select a recording")
+                        .dsFont(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("Press Fn to start recording")
+                        .dsFont(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .windowBackgroundColor))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .recordingCompleted)) { notification in
+            if let recording = notification.object as? Recording {
+                selectedRecording = recording
+            }
+        }
+    }
+}
+
 /// Sidebar showing list of all recordings
 struct HistorySidebarView: View {
     @ObservedObject var historyManager: HistoryManager
@@ -157,47 +230,65 @@ struct HistorySidebarView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: $selectedRecording) {
-                    ForEach(filteredRecordings) { recording in
-                        HistorySidebarRow(recording: recording)
-                            .tag(recording)
-                    }
-                }
-                .listStyle(.sidebar)
-                .onChange(of: selectedRecording) { _ in }
-                .contextMenu(forSelectionType: Recording.self) { recordings in
-                    if let recording = recordings.first {
-                        Button {
-                            copyTranscription(recording)
-                        } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
-                        }
-                        .disabled(recording.transcription == nil)
-
-                        Button {
-                            retryTranscription(recording)
-                        } label: {
-                            Label("Re-transcribe", systemImage: "arrow.clockwise")
-                        }
-
-                        Button {
-                            revealInFinder(recording)
-                        } label: {
-                            Label("Reveal in Finder", systemImage: "folder")
-                        }
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            deleteRecording(recording)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                }
+                recordingsList
             }
         }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search recordings")
+    }
+
+    @ViewBuilder
+    private var recordingsList: some View {
+        if #available(macOS 13.0, *) {
+            recordingsListWithSelectionContextMenu
+        } else {
+            recordingsListContent
+        }
+    }
+
+    private var recordingsListContent: some View {
+        List(selection: $selectedRecording) {
+            ForEach(filteredRecordings) { recording in
+                HistorySidebarRow(recording: recording)
+                    .tag(recording)
+            }
+        }
+        .listStyle(.sidebar)
+        .onChange(of: selectedRecording) { _ in }
+    }
+
+    @available(macOS 13.0, *)
+    private var recordingsListWithSelectionContextMenu: some View {
+        recordingsListContent
+            .contextMenu(forSelectionType: Recording.self) { recordings in
+                if let recording = recordings.first {
+                    Button {
+                        copyTranscription(recording)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .disabled(recording.transcription == nil)
+
+                    Button {
+                        retryTranscription(recording)
+                    } label: {
+                        Label("Re-transcribe", systemImage: "arrow.clockwise")
+                    }
+
+                    Button {
+                        revealInFinder(recording)
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        deleteRecording(recording)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
     }
 
     private func copyTranscription(_ recording: Recording) {
@@ -280,17 +371,10 @@ struct HistorySidebarRow: View {
 struct RecordingDetailView: View {
     let recording: Recording
     @ObservedObject var historyManager: HistoryManager
-    let columnVisibility: NavigationSplitViewVisibility
+    let leadingPadding: CGFloat
     let onDelete: (Recording) -> Void
     @State private var showCopiedNotification = false
     @StateObject private var audioPlayer = AudioPlayerModel()
-
-    // Compute dynamic padding based on sidebar visibility
-    private var leadingPadding: CGFloat {
-        // When sidebar is hidden (.detailOnly), toggle button appears in detail view - need more padding
-        // When sidebar is visible (.all or .doubleColumn), toggle button is in sidebar - use less padding
-        columnVisibility == .detailOnly ? 80 : 16
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

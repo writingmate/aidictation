@@ -172,7 +172,7 @@ struct OnboardingView: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .clipShape(RoundedRectangle(cornerRadius: 16))
         }
-        .contentTransition(.opacity)
+        .compatibleContentOpacityTransition()
         .animation(.easeInOut(duration: 0.3), value: currentUIStep)
     }
 
@@ -404,9 +404,12 @@ struct OnboardingView: View {
             ForEach(TranscriptionMode.allCases, id: \.self) { mode in
                 let isSelected = selectedOnboardingMode == mode
                 let needsModel = mode != .cloud
+                let isAvailable = mode.isAvailable
                 let rating = modeRating(for: mode)
 
                 Button {
+                    guard isAvailable else { return }
+
                     if needsModel && !isParakeetReady && !isParakeetDownloading {
                         pendingMode = mode
                         showModelDownloadAlert = true
@@ -427,6 +430,7 @@ struct OnboardingView: View {
                             Text(mode.description)
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
+                                .opacity(isAvailable ? 1 : 0.65)
                         }
 
                         Spacer()
@@ -444,6 +448,7 @@ struct OnboardingView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(!isAvailable)
             }
 
             // Model download status (only shown when actively downloading or ready)
@@ -572,7 +577,7 @@ struct OnboardingView: View {
     private var firstRecordingContent: some View {
         VStack(alignment: .leading, spacing: 20) {
             // Text field for testing - first so user focuses here
-            TextField("Press \(hotkeyManager.currentHotkey?.displayString ?? "hotkey") and speak...", text: $firstRecordingText, axis: .vertical)
+            firstRecordingTextField
                 .textFieldStyle(.plain)
                 .font(.body)
                 .padding(12)
@@ -627,6 +632,16 @@ struct OnboardingView: View {
         }
     }
 
+    @ViewBuilder
+    private var firstRecordingTextField: some View {
+        let prompt = "Press \(hotkeyManager.currentHotkey?.displayString ?? "hotkey") and speak..."
+        if #available(macOS 13.0, *) {
+            TextField(prompt, text: $firstRecordingText, axis: .vertical)
+        } else {
+            TextField(prompt, text: $firstRecordingText)
+        }
+    }
+
     // MARK: - Complete Screen
 
     @State private var completeAnimationPhase = 0 // 0: start, 1: expanded, 2: card, 3: checkmark, 4: button
@@ -674,7 +689,7 @@ struct OnboardingView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(accentOrange)
-                        .controlSize(.extraLarge)
+                        .compatibleExtraLargeControlSize()
                         .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
                 }
@@ -829,6 +844,9 @@ struct OnboardingView: View {
         case .languages:
             currentUIStep = .transcriptionMode
         case .transcriptionMode:
+            if !selectedOnboardingMode.isAvailable {
+                selectedOnboardingMode = .cloud
+            }
             transcriptionProviderManager.setTranscriptionMode(selectedOnboardingMode)
             currentUIStep = .hotkeyTest
             startFnKeyMonitoring()
@@ -981,5 +999,25 @@ struct ScaledImage: View {
                 width: (NSImage(named: name)?.size.width ?? 0) * scale,
                 height: (NSImage(named: name)?.size.height ?? 0) * scale
             )
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func compatibleContentOpacityTransition() -> some View {
+        if #available(macOS 13.0, *) {
+            contentTransition(.opacity)
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func compatibleExtraLargeControlSize() -> some View {
+        if #available(macOS 14.0, *) {
+            controlSize(.extraLarge)
+        } else {
+            controlSize(.large)
+        }
     }
 }

@@ -390,11 +390,28 @@ class AppState: ObservableObject {
                     return
                 }
 
+                let activeTransport = transcriptionProviderManager.effectiveTransport
                 let realtimeResult: String?
-                if let realtimeClient {
-                    realtimeResult = await realtimeClient.finish(timeout: 1.2)?
+                if activeTransport == .realtime {
+                    guard let realtimeClient else {
+                        throw NSError(
+                            domain: "AppState",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Realtime transcription did not start"]
+                        )
+                    }
+                    let result = await realtimeClient.finish(timeout: 1.2)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let result, !result.isEmpty else {
+                        throw NSError(
+                            domain: "AppState",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Realtime transcription did not return text"]
+                        )
+                    }
+                    realtimeResult = result
                 } else {
+                    realtimeClient?.close()
                     realtimeResult = nil
                 }
 
@@ -562,17 +579,20 @@ class AppState: ObservableObject {
 
         let mode = transcriptionProviderManager.transcriptionMode
         let provider = transcriptionProviderManager.selectedProvider
+        let transport = transcriptionProviderManager.effectiveTransport
 
         guard mode != .local,
               !provider.isOnDevice,
+              transport == .realtime,
               NetworkMonitor.shared.isConnected
         else {
+            DebugLog.info("Skipping realtime start for transport=\(transport.rawValue), mode=\(mode.displayName), provider=\(provider.displayName)", context: "AppState")
             return
         }
 
-        let prompt = buildTranscriptionPromptComponents().joined(separator: "\n")
+        let prompt = buildRealtimePrompt()
         let realtimePrompt = prompt.isEmpty ? nil : prompt
-        let languageCode = languageManager.apiLanguageCode
+        let languageCode = singleAPILanguageCode()
         let client: OpenAIRealtimeTranscriptionClient
 
         switch provider {
@@ -667,6 +687,32 @@ class AppState: ObservableObject {
         return promptComponents
     }
 
+    private func buildSTTHintPromptComponents() -> [String] {
+        var promptComponents: [String] = []
+
+        if !dictionaryManager.transcriptionHints.isEmpty {
+            promptComponents.append("Vocabulary: \(dictionaryManager.transcriptionHints)")
+        }
+        if !shortcutManager.transcriptionHints.isEmpty {
+            promptComponents.append("Phrases: \(shortcutManager.transcriptionHints)")
+        }
+
+        return promptComponents
+    }
+
+    private func buildRealtimePrompt() -> String {
+        buildTranscriptionPromptComponents().joined(separator: "\n")
+    }
+
+    private func singleAPILanguageCode() -> String? {
+        guard let languageCode = languageManager.apiLanguageCode,
+              languageCode.count == 2
+        else {
+            return nil
+        }
+        return languageCode
+    }
+
     /// Core transcription logic shared by live recording and re-transcription
     private func performTranscription(
         audioURL: URL,
@@ -674,14 +720,20 @@ class AppState: ObservableObject {
         clipboardContent: String?,
         screenContext: String?
     ) async throws -> String {
+        let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
         let promptComponents = buildTranscriptionPromptComponents()
+        let postProcessingPrompt = promptComponents.joined(separator: "\n")
 
         let mode = transcriptionProviderManager.transcriptionMode
         var provider = transcriptionProviderManager.selectedProvider
-        DebugLog.info("Transcription mode: \(mode.displayName), provider: \(provider.displayName), isOnDevice: \(provider.isOnDevice)", context: "AppState")
+        DebugLog.info("Transcription mode: \(mode.displayName), provider: \(provider.displayName), transport: \(transcriptionProviderManager.effectiveTransport.rawValue), isOnDevice: \(provider.isOnDevice)", context: "AppState")
 
         // Auto mode: use cloud when online, fall back to local when offline
-        if mode == .auto, !provider.isOnDevice, !NetworkMonitor.shared.isConnected {
+        if mode == .auto,
+           !provider.isOnDevice,
+           !NetworkMonitor.shared.isConnected,
+           ParakeetTranscriptionService.isRuntimeSupported
+        {
             let parakeetState = await MainActor.run { ParakeetTranscriptionService.shared.state }
             switch parakeetState {
             case .ready, .transcribing:
@@ -702,43 +754,20 @@ class AppState: ObservableObject {
             }
         }
 
-        if provider == .custom {
-            DebugLog.info("Using Custom (AIDictation) provider - server handles formatting", context: "AppState")
+        let transport = provider == transcriptionProviderManager.selectedProvider
+            ? transcriptionProviderManager.effectiveTransport
+            : provider.defaultTransport
 
-            guard let transcriptionApiKey = resolvedTranscriptionApiKey() else {
-                throw NSError(domain: "AppState", code: -1, userInfo: [NSLocalizedDescriptionKey: "Please set your transcription API key"])
+        switch transport {
+        case .local:
+            guard ParakeetTranscriptionService.isRuntimeSupported else {
+                throw NSError(
+                    domain: "AppState",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: ParakeetTranscriptionService.unavailableMessage]
+                )
             }
 
-            let config = OpenAIClient.Configuration(
-                transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-                transcriptionModel: transcriptionProviderManager.effectiveModel,
-                chatCompletionEndpoint: llmProviderManager.effectiveEndpoint,
-                chatCompletionModel: llmProviderManager.effectiveModel,
-                apiKey: transcriptionApiKey
-            )
-
-            if openAIClient == nil {
-                openAIClient = OpenAIClient(config: config)
-            } else {
-                openAIClient?.updateConfig(config)
-            }
-
-            guard let client = openAIClient else {
-                throw NSError(domain: "AppState", code: -1)
-            }
-
-            return try await client.transcribeAndFormat(
-                audioURL: audioURL,
-                prompt: nil,
-                formattingRules: promptComponents,
-                languageCodes: languageManager.apiLanguageCode,
-                appContext: appContext,
-                llmApiKey: nil,
-                clipboardContent: clipboardContent,
-                screenContext: screenContext
-            )
-
-        } else if provider.isOnDevice {
             DebugLog.info("Using on-device Parakeet transcription", context: "AppState")
 
             var text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
@@ -746,9 +775,15 @@ class AppState: ObservableObject {
             text = dictionaryManager.applyReplacements(to: text)
             return text
 
-        } else {
-            DebugLog.info("Using \(provider.displayName) cloud transcription", context: "AppState")
+        case .realtime:
+            throw NSError(
+                domain: "AppState",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Realtime transcription cannot fall back to batch transport"]
+            )
 
+        case .batch:
+            DebugLog.info("Using \(provider.displayName) batch transcription", context: "AppState")
             guard let transcriptionApiKey = resolvedTranscriptionApiKey() else {
                 throw NSError(domain: "AppState", code: -1, userInfo: [NSLocalizedDescriptionKey: "Please set your \(provider.displayName) API key"])
             }
@@ -771,9 +806,16 @@ class AppState: ObservableObject {
                 throw NSError(domain: "AppState", code: -1)
             }
 
-            let rawText = try await client.transcribe(audioURL: audioURL)
+            let rawText = try await client.transcribe(
+                audioURL: audioURL,
+                prompt: sttHintPrompt.isEmpty ? nil : sttHintPrompt,
+                language: singleAPILanguageCode(),
+                sttPrompt: provider == .custom && !sttHintPrompt.isEmpty ? sttHintPrompt : nil,
+                postProcessingPrompt: provider == .custom && !postProcessingPrompt.isEmpty ? postProcessingPrompt : nil
+            )
 
             let shouldPostProcess = transcriptionProviderManager.enableLLMPostProcessing &&
+                provider != .custom &&
                 (transcriptionProviderManager.postProcessingProvider == .aidictation || !promptComponents.isEmpty)
             if shouldPostProcess {
                 let postProcessor = transcriptionProviderManager.postProcessingProvider

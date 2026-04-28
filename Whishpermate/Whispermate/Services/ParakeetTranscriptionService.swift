@@ -1,14 +1,10 @@
-import AVFoundation
-internal import Combine
-import FluidAudio
 import Foundation
+internal import Combine
 
-/// On-device transcription service using NVIDIA Parakeet model via FluidAudio
-/// Provides private, offline, low-latency speech recognition on Apple Silicon
+/// On-device transcription service. The FluidAudio implementation lives in a
+/// macOS 14+ runtime framework so the main app can still launch on macOS 12.
 class ParakeetTranscriptionService: ObservableObject {
     static let shared = ParakeetTranscriptionService()
-
-    // MARK: - Types
 
     enum ServiceState {
         case notInitialized
@@ -24,24 +20,30 @@ class ParakeetTranscriptionService: ObservableObject {
         }
     }
 
-    // MARK: - Published Properties
-
     @Published var state: ServiceState = .notInitialized
     @Published var isModelDownloaded: Bool = false
 
-    // MARK: - Private Properties
+    static var isRuntimeSupported: Bool {
+        if #available(macOS 14.0, *) {
+            return true
+        }
+        return false
+    }
 
-    private var asrManager: AsrManager?
-    private let audioConverter = AudioConverter()
+    static var unavailableMessage: String {
+        "Local transcription requires macOS 14 or later"
+    }
 
-    // MARK: - Initialization
+    private var runtimeBridge: NSObject?
 
     private init() {}
 
-    // MARK: - Public API
-
-    /// Download and initialize the Parakeet model (v3 multilingual)
     func initialize() async throws {
+        guard Self.isRuntimeSupported else {
+            await setUnavailableState()
+            throw runtimeError(Self.unavailableMessage)
+        }
+
         guard case .notInitialized = state else {
             DebugLog.info("Already initialized or in progress", context: "ParakeetTranscriptionService")
             return
@@ -51,30 +53,49 @@ class ParakeetTranscriptionService: ObservableObject {
             self.state = .downloading
         }
 
+        let bridge = try loadRuntimeBridge()
+
         do {
-            DebugLog.info("Downloading Parakeet v3 multilingual model...", context: "ParakeetTranscriptionService")
-
-            // Download v3 multilingual model (will use cache if already downloaded)
-            let downloadedModels = try await AsrModels.downloadAndLoad(version: .v3)
-
-            await MainActor.run { self.state = .initializing }
-
-            DebugLog.info("Initializing ASR manager...", context: "ParakeetTranscriptionService")
-
-            // Initialize ASR manager
-            let manager = AsrManager(config: .default)
-            try await manager.loadModels(downloadedModels)
-
+            DebugLog.info("Initializing Parakeet runtime...", context: "ParakeetTranscriptionService")
+            try await initializeRuntimeBridge(bridge)
             await MainActor.run {
-                self.asrManager = manager
                 self.state = .ready
                 self.isModelDownloaded = true
             }
-
             DebugLog.info("Parakeet model ready", context: "ParakeetTranscriptionService")
-
         } catch {
             DebugLog.error("Failed to initialize Parakeet: \(error.localizedDescription)", context: "ParakeetTranscriptionService")
+            await MainActor.run {
+                self.state = .error(error.localizedDescription)
+                self.isModelDownloaded = false
+            }
+            throw error
+        }
+    }
+
+    func transcribe(audioURL: URL) async throws -> String {
+        guard Self.isRuntimeSupported else {
+            await setUnavailableState()
+            throw runtimeError(Self.unavailableMessage)
+        }
+
+        if case .notInitialized = state {
+            try await initialize()
+        }
+
+        let bridge = try loadRuntimeBridge()
+
+        await MainActor.run {
+            self.state = .transcribing
+        }
+
+        do {
+            let text = try await transcribeWithRuntimeBridge(bridge, audioPath: audioURL.path)
+            await MainActor.run {
+                self.state = .ready
+            }
+            return text
+        } catch {
             await MainActor.run {
                 self.state = .error(error.localizedDescription)
             }
@@ -82,62 +103,124 @@ class ParakeetTranscriptionService: ObservableObject {
         }
     }
 
-    /// Transcribe audio file to text
-    /// - Parameter audioURL: URL to audio file (any format supported by AVFoundation)
-    /// - Returns: Transcribed text
-    func transcribe(audioURL: URL) async throws -> String {
-        // Initialize if needed
-        if case .notInitialized = state {
-            try await initialize()
+    func cleanup() {
+        let bridge = runtimeBridge
+        runtimeBridge = nil
+
+        if let bridge {
+            callVoidSelector("cleanupRuntime", on: bridge)
         }
 
-        guard let manager = asrManager else {
-            throw NSError(domain: "ParakeetTranscriptionService", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"])
-        }
-
-        await MainActor.run {
-            self.state = .transcribing
-        }
-
-        defer {
-            Task { @MainActor in
-                self.state = .ready
-            }
-        }
-
-        do {
-            DebugLog.info("Converting audio to 16kHz mono...", context: "ParakeetTranscriptionService")
-
-            // Convert audio to 16kHz mono PCM (required by Parakeet)
-            let samples = try audioConverter.resampleAudioFile(path: audioURL.path)
-
-            DebugLog.info("Transcribing \(samples.count) samples...", context: "ParakeetTranscriptionService")
-
-            // Perform transcription
-            var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-            let result = try await manager.transcribe(samples, decoderState: &decoderState)
-
-            DebugLog.info("Transcription complete: \(result.text.prefix(100))...", context: "ParakeetTranscriptionService")
-
-            return result.text
-
-        } catch {
-            DebugLog.error("Transcription failed: \(error.localizedDescription)", context: "ParakeetTranscriptionService")
-            throw error
+        Task { @MainActor in
+            self.state = .notInitialized
+            self.isModelDownloaded = false
         }
     }
 
-    /// Cleanup resources
-    func cleanup() {
-        let manager = asrManager
-        asrManager = nil
-        Task {
-            await manager?.cleanup()
-            await MainActor.run {
-                self.state = .notInitialized
-                self.isModelDownloaded = false
+    private func setUnavailableState() async {
+        await MainActor.run {
+            self.state = .error(Self.unavailableMessage)
+            self.isModelDownloaded = false
+        }
+    }
+
+    private func loadRuntimeBridge() throws -> NSObject {
+        if let runtimeBridge {
+            return runtimeBridge
+        }
+
+        guard Self.isRuntimeSupported else {
+            throw runtimeError(Self.unavailableMessage)
+        }
+
+        guard let frameworkURL = Bundle.main.privateFrameworksURL?.appendingPathComponent("ParakeetRuntime.framework"),
+              let bundle = Bundle(url: frameworkURL)
+        else {
+            throw runtimeError("Parakeet runtime framework is missing")
+        }
+
+        if !bundle.isLoaded {
+            do {
+                try bundle.loadAndReturnError()
+            } catch {
+                throw runtimeError(error.localizedDescription)
             }
         }
+
+        let runtimeClass: AnyClass? = NSClassFromString("ParakeetRuntime.ParakeetRuntimeBridge")
+            ?? NSClassFromString("ParakeetRuntimeBridge")
+        guard let bridgeClass = runtimeClass as? NSObject.Type else {
+            throw runtimeError("Could not find Parakeet runtime bridge")
+        }
+
+        let bridge = bridgeClass.init()
+        runtimeBridge = bridge
+        return bridge
+    }
+
+    private func initializeRuntimeBridge(_ bridge: NSObject) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let selector = NSSelectorFromString("initializeWithCompletion:")
+            guard bridge.responds(to: selector),
+                  let method = bridge.method(for: selector)
+            else {
+                continuation.resume(throwing: self.runtimeError("Parakeet runtime does not support initialization"))
+                return
+            }
+
+            let completion: @convention(block) (Bool, NSString?) -> Void = { success, message in
+                if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Parakeet initialization failed"))
+                }
+            }
+
+            typealias Function = @convention(c) (AnyObject, Selector, @escaping @convention(block) (Bool, NSString?) -> Void) -> Void
+            unsafeBitCast(method, to: Function.self)(bridge, selector, completion)
+        }
+    }
+
+    private func transcribeWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let selector = NSSelectorFromString("transcribeAudioAtPath:completion:")
+            guard bridge.responds(to: selector),
+                  let method = bridge.method(for: selector)
+            else {
+                continuation.resume(throwing: self.runtimeError("Parakeet runtime does not support transcription"))
+                return
+            }
+
+            let completion: @convention(block) (NSString?, NSString?) -> Void = { text, message in
+                if let text {
+                    continuation.resume(returning: text as String)
+                } else {
+                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Parakeet transcription failed"))
+                }
+            }
+
+            typealias Function = @convention(c) (AnyObject, Selector, NSString, @escaping @convention(block) (NSString?, NSString?) -> Void) -> Void
+            unsafeBitCast(method, to: Function.self)(bridge, selector, audioPath as NSString, completion)
+        }
+    }
+
+    private func callVoidSelector(_ selectorName: String, on bridge: NSObject) {
+        let selector = NSSelectorFromString(selectorName)
+        guard bridge.responds(to: selector),
+              let method = bridge.method(for: selector)
+        else {
+            return
+        }
+
+        typealias Function = @convention(c) (AnyObject, Selector) -> Void
+        unsafeBitCast(method, to: Function.self)(bridge, selector)
+    }
+
+    private func runtimeError(_ message: String) -> NSError {
+        NSError(
+            domain: "ParakeetTranscriptionService",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
     }
 }

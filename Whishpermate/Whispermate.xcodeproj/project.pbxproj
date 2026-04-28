@@ -7,16 +7,25 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1FB33087FF396340CC97677A /* ParakeetRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */; };
+		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C12A3A102ED4CFAA002D97E6 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A0F2ED4CFAA002D97E6 /* Supabase */; };
 		C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A132ED4D0AA002D97E6 /* Auth */; };
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
-		C1FA00032F0B000000000003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		42E01EF2CF78A5915AA93F0E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 75F76DD9E51FB4E901E3F114;
+			remoteInfo = ParakeetRuntime;
+		};
 		C1E7D30A2EBA92C900A07338 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
@@ -85,6 +94,7 @@
 			dstSubfolderSpec = 10;
 			files = (
 				BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */,
+				F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -92,6 +102,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParakeetRuntimeBridge.swift; sourceTree = "<group>"; };
+		BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ParakeetRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE643F2ED8417000D24235 /* AIDictation.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIDictation.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64402ED8417000D24235 /* WhisperMateIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperMateIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -134,6 +146,8 @@
 		};
 		C1E7D2AE2EBA925200A07338 /* WhisperMateShared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = WhisperMateShared;
 			sourceTree = "<group>";
 		};
@@ -156,11 +170,18 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		B0E18A98138A039334FDF997 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C18566D02EA0D31000B46F55 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C1FA00032F0B000000000003 /* FluidAudio in Frameworks */,
 				C2A100012F2B000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -193,6 +214,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		AE72061A8B5F2469574714D4 /* ParakeetRuntime */ = {
+			isa = PBXGroup;
+			children = (
+				4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */,
+			);
+			path = ParakeetRuntime;
+			sourceTree = "<group>";
+		};
 		C12A3A0E2ED4CFAA002D97E6 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -212,6 +241,8 @@
 				C1CE643F2ED8417000D24235 /* AIDictation.app */,
 				C1CE64402ED8417000D24235 /* WhisperMateIOS.app */,
 				C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */,
+				BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */,
+				AE72061A8B5F2469574714D4 /* ParakeetRuntime */,
 			);
 			sourceTree = "<group>";
 		};
@@ -233,9 +264,37 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CE14152E41D664E3255E9A38 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
+		75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D7237D61A02B83B40C74870F /* Build configuration list for PBXNativeTarget "ParakeetRuntime" */;
+			buildPhases = (
+				CE14152E41D664E3255E9A38 /* Headers */,
+				04F59F89041169434F0815D5 /* Sources */,
+				B0E18A98138A039334FDF997 /* Frameworks */,
+				9DA5E095511DD639CCB45319 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ParakeetRuntime;
+			packageProductDependencies = (
+				C1FA00022F0B000000000002 /* FluidAudio */,
+			);
+			productName = ParakeetRuntime;
+			productReference = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */;
+			productType = "com.apple.product-type.framework";
+		};
 		C18566D22EA0D31000B46F55 /* Whispermate */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C18566DE2EA0D31100B46F55 /* Build configuration list for PBXNativeTarget "Whispermate" */;
@@ -250,6 +309,7 @@
 			);
 			dependencies = (
 				C1E7D3242EBA950800A07338 /* PBXTargetDependency */,
+				931DC8AD381DB1589850BC92 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C18566D52EA0D31000B46F55 /* Whispermate */,
@@ -373,11 +433,19 @@
 				C1E7D2AC2EBA925200A07338 /* WhisperMateShared */,
 				C1E7D2ED2EBA92A500A07338 /* WhisperMateIOS */,
 				C1E7D3042EBA92C900A07338 /* WhisperMateKeyboard */,
+				75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		9DA5E095511DD639CCB45319 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C18566D12EA0D31000B46F55 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -433,6 +501,14 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		04F59F89041169434F0815D5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FB33087FF396340CC97677A /* ParakeetRuntimeBridge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C18566CF2EA0D31000B46F55 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -464,6 +540,12 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		931DC8AD381DB1589850BC92 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ParakeetRuntime;
+			target = 75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */;
+			targetProxy = 42E01EF2CF78A5915AA93F0E /* PBXContainerItemProxy */;
+		};
 		C1E7D30B2EBA92C900A07338 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = C1E7D3042EBA92C900A07338 /* WhisperMateKeyboard */;
@@ -487,6 +569,64 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		33BC32C2C6ED049D17F2A7A0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
+				PRODUCT_NAME = ParakeetRuntime;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		364996A27A1044BAC76152E6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
+				PRODUCT_NAME = ParakeetRuntime;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
 		C18566DC2EA0D31100B46F55 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -613,7 +753,7 @@
 				CODE_SIGN_ENTITLEMENTS = Whispermate/Whispermate.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -630,7 +770,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.63;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 0.0.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -652,7 +793,7 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -670,7 +811,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.63;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 0.0.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -690,7 +832,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 3;
@@ -705,8 +847,8 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0.63;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 0.0.64;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -736,7 +878,7 @@
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 3;
@@ -751,8 +893,8 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0.63;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 0.0.64;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -782,7 +924,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = WhisperMateIOS/WhisperMateIOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -797,7 +939,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.63;
+				MARKETING_VERSION = 0.0.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -819,7 +961,7 @@
 				CODE_SIGN_ENTITLEMENTS = WhisperMateIOS/WhisperMateIOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -834,7 +976,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.63;
+				MARKETING_VERSION = 0.0.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "73de4d13-37e6-49ca-a9f0-35378e49c33d";
@@ -855,7 +997,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WhisperMateKeyboard/WhisperMateKeyboard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WhisperMateKeyboard/Info.plist;
@@ -867,7 +1009,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.63;
+				MARKETING_VERSION = 0.0.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -887,7 +1029,7 @@
 				CODE_SIGN_ENTITLEMENTS = WhisperMateKeyboard/WhisperMateKeyboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 64;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WhisperMateKeyboard/Info.plist;
@@ -899,7 +1041,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.63;
+				MARKETING_VERSION = 0.0.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "db6f8085-4d33-4b22-af3e-741fdf9c2c29";
@@ -959,6 +1101,15 @@
 			buildConfigurations = (
 				C1E7D30F2EBA92C900A07338 /* Debug */,
 				C1E7D3102EBA92C900A07338 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D7237D61A02B83B40C74870F /* Build configuration list for PBXNativeTarget "ParakeetRuntime" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				364996A27A1044BAC76152E6 /* Release */,
+				33BC32C2C6ED049D17F2A7A0 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

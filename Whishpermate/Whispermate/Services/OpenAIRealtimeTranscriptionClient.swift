@@ -120,6 +120,7 @@ struct WritingmateRealtimeClientSecretProvider {
 final class OpenAIRealtimeTranscriptionClient {
     private let authorizationProvider: () async throws -> WritingmateRealtimeClientSecretProvider.Authorization
     private let prompt: String?
+    private let shouldSendSessionUpdate: Bool
     private let onPartialTranscript: @MainActor (String) -> Void
     private let onError: @MainActor (String) -> Void
     private let session: URLSession
@@ -130,6 +131,7 @@ final class OpenAIRealtimeTranscriptionClient {
     private var isClosed = false
     private var accumulatedTranscript = ""
     private var finalTranscript: String?
+    private var failedMessage: String?
     private var finishContinuation: CheckedContinuation<String?, Never>?
     private var finishTimeoutTask: Task<Void, Never>?
 
@@ -146,6 +148,7 @@ final class OpenAIRealtimeTranscriptionClient {
             return WritingmateRealtimeClientSecretProvider.Authorization(token: apiKey, webSocketURL: url)
         }
         self.prompt = prompt
+        self.shouldSendSessionUpdate = true
         self.onPartialTranscript = onPartialTranscript
         self.onError = onError
         self.session = URLSession(configuration: .default)
@@ -159,6 +162,7 @@ final class OpenAIRealtimeTranscriptionClient {
     ) {
         self.authorizationProvider = authorizationProvider
         self.prompt = prompt
+        self.shouldSendSessionUpdate = false
         self.onPartialTranscript = onPartialTranscript
         self.onError = onError
         self.session = URLSession(configuration: .default)
@@ -175,9 +179,7 @@ final class OpenAIRealtimeTranscriptionClient {
                 let authorization = try await authorizationProvider()
                 openSocket(authorization: authorization)
             } catch {
-                Task { @MainActor in
-                    self.onError("OpenAI Realtime token failed: \(error.localizedDescription)")
-                }
+                self.fail("OpenAI Realtime token failed: \(error.localizedDescription)")
             }
         }
     }
@@ -192,7 +194,9 @@ final class OpenAIRealtimeTranscriptionClient {
     }
 
     func finish(timeout: TimeInterval = 1.5) async -> String? {
-        sendEvent(["type": "input_audio_buffer.commit"])
+        if failedMessage != nil {
+            return nil
+        }
 
         if let finalTranscript {
             close()
@@ -204,6 +208,10 @@ final class OpenAIRealtimeTranscriptionClient {
                 continuation.resume(returning: finalTranscript)
                 return
             }
+            if failedMessage != nil {
+                continuation.resume(returning: nil)
+                return
+            }
 
             finishContinuation = continuation
             let currentTranscript = accumulatedTranscript.isEmpty ? nil : accumulatedTranscript
@@ -211,6 +219,7 @@ final class OpenAIRealtimeTranscriptionClient {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 self?.resumeFinishIfNeeded(with: self?.finalTranscript ?? currentTranscript)
             }
+            sendEvent(["type": "input_audio_buffer.commit"])
         }
     }
 
@@ -238,7 +247,9 @@ final class OpenAIRealtimeTranscriptionClient {
             self.task = socket
             socket.resume()
             self.receiveNextMessage()
-            self.sendEventOnQueue(self.sessionUpdateEvent())
+            if self.shouldSendSessionUpdate {
+                self.sendEventOnQueue(self.sessionUpdateEvent())
+            }
 
             let queuedEvents = self.pendingEvents
             self.pendingEvents.removeAll()
@@ -322,9 +333,7 @@ final class OpenAIRealtimeTranscriptionClient {
                 self.handle(message)
                 self.receiveNextMessage()
             case .failure(let error):
-                Task { @MainActor in
-                    self.onError("OpenAI Realtime receive failed: \(error.localizedDescription)")
-                }
+                self.fail("OpenAI Realtime receive failed: \(error.localizedDescription)")
             }
         }
     }
@@ -365,11 +374,20 @@ final class OpenAIRealtimeTranscriptionClient {
             resumeFinishIfNeeded(with: transcript)
         case "error":
             let message = ((payload["error"] as? [String: Any])?["message"] as? String) ?? "OpenAI Realtime error"
-            Task { @MainActor in
-                onError(message)
-            }
+            fail(message)
         default:
             break
+        }
+    }
+
+    private func fail(_ message: String) {
+        if failedMessage != nil {
+            return
+        }
+        failedMessage = message
+        resumeFinishIfNeeded(with: nil)
+        Task { @MainActor in
+            onError(message)
         }
     }
 

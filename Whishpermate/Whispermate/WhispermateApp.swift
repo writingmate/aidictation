@@ -9,6 +9,25 @@ import CoreText
 import SwiftUI
 import WhisperMateShared
 
+private enum AppWindowDefaults {
+    static let mainFrameSize = NSSize(width: 900, height: 650)
+    static let historyFrameSize = NSSize(width: 900, height: 600)
+    static let onboardingFrameSize = NSSize(width: 1100, height: 724)
+
+    static func setFrameSize(_ size: NSSize, for window: NSWindow) {
+        let currentFrame = window.frame
+        window.setFrame(
+            NSRect(
+                x: currentFrame.midX - size.width / 2,
+                y: currentFrame.midY - size.height / 2,
+                width: size.width,
+                height: size.height
+            ),
+            display: true
+        )
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusBarManager = StatusBarManager()
     var mainWindow: NSWindow?
@@ -65,7 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return false
         }
         showMainSettingsWindow()
-        return true
+        return false
     }
 
     func applicationDidBecomeActive(_: Notification) {
@@ -160,11 +179,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Only configure once
         guard mainWindow == nil else { return }
 
-        // Minimal configuration - let SwiftUI's .hiddenTitleBar style handle most of it
+        // Minimal configuration; keep the native title bar controls visible.
+        window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        applyWindowChrome(window)
         window.isMovableByWindowBackground = true
         window.backgroundColor = NSColor.windowBackgroundColor
         window.hasShadow = true
         window.isOpaque = true
+        AppWindowDefaults.setFrameSize(AppWindowDefaults.mainFrameSize, for: window)
 
         // Use the system's corner radius for Tahoe/Sequoia
         if #available(macOS 13.0, *) {
@@ -185,11 +209,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Set delegate to customize traffic light button behavior
         window.delegate = self
 
-
-        // Hide traffic lights completely
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.standardWindowButton(.closeButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        window.standardWindowButton(.zoomButton)?.isHidden = false
+        customizeTrafficLightButtons(window: window)
 
         // Center window before hiding it - prevents jump when showing onboarding
         window.center()
@@ -197,7 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Hide window on launch - app starts in menu bar only mode
         window.setIsVisible(false)
 
-        DebugLog.info("Main window configured as borderless, centered, with native corner radius and hidden on launch", context: "AppDelegate")
+        DebugLog.info("Main window configured, centered, with native traffic lights and hidden on launch", context: "AppDelegate")
     }
 
     // MARK: - Traffic Light Customization
@@ -319,6 +342,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
+private func applyWindowChrome(_ window: NSWindow) {
+    window.titlebarSeparatorStyle = .none
+    window.toolbar?.showsBaselineSeparator = false
+
+    DispatchQueue.main.async {
+        window.titlebarSeparatorStyle = .none
+        window.toolbar?.showsBaselineSeparator = false
+    }
+}
+
 // MARK: - Window Identifier Modifier
 
 struct WindowIdentifierModifier: ViewModifier {
@@ -336,12 +369,18 @@ struct WindowAccessor: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             view.window?.identifier = identifier
+            if let window = view.window {
+                applyWindowChrome(window)
+            }
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context _: Context) {
         nsView.window?.identifier = identifier
+        if let window = nsView.window {
+            applyWindowChrome(window)
+        }
     }
 }
 
@@ -413,12 +452,85 @@ func showHistoryWindow() {
 /// Bridges SwiftUI's openWindow action to AppKit code
 enum WindowBridge {
     static var openWindow: ((String) -> Void)?
+    private static var retainedWindows: [String: NSWindow] = [:]
+
+    static func openLegacyWindow(id: String) {
+        if id == "main" {
+            guard let window = retainedWindows[id]
+                ?? findMainWindow()
+                ?? NSApplication.shared.windows.first(where: { $0.title == "AIDictation" })
+            else {
+                DebugLog.info("openLegacyWindow: main WindowGroup is not ready yet", context: "WindowManagement")
+                return
+            }
+
+            retainedWindows[id] = window
+            window.setIsVisible(true)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            return
+        }
+
+        if let window = retainedWindows[id] ?? NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == id }) {
+            window.setIsVisible(true)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            return
+        }
+
+        let window: NSWindow
+        switch id {
+        case "history":
+            window = makeWindow(
+                id: WindowIdentifiers.history,
+                title: "History",
+                size: AppWindowDefaults.historyFrameSize,
+                rootView: AnyView(HistoryMasterDetailView())
+            )
+        case "onboarding":
+            window = makeWindow(
+                id: WindowIdentifiers.onboarding,
+                title: "Welcome to AIDictation",
+                size: AppWindowDefaults.onboardingFrameSize,
+                rootView: AnyView(OnboardingView(
+                    onboardingManager: OnboardingManager.shared,
+                    hotkeyManager: HotkeyManager.shared,
+                    languageManager: LanguageManager.shared,
+                    promptRulesManager: PromptRulesManager.shared,
+                    llmProviderManager: LLMProviderManager.shared,
+                    transcriptionProviderManager: AppState.shared.transcriptionProviderManager
+                ))
+            )
+        default:
+            return
+        }
+
+        retainedWindows[id] = window
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+
+    private static func makeWindow(id: NSUserInterfaceItemIdentifier, title: String, size: NSSize, rootView: AnyView) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.identifier = id
+        window.title = title
+        applyWindowChrome(window)
+        window.contentViewController = NSHostingController(rootView: rootView)
+        AppWindowDefaults.setFrameSize(size, for: window)
+        window.isReleasedWhenClosed = false
+        return window
+    }
 }
 
 @main
 struct WhishpermateApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @Environment(\.openWindow) private var openWindow
     @StateObject private var authManager = AuthManager.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
 
@@ -444,6 +556,16 @@ struct WhishpermateApp: App {
             subscriptionManager.handlePaymentCancel()
         }
     }
+
+    var body: some Scene {
+        LegacyAppScenes(handleURL: handleURL)
+    }
+}
+
+@available(macOS 13.0, *)
+private struct ModernAppScenes: Scene {
+    let handleURL: (URL) -> Void
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         // Store openWindow action globally so AppKit code can open SwiftUI windows
@@ -496,5 +618,27 @@ struct WhishpermateApp: App {
         .defaultPosition(.center)
         .defaultSize(width: 1100, height: 724)
         .commandsRemoved()
+    }
+}
+
+private struct LegacyAppScenes: Scene {
+    let handleURL: (URL) -> Void
+
+    var body: some Scene {
+        let _ = { WindowBridge.openWindow = { id in WindowBridge.openLegacyWindow(id: id) } }()
+
+        WindowGroup("AIDictation") {
+            SettingsWindowView()
+                .windowIdentifier(WindowIdentifiers.main)
+                .onOpenURL(perform: handleURL)
+        }
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    UpdateManager.shared.checkForUpdates()
+                }
+            }
+        }
     }
 }

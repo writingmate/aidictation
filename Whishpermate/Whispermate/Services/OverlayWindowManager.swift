@@ -599,8 +599,14 @@ class OverlayWindowManager: ObservableObject {
             collectionBehavior.insert(.canJoinAllApplications)
         }
         window.collectionBehavior = collectionBehavior
+        let joinsAllApplications: Bool
+        if #available(macOS 13.0, *) {
+            joinsAllApplications = window.collectionBehavior.contains(.canJoinAllApplications)
+        } else {
+            joinsAllApplications = false
+        }
         DebugLog.info(
-            "Configured collectionBehavior raw=\(window.collectionBehavior.rawValue) canJoinAllApplications=\(window.collectionBehavior.contains(.canJoinAllApplications))",
+            "Configured collectionBehavior raw=\(window.collectionBehavior.rawValue) canJoinAllApplications=\(joinsAllApplications)",
             context: "OverlayWindowManager"
         )
 

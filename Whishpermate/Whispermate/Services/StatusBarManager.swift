@@ -238,7 +238,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let parent = NSMenuItem(title: "Transcription Mode", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
 
-        for mode in TranscriptionMode.allCases {
+        for mode in TranscriptionMode.availableCases {
             let item = NSMenuItem(title: mode.displayName, action: #selector(selectTranscriptionMode(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = mode.rawValue

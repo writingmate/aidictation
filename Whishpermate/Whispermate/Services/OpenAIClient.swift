@@ -68,7 +68,10 @@ class OpenAIClient {
     func transcribe(
         audioURL: URL,
         prompt: String? = nil,
-        model: String? = nil
+        model: String? = nil,
+        language: String? = nil,
+        sttPrompt: String? = nil,
+        postProcessingPrompt: String? = nil
     ) async throws -> String {
         let effectiveModel = model ?? config.transcriptionModel
 
@@ -78,7 +81,7 @@ class OpenAIClient {
 
         let startTime = CFAbsoluteTimeGetCurrent()
         DebugLog.api("Starting transcription", endpoint: config.transcriptionEndpoint)
-        DebugLog.info("Model: \(effectiveModel), Language: auto-detect", context: "OpenAIClient")
+        DebugLog.info("Model: \(effectiveModel), Language: \(language ?? "auto-detect"), promptLength: \(prompt?.count ?? 0), sttPromptLength: \(sttPrompt?.count ?? 0), postProcessingPromptLength: \(postProcessingPrompt?.count ?? 0)", context: "OpenAIClient")
 
         // Create multipart form data
         let boundary = UUID().uuidString
@@ -101,6 +104,12 @@ class OpenAIClient {
         // Build multipart body
         var body = Data()
 
+        func appendFormField(name: String, value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+
         // Add file parameter (required)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
@@ -109,26 +118,30 @@ class OpenAIClient {
         body.append("\r\n".data(using: .utf8)!)
 
         // Add model parameter (required)
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(effectiveModel)\r\n".data(using: .utf8)!)
+        appendFormField(name: "model", value: effectiveModel)
 
         // Add temperature parameter (optional - set to 0 for deterministic results)
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"temperature\"\r\n\r\n".data(using: .utf8)!)
-        body.append("0\r\n".data(using: .utf8)!)
+        appendFormField(name: "temperature", value: "0")
+
+        if let language, !language.isEmpty {
+            appendFormField(name: "language", value: language)
+        }
 
         // Add prompt parameter (optional)
         if let prompt = prompt, !prompt.isEmpty {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(prompt)\r\n".data(using: .utf8)!)
+            appendFormField(name: "prompt", value: prompt)
+        }
+
+        if let sttPrompt = sttPrompt, !sttPrompt.isEmpty {
+            appendFormField(name: "stt_prompt", value: sttPrompt)
+        }
+
+        if let postProcessingPrompt = postProcessingPrompt, !postProcessingPrompt.isEmpty {
+            appendFormField(name: "post_processing_prompt", value: postProcessingPrompt)
         }
 
         // Add response_format parameter (optional, default is json)
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n".data(using: .utf8)!)
-        body.append("text\r\n".data(using: .utf8)!)
+        appendFormField(name: "response_format", value: "text")
 
         // End boundary
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
@@ -144,6 +157,11 @@ class OpenAIClient {
             }
 
             DebugLog.api("Response status: \(httpResponse.statusCode)")
+            let proxyRequestId = httpResponse.value(forHTTPHeaderField: "x-aidictation-request-id")
+            let proxyTotalMs = httpResponse.value(forHTTPHeaderField: "x-aidictation-total-ms")
+            if proxyRequestId != nil || proxyTotalMs != nil {
+                DebugLog.info("Proxy timing: requestId=\(proxyRequestId ?? "n/a"), totalMs=\(proxyTotalMs ?? "n/a")", context: "OpenAIClient")
+            }
 
             if httpResponse.statusCode != 200 {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -297,10 +315,9 @@ class OpenAIClient {
             }
         }
 
-        // Log the complete prompt before sending
+        // Log prompt shape without dumping user context into logs.
         if !combinedPrompt.isEmpty {
-            DebugLog.info("📝 Full prompt being sent to API:\n\(combinedPrompt)", context: "OpenAIClient")
-            print("📝 [Prompt] Full prompt:\n\(combinedPrompt)")
+            DebugLog.info("Prompt length being sent to API: \(combinedPrompt.count)", context: "OpenAIClient")
         }
 
         // Transcribe with formatting rules in prompt

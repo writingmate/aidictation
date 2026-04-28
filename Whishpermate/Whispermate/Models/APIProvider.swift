@@ -48,6 +48,15 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         }
     }
 
+    var defaultTransport: TranscriptionTransport {
+        switch self {
+        case .parakeet:
+            return .local
+        case .groq, .openai, .custom:
+            return .batch
+        }
+    }
+
     var apiKeyName: String {
         return "\(rawValue)_transcription_api_key"
     }
@@ -62,8 +71,21 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
 
     /// Returns all available providers
     static var availableProviders: [TranscriptionProvider] {
-        return allCases
+        if ParakeetTranscriptionService.isRuntimeSupported {
+            return allCases
+        }
+        return allCases.filter { $0 != .parakeet }
     }
+}
+
+/// Runtime transport used by the Mac app. Server-side model/provider choices are
+/// endpoint configuration, not app control-flow branches.
+enum TranscriptionTransport: String, CaseIterable, Identifiable {
+    case batch
+    case realtime
+    case local
+
+    var id: String { rawValue }
 }
 
 // MARK: - Post-Processing Provider
@@ -113,6 +135,19 @@ enum TranscriptionMode: String, CaseIterable {
         case .local: return "On-device, instant response, good quality"
         }
     }
+
+    var isAvailable: Bool {
+        switch self {
+        case .cloud:
+            return true
+        case .auto, .local:
+            return ParakeetTranscriptionService.isRuntimeSupported
+        }
+    }
+
+    static var availableCases: [TranscriptionMode] {
+        allCases.filter(\.isAvailable)
+    }
 }
 
 class TranscriptionProviderManager: ObservableObject {
@@ -122,12 +157,14 @@ class TranscriptionProviderManager: ObservableObject {
     @Published var transcriptionMode: TranscriptionMode = .auto
     @Published var customEndpoint: String = ""
     @Published var customModel: String = ""
+    @Published var customTransport: TranscriptionTransport = .batch
     @Published var enableLLMPostProcessing: Bool = false
     @Published var postProcessingProvider: PostProcessingProvider = .aidictation
 
     private enum Keys {
         static let selectedProvider = "transcriptionProvider"
         static let transcriptionMode = "transcriptionMode"
+        static let customTransport = "customTranscriptionTransport"
     }
 
     /// Whether the user prefers on-device transcription
@@ -156,12 +193,34 @@ class TranscriptionProviderManager: ObservableObject {
             transcriptionMode = selectedProvider == .parakeet ? .local : .cloud
         }
 
+        if !ParakeetTranscriptionService.isRuntimeSupported {
+            if selectedProvider == .parakeet {
+                selectedProvider = .custom
+                AppDefaults.shared.set(TranscriptionProvider.custom.rawValue, forKey: Keys.selectedProvider)
+            }
+            if transcriptionMode == .local || transcriptionMode == .auto {
+                transcriptionMode = .cloud
+                AppDefaults.shared.set(TranscriptionMode.cloud.rawValue, forKey: Keys.transcriptionMode)
+            }
+        }
+
         enableLLMPostProcessing = false
         postProcessingProvider = .aidictation
-        DebugLog.info("Loaded: \(selectedProvider.displayName), mode: \(transcriptionMode.displayName), LLM post-processing: \(enableLLMPostProcessing), post-processor: \(postProcessingProvider.displayName)", context: "TranscriptionProviderManager")
+        if let savedTransport = AppDefaults.shared.string(forKey: Keys.customTransport),
+           let transport = TranscriptionTransport(rawValue: savedTransport)
+        {
+            customTransport = transport
+        }
+        DebugLog.info("Loaded: \(selectedProvider.displayName), mode: \(transcriptionMode.displayName), transport: \(effectiveTransport.rawValue), LLM post-processing: \(enableLLMPostProcessing), post-processor: \(postProcessingProvider.displayName)", context: "TranscriptionProviderManager")
     }
 
     func setTranscriptionMode(_ mode: TranscriptionMode) {
+        guard mode.isAvailable else {
+            DebugLog.warning("Ignoring unavailable transcription mode: \(mode.displayName)", context: "TranscriptionProviderManager")
+            setTranscriptionMode(.cloud)
+            return
+        }
+
         transcriptionMode = mode
         AppDefaults.shared.set(mode.rawValue, forKey: Keys.transcriptionMode)
 
@@ -181,6 +240,11 @@ class TranscriptionProviderManager: ObservableObject {
 
     @discardableResult
     func requestTranscriptionMode(_ mode: TranscriptionMode, parakeetService: ParakeetTranscriptionService = .shared) -> TranscriptionMode? {
+        guard mode.isAvailable else {
+            setTranscriptionMode(.cloud)
+            return nil
+        }
+
         let modelReady: Bool = {
             if case .ready = parakeetService.state { return true }
             return false
@@ -225,6 +289,12 @@ class TranscriptionProviderManager: ObservableObject {
         customModel = model
     }
 
+    func setCustomTransport(_ transport: TranscriptionTransport) {
+        customTransport = transport
+        AppDefaults.shared.set(transport.rawValue, forKey: Keys.customTransport)
+        DebugLog.info("Set custom transcription transport: \(transport.rawValue)", context: "TranscriptionProviderManager")
+    }
+
     var effectiveEndpoint: String {
         // For custom provider, check Secrets.plist first
         if selectedProvider == .custom {
@@ -251,6 +321,18 @@ class TranscriptionProviderManager: ObservableObject {
             return customModel
         }
         return selectedProvider.defaultModel
+    }
+
+    var effectiveTransport: TranscriptionTransport {
+        if selectedProvider == .custom {
+            if let secretTransport = SecretsLoader.getValue(for: "CustomTranscriptionTransport")?.lowercased(),
+               let transport = TranscriptionTransport(rawValue: secretTransport)
+            {
+                return transport
+            }
+            return customTransport
+        }
+        return selectedProvider.defaultTransport
     }
 }
 

@@ -51,7 +51,11 @@ class SileroVAD {
     private func loadModel() async {
         do {
             let config = MLModelConfiguration()
-            config.computeUnits = .cpuAndNeuralEngine
+            if #available(macOS 13.0, *) {
+                config.computeUnits = .cpuAndNeuralEngine
+            } else {
+                config.computeUnits = .cpuOnly
+            }
 
             // First, compile the model if it's an mlpackage
             let compiledURL: URL

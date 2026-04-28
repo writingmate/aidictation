@@ -115,6 +115,11 @@ class ScreenCaptureManager: ObservableObject {
     }
 
     private func captureActiveWindow(windowInfo: (title: String, ownerName: String, windowID: CGWindowID)) async -> NSImage? {
+        guard #available(macOS 14.0, *) else {
+            DebugLog.warning("Screen capture requires macOS 14.0+", context: "ScreenCaptureManager")
+            return nil
+        }
+
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
@@ -129,13 +134,8 @@ class ScreenCaptureManager: ObservableObject {
             configuration.width = Int(targetWindow.frame.width) * 2
             configuration.height = Int(targetWindow.frame.height) * 2
 
-            if #available(macOS 14.0, *) {
-                let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-                return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-            } else {
-                DebugLog.warning("Screen capture requires macOS 14.0+", context: "ScreenCaptureManager")
-                return nil
-            }
+            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
 
         } catch {
             DebugLog.error("Screen capture failed: \(error.localizedDescription)", context: "ScreenCaptureManager")
@@ -153,7 +153,9 @@ class ScreenCaptureManager: ObservableObject {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
+            if #available(macOS 13.0, *) {
+                request.automaticallyDetectsLanguage = true
+            }
 
             let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
 
@@ -169,7 +171,9 @@ class ScreenCaptureManager: ObservableObject {
 
                 return text.isEmpty ? nil : text
             } catch {
-                DebugLog.error("Text recognition failed: \(error.localizedDescription)", context: "ScreenCaptureManager")
+                Task { @MainActor in
+                    DebugLog.error("Text recognition failed: \(error.localizedDescription)", context: "ScreenCaptureManager")
+                }
                 return nil
             }
         }.value

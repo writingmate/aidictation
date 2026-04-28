@@ -57,30 +57,24 @@ class ClipboardManager {
             return
         }
 
-        // Note: We proceed with paste even if we can't detect a focused element
-        // because web contenteditable fields (Gmail, etc.) often don't report via Accessibility API
-        if getFocusedTextElement() == nil {
+        // Check if we need to add a space before pasting.
+        // Only add it when Accessibility can prove there is non-whitespace text
+        // immediately before the insertion point. Unknown context should paste as-is.
+        var textToPaste = text
+        let focusedElement = getFocusedTextElement()
+        if focusedElement == nil {
             DebugLog.info("⚠️ No focused text element detected (may be web contenteditable), will attempt paste anyway", context: "ClipboardManager")
         }
 
-        // Check if we need to add a space before pasting
-        var textToPaste = text
-        if let focusedElement = getFocusedTextElement() {
-            if let existingText = getTextFromElement(focusedElement) {
-                DebugLog.info("Existing text found: \"\(existingText.prefix(50))...\"", context: "ClipboardManager")
-                // Add space if there's existing text and it doesn't end with whitespace
-                if !existingText.isEmpty, !existingText.hasSuffix(" "), !existingText.hasSuffix("\n"), !existingText.hasSuffix("\t") {
-                    textToPaste = " " + text
-                    DebugLog.info("✅ Added space before text", context: "ClipboardManager")
-                } else {
-                    DebugLog.info("ℹ️ No space needed (text is empty or ends with whitespace)", context: "ClipboardManager")
-                }
+        if let focusedElement {
+            if shouldAddLeadingSpaceBeforePaste(in: focusedElement) {
+                textToPaste = " " + text
+                DebugLog.info("✅ Added space before text", context: "ClipboardManager")
+            } else {
+                DebugLog.info("ℹ️ No leading space added", context: "ClipboardManager")
             }
         } else {
-            // For web contenteditable fields, we can't detect existing text, so add a leading space
-            // to be safe (user can delete if not needed)
-            textToPaste = " " + text
-            DebugLog.info("ℹ️ Could not get focused element (web field?), adding leading space to be safe", context: "ClipboardManager")
+            DebugLog.info("ℹ️ Could not get focused element, pasting without leading space", context: "ClipboardManager")
         }
 
         let pasteboard = NSPasteboard.general
@@ -377,15 +371,55 @@ class ClipboardManager {
             return text
         }
 
-        // If that didn't work, try getting selected text range and then the full value
-        var selectedRange: AnyObject?
-        let rangeResult = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRange)
-
-        if rangeResult == .success, let text = selectedRange as? String {
-            return text
-        }
-
         DebugLog.info("Could not get text from element", context: "ClipboardManager")
         return nil
+    }
+
+    private static func getSelectedTextRange(from element: AXUIElement) -> CFRange? {
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value)
+
+        guard result == .success,
+              let value,
+              AXValueGetType(value as! AXValue) == .cfRange
+        else {
+            return nil
+        }
+
+        var range = CFRange()
+        let axValue = value as! AXValue
+        guard AXValueGetValue(axValue, .cfRange, &range) else {
+            return nil
+        }
+        return range
+    }
+
+    private static func shouldAddLeadingSpaceBeforePaste(in element: AXUIElement) -> Bool {
+        guard let existingText = getTextFromElement(element) else {
+            DebugLog.info("Could not read focused text, pasting without leading space", context: "ClipboardManager")
+            return false
+        }
+
+        let nsText = existingText as NSString
+        guard nsText.length > 0 else {
+            return false
+        }
+
+        guard let selectedRange = getSelectedTextRange(from: element) else {
+            DebugLog.info("Could not read insertion point, pasting without leading space", context: "ClipboardManager")
+            return false
+        }
+        let insertionLocation = max(0, min(selectedRange.location, nsText.length))
+
+        guard insertionLocation > 0 else {
+            return false
+        }
+
+        let textBeforeCursor = nsText.substring(to: insertionLocation)
+        guard let previousScalar = textBeforeCursor.unicodeScalars.last else {
+            return false
+        }
+
+        return !CharacterSet.whitespacesAndNewlines.contains(previousScalar)
     }
 }

@@ -267,7 +267,7 @@ struct RecordingSheetView: View {
         // Get API key from Secrets.plist or keychain
         let apiKey = KeychainHelper.get(key: "custom_transcription_api_key") ?? SecretsLoader.transcriptionKey(for: .custom)
         let endpoint = SecretsLoader.customTranscriptionEndpoint() ?? "https://writingmate.ai/api/openai/v1/audio/transcriptions"
-        let model = SecretsLoader.customTranscriptionModel() ?? "gpt-4o-transcribe"
+        let model = SecretsLoader.customTranscriptionModel() ?? "groq/whisper-large-v3-turbo"
 
         guard let apiKey = apiKey else {
             errorMessage = "API key not configured"

@@ -44,7 +44,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .parakeet: return "parakeet-tdt-0.6b-v3" // Multilingual
         case .groq: return "whisper-large-v3-turbo"
         case .openai: return "whisper-1"
-        case .custom: return "gpt-4o-transcribe"
+        case .custom: return "groq/whisper-large-v3-turbo"
         }
     }
 

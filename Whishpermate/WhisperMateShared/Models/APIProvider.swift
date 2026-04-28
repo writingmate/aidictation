@@ -38,7 +38,7 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .groq: return "whisper-large-v3-turbo"
         case .openai: return "whisper-1"
-        case .custom: return "gpt-4o-transcribe"
+        case .custom: return "groq/whisper-large-v3-turbo"
         }
     }
 

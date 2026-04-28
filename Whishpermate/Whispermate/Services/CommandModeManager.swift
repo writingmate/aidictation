@@ -12,7 +12,6 @@ class CommandModeManager: ObservableObject {
 
     enum TargetSource {
         case selectedText
-        case clipboard
         case none
     }
 
@@ -40,7 +39,7 @@ class CommandModeManager: ObservableObject {
 
     // MARK: - Public API
 
-    /// Get target text for command mode: tries selected text first, then clipboard
+    /// Get target text for command mode from the selected text only.
     func getTargetText() -> (text: String, source: TargetSource)? {
         DebugLog.info("getTargetText() called", context: "CommandModeManager")
 
@@ -50,13 +49,7 @@ class CommandModeManager: ObservableObject {
             return (selected, .selectedText)
         }
 
-        // Fallback: try clipboard content
-        if let clipboardText = NSPasteboard.general.string(forType: .string), !clipboardText.isEmpty {
-            DebugLog.info("Command mode: Using clipboard content (\(clipboardText.count) chars)", context: "CommandModeManager")
-            return (clipboardText, .clipboard)
-        }
-
-        DebugLog.warning("Command mode: No selected text or clipboard content available", context: "CommandModeManager")
+        DebugLog.warning("Command mode: No selected text available", context: "CommandModeManager")
         return nil
     }
 
@@ -235,7 +228,7 @@ class CommandModeManager: ObservableObject {
             }
         }
 
-        // AX API didn't return text - clipboard fallback is handled in getTargetText()
+        // AX API didn't return text.
         DebugLog.info("getSelectedTextSync: AX API returned no text", context: "CommandModeManager")
         return nil
     }

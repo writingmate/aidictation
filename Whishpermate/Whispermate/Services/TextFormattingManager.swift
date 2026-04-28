@@ -135,8 +135,7 @@ class TextFormattingManager {
         let success = await tryReplaceViaAccessibility(with: newText)
 
         if !success {
-            // Method 2: Fall back to clipboard + paste method
-            try await replaceViaClipboard(with: newText)
+            await replaceViaDirectInsertion(with: newText)
         }
     }
 
@@ -178,52 +177,12 @@ class TextFormattingManager {
         }
     }
 
-    private func replaceViaClipboard(with newText: String) async throws {
-        // Save current clipboard
-        let pasteboard = NSPasteboard.general
-        let originalContents = pasteboard.string(forType: .string)
-
-        // Copy new text to clipboard
-        pasteboard.clearContents()
-        pasteboard.setString(newText, forType: .string)
-
-        // Small delay to ensure clipboard is set
-        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
-
-        // Simulate Cmd+V to paste
-        let source = CGEventSource(stateID: .hidSystemState)
-
-        // Key down Cmd
-        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true)
-        cmdDown?.flags = .maskCommand
-
-        // Key down V
-        let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-        vDown?.flags = .maskCommand
-
-        // Key up V
-        let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-        vUp?.flags = .maskCommand
-
-        // Key up Cmd
-        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
-
-        // Post events
-        cmdDown?.post(tap: .cghidEventTap)
-        vDown?.post(tap: .cghidEventTap)
-        vUp?.post(tap: .cghidEventTap)
-        cmdUp?.post(tap: .cghidEventTap)
-
-        // Wait a bit for paste to complete
-        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
-
-        // Restore original clipboard if it existed
-        if let original = originalContents {
-            pasteboard.clearContents()
-            pasteboard.setString(original, forType: .string)
+    private func replaceViaDirectInsertion(with newText: String) async {
+        await MainActor.run {
+            ClipboardManager.replaceSelectionAndPaste(newText)
         }
 
-        DebugLog.info("Replaced text via clipboard method", context: "TextFormattingManager")
+        DebugLog.info("Replaced text via direct insertion fallback", context: "TextFormattingManager")
     }
 
     // MARK: - Notifications

@@ -439,7 +439,7 @@ class AppState: ObservableObject {
                     }
                 }
 
-                // Get clipboard and screen context (only for dictation mode)
+                // Get screen context only. Normal dictation must not read or write the clipboard.
                 let clipboardContent: String?
                 let screenContextForTranscription: String?
 
@@ -448,9 +448,7 @@ class AppState: ObservableObject {
                     screenContextForTranscription = nil
                     DebugLog.info("Command mode: transcribing voice instruction only", context: "AppState")
                 } else {
-                    clipboardContent = await MainActor.run {
-                        NSPasteboard.general.string(forType: .string)
-                    }
+                    clipboardContent = nil
                     screenContextForTranscription = capturedScreenContext
                 }
 
@@ -975,7 +973,7 @@ class AppState: ObservableObject {
             self.recordingState = .pasting
         }
 
-        // Only replace selected text if source was selectedText (not clipboard)
+        // Only replace selected text if Accessibility captured a selection.
         if targetSource == .selectedText, selectedTextLength > 0 {
             // For selected text: move forward to end of selection, delete backwards, then paste
             DebugLog.info("Command mode: replacing \(selectedTextLength) chars of selected text", context: "AppState")
@@ -983,7 +981,7 @@ class AppState: ObservableObject {
                 ClipboardManager.replaceSelectionAndPaste(resultText)
             }
         } else {
-            // Clipboard source or no selection - just paste at cursor
+            // No selection - insert generated text at cursor.
             DebugLog.info("Command mode: pasting at cursor (source: \(targetSource))", context: "AppState")
             ClipboardManager.replaceSelectionAndPaste(resultText)
         }

@@ -40,11 +40,11 @@ android {
 
         // API keys from local.properties (do not commit). Defaults mirror the Mac
         // app, which ships with Writingmate AI as the default transcription provider
-        // (gpt-4o-transcribe) so a fresh install points at Writingmate unless a custom
-        // endpoint is set in local.properties.
+        // routing to groq/whisper-large-v3-turbo so a fresh install points at
+        // Writingmate unless a custom endpoint is set in local.properties.
         buildConfigField("String", "TRANSCRIPTION_API_KEY", "\"${localProperties.getProperty("TRANSCRIPTION_API_KEY", "")}\"")
         buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${localProperties.getProperty("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")}\"")
-        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${localProperties.getProperty("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")}\"")
+        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${localProperties.getProperty("TRANSCRIPTION_MODEL", "groq/whisper-large-v3-turbo")}\"")
 
         // LLM API for post-processing (Mac app defaults to Groq here).
         buildConfigField("String", "GROQ_API_KEY", "\"${localProperties.getProperty("GROQ_API_KEY", "")}\"")

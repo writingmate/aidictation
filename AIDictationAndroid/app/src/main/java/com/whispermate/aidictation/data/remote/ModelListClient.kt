@@ -25,7 +25,7 @@ object ModelListClient {
     // MARK: - Fallback lists
 
     private val transcriptionFallbacks = mapOf(
-        ApiProvider.WRITINGMATE to listOf("gpt-4o-transcribe", "whisper-1"),
+        ApiProvider.WRITINGMATE to listOf("groq/whisper-large-v3-turbo", "whisper-1"),
         ApiProvider.OPENAI to listOf("whisper-1"),
         ApiProvider.GROQ to listOf("whisper-large-v3-turbo", "whisper-large-v3", "distil-whisper-large-v3-en")
     )

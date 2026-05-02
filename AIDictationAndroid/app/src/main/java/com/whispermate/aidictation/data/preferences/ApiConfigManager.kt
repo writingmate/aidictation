@@ -69,7 +69,7 @@ class ApiConfigManager @Inject constructor(
             private set
 
         fun defaultTranscriptionModel(provider: ApiProvider): String = when (provider) {
-            ApiProvider.WRITINGMATE -> "gpt-4o-transcribe"
+            ApiProvider.WRITINGMATE -> "groq/whisper-large-v3-turbo"
             ApiProvider.OPENAI -> "whisper-1"
             ApiProvider.GROQ -> "whisper-large-v3-turbo"
         }
@@ -122,6 +122,15 @@ class ApiConfigManager @Inject constructor(
 
     init {
         instance = this
+        scope.launch {
+            // Migrate stale saved model: `gpt-4o-transcribe` is not available
+            // through the Writingmate proxy and returns a 500 from the server.
+            context.apiConfigDataStore.edit { prefs ->
+                if (prefs[Keys.TRANSCRIPTION_MODEL] == "gpt-4o-transcribe") {
+                    prefs.remove(Keys.TRANSCRIPTION_MODEL)
+                }
+            }
+        }
         scope.launch {
             context.apiConfigDataStore.data.collect { prefs ->
                 val userPickedProvider = prefs[Keys.TRANSCRIPTION_PROVIDER]

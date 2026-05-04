@@ -3,7 +3,7 @@
     <string name="app_name">AIDictation</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_welcome_title">Welcome to AI Dictation</string>
+    <string name="onboarding_welcome_title">Welcome to AIDictation</string>
     <string name="onboarding_welcome_subtitle">Your voice, instantly transcribed</string>
     <string name="onboarding_feature_1">Speak naturally</string>
     <string name="onboarding_feature_2">Fast transcription</string>
@@ -14,7 +14,7 @@
     <string name="onboarding_mic_enable">Enable Microphone</string>
     <string name="onboarding_overlay_title">Enable Overlay Dictation</string>
     <string name="onboarding_overlay_subtitle">Enable Accessibility to show a mic bubble only when text input is focused</string>
-    <string name="onboarding_overlay_step1">Enable WhisperMate in Accessibility settings</string>
+    <string name="onboarding_overlay_step1">Enable AIDictation in Accessibility settings</string>
     <string name="onboarding_overlay_step2">Focus any text field and tap the bubble to dictate</string>
     <string name="onboarding_overlay_step3">Use the test field below to confirm dictation works</string>
     <string name="onboarding_overlay_hint">The overlay stays hidden in password and secure fields.</string>

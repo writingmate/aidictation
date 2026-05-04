@@ -135,6 +135,17 @@ jobs:
 
       - name: Write local.properties
         run: |
+          normalize_transcription_model() {
+            case "$1" in
+              ""|*"gpt-4o-transcribe"*)
+                printf '%s\n' "groq/whisper-large-v3-turbo"
+                ;;
+              *)
+                printf '%s\n' "$1"
+                ;;
+            esac
+          }
+          TRANSCRIPTION_MODEL="$(normalize_transcription_model "${TRANSCRIPTION_MODEL:-}")"
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
@@ -317,6 +328,17 @@ jobs:
 
       - name: Write local.properties
         run: |
+          normalize_transcription_model() {
+            case "$1" in
+              ""|*"gpt-4o-transcribe"*)
+                printf '%s\n' "groq/whisper-large-v3-turbo"
+                ;;
+              *)
+                printf '%s\n' "$1"
+                ;;
+            esac
+          }
+          TRANSCRIPTION_MODEL="$(normalize_transcription_model "${TRANSCRIPTION_MODEL:-}")"
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}

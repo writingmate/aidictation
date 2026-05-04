@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.repository.RecordingRepository
+import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
 import com.whispermate.aidictation.domain.model.Recording
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,6 +30,7 @@ enum class RecordingState {
 class MainViewModel @Inject constructor(
     private val recordingRepository: RecordingRepository,
     private val transcriptionRepository: TranscriptionRepository,
+    private val subscriptionRepository: SubscriptionRepository,
     private val appPreferences: AppPreferences
 ) : ViewModel() {
 
@@ -40,6 +42,8 @@ class MainViewModel @Inject constructor(
 
     val postProcessingEnabled: StateFlow<Boolean> = appPreferences.postProcessingEnabled
         .stateIn(viewModelScope, SharingStarted.Lazily, true)
+
+    val usageStatus = subscriptionRepository.usageStatus
 
     fun setMultilingualEnabled(enabled: Boolean) {
         viewModelScope.launch {
@@ -88,6 +92,13 @@ class MainViewModel @Inject constructor(
         _recordingState.value = RecordingState.Processing
 
         viewModelScope.launch {
+            subscriptionRepository.checkCanTranscribe().onFailure { error ->
+                audioFile.delete()
+                _error.value = error.message
+                _recordingState.value = RecordingState.Idle
+                return@launch
+            }
+
             val prompt = transcriptionRepository.buildPrompt()
             val contextRules = appPreferences.getInstructionsForApp(null)
             val result = transcriptionRepository.transcribe(audioFile, prompt.ifEmpty { null }, contextRules)
@@ -102,6 +113,7 @@ class MainViewModel @Inject constructor(
                             audioFilePath = audioFile.absolutePath
                         )
                         recordingRepository.addRecording(recording)
+                        subscriptionRepository.recordWords(processedText)
                         _selectedRecording.value = recording
                     }
                     _recordingState.value = RecordingState.Idle
@@ -111,6 +123,20 @@ class MainViewModel @Inject constructor(
                     _recordingState.value = RecordingState.Idle
                 }
             )
+        }
+    }
+
+    fun openLogin() {
+        subscriptionRepository.openLogin()
+    }
+
+    fun openUpgrade() {
+        subscriptionRepository.openUpgrade()
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            subscriptionRepository.signOut()
         }
     }
 

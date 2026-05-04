@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -65,7 +66,6 @@ import kotlinx.coroutines.launch
 fun MainScreen(
     onNavigateToPostProcessingSettings: () -> Unit,
     onNavigateToLanguageSettings: () -> Unit,
-    onNavigateToApiConfig: () -> Unit,
     onNavigateToRecordingDetail: (String) -> Unit,
     shouldStartRecording: Boolean = false,
     onRecordingStarted: () -> Unit = {},
@@ -77,6 +77,7 @@ fun MainScreen(
     val error by viewModel.error.collectAsState()
     val multilingualEnabled by viewModel.multilingualEnabled.collectAsState()
     val postProcessingEnabled by viewModel.postProcessingEnabled.collectAsState()
+    val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -144,6 +145,31 @@ fun MainScreen(
         }
     }
 
+    fun toggleRecording() {
+        when (recordingState) {
+            RecordingState.Idle -> {
+                val recorder = AudioRecorder(context)
+                audioRecorder = recorder
+                val file = recorder.start()
+                if (file != null) {
+                    viewModel.startRecording()
+                } else {
+                    audioRecorder = null
+                }
+            }
+            RecordingState.Recording -> {
+                scope.launch {
+                    val result = audioRecorder?.stop()
+                    val file = result?.first
+                    val duration = result?.second ?: 0L
+                    audioRecorder = null
+                    viewModel.stopRecording(file, duration)
+                }
+            }
+            RecordingState.Processing -> Unit
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
@@ -154,6 +180,26 @@ fun MainScreen(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 }
                 )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .width(88.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularMicButton(
+                        state = when (recordingState) {
+                            RecordingState.Idle -> MicButtonState.Idle
+                            RecordingState.Recording -> MicButtonState.Recording
+                            RecordingState.Processing -> MicButtonState.Processing
+                        },
+                        audioLevel = audioLevel,
+                        frequencyBands = frequencyBands,
+                        onClick = { toggleRecording() },
+                        size = 60.dp
+                    )
+                }
+
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     label = { Text(stringResource(R.string.tab_settings)) },
@@ -161,44 +207,6 @@ fun MainScreen(
                     onClick = { selectedTab = 1 }
                 )
             }
-        },
-        floatingActionButton = {
-            CircularMicButton(
-                state = when (recordingState) {
-                    RecordingState.Idle -> MicButtonState.Idle
-                    RecordingState.Recording -> MicButtonState.Recording
-                    RecordingState.Processing -> MicButtonState.Processing
-                },
-                audioLevel = audioLevel,
-                frequencyBands = frequencyBands,
-                onClick = {
-                    when (recordingState) {
-                        RecordingState.Idle -> {
-                            val recorder = AudioRecorder(context)
-                            audioRecorder = recorder
-                            val file = recorder.start()
-                            if (file != null) {
-                                viewModel.startRecording()
-                            } else {
-                                audioRecorder = null
-                            }
-                        }
-                        RecordingState.Recording -> {
-                            scope.launch {
-                                val result = audioRecorder?.stop()
-                                val file = result?.first
-                                val duration = result?.second ?: 0L
-                                audioRecorder = null
-                                viewModel.stopRecording(file, duration)
-                            }
-                        }
-                        RecordingState.Processing -> {
-                            // Do nothing while processing
-                        }
-                    }
-                },
-                size = 64.dp
-            )
         }
     ) { paddingValues ->
         when (selectedTab) {
@@ -218,7 +226,10 @@ fun MainScreen(
                 onMultilingualToggled = { viewModel.setMultilingualEnabled(it) },
                 postProcessingEnabled = postProcessingEnabled,
                 onPostProcessingToggled = { viewModel.setPostProcessingEnabled(it) },
-                onNavigateToApiConfig = onNavigateToApiConfig,
+                usageStatus = usageStatus,
+                onSignIn = { viewModel.openLogin() },
+                onSignOut = { viewModel.signOut() },
+                onUpgrade = { viewModel.openUpgrade() },
                 modifier = Modifier.padding(paddingValues)
             )
         }

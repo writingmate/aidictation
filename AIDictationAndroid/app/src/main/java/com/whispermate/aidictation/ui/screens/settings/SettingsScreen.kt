@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,22 +21,25 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -51,11 +55,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 
 @Composable
@@ -68,11 +74,15 @@ fun SettingsScreen(
     onMultilingualToggled: (Boolean) -> Unit = {},
     postProcessingEnabled: Boolean = true,
     onPostProcessingToggled: (Boolean) -> Unit = {},
-    onNavigateToApiConfig: () -> Unit,
+    usageStatus: UsageStatus,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onUpgrade: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var overlayBubbleSuppressed by remember { mutableStateOf(isOverlayBubbleSuppressed(context)) }
 
     val hasMicPermission = ContextCompat.checkSelfPermission(
         context,
@@ -120,6 +130,82 @@ fun SettingsScreen(
                     }
                 }
             )
+
+            if (overlayBubbleSuppressed) {
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+                SettingsItem(
+                    icon = Icons.Default.Mic,
+                    title = stringResource(R.string.settings_show_overlay_bubble),
+                    onClick = {
+                        restoreOverlayBubble(context)
+                        overlayBubbleSuppressed = false
+                        Toast.makeText(
+                            context,
+                            R.string.overlay_restored,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    iconTint = MaterialTheme.colorScheme.primary,
+                    titleColor = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        SectionHeader(stringResource(R.string.settings_account))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            UsageSummary(usageStatus = usageStatus)
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            if (usageStatus.isAuthenticated) {
+                AccountIdentityItem(
+                    email = usageStatus.email ?: stringResource(R.string.account_signed_in),
+                    tierName = usageStatus.tierName
+                )
+
+                if (!usageStatus.isPro) {
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                    SettingsItem(
+                        icon = Icons.Default.Star,
+                        title = stringResource(R.string.account_upgrade),
+                        onClick = onUpgrade,
+                        iconTint = MaterialTheme.colorScheme.primary,
+                        titleColor = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsItem(
+                    icon = Icons.AutoMirrored.Filled.Logout,
+                    title = stringResource(R.string.account_sign_out),
+                    onClick = onSignOut
+                )
+            } else {
+                SettingsItem(
+                    icon = Icons.Default.AccountCircle,
+                    title = stringResource(R.string.account_sign_in),
+                    onClick = onSignIn,
+                    iconTint = MaterialTheme.colorScheme.primary,
+                    titleColor = MaterialTheme.colorScheme.primary
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsItem(
+                    icon = Icons.Default.Star,
+                    title = stringResource(R.string.account_upgrade),
+                    onClick = onUpgrade,
+                    iconTint = MaterialTheme.colorScheme.primary,
+                    titleColor = MaterialTheme.colorScheme.primary
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -185,29 +271,6 @@ fun SettingsScreen(
                         contentDescription = null,
                         tint = if (postProcessingEnabled) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                    )
-                }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        SectionHeader(stringResource(R.string.settings_api_config))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            SettingsItem(
-                icon = Icons.Default.Key,
-                title = stringResource(R.string.settings_api_config),
-                onClick = onNavigateToApiConfig,
-                trailingContent = {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             )
@@ -282,6 +345,103 @@ fun SettingsScreen(
     }
 }
 
+private const val OVERLAY_BUBBLE_PREFS = "overlay_bubble"
+private const val OVERLAY_BUBBLE_HIDDEN_KEY = "bubble_hidden"
+private const val OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY = "bubble_snooze_until_ms"
+
+private fun isOverlayBubbleSuppressed(context: Context): Boolean {
+    val prefs = context.getSharedPreferences(OVERLAY_BUBBLE_PREFS, Context.MODE_PRIVATE)
+    if (prefs.getBoolean(OVERLAY_BUBBLE_HIDDEN_KEY, false)) return true
+
+    val snoozeUntil = prefs.getLong(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY, 0L)
+    if (snoozeUntil <= 0L) return false
+    if (System.currentTimeMillis() < snoozeUntil) return true
+
+    prefs.edit().remove(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY).apply()
+    return false
+}
+
+private fun restoreOverlayBubble(context: Context) {
+    context.getSharedPreferences(OVERLAY_BUBBLE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .remove(OVERLAY_BUBBLE_HIDDEN_KEY)
+        .remove(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY)
+        .apply()
+}
+
+@Composable
+private fun AccountIdentityItem(
+    email: String,
+    tierName: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.AccountCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = email,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = tierName,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
+@Composable
+private fun UsageSummary(usageStatus: UsageStatus) {
+    Column(
+        modifier = Modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = if (usageStatus.isPro) {
+                stringResource(R.string.account_usage_unlimited)
+            } else {
+                stringResource(R.string.account_usage_words, usageStatus.used, usageStatus.limit)
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Text(
+            text = if (usageStatus.isAuthenticated) {
+                stringResource(R.string.account_authenticated_hint)
+            } else {
+                stringResource(R.string.account_anonymous_hint)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (!usageStatus.isPro) {
+            LinearProgressIndicator(
+                progress = { usageStatus.percentage.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
 @Composable
 private fun StatusIcon(isEnabled: Boolean) {
     Icon(
@@ -327,6 +487,7 @@ private fun SettingsItem(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(
+            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -339,9 +500,12 @@ private fun SettingsItem(
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
-                color = if (enabled) titleColor else titleColor.copy(alpha = 0.38f)
+                color = if (enabled) titleColor else titleColor.copy(alpha = 0.38f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
+        Spacer(modifier = Modifier.width(12.dp))
         trailingContent()
     }
 }

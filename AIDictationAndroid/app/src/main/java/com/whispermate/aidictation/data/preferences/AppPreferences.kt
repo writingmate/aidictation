@@ -5,6 +5,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.squareup.moshi.Moshi
@@ -13,8 +15,10 @@ import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.domain.model.ContextRule
 import com.whispermate.aidictation.domain.model.DictionaryEntry
+import com.whispermate.aidictation.domain.model.FREE_MONTHLY_WORD_LIMIT
 import com.whispermate.aidictation.domain.model.Shortcut
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.Calendar
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -39,7 +43,14 @@ class AppPreferences @Inject constructor(
         val SELECTED_LANGUAGES = stringPreferencesKey("selected_languages")
         val MULTILINGUAL_ENABLED = booleanPreferencesKey("multilingual_enabled")
         val POST_PROCESSING_ENABLED = booleanPreferencesKey("post_processing_enabled")
+        val LOCAL_MONTHLY_WORD_COUNT = intPreferencesKey("local_monthly_word_count")
+        val LOCAL_WORD_COUNT_RESET_AT = longPreferencesKey("local_word_count_reset_at")
     }
+
+    data class LocalUsage(
+        val wordCount: Int,
+        val resetAtMillis: Long
+    )
 
     // Selected Languages
     private val stringListType = Types.newParameterizedType(List::class.java, String::class.java)
@@ -78,6 +89,46 @@ class AppPreferences @Inject constructor(
         context.dataStore.edit { preferences ->
             preferences[Keys.POST_PROCESSING_ENABLED] = enabled
         }
+    }
+
+    val localUsage: Flow<LocalUsage> = context.dataStore.data.map { preferences ->
+        LocalUsage(
+            wordCount = preferences[Keys.LOCAL_MONTHLY_WORD_COUNT] ?: 0,
+            resetAtMillis = preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] ?: nextMonthStartMillis()
+        )
+    }
+
+    suspend fun checkAndResetLocalUsageIfNeeded() {
+        context.dataStore.edit { preferences ->
+            val resetAt = preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] ?: nextMonthStartMillis()
+            if (System.currentTimeMillis() >= resetAt) {
+                preferences[Keys.LOCAL_MONTHLY_WORD_COUNT] = 0
+                preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] = nextMonthStartMillis()
+            } else if (preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] == null) {
+                preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] = resetAt
+            }
+        }
+    }
+
+    suspend fun getLocalWordCount(): Int {
+        checkAndResetLocalUsageIfNeeded()
+        return localUsage.first().wordCount
+    }
+
+    suspend fun addLocalWords(count: Int) {
+        if (count <= 0) return
+        checkAndResetLocalUsageIfNeeded()
+        context.dataStore.edit { preferences ->
+            val current = preferences[Keys.LOCAL_MONTHLY_WORD_COUNT] ?: 0
+            preferences[Keys.LOCAL_MONTHLY_WORD_COUNT] = (current + count).coerceAtLeast(0)
+            if (preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] == null) {
+                preferences[Keys.LOCAL_WORD_COUNT_RESET_AT] = nextMonthStartMillis()
+            }
+        }
+    }
+
+    suspend fun hasReachedLocalFreeLimit(): Boolean {
+        return getLocalWordCount() >= FREE_MONTHLY_WORD_LIMIT
     }
 
     // Onboarding
@@ -305,5 +356,16 @@ class AppPreferences @Inject constructor(
                 isEnabled = true
             ),
         )
+    }
+
+    private fun nextMonthStartMillis(): Long {
+        val calendar = Calendar.getInstance()
+        calendar.set(Calendar.DAY_OF_MONTH, 1)
+        calendar.set(Calendar.HOUR_OF_DAY, 0)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        calendar.add(Calendar.MONTH, 1)
+        return calendar.timeInMillis
     }
 }

@@ -48,18 +48,19 @@
     <string name="language_search_hint">Search languages…</string>
     <string name="language_selection_hint">Select languages you speak. Limits transcription to only those languages.</string>
     <string name="language_no_results">No languages found</string>
-    <string name="settings_api_config">API Configuration</string>
-    <string name="api_config_transcription">Transcription API</string>
-    <string name="api_config_postprocessing">Post-processing API</string>
-    <string name="api_config_provider">Provider</string>
-    <string name="api_config_api_key">API Key</string>
-    <string name="api_config_model">Model</string>
-    <string name="api_config_key_placeholder">Enter API key</string>
-    <string name="api_config_loading_models">Loading models…</string>
-    <string name="api_config_reset">Reset to Defaults</string>
     <string name="settings_permissions">Permissions</string>
     <string name="settings_microphone">Microphone Access</string>
     <string name="settings_overlay_access">Overlay Accessibility</string>
+    <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
+    <string name="settings_account">Account</string>
+    <string name="account_sign_in">Sign in</string>
+    <string name="account_sign_out">Sign out</string>
+    <string name="account_signed_in">Signed in</string>
+    <string name="account_upgrade">Upgrade</string>
+    <string name="account_usage_words">%1$d / %2$d words used this month</string>
+    <string name="account_usage_unlimited">Unlimited words</string>
+    <string name="account_anonymous_hint">Sign in only when you need more words or want to purchase.</string>
+    <string name="account_authenticated_hint">Your word usage and purchases are linked to this account.</string>
     <string name="settings_transcription">Transcription</string>
     <string name="settings_post_processing_settings">Post-processing Settings</string>
     <string name="settings_about">About</string>
@@ -87,6 +88,7 @@
     <string name="error_transcription_failed">Transcription failed</string>
     <string name="error_recording_failed">Recording failed</string>
     <string name="error_permission_denied">Permission denied</string>
+    <string name="usage_limit_reached">Word limit reached</string>
 
     <!-- Accessibility -->
     <string name="accessibility_service_description">Shows a dictation bubble when a text field is focused, then inserts speech at cursor.</string>
@@ -96,4 +98,9 @@
     <string name="overlay_command_apply_failed">Could not apply command</string>
     <string name="overlay_command_failed">%1$s failed</string>
     <string name="overlay_command_no_instruction">No instruction heard</string>
+    <string name="overlay_dismiss_hide">Hide</string>
+    <string name="overlay_dismiss_snooze">Snooze 10 min</string>
+    <string name="overlay_hidden_permanently">Dictation bubble hidden</string>
+    <string name="overlay_restored">Dictation bubble restored</string>
+    <string name="overlay_snoozed">Dictation bubble snoozed for 10 minutes</string>
 </resources>

@@ -1,5 +1,8 @@
 package com.whispermate.aidictation.service
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
@@ -11,12 +14,14 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -24,18 +29,21 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.view.animation.DecelerateInterpolator
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.whispermate.aidictation.R
-import com.squareup.moshi.Moshi
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
+import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.ui.views.CircularMicButtonView
 import com.whispermate.aidictation.util.AudioRecorder
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,11 +53,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
  * text field is focused, while keeping the user's regular keyboard (e.g. Gboard).
  */
+@AndroidEntryPoint
 class OverlayDictationAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -58,18 +68,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_PREFS = "overlay_bubble"
         private const val BUBBLE_X_KEY = "bubble_x"
         private const val BUBBLE_Y_KEY = "bubble_y"
+        private const val BUBBLE_HIDDEN_KEY = "bubble_hidden"
+        private const val BUBBLE_SNOOZE_UNTIL_MS_KEY = "bubble_snooze_until_ms"
         private const val MIN_RECORDING_MS = 500L
-        private const val BUBBLE_SIZE_DP = 44
+        private const val BUBBLE_SIZE_DP = 55
         private const val BUBBLE_MARGIN_DP = 8
-        // Keyboard-dismissal fires bursts of accessibility events, during which focus can
-        // briefly be unreadable. We must wait long enough for the dismissal animation to
-        // settle before committing to a hide, otherwise the bubble fades out and back in.
-        private const val BUBBLE_VISIBILITY_DELAY_MS = 300L
         private const val BUBBLE_ANIMATION_MS = 140L
+        private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
+        private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
         private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 220
         private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 40
+        private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_CLEANUP_ID = "cleanup"
         private const val COMMAND_REWRITE_ID = "rewrite"
 
@@ -100,6 +111,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         RewriteWithAi
     }
 
+    private enum class BubbleDismissTarget {
+        Snooze,
+        Hide
+    }
+
     private data class EditableTextSnapshot(
         val text: String,
         val selectionStart: Int,
@@ -113,10 +129,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private lateinit var appPreferences: AppPreferences
-    private val transcriptionRepository by lazy {
-        com.whispermate.aidictation.data.repository.TranscriptionRepository(appPreferences)
-    }
+    @Inject lateinit var appPreferences: AppPreferences
+    @Inject lateinit var transcriptionRepository: com.whispermate.aidictation.data.repository.TranscriptionRepository
+    @Inject lateinit var subscriptionRepository: SubscriptionRepository
     private lateinit var windowManager: WindowManager
 
     private var bubbleView: CircularMicButtonView? = null
@@ -127,13 +142,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var commandActionsView: LinearLayout? = null
     private var commandActionsParams: WindowManager.LayoutParams? = null
     private var isCommandActionsAttached = false
+    private var dismissActionsView: LinearLayout? = null
+    private var dismissActionsParams: WindowManager.LayoutParams? = null
+    private var isDismissActionsAttached = false
+    private var dismissSnoozeZone: TextView? = null
+    private var dismissHideZone: TextView? = null
 
     private var recordingState: RecordingState = RecordingState.Idle
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private var audioRecorder: AudioRecorder? = null
     private var vadJob: Job? = null
-    private var focusLossJob: Job? = null
     private var bubbleAnimationJob: Job? = null
+    private var bubbleSnapAnimator: ValueAnimator? = null
 
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
@@ -158,7 +178,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        appPreferences = AppPreferences(applicationContext, Moshi.Builder().build())
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         
         refreshOverlayVisibility(null)
@@ -188,7 +207,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         stopRecording(discard = true)
         hideBubble(animated = false)
         hideCommandActions(animated = false)
+        hideDismissActions()
         stopBubbleAnimation()
+        stopBubbleSnapAnimation()
     }
 
     override fun onDestroy() {
@@ -196,12 +217,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         stopRecording(discard = true)
         hideBubble(animated = false)
         hideCommandActions(animated = false)
+        hideDismissActions()
         stopBubbleAnimation()
+        stopBubbleSnapAnimation()
         serviceScope.cancel()
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
-        focusLossJob?.cancel()
         if (shouldShowBubble(source)) {
             bubbleShouldBeVisible = true
             showBubble()
@@ -209,34 +231,78 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        focusLossJob = serviceScope.launch {
-            delay(BUBBLE_VISIBILITY_DELAY_MS)
-            if (!shouldShowBubble(null)) {
-                bubbleShouldBeVisible = false
-                if (recordingState == RecordingState.Recording) {
-                    stopRecording(discard = true)
-                }
-                hideBubble(animated = true)
-                hideCommandActions(animated = true)
-            } else {
-                bubbleShouldBeVisible = true
-                showBubble()
-                updateCommandActionsVisibility(null)
-            }
+        bubbleShouldBeVisible = false
+        if (recordingState == RecordingState.Recording) {
+            stopRecording(discard = true)
         }
+        hideBubble(animated = false)
+        hideCommandActions(animated = false)
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        // We check for eligibility even if keyboard is hidden, 
-        // especially for cover screen shortcuts on foldables.
+        if (isBubbleSuppressed()) return false
+        if (!isKeyboardVisible()) return false
         val focusedNode = resolveFocusedEditableNode(source) ?: return false
         return true
     }
 
-    private fun isInputMethodVisible(): Boolean {
-        return windows.any { window ->
-            window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD
+    private fun isKeyboardVisible(): Boolean {
+        return inputMethodBounds() != null
+    }
+
+    private fun keyboardTop(): Int {
+        return inputMethodBounds()?.top ?: resources.displayMetrics.heightPixels
+    }
+
+    private fun dismissAreaTop(): Int {
+        return (keyboardTop() - dp(DISMISS_ACTION_HEIGHT_DP)).coerceAtLeast(0)
+    }
+
+    private fun inputMethodBounds(): Rect? {
+        return windows
+            .asSequence()
+            .filter { window -> window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            .mapNotNull { window ->
+                Rect().also { window.getBoundsInScreen(it) }
+                    .takeIf { bounds -> bounds.height() > 0 && bounds.width() > 0 }
+            }
+            .minByOrNull { bounds -> bounds.top }
+    }
+
+    private fun isBubbleSuppressed(): Boolean {
+        if (bubblePrefs.getBoolean(BUBBLE_HIDDEN_KEY, false)) return true
+
+        val snoozeUntil = bubblePrefs.getLong(BUBBLE_SNOOZE_UNTIL_MS_KEY, 0L)
+        if (snoozeUntil <= 0L) return false
+        if (System.currentTimeMillis() < snoozeUntil) return true
+
+        bubblePrefs.edit().remove(BUBBLE_SNOOZE_UNTIL_MS_KEY).apply()
+        return false
+    }
+
+    private fun hideBubblePermanently() {
+        bubblePrefs.edit()
+            .putBoolean(BUBBLE_HIDDEN_KEY, true)
+            .remove(BUBBLE_SNOOZE_UNTIL_MS_KEY)
+            .apply()
+        suppressBubbleNow(R.string.overlay_hidden_permanently)
+    }
+
+    private fun snoozeBubble() {
+        bubblePrefs.edit()
+            .putLong(BUBBLE_SNOOZE_UNTIL_MS_KEY, System.currentTimeMillis() + BUBBLE_SNOOZE_MS)
+            .apply()
+        suppressBubbleNow(R.string.overlay_snoozed)
+    }
+
+    private fun suppressBubbleNow(messageRes: Int) {
+        hideDismissActions()
+        if (recordingState == RecordingState.Recording) {
+            stopRecording(discard = true)
         }
+        hideBubble(animated = false)
+        hideCommandActions(animated = false)
+        Toast.makeText(this, messageRes, Toast.LENGTH_SHORT).show()
     }
 
     private fun resolveFocusedEditableNode(source: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
@@ -327,28 +393,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleShouldBeVisible = false
         if (!isBubbleAttached) return
         val bubble = bubbleView ?: return
-        val token = ++bubbleVisibilityToken
+        ++bubbleVisibilityToken
         bubble.animate().cancel()
 
-        if (!animated) {
-            removeBubbleView()
-            return
-        }
-
-        bubble.animate()
-            .alpha(0f)
-            .setDuration(BUBBLE_ANIMATION_MS)
-            .withEndAction {
-                if (token != bubbleVisibilityToken) return@withEndAction
-                // Only remove if nothing flipped the intent back during the fade.
-                // Re-checking shouldShowBubble here and re-entering showBubble used
-                // to snap alpha 0 -> 1 and caused the keyboard-dismiss flicker; any
-                // legitimate reshow will be driven by the next accessibility event.
-                if (!bubbleShouldBeVisible) {
-                    removeBubbleView()
-                }
-            }
-            .start()
+        // Do not fade out. Keyboard dismissal can produce alternating focus/window
+        // events, and an in-flight alpha animation makes the bubble visibly blink.
+        removeBubbleView()
     }
 
     private fun removeBubbleView() {
@@ -363,6 +413,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             bubble.alpha = 1f
             hideCommandActions(animated = false)
             stopBubbleAnimation()
+            stopBubbleSnapAnimation()
         }
     }
 
@@ -387,6 +438,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleView = CircularMicButtonView(this).apply {
             elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isHapticFeedbackEnabled = true
             setColors(bubbleIdleColor, resolveBubbleActiveColor())
             setState(CircularMicButtonView.State.Idle)
         }
@@ -581,16 +633,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val actions = commandActionsView ?: return
         actions.animate().cancel()
 
-        if (!animated) {
-            removeCommandActionsView()
-            return
-        }
-
-        actions.animate()
-            .alpha(0f)
-            .setDuration(BUBBLE_ANIMATION_MS)
-            .withEndAction { removeCommandActionsView() }
-            .start()
+        // Match bubble removal to avoid a lingering fading command strip when the
+        // keyboard is closing.
+        removeCommandActionsView()
     }
 
     private fun removeCommandActionsView() {
@@ -603,6 +648,165 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         } finally {
             isCommandActionsAttached = false
             actions.alpha = 1f
+        }
+    }
+
+    private fun ensureDismissActionsCreated() {
+        if (dismissActionsView != null) return
+
+        val surfaceColor = resolveThemeColor(
+            android.R.attr.colorBackgroundFloating,
+            resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
+        )
+        val onSurfaceColor = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
+        val idleZoneColor = withAlpha(surfaceColor, 0.88f)
+
+        dismissSnoozeZone = createDismissDropZone(
+            label = getString(R.string.overlay_dismiss_snooze),
+            textColor = onSurfaceColor,
+            backgroundColor = idleZoneColor
+        )
+        dismissHideZone = createDismissDropZone(
+            label = getString(R.string.overlay_dismiss_hide),
+            textColor = onSurfaceColor,
+            backgroundColor = idleZoneColor
+        )
+
+        dismissActionsView = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            elevation = dp(8).toFloat()
+
+            addView(dismissSnoozeZone, LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                1f
+            ))
+            addView(dismissHideZone, LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                1f
+            ))
+        }
+
+        dismissActionsParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            dp(DISMISS_ACTION_HEIGHT_DP),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            x = 0
+            y = 0
+        }
+    }
+
+    private fun createDismissDropZone(
+        label: String,
+        textColor: Int,
+        backgroundColor: Int
+    ): TextView {
+        return TextView(this).apply {
+            text = label
+            setTextColor(textColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            isAllCaps = false
+            setPadding(dp(12), dp(16), dp(12), dp(16))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 0f
+                setColor(backgroundColor)
+            }
+        }
+    }
+
+    private fun showDismissActions() {
+        ensureDismissActionsCreated()
+        val actions = dismissActionsView ?: return
+        val params = dismissActionsParams ?: return
+
+        hideCommandActions(animated = false)
+        updateDismissActionsPosition()
+        if (isDismissActionsAttached) return
+
+        try {
+            actions.alpha = 1f
+            windowManager.addView(actions, params)
+            isDismissActionsAttached = true
+            updateDismissActionsPosition()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach dismiss actions overlay", e)
+        }
+    }
+
+    private fun hideDismissActions() {
+        if (!isDismissActionsAttached) return
+        val actions = dismissActionsView ?: return
+        actions.animate().cancel()
+        try {
+            windowManager.removeView(actions)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove dismiss actions overlay", e)
+        } finally {
+            isDismissActionsAttached = false
+            actions.alpha = 1f
+        }
+    }
+
+    private fun updateDismissActionsPosition() {
+        val params = dismissActionsParams ?: return
+        val actions = dismissActionsView ?: return
+        params.x = 0
+        params.y = 0
+        if (!isDismissActionsAttached) return
+        try {
+            windowManager.updateViewLayout(actions, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update dismiss actions position", e)
+        }
+    }
+
+    private fun updateDismissDropTarget(target: BubbleDismissTarget?) {
+        val surfaceColor = resolveThemeColor(
+            android.R.attr.colorBackgroundFloating,
+            resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
+        )
+        val onSurfaceColor = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
+        val idleZoneColor = withAlpha(surfaceColor, 0.88f)
+
+        setDismissZoneState(
+            view = dismissSnoozeZone,
+            selected = target == BubbleDismissTarget.Snooze,
+            selectedColor = bubbleRewriteActiveColor,
+            idleColor = idleZoneColor,
+            idleTextColor = onSurfaceColor
+        )
+        setDismissZoneState(
+            view = dismissHideZone,
+            selected = target == BubbleDismissTarget.Hide,
+            selectedColor = bubbleDictationActiveColor,
+            idleColor = idleZoneColor,
+            idleTextColor = onSurfaceColor
+        )
+    }
+
+    private fun setDismissZoneState(
+        view: TextView?,
+        selected: Boolean,
+        selectedColor: Int,
+        idleColor: Int,
+        idleTextColor: Int
+    ) {
+        view ?: return
+        val backgroundColor = if (selected) selectedColor else idleColor
+        view.setTextColor(if (selected) preferredOnColor(selectedColor) else idleTextColor)
+        view.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(backgroundColor)
         }
     }
 
@@ -650,6 +854,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubble.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    stopBubbleSnapAnimation()
                     downRawX = event.rawX
                     downRawY = event.rawY
                     downX = params.x
@@ -664,22 +869,46 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
                     if (!dragging && (kotlin.math.abs(deltaX) > touchSlop || kotlin.math.abs(deltaY) > touchSlop)) {
                         dragging = true
+                        performDragHaptic(start = true)
                     }
 
                     if (dragging) {
                         params.x = downX + deltaX
                         params.y = downY + deltaY
                         updateBubblePosition()
+                        if (shouldRevealDismissZones(params)) {
+                            showDismissActions()
+                            updateDismissDropTarget(resolveDismissTarget(params))
+                        } else {
+                            hideDismissActions()
+                        }
                     }
                     true
                 }
 
                 MotionEvent.ACTION_UP -> {
                     if (dragging) {
-                        persistBubblePosition(params.x, params.y)
+                        performDragHaptic(start = false)
+                        when (resolveDismissTarget(params)) {
+                            BubbleDismissTarget.Snooze -> snoozeBubble()
+                            BubbleDismissTarget.Hide -> hideBubblePermanently()
+                            null -> {
+                                hideDismissActions()
+                                snapBubbleToNearestHorizontalEdge(params.x, params.y)
+                            }
+                        }
                     } else {
+                        hideDismissActions()
                         onBubbleTapped()
                     }
+                    true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) {
+                        performDragHaptic(start = false)
+                    }
+                    hideDismissActions()
                     true
                 }
 
@@ -688,12 +917,89 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun performDragHaptic(start: Boolean) {
+        val effect = if (start) {
+            HapticFeedbackConstants.LONG_PRESS
+        } else {
+            HapticFeedbackConstants.CONTEXT_CLICK
+        }
+        bubbleView?.performHapticFeedback(effect)
+    }
+
     private fun onBubbleTapped() {
+        hideDismissActions()
         when (recordingState) {
             RecordingState.Idle -> startRecording(mode = RecordingMode.Dictation)
             RecordingState.Recording -> stopRecording(discard = false)
             RecordingState.Processing -> Unit
         }
+    }
+
+    private fun snapBubbleToNearestHorizontalEdge(currentX: Int, currentY: Int) {
+        val screenWidth = resources.displayMetrics.widthPixels
+        val margin = dp(BUBBLE_MARGIN_DP)
+        val bubbleSize = dp(BUBBLE_SIZE_DP)
+        val leftX = margin
+        val rightX = (screenWidth - bubbleSize - margin).coerceAtLeast(leftX)
+        val bubbleCenterX = currentX + bubbleSize / 2
+        val targetX = if (bubbleCenterX < screenWidth / 2) leftX else rightX
+        val maxY = (keyboardTop() - bubbleSize - margin).coerceAtLeast(margin)
+        val targetY = currentY.coerceIn(margin, maxY)
+
+        animateBubbleTo(targetX, targetY)
+    }
+
+    private fun animateBubbleTo(targetX: Int, targetY: Int) {
+        val params = bubbleParams ?: return
+        if (!isBubbleAttached) {
+            persistBubblePosition(targetX, targetY)
+            return
+        }
+
+        val startX = params.x
+        val startY = params.y
+        if (startX == targetX && startY == targetY) {
+            persistBubblePosition(targetX, targetY)
+            return
+        }
+
+        stopBubbleSnapAnimation()
+        var cancelled = false
+        bubbleSnapAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = BUBBLE_ANIMATION_MS
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { animator ->
+                val fraction = animator.animatedValue as Float
+                params.x = startX + ((targetX - startX) * fraction).roundToInt()
+                params.y = startY + ((targetY - startY) * fraction).roundToInt()
+                updateBubblePosition()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                    if (bubbleSnapAnimator === animation) {
+                        bubbleSnapAnimator = null
+                    }
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    params.x = targetX
+                    params.y = targetY
+                    updateBubblePosition()
+                    persistBubblePosition(targetX, targetY)
+                    if (bubbleSnapAnimator === animation) {
+                        bubbleSnapAnimator = null
+                    }
+                }
+            })
+            start()
+        }
+    }
+
+    private fun stopBubbleSnapAnimation() {
+        bubbleSnapAnimator?.cancel()
+        bubbleSnapAnimator = null
     }
 
     private fun updateBubblePosition() {
@@ -704,8 +1010,28 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         try {
             windowManager.updateViewLayout(bubble, params)
             updateCommandActionsPosition()
+            updateDismissActionsPosition()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update bubble position", e)
+        }
+    }
+
+    private fun shouldRevealDismissZones(params: WindowManager.LayoutParams): Boolean {
+        val bubbleCenterY = params.y + dp(BUBBLE_SIZE_DP) / 2
+        val revealTop = (resources.displayMetrics.heightPixels - dp(BUBBLE_DISMISS_DROP_HEIGHT_DP)).coerceAtLeast(0)
+        return bubbleCenterY >= revealTop
+    }
+
+    private fun resolveDismissTarget(params: WindowManager.LayoutParams): BubbleDismissTarget? {
+        val screenWidth = resources.displayMetrics.widthPixels
+        val bubbleCenterX = params.x + dp(BUBBLE_SIZE_DP) / 2
+        val bubbleCenterY = params.y + dp(BUBBLE_SIZE_DP) / 2
+
+        if (bubbleCenterY < resources.displayMetrics.heightPixels - dp(DISMISS_ACTION_HEIGHT_DP)) return null
+        return if (bubbleCenterX < screenWidth / 2) {
+            BubbleDismissTarget.Snooze
+        } else {
+            BubbleDismissTarget.Hide
         }
     }
 
@@ -733,6 +1059,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         serviceScope.launch {
             try {
+                subscriptionRepository.checkCanTranscribe().onFailure { error ->
+                    Toast.makeText(
+                        this@OverlayDictationAccessibilityService,
+                        error.message ?: getString(R.string.usage_limit_reached),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
+                }
+
                 val command = resolveCommand(commandId)
                 if (command == null) {
                     Toast.makeText(
@@ -761,6 +1096,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         ).show()
                     } else {
                         lastDictatedText = transformed
+                        subscriptionRepository.recordWords(transformed)
                     }
                 }.onFailure { error ->
                     Log.e(TAG, "Command '${command.name}' failed", error)
@@ -1031,6 +1367,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun processRecording(audioFile: java.io.File) {
+        subscriptionRepository.checkCanTranscribe().onFailure { error ->
+            Toast.makeText(
+                this@OverlayDictationAccessibilityService,
+                error.message ?: getString(R.string.usage_limit_reached),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
         val node = resolveFocusedEditableNode(null)
         val snapshot = node?.let { captureEditableTextSnapshot(it) } ?: EditableTextSnapshot("", 0, 0)
 
@@ -1058,21 +1403,22 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val result: Result<com.whispermate.aidictation.data.remote.TranscriptionResult> =
             TranscriptionClient.detectAndExecuteCommands(rawText, lastDictatedText, enabledCommands, contextRules)
 
-        result.onSuccess { transcription ->
-            if (transcription.text.isBlank()) return@onSuccess
-
-            val applied = if (transcription.executedCommand != null) {
-                applyCommandResult(transcription.text)
-            } else {
-                insertDictationText(transcription.text)
-            }
-
-            if (applied) {
-                lastDictatedText = transcription.text
-            }
-        }.onFailure { error ->
+        val transcription = result.getOrElse { error ->
             Log.e(TAG, "Transcription failed", error)
             Toast.makeText(this@OverlayDictationAccessibilityService, "Transcription failed", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (transcription.text.isBlank()) return
+
+        val applied = if (transcription.executedCommand != null) {
+            applyCommandResult(transcription.text)
+        } else {
+            insertDictationText(transcription.text)
+        }
+
+        if (applied) {
+            lastDictatedText = transcription.text
+            subscriptionRepository.recordWords(transcription.text)
         }
     }
 
@@ -1080,6 +1426,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         audioFile: java.io.File,
         target: SelectionCommandTarget?
     ) {
+        subscriptionRepository.checkCanTranscribe().onFailure { error ->
+            Toast.makeText(
+                this@OverlayDictationAccessibilityService,
+                error.message ?: getString(R.string.usage_limit_reached),
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
         if (target == null) {
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
@@ -1125,6 +1480,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     ).show()
                 } else {
                     lastDictatedText = transformed
+                    subscriptionRepository.recordWords(transformed)
                 }
             }.onFailure { error ->
                 Log.e(TAG, "Rewrite instruction failed", error)

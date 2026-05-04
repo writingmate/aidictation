@@ -46,9 +46,9 @@ object CommandClient {
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val apiConfig = ApiConfigManager.instance?.getPostProcessingConfig()
-            val apiKey = apiConfig?.apiKey ?: BuildConfig.GROQ_API_KEY
-            val endpoint = apiConfig?.endpoint ?: BuildConfig.GROQ_ENDPOINT
-            val model = apiConfig?.model ?: BuildConfig.GROQ_MODEL
+            val apiKey = apiConfig?.apiKey ?: BuildConfig.AIDICTATION_POST_PROCESSING_KEY
+            val endpoint = apiConfig?.endpoint ?: BuildConfig.AIDICTATION_POST_PROCESSING_ENDPOINT
+            val model = apiConfig?.model ?: BuildConfig.AIDICTATION_POST_PROCESSING_MODEL
             if (apiKey.isEmpty()) {
                 return@withContext Result.failure(Exception("Post-processing API key not configured"))
             }
@@ -143,9 +143,9 @@ object CommandClient {
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val apiConfig = ApiConfigManager.instance?.getPostProcessingConfig()
-            val apiKey = apiConfig?.apiKey ?: BuildConfig.GROQ_API_KEY
-            val endpoint = apiConfig?.endpoint ?: BuildConfig.GROQ_ENDPOINT
-            val model = apiConfig?.model ?: BuildConfig.GROQ_MODEL
+            val apiKey = apiConfig?.apiKey ?: BuildConfig.AIDICTATION_POST_PROCESSING_KEY
+            val endpoint = apiConfig?.endpoint ?: BuildConfig.AIDICTATION_POST_PROCESSING_ENDPOINT
+            val model = apiConfig?.model ?: BuildConfig.AIDICTATION_POST_PROCESSING_MODEL
             if (apiKey.isEmpty()) {
                 return@withContext Result.failure(Exception("Post-processing API key not configured"))
             }

@@ -40,7 +40,13 @@ object TranscriptionClient {
             .build()
     }
 
-    suspend fun transcribe(audioFile: File, prompt: String? = null, language: String? = null): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun transcribe(
+        audioFile: File,
+        prompt: String? = null,
+        language: String? = null,
+        sttPrompt: String? = null,
+        postProcessingPrompt: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val config = ApiConfigManager.instance?.getTranscriptionConfig()
             val apiKey = config?.apiKey ?: BuildConfig.TRANSCRIPTION_API_KEY
@@ -49,12 +55,47 @@ object TranscriptionClient {
             Log.d(TAG, "Transcribing file: ${audioFile.absolutePath}, size: ${audioFile.length()} bytes")
             Log.d(TAG, "Endpoint: $endpoint")
             Log.d(TAG, "Model: $model")
+            Log.d(
+                TAG,
+                "Language: ${language ?: "auto-detect"}, promptLength: ${prompt?.length ?: 0}, " +
+                    "sttPromptLength: ${sttPrompt?.length ?: 0}, " +
+                    "postProcessingPromptLength: ${postProcessingPrompt?.length ?: 0}"
+            )
 
             if (apiKey.isEmpty()) {
                 Log.e(TAG, "API key is empty!")
                 return@withContext Result.failure(Exception("API key not configured"))
             }
 
+            val primary = executeTranscriptionRequest(
+                audioFile = audioFile,
+                prompt = prompt,
+                language = language,
+                sttPrompt = sttPrompt,
+                postProcessingPrompt = postProcessingPrompt,
+                endpoint = endpoint,
+                apiKey = apiKey,
+                model = model
+            )
+
+            primary
+        } catch (e: Exception) {
+            Log.e(TAG, "Transcription exception", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun executeTranscriptionRequest(
+        audioFile: File,
+        prompt: String?,
+        language: String?,
+        sttPrompt: String?,
+        postProcessingPrompt: String?,
+        endpoint: String,
+        apiKey: String,
+        model: String
+    ): Result<String> {
+        return try {
             val requestBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart(
@@ -64,11 +105,16 @@ object TranscriptionClient {
                 )
                 .addFormDataPart("model", model)
                 .addFormDataPart("temperature", "0")
-                .addFormDataPart("response_format", "json")
+                .addFormDataPart("response_format", "text")
                 .apply {
                     if (!prompt.isNullOrEmpty()) {
                         addFormDataPart("prompt", prompt)
-                        Log.d(TAG, "Prompt: $prompt")
+                    }
+                    if (!sttPrompt.isNullOrEmpty()) {
+                        addFormDataPart("stt_prompt", sttPrompt)
+                    }
+                    if (!postProcessingPrompt.isNullOrEmpty()) {
+                        addFormDataPart("post_processing_prompt", postProcessingPrompt)
                     }
                     if (!language.isNullOrEmpty()) {
                         addFormDataPart("language", language)
@@ -83,20 +129,19 @@ object TranscriptionClient {
                 .post(requestBody)
                 .build()
 
-            Log.d(TAG, "Sending transcription request...")
+            Log.d(TAG, "Sending transcription request with model: $model")
             val response = okHttpClient.newCall(request).execute()
             Log.d(TAG, "Response code: ${response.code}")
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
                 Log.e(TAG, "Transcription failed: ${response.code} - $errorBody")
-                return@withContext Result.failure(Exception("Transcription failed: ${response.code} - $errorBody"))
+                return Result.failure(TranscriptionHttpException(response.code, errorBody))
             }
 
             val responseBody = response.body?.string()
             Log.d(TAG, "Response body: $responseBody")
-            val json = JSONObject(responseBody ?: "{}")
-            val text = json.optString("text", "").trim()
+            val text = parseTranscriptionText(responseBody)
             Log.d(TAG, "Transcribed text: '$text'")
 
             Result.success(text)
@@ -105,6 +150,18 @@ object TranscriptionClient {
             Result.failure(e)
         }
     }
+
+    private fun parseTranscriptionText(responseBody: String?): String {
+        val trimmed = responseBody?.trim().orEmpty()
+        if (!trimmed.startsWith("{")) return trimmed
+        return runCatching { JSONObject(trimmed).optString("text", "").trim() }
+            .getOrDefault(trimmed)
+    }
+
+    private class TranscriptionHttpException(
+        val statusCode: Int,
+        val errorBody: String
+    ) : Exception("Transcription failed: $statusCode - $errorBody")
 
     /**
      * Transcribes the audio once per language in parallel.

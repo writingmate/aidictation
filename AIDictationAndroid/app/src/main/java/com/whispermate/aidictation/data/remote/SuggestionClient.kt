@@ -35,9 +35,9 @@ Output: you, your, ya"""
     suspend fun getSuggestions(text: String, isCompletingWord: Boolean): Result<List<String>> = withContext(Dispatchers.IO) {
         try {
             val config = ApiConfigManager.instance?.getPostProcessingConfig()
-            val apiKey = config?.apiKey ?: BuildConfig.GROQ_API_KEY
-            val endpoint = config?.endpoint ?: BuildConfig.GROQ_ENDPOINT
-            val model = config?.model ?: BuildConfig.GROQ_MODEL
+            val apiKey = config?.apiKey ?: BuildConfig.AIDICTATION_POST_PROCESSING_KEY
+            val endpoint = config?.endpoint ?: BuildConfig.AIDICTATION_POST_PROCESSING_ENDPOINT
+            val model = config?.model ?: BuildConfig.AIDICTATION_POST_PROCESSING_MODEL
             if (apiKey.isEmpty()) {
                 return@withContext Result.failure(Exception("Post-processing API key not configured"))
             }

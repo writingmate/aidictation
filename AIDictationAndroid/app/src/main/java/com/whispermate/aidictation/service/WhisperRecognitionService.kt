@@ -12,7 +12,10 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import com.squareup.moshi.Moshi
+import com.whispermate.aidictation.data.local.ParakeetModelAssets
+import com.whispermate.aidictation.data.local.ParakeetTranscriber
 import com.whispermate.aidictation.data.preferences.AppPreferences
+import com.whispermate.aidictation.data.repository.TranscriptionRepository
 import com.whispermate.aidictation.util.SileroVAD
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,8 +51,11 @@ class WhisperRecognitionService : RecognitionService() {
     private var currentCallback: Callback? = null
     private var isListening = false
     private val appPreferences by lazy { AppPreferences(applicationContext, Moshi.Builder().build()) }
+    private val parakeetTranscriber by lazy {
+        ParakeetTranscriber(ParakeetModelAssets(applicationContext))
+    }
     private val transcriptionRepository by lazy {
-        com.whispermate.aidictation.data.repository.TranscriptionRepository(appPreferences)
+        TranscriptionRepository(appPreferences, parakeetTranscriber)
     }
 
     override fun onCreate() {

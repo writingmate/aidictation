@@ -4,17 +4,23 @@
 # Android SDK location
 sdk.dir=/path/to/Android/Sdk
 
-# Transcription API Configuration
-TRANSCRIPTION_API_KEY=your_openai_or_groq_api_key_here
-TRANSCRIPTION_ENDPOINT=https://api.openai.com/v1/audio/transcriptions
-TRANSCRIPTION_MODEL=whisper-1
+# Writingmate transcription configuration
+TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here
+TRANSCRIPTION_ENDPOINT=https://writingmate.ai/api/openai/v1/audio/transcriptions
+TRANSCRIPTION_MODEL=groq/whisper-large-v3-turbo
 
-# For Groq, use:
-# TRANSCRIPTION_ENDPOINT=https://api.groq.com/openai/v1/audio/transcriptions
-# TRANSCRIPTION_MODEL=whisper-large-v3
+# Writingmate post-processing configuration
+# Matches AIDictationPostProcessing* in the macOS Secrets.plist.
+AIDICTATION_POST_PROCESSING_KEY=your_writingmate_post_processing_key_here
+AIDICTATION_POST_PROCESSING_ENDPOINT=https://writingmate.ai/api/openai/v1/chat/completions
+AIDICTATION_POST_PROCESSING_MODEL=openai/gpt-oss-20b
 
-# LLM API Configuration (used for commands, cleanup, and suggestions)
-# Supports any OpenAI-compatible endpoint (Groq recommended for low latency)
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_ENDPOINT=https://api.groq.com/openai/v1/chat/completions
-GROQ_MODEL=llama-3.3-70b-versatile
+# Auth and purchase configuration
+# Uses the same web auth + Stripe checkout setup as the macOS app.
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_supabase_anon_key_here
+AUTH_WEB_URL=https://voicesinmyhead.co/auth
+STRIPE_PAYMENT_LINK=https://buy.stripe.com/your_default_checkout_link
+STRIPE_PAYMENT_LINK_MONTHLY=https://buy.stripe.com/your_monthly_checkout_link
+STRIPE_PAYMENT_LINK_ANNUAL=https://buy.stripe.com/your_annual_checkout_link
+STRIPE_PAYMENT_LINK_LIFETIME=https://buy.stripe.com/your_lifetime_checkout_link

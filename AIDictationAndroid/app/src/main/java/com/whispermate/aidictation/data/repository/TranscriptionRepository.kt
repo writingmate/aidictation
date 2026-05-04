@@ -1,5 +1,8 @@
 package com.whispermate.aidictation.data.repository
 
+import com.whispermate.aidictation.data.local.ParakeetTranscriber
+import com.whispermate.aidictation.data.preferences.ApiConfigManager
+import com.whispermate.aidictation.data.preferences.ApiProvider
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.remote.LanguagePostProcessClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
@@ -11,7 +14,8 @@ import javax.inject.Singleton
 
 @Singleton
 class TranscriptionRepository @Inject constructor(
-    private val appPreferences: AppPreferences
+    private val appPreferences: AppPreferences,
+    private val parakeetTranscriber: ParakeetTranscriber
 ) {
     suspend fun transcribe(
         audioFile: File,
@@ -21,28 +25,53 @@ class TranscriptionRepository @Inject constructor(
         val languages = appPreferences.selectedLanguages.first()
         val multilingual = appPreferences.multilingualEnabled.first()
         val postProcess = appPreferences.postProcessingEnabled.first()
+        val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
+        val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
 
-        return when {
-            multilingual && languages.size > 1 && postProcess -> {
-                val candidates = TranscriptionClient.transcribeForLanguages(audioFile, languages, prompt)
-                if (candidates.isEmpty()) return Result.failure(Exception("All transcription calls failed"))
-                val namedCandidates = candidates.mapKeys { (code, _) -> WhisperLanguages.getName(code) ?: code }
+        if (provider == ApiProvider.PARAKEET) {
+            val raw = parakeetTranscriber.transcribe(audioFile)
+                .getOrElse { return Result.failure(it) }
+            return if (postProcess) {
                 val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
-                Result.success(LanguagePostProcessClient.postProcess(namedCandidates, languageNames, contextRules))
+                    .takeIf { it.isNotEmpty() }
+                    ?: listOf("auto")
+                Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), languageNames, contextRules))
+            } else {
+                Result.success(raw)
             }
-            multilingual && languages.size > 1 -> {
-                val candidates = TranscriptionClient.transcribeForLanguages(audioFile, languages, prompt)
-                if (candidates.isEmpty()) return Result.failure(Exception("All transcription calls failed"))
-                val namedCandidates = candidates.mapKeys { (code, _) -> WhisperLanguages.getName(code) ?: code }
-                Result.success(LanguagePostProcessClient.bestCandidate(namedCandidates))
-            }
-            postProcess -> {
-                val raw = TranscriptionClient.transcribe(audioFile, prompt, null)
-                    .getOrElse { return Result.failure(it) }
-                Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), listOf("auto"), contextRules))
-            }
-            else -> TranscriptionClient.transcribe(audioFile, prompt, null)
         }
+
+        val language = apiLanguageFor(multilingual, languages)
+        if (provider == ApiProvider.WRITINGMATE) {
+            return TranscriptionClient.transcribe(
+                audioFile = audioFile,
+                prompt = prompt,
+                language = language,
+                sttPrompt = prompt,
+                postProcessingPrompt = if (postProcess) {
+                    buildPostProcessingPrompt(prompt, contextRules)
+                } else {
+                    null
+                }
+            )
+        }
+
+        return if (postProcess) {
+            val raw = TranscriptionClient.transcribe(audioFile, prompt, language)
+                .getOrElse { return Result.failure(it) }
+            val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
+                .takeIf { multilingual && it.isNotEmpty() }
+                ?: listOf("auto")
+            Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), languageNames, contextRules))
+        } else {
+            TranscriptionClient.transcribe(audioFile, prompt, language)
+        }
+    }
+
+    private fun apiLanguageFor(multilingual: Boolean, languages: List<String>): String? {
+        if (!multilingual) return null
+        val validLanguages = languages.filter { WhisperLanguages.getLanguage(it) != null }
+        return validLanguages.singleOrNull()
     }
 
     suspend fun buildPrompt(): String {
@@ -57,17 +86,27 @@ class TranscriptionRepository @Inject constructor(
         val parts = mutableListOf<String>()
 
         if (dictionary.isNotEmpty()) {
-            parts.add("Vocabulary hints: ${dictionary.joinToString(", ")}")
+            parts.add("Vocabulary: ${dictionary.joinToString(", ")}")
         }
 
         if (shortcuts.isNotEmpty()) {
-            parts.add("Common phrases: ${shortcuts.joinToString(", ")}")
+            parts.add("Phrases: ${shortcuts.joinToString(", ")}")
         }
 
         return parts.joinToString(". ")
     }
 
+    private fun buildPostProcessingPrompt(prompt: String?, contextRules: String?): String? {
+        return listOfNotNull(
+            prompt?.takeIf { it.isNotBlank() },
+            contextRules?.takeIf { it.isNotBlank() }
+        ).joinToString("\n").ifBlank { null }
+    }
+
     suspend fun applyPostProcessing(text: String): String {
+        val provider = ApiConfigManager.instance?.getTranscriptionConfig()?.provider ?: ApiProvider.WRITINGMATE
+        if (provider == ApiProvider.WRITINGMATE) return text
+
         var result = text
 
         val dictionary = appPreferences.dictionaryEntries.first()

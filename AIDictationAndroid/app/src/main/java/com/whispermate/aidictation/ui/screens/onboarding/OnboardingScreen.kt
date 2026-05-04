@@ -118,7 +118,7 @@ fun OnboardingScreen(
                 .padding(vertical = 16.dp),
             horizontalArrangement = Arrangement.Center
         ) {
-            repeat(4) { index ->
+            repeat(3) { index ->
                 Box(
                     modifier = Modifier
                         .size(8.dp)
@@ -128,7 +128,7 @@ fun OnboardingScreen(
                             else MaterialTheme.colorScheme.outlineVariant
                         )
                 )
-                if (index < 3) {
+                if (index < 2) {
                     Spacer(modifier = Modifier.width(8.dp))
                 }
             }
@@ -149,11 +149,7 @@ fun OnboardingScreen(
                 when (step) {
                     0 -> WelcomeStep()
                     1 -> MicrophonePermissionStep(hasPermission = hasMicPermission)
-                    2 -> ContextRulesStep(
-                        enabledStates = contextRulesEnabled,
-                        onToggle = { index, enabled -> contextRulesEnabled[index] = enabled }
-                    )
-                    3 -> OverlaySetupStep(
+                    2 -> OverlaySetupStep(
                         isEnabled = isOverlayServiceEnabled,
                         testInputText = testInputText,
                         onTestInputChanged = { testInputText = it },
@@ -177,13 +173,10 @@ fun OnboardingScreen(
                         }
                     }
                     2 -> {
-                        onSaveContextRules(contextRulesEnabled.toList())
-                        currentStep = 3
-                    }
-                    3 -> {
                         if (!isOverlayServiceEnabled) {
                             openAccessibilitySettings(context)
                         } else if (hasTestedDictation) {
+                            onSaveContextRules(contextRulesEnabled.toList())
                             onComplete()
                         }
                     }
@@ -192,7 +185,7 @@ fun OnboardingScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
-            enabled = currentStep != 3 || !isOverlayServiceEnabled || hasTestedDictation,
+            enabled = currentStep != 2 || !isOverlayServiceEnabled || hasTestedDictation,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary
             )
@@ -205,8 +198,7 @@ fun OnboardingScreen(
                     } else {
                         stringResource(R.string.onboarding_mic_enable)
                     }
-                    2 -> stringResource(R.string.onboarding_continue)
-                    3 -> when {
+                    2 -> when {
                         !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
                         hasTestedDictation -> stringResource(R.string.onboarding_get_started)
                         else -> stringResource(R.string.onboarding_try_dictation)

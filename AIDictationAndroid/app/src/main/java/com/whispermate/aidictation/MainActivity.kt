@@ -12,13 +12,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
+import com.whispermate.aidictation.data.repository.AuthRepository
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.AIDictationNavHost
 import com.whispermate.aidictation.ui.theme.AIDictationTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject lateinit var authRepository: AuthRepository
+
     private var shouldStartRecording by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,6 +55,13 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == OverlayDictationAccessibilityService.ACTION_START_DICTATION) {
             shouldStartRecording = true
+        }
+        intent?.data?.let { uri ->
+            if (uri.scheme == "aidictation" && uri.host == "auth-callback") {
+                lifecycleScope.launch {
+                    authRepository.handleAuthCallback(uri)
+                }
+            }
         }
     }
 }

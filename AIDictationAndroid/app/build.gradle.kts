@@ -33,23 +33,35 @@ android {
         applicationId = "com.whispermate.aidictation"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.0.3"
+        versionCode = 4
+        versionName = "0.0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // API keys from local.properties (do not commit). Defaults mirror the Mac
         // app, which ships with Writingmate AI as the default transcription provider
-        // routing to groq/whisper-large-v3-turbo so a fresh install points at
-        // Writingmate unless a custom endpoint is set in local.properties.
+        // routing Groq Whisper through the Writingmate proxy unless a custom
+        // endpoint is set in local.properties.
         buildConfigField("String", "TRANSCRIPTION_API_KEY", "\"${localProperties.getProperty("TRANSCRIPTION_API_KEY", "")}\"")
         buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${localProperties.getProperty("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")}\"")
         buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${localProperties.getProperty("TRANSCRIPTION_MODEL", "groq/whisper-large-v3-turbo")}\"")
 
-        // LLM API for post-processing (Mac app defaults to Groq here).
-        buildConfigField("String", "GROQ_API_KEY", "\"${localProperties.getProperty("GROQ_API_KEY", "")}\"")
-        buildConfigField("String", "GROQ_ENDPOINT", "\"${localProperties.getProperty("GROQ_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions")}\"")
-        buildConfigField("String", "GROQ_MODEL", "\"${localProperties.getProperty("GROQ_MODEL", "openai/gpt-oss-20b")}\"")
+        // Writingmate post-processing, matching the macOS app's
+        // AIDictationPostProcessing* secrets.
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_KEY", "\"${localProperties.getProperty("AIDICTATION_POST_PROCESSING_KEY", "")}\"")
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_ENDPOINT", "\"${localProperties.getProperty("AIDICTATION_POST_PROCESSING_ENDPOINT", "https://writingmate.ai/api/openai/v1/chat/completions")}\"")
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_MODEL", "\"${localProperties.getProperty("AIDICTATION_POST_PROCESSING_MODEL", "openai/gpt-oss-20b")}\"")
+
+        // Auth, usage, and purchase links. Android uses the same web auth and
+        // Stripe checkout flow as the macOS app; empty values leave those entry
+        // points disabled in local builds.
+        buildConfigField("String", "SUPABASE_URL", "\"${localProperties.getProperty("SUPABASE_URL", "")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProperties.getProperty("SUPABASE_ANON_KEY", "")}\"")
+        buildConfigField("String", "AUTH_WEB_URL", "\"${localProperties.getProperty("AUTH_WEB_URL", "https://voicesinmyhead.co/auth")}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK", "")}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK_MONTHLY", localProperties.getProperty("STRIPE_PAYMENT_LINK", ""))}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK_ANNUAL", "")}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK_LIFETIME", "")}\"")
     }
 
     buildTypes {
@@ -124,6 +136,7 @@ dependencies {
 
     // ONNX Runtime for Silero VAD
     implementation(libs.onnx.runtime)
+    implementation(libs.play.asset.delivery)
 
     // Debug
     debugImplementation(libs.androidx.ui.tooling)

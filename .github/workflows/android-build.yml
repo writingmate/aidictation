@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - 'claude/**'
+      - 'codex/**'
+    tags:
+      - 'android-v[0-9]*.[0-9]*.[0-9]*'
     paths:
       - 'AIDictationAndroid/**'
       - '.github/workflows/android-build.yml'
@@ -14,6 +17,24 @@ on:
       - 'AIDictationAndroid/**'
       - '.github/workflows/android-build.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub Release tag. Defaults to android-v<versionName>.'
+        required: false
+        type: string
+      draft:
+        description: 'Create the GitHub Release as a draft.'
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: 'Mark the GitHub Release as a prerelease.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
 
 env:
   JAVA_VERSION: '17'
@@ -29,14 +50,14 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      # Transcription API (OpenAI / Groq / Writingmate compatible)
+      # Writingmate transcription API
       TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
       TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
       TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
-      # LLM API (word suggestions / cleanup)
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      GROQ_ENDPOINT: ${{ secrets.GROQ_ENDPOINT }}
-      GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
+      # Writingmate LLM API (word suggestions / cleanup)
+      AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+      AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+      AIDICTATION_POST_PROCESSING_MODEL: ${{ secrets.AIDICTATION_POST_PROCESSING_MODEL }}
       # Shared macOS Secrets.plist (base64). If set, the Writingmate key is
       # extracted from CustomTranscriptionKey so both platforms share one secret.
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
@@ -48,6 +69,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
@@ -87,6 +110,9 @@ jobs:
           wm_key=$(extract CustomTranscriptionKey)
           wm_endpoint=$(extract CustomTranscriptionEndpoint)
           wm_model=$(extract CustomTranscriptionModel)
+          pp_key=$(extract AIDictationPostProcessingKey)
+          pp_endpoint=$(extract AIDictationPostProcessingEndpoint)
+          pp_model=$(extract AIDictationPostProcessingModel)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -96,6 +122,15 @@ jobs:
           if [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_model" ]; then
             echo "TRANSCRIPTION_MODEL=$wm_model" >> "$GITHUB_ENV"
           fi
+          if [ -z "$AIDICTATION_POST_PROCESSING_KEY" ] && [ -n "$pp_key" ]; then
+            echo "AIDICTATION_POST_PROCESSING_KEY=$pp_key" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$AIDICTATION_POST_PROCESSING_ENDPOINT" ] && [ -n "$pp_endpoint" ]; then
+            echo "AIDICTATION_POST_PROCESSING_ENDPOINT=$pp_endpoint" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$AIDICTATION_POST_PROCESSING_MODEL" ] && [ -n "$pp_model" ]; then
+            echo "AIDICTATION_POST_PROCESSING_MODEL=$pp_model" >> "$GITHUB_ENV"
+          fi
           rm /tmp/secrets.plist
 
       - name: Write local.properties
@@ -104,10 +139,10 @@ jobs:
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
           TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}
-          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-gpt-4o-transcribe}
-          GROQ_API_KEY=${GROQ_API_KEY}
-          GROQ_ENDPOINT=${GROQ_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
-          GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-20b}
+          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-groq/whisper-large-v3-turbo}
+          AIDICTATION_POST_PROCESSING_KEY=${AIDICTATION_POST_PROCESSING_KEY}
+          AIDICTATION_POST_PROCESSING_ENDPOINT=${AIDICTATION_POST_PROCESSING_ENDPOINT:-https://writingmate.ai/api/openai/v1/chat/completions}
+          AIDICTATION_POST_PROCESSING_MODEL=${AIDICTATION_POST_PROCESSING_MODEL:-openai/gpt-oss-20b}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}
@@ -136,7 +171,7 @@ jobs:
   release:
     name: Release (signed)
     needs: build
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/')))
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/android-v')))
     runs-on: ubuntu-latest
 
     defaults:
@@ -147,18 +182,61 @@ jobs:
       TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
       TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
       TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      GROQ_ENDPOINT: ${{ secrets.GROQ_ENDPOINT }}
-      GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
+      AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+      AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+      AIDICTATION_POST_PROCESSING_MODEL: ${{ secrets.AIDICTATION_POST_PROCESSING_MODEL }}
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      RELEASE_DRAFT: ${{ github.event.inputs.draft || 'false' }}
+      RELEASE_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+      RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag || '' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' app/build.gradle.kts | head -n 1)
+          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
+            echo "Could not read Android versionName/versionCode from app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ -n "$RELEASE_TAG_INPUT" ]; then
+            tag="$RELEASE_TAG_INPUT"
+          else
+            tag="android-v${version_name}"
+          fi
+
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=AIDictation Android ${version_name} (${version_code})" >> "$GITHUB_OUTPUT"
+
+      - name: Guard main release tag
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            tag_sha=$(git rev-list -n 1 "$RELEASE_TAG")
+            if [ "$tag_sha" != "$GITHUB_SHA" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+              echo "Release tag $RELEASE_TAG already points to $tag_sha, not this main merge $GITHUB_SHA." >&2
+              echo "Bump Android versionName/versionCode before merging to main." >&2
+              exit 1
+            fi
+          fi
 
       - name: Report secret presence
         run: |
@@ -166,9 +244,9 @@ jobs:
           echo "TRANSCRIPTION_API_KEY:     $(present "$TRANSCRIPTION_API_KEY")"
           echo "TRANSCRIPTION_ENDPOINT:    $(present "$TRANSCRIPTION_ENDPOINT")"
           echo "TRANSCRIPTION_MODEL:       $(present "$TRANSCRIPTION_MODEL")"
-          echo "GROQ_API_KEY:              $(present "$GROQ_API_KEY")"
-          echo "GROQ_ENDPOINT:             $(present "$GROQ_ENDPOINT")"
-          echo "GROQ_MODEL:                $(present "$GROQ_MODEL")"
+          echo "AIDICTATION_POST_PROCESSING_KEY:      $(present "$AIDICTATION_POST_PROCESSING_KEY")"
+          echo "AIDICTATION_POST_PROCESSING_ENDPOINT: $(present "$AIDICTATION_POST_PROCESSING_ENDPOINT")"
+          echo "AIDICTATION_POST_PROCESSING_MODEL:    $(present "$AIDICTATION_POST_PROCESSING_MODEL")"
           echo "SECRETS_PLIST:             $(present "$SECRETS_PLIST")"
           echo "ANDROID_KEYSTORE_BASE64:   $(present "$ANDROID_KEYSTORE_BASE64")"
           echo "ANDROID_KEYSTORE_PASSWORD: $(present "$KEYSTORE_PASSWORD")"
@@ -214,6 +292,9 @@ jobs:
           wm_key=$(extract CustomTranscriptionKey)
           wm_endpoint=$(extract CustomTranscriptionEndpoint)
           wm_model=$(extract CustomTranscriptionModel)
+          pp_key=$(extract AIDictationPostProcessingKey)
+          pp_endpoint=$(extract AIDictationPostProcessingEndpoint)
+          pp_model=$(extract AIDictationPostProcessingModel)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -223,6 +304,15 @@ jobs:
           if [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_model" ]; then
             echo "TRANSCRIPTION_MODEL=$wm_model" >> "$GITHUB_ENV"
           fi
+          if [ -z "$AIDICTATION_POST_PROCESSING_KEY" ] && [ -n "$pp_key" ]; then
+            echo "AIDICTATION_POST_PROCESSING_KEY=$pp_key" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$AIDICTATION_POST_PROCESSING_ENDPOINT" ] && [ -n "$pp_endpoint" ]; then
+            echo "AIDICTATION_POST_PROCESSING_ENDPOINT=$pp_endpoint" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$AIDICTATION_POST_PROCESSING_MODEL" ] && [ -n "$pp_model" ]; then
+            echo "AIDICTATION_POST_PROCESSING_MODEL=$pp_model" >> "$GITHUB_ENV"
+          fi
           rm /tmp/secrets.plist
 
       - name: Write local.properties
@@ -231,10 +321,10 @@ jobs:
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
           TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}
-          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-gpt-4o-transcribe}
-          GROQ_API_KEY=${GROQ_API_KEY}
-          GROQ_ENDPOINT=${GROQ_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
-          GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-20b}
+          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-groq/whisper-large-v3-turbo}
+          AIDICTATION_POST_PROCESSING_KEY=${AIDICTATION_POST_PROCESSING_KEY}
+          AIDICTATION_POST_PROCESSING_ENDPOINT=${AIDICTATION_POST_PROCESSING_ENDPOINT:-https://writingmate.ai/api/openai/v1/chat/completions}
+          AIDICTATION_POST_PROCESSING_MODEL=${AIDICTATION_POST_PROCESSING_MODEL:-openai/gpt-oss-20b}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}
@@ -249,6 +339,20 @@ jobs:
       - name: Bundle release AAB
         run: ./gradlew bundleRelease --stacktrace
 
+      - name: Collect release assets
+        run: |
+          tag="${{ steps.release_meta.outputs.tag }}"
+          mkdir -p release-artifacts
+          apk_path=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -n 1)
+          aab_path=$(find app/build/outputs/bundle/release -maxdepth 1 -name '*.aab' | head -n 1)
+          if [ -z "$apk_path" ] || [ -z "$aab_path" ]; then
+            echo "Release APK or AAB was not produced" >&2
+            exit 1
+          fi
+          cp "$apk_path" "release-artifacts/AIDictation-Android-${tag}.apk"
+          cp "$aab_path" "release-artifacts/AIDictation-Android-${tag}.aab"
+          ls -lh release-artifacts
+
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
@@ -262,3 +366,28 @@ jobs:
           name: aidictation-release-aab
           path: AIDictationAndroid/app/build/outputs/bundle/release/*.aab
           retention-days: 90
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release_meta.outputs.title }}
+        run: |
+          flags=(--repo "$GITHUB_REPOSITORY")
+          if [ "$RELEASE_DRAFT" = "true" ]; then
+            flags+=(--draft)
+          fi
+          if [ "$RELEASE_PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-artifacts/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" release-artifacts/* \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --generate-notes \
+              "${flags[@]}"
+          fi

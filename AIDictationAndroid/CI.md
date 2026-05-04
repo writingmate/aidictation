@@ -2,7 +2,9 @@
 
 The `.github/workflows/android-build.yml` pipeline builds the
 `AIDictationAndroid` Gradle project on every push/PR that touches the
-Android source tree.
+Android source tree. A push to `main`, an `android-v*` tag, or a manual
+workflow dispatch also runs the signed release job and publishes APK/AAB
+assets to a GitHub Release named `android-v<versionName>`.
 
 ## Required repository secrets
 
@@ -14,13 +16,13 @@ runs, matching the local-developer layout described in
 
 | Secret | Purpose |
 |---|---|
-| `TRANSCRIPTION_API_KEY` | Writingmate / OpenAI / Groq transcription key. Sent as `Authorization: Bearer …`. |
+| `TRANSCRIPTION_API_KEY` | Writingmate transcription key. Sent as `Authorization: Bearer …`. |
 | `TRANSCRIPTION_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/audio/transcriptions` (matches the Mac app's `.custom` provider). |
-| `TRANSCRIPTION_MODEL` | Optional override. Defaults to `gpt-4o-transcribe`. |
-| `GROQ_API_KEY` | LLM key for post-processing (word suggestions, cleanup). |
-| `GROQ_ENDPOINT` | Optional override. Defaults to Groq chat completions. |
-| `GROQ_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
-| `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present and `TRANSCRIPTION_API_KEY` is empty, the workflow extracts `CustomTranscriptionKey` / `CustomTranscriptionEndpoint` / `CustomTranscriptionModel` so both platforms ship with the same Writingmate credentials. |
+| `TRANSCRIPTION_MODEL` | Optional override. Defaults to `groq/whisper-large-v3-turbo`. |
+| `AIDICTATION_POST_PROCESSING_KEY` | Writingmate post-processing key for suggestions, commands, and cleanup. |
+| `AIDICTATION_POST_PROCESSING_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/chat/completions`. |
+| `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
+| `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present, the workflow extracts `CustomTranscription*` and `AIDictationPostProcessing*` so both platforms ship with the same Writingmate credentials. |
 
 ### Release signing (only needed for the `release` job on `main`)
 
@@ -37,11 +39,11 @@ runs, matching the local-developer layout described in
 # Either: dedicated Android secret
 gh secret set TRANSCRIPTION_API_KEY --repo writingmate/aidictation
 
-# Or: reuse the Mac Secrets.plist (base64-encoded) — the Writingmate
-# transcription key is pulled from CustomTranscriptionKey automatically.
+# Or: reuse the Mac Secrets.plist (base64-encoded) — Writingmate
+# transcription and post-processing keys are pulled automatically.
 base64 -w0 Secrets.plist | gh secret set SECRETS_PLIST --repo writingmate/aidictation
 
-gh secret set GROQ_API_KEY         --repo writingmate/aidictation
+gh secret set AIDICTATION_POST_PROCESSING_KEY --repo writingmate/aidictation
 base64 -w0 release.keystore | gh secret set ANDROID_KEYSTORE_BASE64 --repo writingmate/aidictation
 gh secret set ANDROID_KEYSTORE_PASSWORD --repo writingmate/aidictation
 gh secret set ANDROID_KEY_ALIAS         --repo writingmate/aidictation

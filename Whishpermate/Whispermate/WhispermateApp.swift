@@ -385,6 +385,10 @@ private func isMainSettingsWindowCandidate(_ window: NSWindow) -> Bool {
         return false
     }
 
+    if window.identifier == WindowIdentifiers.authPresentation {
+        return false
+    }
+
     if window.identifier == WindowIdentifiers.main || window.identifier == WindowIdentifiers.settings {
         return true
     }

@@ -1,6 +1,9 @@
 import Combine
 import Foundation
 import Supabase
+#if canImport(AuthenticationServices) && canImport(AppKit)
+    import AuthenticationServices
+#endif
 #if canImport(AppKit)
     import AppKit
 #endif
@@ -13,6 +16,7 @@ public class AuthManager: ObservableObject {
 
     private enum Constants {
         static let authCallbackScheme = "aidictation://auth-callback"
+        static let authCallbackURLScheme = "aidictation"
         static let userAuthChangedNotification = "UserAuthenticationChanged"
     }
 
@@ -21,12 +25,17 @@ public class AuthManager: ObservableObject {
     @Published public var currentUser: User?
     @Published public var isAuthenticated: Bool = false
     @Published public var isLoading: Bool = false
+    @Published public private(set) var isAuthenticationSessionActive: Bool = false
     @Published public var error: String?
 
     // MARK: - Private Properties
 
     private let supabase = SupabaseManager.shared
     private var didStartAutoRefresh = false
+    #if canImport(AuthenticationServices) && canImport(AppKit)
+        private let authPresentationContextProvider = AuthPresentationContextProvider()
+        private var authSession: ASWebAuthenticationSession?
+    #endif
 
     // MARK: - Initialization
 
@@ -70,20 +79,107 @@ public class AuthManager: ObservableObject {
     // MARK: - Public API
 
     public func openSignUp() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.openSignUp()
+            }
+            return
+        }
+
+        guard !isAuthenticationSessionActive else {
+            DebugLog.info("Auth popup already active, ignoring duplicate request", context: "AuthManager")
+            return
+        }
+
         guard let authWebURL = SecretsLoader.getValue(for: "AUTH_WEB_URL") else {
             error = "Missing auth web URL configuration"
             DebugLog.info("Missing auth web URL configuration", context: "AuthManager")
             return
         }
 
-        let authURL = "\(authWebURL)?redirect_to=\(Constants.authCallbackScheme.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Constants.authCallbackScheme)"
+        let authURLString = "\(authWebURL)?redirect_to=\(Constants.authCallbackScheme.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Constants.authCallbackScheme)"
+        guard let authURL = URL(string: authURLString) else {
+            error = "Invalid auth URL configuration"
+            DebugLog.warning("Invalid auth URL configuration: \(authURLString)", context: "AuthManager")
+            return
+        }
 
-        #if canImport(AppKit)
-            if let url = URL(string: authURL) {
-                NSWorkspace.shared.open(url)
+        openAuthenticationURL(authURL)
+    }
+
+    private func openAuthenticationURL(_ url: URL) {
+        #if canImport(AuthenticationServices) && canImport(AppKit)
+            if Thread.isMainThread {
+                startWebAuthenticationSession(url)
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.startWebAuthenticationSession(url)
+                }
             }
+        #elseif canImport(AppKit)
+            openAuthURLInBrowser(url)
         #endif
     }
+
+    #if canImport(AuthenticationServices) && canImport(AppKit)
+        private func startWebAuthenticationSession(_ url: URL) {
+            guard authSession == nil, !isAuthenticationSessionActive else {
+                DebugLog.info("Auth popup already active, ignoring duplicate request", context: "AuthManager")
+                return
+            }
+
+            isAuthenticationSessionActive = true
+
+            let session = ASWebAuthenticationSession(
+                url: url,
+                callbackURLScheme: Constants.authCallbackURLScheme
+            ) { [weak self] callbackURL, error in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+
+                    self.authSession = nil
+                    self.isAuthenticationSessionActive = false
+
+                    if let callbackURL {
+                        Task {
+                            await self.handleAuthCallback(url: callbackURL)
+                        }
+                        return
+                    }
+
+                    if let authError = error as? ASWebAuthenticationSessionError,
+                       authError.code == .canceledLogin
+                    {
+                        DebugLog.info("Auth popup canceled", context: "AuthManager")
+                        return
+                    }
+
+                    if let error {
+                        DebugLog.warning("Auth popup failed: \(error.localizedDescription)", context: "AuthManager")
+                        self.error = "Authentication failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+
+            session.presentationContextProvider = authPresentationContextProvider
+            session.prefersEphemeralWebBrowserSession = false
+            authSession = session
+
+            guard session.start() else {
+                DebugLog.warning("Auth popup could not start, falling back to browser", context: "AuthManager")
+                authSession = nil
+                isAuthenticationSessionActive = false
+                openAuthURLInBrowser(url)
+                return
+            }
+        }
+    #endif
+
+    #if canImport(AppKit)
+        private func openAuthURLInBrowser(_ url: URL) {
+            NSWorkspace.shared.open(url)
+        }
+    #endif
 
     public func openLogin() {
         openSignUp()
@@ -184,3 +280,26 @@ public class AuthManager: ObservableObject {
         return (true, nil)
     }
 }
+
+#if canImport(AuthenticationServices) && canImport(AppKit)
+    private final class AuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+        private let fallbackWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+            styleMask: [],
+            backing: .buffered,
+            defer: false
+        )
+
+        override init() {
+            super.init()
+            fallbackWindow.identifier = NSUserInterfaceItemIdentifier("authPresentation")
+        }
+
+        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+            NSApplication.shared.keyWindow ??
+                NSApplication.shared.mainWindow ??
+                NSApplication.shared.windows.first(where: { $0.isVisible }) ??
+                fallbackWindow
+        }
+    }
+#endif

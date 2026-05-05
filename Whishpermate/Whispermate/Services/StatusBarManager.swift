@@ -9,6 +9,7 @@ enum WindowIdentifiers {
     static let settings = NSUserInterfaceItemIdentifier("settings")
     static let history = NSUserInterfaceItemIdentifier("history")
     static let onboarding = NSUserInterfaceItemIdentifier("onboarding")
+    static let authPresentation = NSUserInterfaceItemIdentifier("authPresentation")
 }
 
 /// Finds the main settings window reliably across all lifecycle states
@@ -33,9 +34,10 @@ func findMainWindow() -> NSWindow? {
         $0.level == .normal
             && $0.identifier != WindowIdentifiers.history
             && $0.identifier != WindowIdentifiers.onboarding
+            && $0.identifier != WindowIdentifiers.authPresentation
             && $0.title != "History"
             && !$0.title.hasPrefix("Welcome")
-            && ($0.title.isEmpty || $0.title == "AIDictation")
+            && $0.title == "AIDictation"
     })
     if fallback != nil {
         DebugLog.info("findMainWindow: found by .normal level fallback", context: "WindowManagement")

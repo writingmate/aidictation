@@ -19,6 +19,7 @@ struct OnboardingView: View {
     @ObservedObject var transcriptionProviderManager: TranscriptionProviderManager
     @ObservedObject var parakeetService = ParakeetTranscriptionService.shared
     @ObservedObject var overlayManager = OverlayWindowManager.shared
+    @ObservedObject private var authManager = AuthManager.shared
 
     @State private var currentUIStep: OnboardingUIStep = .permissions
     @State private var selectedOnboardingMode: TranscriptionMode = .cloud
@@ -32,7 +33,8 @@ struct OnboardingView: View {
         case overlayColor = 3
         case hotkeyTest = 4
         case firstRecording = 5
-        case complete = 6
+        case account = 6
+        case complete = 7
     }
 
     // Gradient colors
@@ -40,6 +42,9 @@ struct OnboardingView: View {
     private let gradientEnd = Color(red: 1.0, green: 0.929, blue: 0.275) // #FFED46
 
     private let accentColor = Color(red: 0.945, green: 0.431, blue: 0.0) // #F16E00
+    private var isAccountSignedIn: Bool {
+        authManager.isAuthenticated && authManager.currentUser != nil
+    }
 
     var body: some View {
         Group {
@@ -168,7 +173,7 @@ struct OnboardingView: View {
                         .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)
                 }
                 .id(currentUIStep)
-                .offset(y: (currentUIStep == .languages || currentUIStep == .transcriptionMode || currentUIStep == .overlayColor || currentUIStep == .hotkeyTest) ? 0 : -geo.size.height * 0.1)
+                .offset(y: (currentUIStep == .languages || currentUIStep == .transcriptionMode || currentUIStep == .overlayColor || currentUIStep == .hotkeyTest || currentUIStep == .account) ? 0 : -geo.size.height * 0.1)
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -239,6 +244,22 @@ struct OnboardingView: View {
                 .frame(width: 393, height: 370)
                 .padding(40)
 
+        case .account:
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: 210, height: 210)
+
+                Circle()
+                    .fill(Color.white.opacity(0.34))
+                    .frame(width: 150, height: 150)
+
+                Image(systemName: isAccountSignedIn ? "checkmark.seal.fill" : "person.crop.circle.badge.plus")
+                    .font(.system(size: 92, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+            }
+            .padding(40)
+
         case .complete:
             EmptyView()
         }
@@ -270,6 +291,9 @@ struct OnboardingView: View {
 
         case .firstRecording:
             firstRecordingContent
+
+        case .account:
+            accountContent
 
         case .complete:
             EmptyView()
@@ -743,6 +767,88 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Account Content
+
+    private var accountContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if authManager.isAuthenticated, let user = authManager.currentUser {
+                HStack(spacing: 14) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.green)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Signed in")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(user.email)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.green.opacity(0.35), lineWidth: 1)
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.crop.circle.badge.plus")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(accentColor)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Use AIDictation now, sign in anytime")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text("Sign in to keep your account and billing in one place.")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer()
+                    }
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+
+                if authManager.isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking session...")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let error = authManager.error {
+                    Text(error)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
     private var firstRecordingTextField: some View {
         let prompt = "Press \(hotkeyManager.currentHotkey?.displayString ?? "hotkey") and speak..."
@@ -875,6 +981,8 @@ struct OnboardingView: View {
                 return showChangeHotkey ? hotkeyManager.currentHotkey != nil : fnKeyEverDetected
             case .firstRecording:
                 return true
+            case .account:
+                return true
             case .complete:
                 return true
             }
@@ -888,12 +996,24 @@ struct OnboardingView: View {
                     .controlSize(.regular)
             }
 
-            // Next button
-            Button("Next", action: goNext)
-                .buttonStyle(.borderedProminent)
-                .tint(accentColor)
-                .controlSize(.regular)
-                .disabled(!canProceed)
+            if currentUIStep == .account {
+                Button("Skip", action: skipAccountStep)
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+
+                Button(isAccountSignedIn ? "Finish" : "Sign In", action: goNext)
+                    .buttonStyle(.borderedProminent)
+                    .tint(accentColor)
+                    .controlSize(.regular)
+                    .disabled(authManager.isLoading || authManager.isAuthenticationSessionActive)
+            } else {
+                // Next button
+                Button("Next", action: goNext)
+                    .buttonStyle(.borderedProminent)
+                    .tint(accentColor)
+                    .controlSize(.regular)
+                    .disabled(!canProceed)
+            }
 
             Spacer()
         }
@@ -915,6 +1035,8 @@ struct OnboardingView: View {
             return showChangeHotkey ? "Change your hotkey" : "Try your dictation hotkey"
         case .firstRecording:
             return "Try one quick recording"
+        case .account:
+            return "Sign in?"
         case .complete:
             return ""
         }
@@ -934,6 +1056,8 @@ struct OnboardingView: View {
             } else {
                 return "Press Fn now. You can choose another shortcut if Fn does not feel right."
             }
+        case .account:
+            return "This is optional. You can skip and start dictating now."
         default:
             return nil
         }
@@ -979,12 +1103,26 @@ struct OnboardingView: View {
                 currentUIStep = .firstRecording
             }
         case .firstRecording:
-            // Ensure hotkey stays enabled for complete screen
-            hotkeyManager.setDeferRegistration(false)
-            currentUIStep = .complete
+            currentUIStep = .account
+        case .account:
+            if isAccountSignedIn {
+                showCompleteScreen()
+            } else {
+                authManager.openLogin()
+            }
         case .complete:
             onboardingManager.completeOnboarding()
         }
+    }
+
+    private func skipAccountStep() {
+        showCompleteScreen()
+    }
+
+    private func showCompleteScreen() {
+        // Ensure hotkey stays enabled for complete screen
+        hotkeyManager.setDeferRegistration(false)
+        currentUIStep = .complete
     }
 
     // MARK: - Permission Checking

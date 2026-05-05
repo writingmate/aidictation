@@ -73,6 +73,7 @@ class OnboardingManager: ObservableObject {
         static let currentOnboardingStep = "current_onboarding_step"
         static let hotkeyKeycode = "hotkey_keycode"
         static let hotkeyModifiers = "hotkey_modifiers"
+        static let hotkeyMouseButton = "hotkey_mouse_button"
     }
 
     // MARK: - Initialization
@@ -116,16 +117,15 @@ class OnboardingManager: ObservableObject {
             }
         } else {
             // User has completed onboarding before
-            // Check if all permissions are still granted
-            let allGranted = checkAllPermissions()
-            showOnboarding = !allGranted
+            // Keep onboarding as a first-run flow. Permission checks can return
+            // transient false negatives shortly after login/restart, so don't
+            // reopen onboarding automatically for users who already completed it.
+            showOnboarding = false
 
-            if !allGranted {
-                DebugLog.info("Permissions revoked, showing onboarding again", context: "OnboardingManager")
-                // Find first non-granted permission
-                currentStep = findFirstIncompleteStep()
-            } else {
+            if checkAllPermissions() {
                 DebugLog.info("All permissions granted, skipping onboarding", context: "OnboardingManager")
+            } else {
+                DebugLog.info("Onboarding already completed, skipping automatic reopen despite missing prerequisites", context: "OnboardingManager")
             }
         }
     }
@@ -157,8 +157,10 @@ class OnboardingManager: ObservableObject {
 
     func isHotkeyConfigured() -> Bool {
         // Check the same keys that HotkeyManager uses
-        return AppDefaults.shared.value(forKey: Keys.hotkeyKeycode) != nil &&
+        let hasKeyboardHotkey = AppDefaults.shared.value(forKey: Keys.hotkeyKeycode) != nil &&
             AppDefaults.shared.value(forKey: Keys.hotkeyModifiers) != nil
+        let hasMouseHotkey = AppDefaults.shared.value(forKey: Keys.hotkeyMouseButton) != nil
+        return hasKeyboardHotkey || hasMouseHotkey
     }
 
     func isStepComplete(_ step: OnboardingStep) -> Bool {

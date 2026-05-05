@@ -330,6 +330,7 @@ struct SettingsView: View {
                                 authManager.openSignUp()
                             }
                             .controlSize(.small)
+                            .disabled(authManager.isAuthenticationSessionActive)
                         }
                     }
                 }
@@ -362,7 +363,7 @@ struct SettingsView: View {
                         }
 
                         // Progress bar
-                        let (used, limit, percentage, _) = subscriptionManager.getUsageStatus()
+                        let (_, _, percentage, _) = subscriptionManager.getUsageStatus()
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 RoundedRectangle(cornerRadius: 4)
@@ -1607,24 +1608,46 @@ struct SidebarAccountStatusView: View {
     var body: some View {
         let (used, limit, percentage, isPro) = subscriptionManager.getUsageStatus()
 
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
-                // Plan badge
-                HStack(spacing: 4) {
-                    Image(systemName: isPro ? "star.fill" : "person.fill")
-                        .font(.caption2)
-                    Text(authManager.currentUser?.subscriptionTier.displayName ?? (isPro ? "Pro" : "Free"))
-                        .font(.caption)
-                        .fontWeight(.medium)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: onTap) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isPro ? "star.fill" : "person.fill")
+                            .font(.caption2)
+                        Text(authManager.currentUser?.subscriptionTier.displayName ?? (isPro ? "Pro" : "Free"))
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundStyle(isPro ? Color.dsPrimary : .secondary)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(isPro ? Color.dsPrimary : .secondary)
+                .buttonStyle(.plain)
 
-                if isPro {
+                Spacer(minLength: 6)
+
+                if !authManager.isAuthenticated {
+                    Button("Log In") {
+                        authManager.openLogin()
+                    }
+                    .font(.caption.weight(.medium))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.dsPrimary)
+                    .disabled(authManager.isAuthenticationSessionActive)
+                }
+            }
+
+            if isPro {
+                Button(action: onTap) {
                     Text("Unlimited transcriptions")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                } else {
-                    // Usage bar
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                // Usage bar
+                Button(action: onTap) {
                     VStack(alignment: .leading, spacing: 4) {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
@@ -1643,12 +1666,12 @@ struct SidebarAccountStatusView: View {
                             .font(.caption2)
                             .foregroundStyle(percentage >= 0.9 ? .orange : .secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 }
 

@@ -8,6 +8,42 @@
         <description>Latest AIDictation releases.</description>
         <language>en</language>
         <item>
+            <title>AIDictation 0.0.72</title>
+            <pubDate>Tue, 05 May 2026 18:40:14 +0000</pubDate>
+            <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.72</link>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/writingmate/aidictation/releases/download/v0.0.72/AIDictation-v0.0.72.dmg"
+                sparkle:version="72"
+                sparkle:shortVersionString="0.0.72"
+                length="7198394"
+                type="application/octet-stream" />
+        </item>
+        <item>
+            <title>AIDictation 0.0.71</title>
+            <pubDate>Tue, 05 May 2026 18:00:24 +0000</pubDate>
+            <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.71</link>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/writingmate/aidictation/releases/download/v0.0.71/AIDictation-v0.0.71.dmg"
+                sparkle:version="71"
+                sparkle:shortVersionString="0.0.71"
+                length="7180277"
+                type="application/octet-stream" />
+        </item>
+        <item>
+            <title>AIDictation 0.0.70</title>
+            <pubDate>Tue, 05 May 2026 17:43:37 +0000</pubDate>
+            <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.70</link>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/writingmate/aidictation/releases/download/v0.0.70/AIDictation-v0.0.70.dmg"
+                sparkle:version="70"
+                sparkle:shortVersionString="0.0.70"
+                length="7179997"
+                type="application/octet-stream" />
+        </item>
+        <item>
             <title>AIDictation 0.0.69</title>
             <pubDate>Tue, 28 Apr 2026 19:52:26 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.69</link>

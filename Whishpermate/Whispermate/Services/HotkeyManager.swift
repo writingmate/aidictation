@@ -38,6 +38,9 @@ class HotkeyManager: ObservableObject {
 
     private enum Constants {
         static let doubleTapInterval: TimeInterval = 0.3 // 300ms
+        // Command mode has not been shipped publicly yet. Keep any saved value
+        // untouched, but do not register it until the feature is enabled.
+        static let commandHotkeyEnabled = false
     }
 
     private enum Diagnostics {
@@ -145,6 +148,12 @@ class HotkeyManager: ObservableObject {
     }
 
     func setCommandHotkey(_ hotkey: Hotkey) {
+        guard Constants.commandHotkeyEnabled else {
+            commandHotkey = nil
+            DebugLog.info("setCommandHotkey: Command hotkey ignored because command mode is disabled", context: "HotkeyManager LOG")
+            return
+        }
+
         commandHotkey = hotkey
         saveCommandHotkey()
 
@@ -205,6 +214,12 @@ class HotkeyManager: ObservableObject {
     private func loadCommandHotkey() {
         DebugLog.info("loadCommandHotkey: Loading command hotkey from UserDefaults", context: "HotkeyManager LOG")
 
+        guard Constants.commandHotkeyEnabled else {
+            commandHotkey = nil
+            DebugLog.info("loadCommandHotkey: Command hotkey disabled; skipping saved/default command shortcut", context: "HotkeyManager LOG")
+            return
+        }
+
         // Check for mouse button hotkey first
         if let mouseButton = AppDefaults.shared.value(forKey: Keys.commandHotkeyMouseButton) as? Int32 {
             commandHotkey = Hotkey(keyCode: 0, modifiers: [], mouseButton: mouseButton)
@@ -221,9 +236,8 @@ class HotkeyManager: ObservableObject {
             return
         }
 
-        // Default: Left Control key (keyCode 59)
-        commandHotkey = Hotkey(keyCode: 59, modifiers: .control)
-        DebugLog.info("loadCommandHotkey: Using default Left Control key (keyCode=59, modifiers=.control)", context: "HotkeyManager LOG")
+        commandHotkey = nil
+        DebugLog.info("loadCommandHotkey: No command hotkey configured", context: "HotkeyManager LOG")
     }
 
     private func saveCommandHotkey() {

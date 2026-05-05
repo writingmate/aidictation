@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout
@@ -188,7 +188,7 @@ jobs:
               <title>AIDictation {version}</title>
               <pubDate>{date}</pubDate>
               <link>https://github.com/{repo}/releases/tag/v{version}</link>
-              <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+              <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
               <enclosure
                   url="https://github.com/{repo}/releases/download/v{version}/AIDictation-v{version}.dmg"
                   sparkle:version="{build}"

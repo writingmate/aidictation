@@ -17,6 +17,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Extract version info
         id: version
@@ -222,5 +223,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add appcast.xml
           git add -f Whishpermate/Whispermate.xcodeproj/project.pbxproj
+          if git diff --cached --quiet; then
+            echo "No appcast or version changes to commit"
+            exit 0
+          fi
           git commit -m "update appcast for v${VERSION} release"
+          git fetch origin main
+          git rebase FETCH_HEAD
           git push origin HEAD:main

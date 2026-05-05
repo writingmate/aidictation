@@ -26,7 +26,10 @@ public enum SecretsLoader {
     }
 
     public static func customTranscriptionModel() -> String? {
-        return secretsDictionary?["CustomTranscriptionModel"] as? String
+        guard let model = secretsDictionary?["CustomTranscriptionModel"] as? String else {
+            return nil
+        }
+        return normalizedCustomTranscriptionModel(model)
     }
 
     public static func llmKey(for provider: LLMProvider) -> String? {
@@ -48,5 +51,21 @@ public enum SecretsLoader {
 
     public static func getValue(for key: String) -> String? {
         return secretsDictionary?[key] as? String
+    }
+
+    private static func normalizedCustomTranscriptionModel(_ model: String) -> String {
+        guard let endpoint = customTranscriptionEndpoint(),
+              let host = URL(string: endpoint)?.host?.lowercased(),
+              host.contains("writingmate") || host.contains("aidictation")
+        else {
+            return model
+        }
+
+        switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
+            return "groq/whisper-large-v3-turbo"
+        default:
+            return model
+        }
     }
 }

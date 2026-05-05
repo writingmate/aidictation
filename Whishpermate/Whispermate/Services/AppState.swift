@@ -393,23 +393,15 @@ class AppState: ObservableObject {
                 let activeTransport = transcriptionProviderManager.effectiveTransport
                 let realtimeResult: String?
                 if activeTransport == .realtime {
-                    guard let realtimeClient else {
-                        throw NSError(
-                            domain: "AppState",
-                            code: -1,
-                            userInfo: [NSLocalizedDescriptionKey: "Realtime transcription did not start"]
-                        )
-                    }
-                    let result = await realtimeClient.finish(timeout: 1.2)?
+                    let result = await realtimeClient?.finish(timeout: 1.2)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard let result, !result.isEmpty else {
-                        throw NSError(
-                            domain: "AppState",
-                            code: -1,
-                            userInfo: [NSLocalizedDescriptionKey: "Realtime transcription did not return text"]
-                        )
+                    if let result, !result.isEmpty {
+                        realtimeResult = result
+                    } else {
+                        DebugLog.warning("Realtime transcription unavailable; falling back to batch cloud transcription", context: "AppState")
+                        realtimeClient?.close()
+                        realtimeResult = nil
                     }
-                    realtimeResult = result
                 } else {
                     realtimeClient?.close()
                     realtimeResult = nil
@@ -774,11 +766,8 @@ class AppState: ObservableObject {
             return text
 
         case .realtime:
-            throw NSError(
-                domain: "AppState",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Realtime transcription cannot fall back to batch transport"]
-            )
+            DebugLog.warning("Realtime transport reached batch transcription path; using batch cloud fallback", context: "AppState")
+            fallthrough
 
         case .batch:
             DebugLog.info("Using \(provider.displayName) batch transcription", context: "AppState")

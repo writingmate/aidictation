@@ -75,6 +75,12 @@ jobs:
         run: |
           echo "$SECRETS_PLIST" | base64 --decode > Whishpermate/Whispermate/Secrets.plist
 
+      - name: Validate release transcription secret
+        run: |
+          python3 scripts/validate_release_transcription_config.py \
+            --secrets Whishpermate/Whispermate/Secrets.plist \
+            --config-only
+
       - name: Resolve Swift package dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
@@ -112,6 +118,22 @@ jobs:
             -archivePath /tmp/AIDictation.xcarchive \
             -exportOptionsPlist /tmp/export-options.plist \
             -exportPath /tmp/AIDictation-export
+
+      - name: Validate exported app behavior
+        env:
+          AIDICTATION_RELEASE_TEST_EMAIL: ${{ secrets.AIDICTATION_RELEASE_TEST_EMAIL }}
+          AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
+        run: |
+          APP=/tmp/AIDictation-export/AIDictation.app
+          python3 scripts/validate_release_transcription_config.py \
+            --secrets "$APP/Contents/Resources/Secrets.plist" \
+            --require-auth
+          swiftc \
+            Whishpermate/Whispermate/Services/TextInsertionFormatter.swift \
+            scripts/validate_text_insertion_formatter.swift \
+            -o /tmp/validate_text_insertion_formatter
+          /tmp/validate_text_insertion_formatter
+          swift scripts/validate_parakeet_runtime.swift "$APP"
 
       - name: Notarize app
         env:

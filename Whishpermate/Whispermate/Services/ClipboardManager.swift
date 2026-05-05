@@ -9,7 +9,6 @@ class ClipboardManager {
     private static let appActivationDelay: TimeInterval = 0.3
     private static let clipboardRestoreDelay: TimeInterval = 0.8
     private static let pasteKeyEventDelay: useconds_t = 10_000
-    private static let postPasteSpaceDelay: TimeInterval = 0.05
 
     static func storePreviousApp() {
         let workspace = NSWorkspace.shared
@@ -59,20 +58,17 @@ class ClipboardManager {
         let pasteboard = NSPasteboard.general
         let originalSnapshot = originalSnapshotForNewPaste(from: pasteboard)
         let element = getFocusedTextElement(preferredApp: app)
-        var textToPaste: String
+        let focusedTextContext = focusedTextContext(from: element)
+        if addBoundarySpaces, focusedTextContext == nil {
+            DebugLog.info("Could not read focused text context, inserting with trailing separator only", context: "ClipboardManager")
+        }
 
-        if addBoundarySpaces, let element {
-            textToPaste = textByAddingBoundarySpaces(text, in: element)
-        } else {
-            textToPaste = text
-            if addBoundarySpaces {
-                DebugLog.info("Could not get focused text element, inserting without boundary spaces", context: "ClipboardManager")
-            }
-        }
-        let shouldInsertTrailingSpace = addBoundarySpaces && shouldInsertTrailingSpace(after: text)
-        if shouldInsertTrailingSpace {
-            textToPaste = textByRemovingTrailingWhitespace(textToPaste)
-        }
+        let textToPaste = TextInsertionFormatter.payload(
+            for: text,
+            existingText: focusedTextContext?.text,
+            selectedRange: focusedTextContext?.range,
+            addBoundarySpaces: addBoundarySpaces
+        )
 
         DebugLog.info("Target app for paste: \(app.localizedName ?? "unknown")", context: "ClipboardManager")
         _ = writePasteText(textToPaste, to: pasteboard)
@@ -81,11 +77,6 @@ class ClipboardManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + appActivationDelay) {
             let pasteboardChangeCount = writePasteText(textToPaste, to: pasteboard)
             simulatePaste()
-            if shouldInsertTrailingSpace {
-                DispatchQueue.main.asyncAfter(deadline: .now() + postPasteSpaceDelay) {
-                    simulateSpaceKey()
-                }
-            }
             scheduleClipboardRestore(
                 originalSnapshot,
                 expectedChangeCount: pasteboardChangeCount,
@@ -190,25 +181,6 @@ class ClipboardManager {
         commandUp.post(tap: eventTap)
 
         DebugLog.info("Paste key events posted", context: "ClipboardManager")
-    }
-
-    private static func simulateSpaceKey() {
-        DebugLog.info("simulateSpaceKey started", context: "ClipboardManager")
-        HotkeyManager.shared.suppressFnKeyDetection()
-
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: false)
-        else {
-            DebugLog.info("ERROR: Failed to create space key events", context: "ClipboardManager")
-            return
-        }
-
-        let eventTap = CGEventTapLocation.cghidEventTap
-        keyDown.post(tap: eventTap)
-        usleep(pasteKeyEventDelay)
-        keyUp.post(tap: eventTap)
-        DebugLog.info("Space key events posted", context: "ClipboardManager")
     }
 
     private struct ClipboardRestoreState {
@@ -410,112 +382,14 @@ class ClipboardManager {
         return range
     }
 
-    private static func textByAddingBoundarySpaces(_ text: String, in element: AXUIElement) -> String {
-        guard let existingText = getTextFromElement(element) else {
-            DebugLog.info("Could not read focused text, inserting without boundary spaces", context: "ClipboardManager")
-            return text
-        }
-
-        let nsText = existingText as NSString
-        guard nsText.length > 0,
-              let selectedRange = getSelectedTextRange(from: element)
+    private static func focusedTextContext(from element: AXUIElement?) -> (text: String, range: NSRange)? {
+        guard let element,
+              let text = getTextFromElement(element),
+              let range = getSelectedTextRange(from: element)
         else {
-            return text
+            return nil
         }
 
-        let safeLocation = max(0, min(selectedRange.location, nsText.length))
-        let safeLength = max(0, min(selectedRange.length, nsText.length - safeLocation))
-        let insertionEnd = safeLocation + safeLength
-        var result = text
-
-        if shouldAddLeadingSpace(to: text, existingText: nsText, insertionLocation: safeLocation) {
-            result = " " + result
-            DebugLog.info("Added leading boundary space", context: "ClipboardManager")
-        }
-
-        if shouldAddTrailingSpace(to: text, existingText: nsText, insertionEnd: insertionEnd) {
-            result += " "
-            DebugLog.info("Added trailing boundary space", context: "ClipboardManager")
-        }
-
-        return result
-    }
-
-    private static func shouldInsertTrailingSpace(after text: String) -> Bool {
-        guard let lastScalar = text.unicodeScalars.last,
-              !CharacterSet.whitespacesAndNewlines.contains(lastScalar)
-        else {
-            return false
-        }
-
-        DebugLog.info("Will insert trailing space after paste", context: "ClipboardManager")
-        return true
-    }
-
-    private static func textByRemovingTrailingWhitespace(_ text: String) -> String {
-        String(text.reversed().drop { character in
-            character.unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
-        }.reversed())
-    }
-
-    private static func shouldAddLeadingSpace(
-        to text: String,
-        existingText: NSString,
-        insertionLocation: Int
-    ) -> Bool {
-        guard insertionLocation > 0,
-              let firstInsertedScalar = text.unicodeScalars.first,
-              !CharacterSet.whitespacesAndNewlines.contains(firstInsertedScalar)
-        else {
-            return false
-        }
-
-        let textBeforeCursor = existingText.substring(to: insertionLocation)
-        guard let previousScalar = textBeforeCursor.unicodeScalars.last else {
-            return false
-        }
-
-        return shouldAddBoundarySpace(between: previousScalar, and: firstInsertedScalar)
-    }
-
-    private static func shouldAddTrailingSpace(
-        to text: String,
-        existingText: NSString,
-        insertionEnd: Int
-    ) -> Bool {
-        guard insertionEnd < existingText.length,
-              let lastInsertedScalar = text.unicodeScalars.last,
-              !CharacterSet.whitespacesAndNewlines.contains(lastInsertedScalar)
-        else {
-            return false
-        }
-
-        let textAfterCursor = existingText.substring(from: insertionEnd)
-        guard let nextScalar = textAfterCursor.unicodeScalars.first else {
-            return false
-        }
-
-        return shouldAddBoundarySpace(between: lastInsertedScalar, and: nextScalar)
-    }
-
-    private static func shouldAddBoundarySpace(between left: Unicode.Scalar, and right: Unicode.Scalar) -> Bool {
-        let whitespace = CharacterSet.whitespacesAndNewlines
-        guard !whitespace.contains(left), !whitespace.contains(right) else {
-            return false
-        }
-
-        if isOpeningBoundary(left) || isClosingBoundary(right) {
-            return false
-        }
-
-        return true
-    }
-
-    private static func isOpeningBoundary(_ scalar: Unicode.Scalar) -> Bool {
-        "([{<\"'`".unicodeScalars.contains(scalar)
-    }
-
-    private static func isClosingBoundary(_ scalar: Unicode.Scalar) -> Bool {
-        ")]}>.,!?;:%\"'`".unicodeScalars.contains(scalar)
+        return (text, NSRange(location: range.location, length: range.length))
     }
 }

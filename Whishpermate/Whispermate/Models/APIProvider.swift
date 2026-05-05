@@ -316,16 +316,34 @@ class TranscriptionProviderManager: ObservableObject {
 
     var effectiveModel: String {
         // For custom provider, check Secrets.plist first
+        let endpoint = effectiveEndpoint
         if selectedProvider == .custom {
             if let secretModel = SecretsLoader.customTranscriptionModel(), !secretModel.isEmpty {
-                return secretModel
+                return normalizedCustomModel(secretModel, endpoint: endpoint)
             }
         }
 
         if !customModel.isEmpty {
-            return customModel
+            return normalizedCustomModel(customModel, endpoint: endpoint)
         }
         return selectedProvider.defaultModel
+    }
+
+    private func normalizedCustomModel(_ model: String, endpoint: String) -> String {
+        guard selectedProvider == .custom,
+              let host = URL(string: endpoint)?.host?.lowercased(),
+              host.contains("writingmate") || host.contains("aidictation")
+        else {
+            return model
+        }
+
+        switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
+            DebugLog.warning("Replacing stale shipped transcription model \(model) with \(TranscriptionProvider.custom.defaultModel)", context: "TranscriptionProviderManager")
+            return TranscriptionProvider.custom.defaultModel
+        default:
+            return model
+        }
     }
 
     var effectiveTransport: TranscriptionTransport {

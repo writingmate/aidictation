@@ -54,6 +54,7 @@ extension NSNotification.Name {
     static let recordingCompleted = NSNotification.Name("RecordingCompleted")
     static let recordingReadyForTranscription = NSNotification.Name("RecordingReadyForTranscription")
     static let openAccountSettings = NSNotification.Name("OpenAccountSettings")
+    static let menuBarIconVisibilityRequested = NSNotification.Name("MenuBarIconVisibilityRequested")
     static let menuBarIconVisibilityChanged = NSNotification.Name("MenuBarIconVisibilityChanged")
 }
 
@@ -77,7 +78,22 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         set { AppDefaults.shared.set(newValue, forKey: Keys.showMenuBarIcon) }
     }
 
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMenuBarIconVisibilityRequest(_:)),
+            name: .menuBarIconVisibilityRequested,
+            object: nil
+        )
+    }
+
     // MARK: - Public API
+
+    static func requestMenuBarIconVisibility(_ visible: Bool) {
+        isMenuBarIconVisible = visible
+        NotificationCenter.default.post(name: .menuBarIconVisibilityRequested, object: visible)
+    }
 
     func setupMenuBar() {
         guard Self.isMenuBarIconVisible else {
@@ -192,7 +208,15 @@ class StatusBarManager: NSObject, NSMenuDelegate {
     }
 
     func setMenuBarIconVisible(_ visible: Bool) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.setMenuBarIconVisible(visible)
+            }
+            return
+        }
+
         guard Self.isMenuBarIconVisible != visible || (visible && statusItem == nil) || (!visible && statusItem != nil) else {
+            NotificationCenter.default.post(name: .menuBarIconVisibilityChanged, object: visible)
             return
         }
 
@@ -259,6 +283,14 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let quitItem = NSMenuItem(title: "Quit AIDictation", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu?.addItem(quitItem)
+    }
+
+    @objc private func handleMenuBarIconVisibilityRequest(_ notification: Notification) {
+        guard let visible = notification.object as? Bool else {
+            return
+        }
+
+        setMenuBarIconVisible(visible)
     }
 
     private func addMicrophoneMenu() {
@@ -366,7 +398,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
     }
 
     @objc private func hideMenuBarIcon() {
-        setMenuBarIconVisible(false)
+        Self.requestMenuBarIconVisibility(false)
     }
 
     @objc private func showOnboarding() {
@@ -388,6 +420,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         removeMenuBarIcon()
     }
 }

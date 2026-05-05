@@ -834,11 +834,7 @@ struct SettingsView: View {
                             get: { showMenuBarIcon },
                             set: { newValue in
                                 showMenuBarIcon = newValue
-                                if let appDelegate = NSApp.delegate as? AppDelegate {
-                                    appDelegate.statusBarManager.setMenuBarIconVisible(newValue)
-                                } else {
-                                    StatusBarManager.isMenuBarIconVisible = newValue
-                                }
+                                StatusBarManager.requestMenuBarIconVisibility(newValue)
                             }
                         ))
                         .toggleStyle(.switch)

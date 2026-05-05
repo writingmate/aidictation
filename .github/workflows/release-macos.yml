@@ -241,8 +241,16 @@ jobs:
       - name: Commit appcast and version bump to main
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          cp appcast.xml /tmp/appcast.xml
+          cp Whishpermate/Whispermate.xcodeproj/project.pbxproj /tmp/project.pbxproj
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B release-feed-update FETCH_HEAD
+
+          cp /tmp/appcast.xml appcast.xml
+          cp /tmp/project.pbxproj Whishpermate/Whispermate.xcodeproj/project.pbxproj
           git add appcast.xml
           git add -f Whishpermate/Whispermate.xcodeproj/project.pbxproj
           if git diff --cached --quiet; then
@@ -250,6 +258,4 @@ jobs:
             exit 0
           fi
           git commit -m "update appcast for v${VERSION} release"
-          git fetch origin main
-          git rebase FETCH_HEAD
           git push origin HEAD:main

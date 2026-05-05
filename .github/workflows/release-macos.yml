@@ -247,7 +247,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-          git checkout -B release-feed-update FETCH_HEAD
+          git checkout -f -B release-feed-update FETCH_HEAD
 
           cp /tmp/appcast.xml appcast.xml
           cp /tmp/project.pbxproj Whishpermate/Whispermate.xcodeproj/project.pbxproj

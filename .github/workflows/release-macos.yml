@@ -90,6 +90,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM=G7DJ6P37KU \
+            ARCHS=arm64 \
             archive
 
       - name: Export with Developer ID signing

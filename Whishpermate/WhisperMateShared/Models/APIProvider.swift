@@ -45,6 +45,15 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
     public var apiKeyName: String {
         return "\(rawValue)_transcription_api_key"
     }
+
+    public var requiresAPIKey: Bool {
+        switch self {
+        case .groq, .openai:
+            return true
+        case .custom:
+            return false
+        }
+    }
 }
 
 public class TranscriptionProviderManager: ObservableObject {

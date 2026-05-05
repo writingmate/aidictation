@@ -17,6 +17,7 @@ Environment:
     NOTARY_PROFILE      default: AIDictation-notary
     GH_REPO             default: writingmate/aidictation
     DMG_SIGN_IDENTITY   default: Developer ID Application
+    RELEASE_ARCHS       default: arm64
 
   Optional credential bootstrap (via 1Password):
     APPLE_ID
@@ -75,6 +76,7 @@ fi
 NOTARY_PROFILE="${NOTARY_PROFILE:-AIDictation-notary}"
 GH_REPO="${GH_REPO:-writingmate/aidictation}"
 DMG_SIGN_IDENTITY="${DMG_SIGN_IDENTITY:-Developer ID Application}"
+RELEASE_ARCHS="${RELEASE_ARCHS:-arm64}"
 
 require_tool git
 require_tool xcodebuild
@@ -150,6 +152,7 @@ ARCHIVE_CMD=(
   -scheme "$SCHEME"
   -configuration Release
   -archivePath "$ARCHIVE_PATH"
+  ARCHS="$RELEASE_ARCHS"
   MARKETING_VERSION="$VERSION"
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 )

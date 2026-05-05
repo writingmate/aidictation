@@ -867,6 +867,10 @@ class AppState: ObservableObject {
             return secretKey
         }
 
+        if !provider.requiresAPIKey {
+            return "not-needed"
+        }
+
         // Then check keychain
         if let storedKey = KeychainHelper.get(key: provider.apiKeyName), !storedKey.isEmpty {
             return storedKey

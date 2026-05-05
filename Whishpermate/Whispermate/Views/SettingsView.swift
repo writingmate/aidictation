@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import AVFoundation
 import SwiftUI
 import WhisperMateShared
@@ -108,6 +109,7 @@ struct SettingsView: View {
     @State private var isCheckingPayment = false
     @State private var paymentCheckTask: Task<Void, Never>?
     @State private var pendingTranscriptionMode: TranscriptionMode?
+    @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -119,6 +121,7 @@ struct SettingsView: View {
             }
         }
         .onAppear {
+            showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
             loadAudioDevices()
         }
         .onChange(of: selectedAudioDevice) { newValue in
@@ -126,6 +129,11 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AudioDeviceListChanged"))) { _ in
             loadAudioDevices()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .menuBarIconVisibilityChanged)) { notification in
+            if let visible = notification.object as? Bool {
+                showMenuBarIcon = visible
+            }
         }
         .onDisappear {
             stopPaymentConfirmationCheck()
@@ -811,6 +819,37 @@ struct SettingsView: View {
             // Startup Group
             SettingsCard {
                 VStack(spacing: 0) {
+                    // Menu Bar Icon
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Menu Bar Icon")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Show AIDictation in the macOS menu bar")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { showMenuBarIcon },
+                            set: { newValue in
+                                showMenuBarIcon = newValue
+                                if let appDelegate = NSApp.delegate as? AppDelegate {
+                                    appDelegate.statusBarManager.setMenuBarIconVisible(newValue)
+                                } else {
+                                    StatusBarManager.isMenuBarIconVisible = newValue
+                                }
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
+
+                    Divider()
+                        .padding(.vertical, 6)
+
                     // Launch at Login
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {

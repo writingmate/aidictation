@@ -47,7 +47,9 @@ struct WritingmateRealtimeClientSecretProvider {
     ) async throws -> Authorization {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if !apiKey.isEmpty, apiKey != "not-needed" {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var payload: [String: String] = [:]

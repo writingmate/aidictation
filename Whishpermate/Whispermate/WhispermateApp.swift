@@ -289,7 +289,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func closeButtonClicked() {
         DebugLog.info("Red button clicked - hiding window to menu bar", context: "AppDelegate")
         mainWindow?.setIsVisible(false)
-        OverlayWindowManager.shared.show()
+        if !OverlayWindowManager.shared.hideIdleState {
+            OverlayWindowManager.shared.show()
+        }
     }
 
     @objc private func yellowButtonClicked() {

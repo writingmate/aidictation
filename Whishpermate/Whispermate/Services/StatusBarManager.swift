@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WhisperMateShared
 
 // MARK: - Window Identifiers
 
@@ -53,6 +54,7 @@ extension NSNotification.Name {
     static let recordingCompleted = NSNotification.Name("RecordingCompleted")
     static let recordingReadyForTranscription = NSNotification.Name("RecordingReadyForTranscription")
     static let openAccountSettings = NSNotification.Name("OpenAccountSettings")
+    static let menuBarIconVisibilityChanged = NSNotification.Name("MenuBarIconVisibilityChanged")
 }
 
 // MARK: - StatusBarManager
@@ -66,9 +68,27 @@ class StatusBarManager: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
 
+    private enum Keys {
+        static let showMenuBarIcon = "showMenuBarIcon"
+    }
+
+    static var isMenuBarIconVisible: Bool {
+        get { AppDefaults.shared.object(forKey: Keys.showMenuBarIcon) as? Bool ?? true }
+        set { AppDefaults.shared.set(newValue, forKey: Keys.showMenuBarIcon) }
+    }
+
     // MARK: - Public API
 
     func setupMenuBar() {
+        guard Self.isMenuBarIconVisible else {
+            removeMenuBarIcon()
+            return
+        }
+
+        guard statusItem == nil else {
+            return
+        }
+
         // Create status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
@@ -136,6 +156,16 @@ class StatusBarManager: NSObject, NSMenuDelegate {
 
         menu?.addItem(NSMenuItem.separator())
 
+        let hideMenuBarItem = NSMenuItem(
+            title: "Hide Menu Bar Icon",
+            action: #selector(hideMenuBarIcon),
+            keyEquivalent: ""
+        )
+        hideMenuBarItem.target = self
+        menu?.addItem(hideMenuBarItem)
+
+        menu?.addItem(NSMenuItem.separator())
+
         // Onboarding
         let onboardingItem = NSMenuItem(
             title: "Show Onboarding",
@@ -159,6 +189,22 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         statusItem?.menu = menu
 
         DebugLog.info("Menu bar icon created successfully", context: "StatusBarManager")
+    }
+
+    func setMenuBarIconVisible(_ visible: Bool) {
+        guard Self.isMenuBarIconVisible != visible || (visible && statusItem == nil) || (!visible && statusItem != nil) else {
+            return
+        }
+
+        Self.isMenuBarIconVisible = visible
+
+        if visible {
+            setupMenuBar()
+        } else {
+            removeMenuBarIcon()
+        }
+
+        NotificationCenter.default.post(name: .menuBarIconVisibilityChanged, object: visible)
     }
 
     func menuWillOpen(_: NSMenu) {
@@ -195,6 +241,12 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let updatesItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
         updatesItem.target = self
         menu?.addItem(updatesItem)
+
+        menu?.addItem(NSMenuItem.separator())
+
+        let hideMenuBarItem = NSMenuItem(title: "Hide Menu Bar Icon", action: #selector(hideMenuBarIcon), keyEquivalent: "")
+        hideMenuBarItem.target = self
+        menu?.addItem(hideMenuBarItem)
 
         menu?.addItem(NSMenuItem.separator())
 
@@ -313,6 +365,10 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func hideMenuBarIcon() {
+        setMenuBarIconVisible(false)
+    }
+
     @objc private func showOnboarding() {
         NSApplication.shared.activate(ignoringOtherApps: true)
         NotificationCenter.default.post(name: .showOnboarding, object: nil)
@@ -322,9 +378,16 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         NSApplication.shared.terminate(nil)
     }
 
-    deinit {
-        if let statusItem = statusItem {
+    private func removeMenuBarIcon() {
+        if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
+        statusItem = nil
+        menu = nil
+        DebugLog.info("Menu bar icon removed", context: "StatusBarManager")
+    }
+
+    deinit {
+        removeMenuBarIcon()
     }
 }

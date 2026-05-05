@@ -66,7 +66,12 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     }
 
     var requiresAPIKey: Bool {
-        return self != .parakeet
+        switch self {
+        case .groq, .openai:
+            return true
+        case .parakeet, .custom:
+            return false
+        }
     }
 
     /// Returns all available providers

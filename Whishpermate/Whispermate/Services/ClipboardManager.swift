@@ -4,8 +4,12 @@ import CoreGraphics
 
 class ClipboardManager {
     private static var previousApp: NSRunningApplication?
-    private static let appActivationDelay: TimeInterval = 0.25
-    private static let unicodeEventChunkLimit = 180
+    private static var clipboardRestoreWorkItem: DispatchWorkItem?
+    private static var clipboardRestoreState: ClipboardRestoreState?
+    private static let appActivationDelay: TimeInterval = 0.3
+    private static let clipboardRestoreDelay: TimeInterval = 0.8
+    private static let pasteKeyEventDelay: useconds_t = 10_000
+    private static let postPasteSpaceDelay: TimeInterval = 0.05
 
     static func storePreviousApp() {
         let workspace = NSWorkspace.shared
@@ -15,23 +19,23 @@ class ClipboardManager {
         }
     }
 
-    /// Insert dictated text without putting it on the system clipboard.
+    /// Insert dictated text through one cross-app path: temporary pasteboard + Cmd+V + guarded restore.
     static func copyAndPaste(_ text: String) {
         DebugLog.info("========================================", context: "ClipboardManager")
-        DebugLog.info("copyAndPaste called; using clipboard-free insertion", context: "ClipboardManager")
-        insertText(text, addLeadingSpace: true)
+        DebugLog.info("copyAndPaste called; using guarded pasteboard insertion", context: "ClipboardManager")
+        insertText(text, addBoundarySpaces: true)
     }
 
-    /// Insert replacement text without putting it on the system clipboard.
+    /// Replace the current selection exactly, without adding boundary spaces.
     static func replaceSelectionAndPaste(_ text: String) {
         DebugLog.info("========================================", context: "ClipboardManager")
-        DebugLog.info("replaceSelectionAndPaste called; using clipboard-free insertion", context: "ClipboardManager")
-        insertText(text, addLeadingSpace: false)
+        DebugLog.info("replaceSelectionAndPaste called; using guarded pasteboard insertion", context: "ClipboardManager")
+        insertText(text, addBoundarySpaces: false)
     }
 
-    // MARK: - Direct Text Insertion
+    // MARK: - Pasteboard Insertion
 
-    private static func insertText(_ text: String, addLeadingSpace: Bool) {
+    private static func insertText(_ text: String, addBoundarySpaces: Bool) {
         DebugLog.info("Text length: \(text.count) characters", context: "ClipboardManager")
 
         guard !text.isEmpty else {
@@ -41,149 +45,218 @@ class ClipboardManager {
         }
 
         guard AXIsProcessTrusted() else {
-            DebugLog.warning("Accessibility permission missing; refusing to use clipboard fallback", context: "ClipboardManager")
+            DebugLog.warning("Accessibility permission missing; cannot send Cmd+V", context: "ClipboardManager")
             previousApp = nil
             return
         }
 
-        let targetApp = previousApp ?? NSWorkspace.shared.frontmostApplication
-        DebugLog.info("Target app for direct insertion: \(targetApp?.localizedName ?? "unknown")", context: "ClipboardManager")
-
-        guard let app = targetApp else {
-            DebugLog.warning("No target app available for direct insertion", context: "ClipboardManager")
+        guard let app = previousApp ?? NSWorkspace.shared.frontmostApplication else {
+            DebugLog.warning("No target app available for paste", context: "ClipboardManager")
             previousApp = nil
             return
         }
 
+        let pasteboard = NSPasteboard.general
+        let originalSnapshot = originalSnapshotForNewPaste(from: pasteboard)
+        let element = getFocusedTextElement(preferredApp: app)
+        var textToPaste: String
+
+        if addBoundarySpaces, let element {
+            textToPaste = textByAddingBoundarySpaces(text, in: element)
+        } else {
+            textToPaste = text
+            if addBoundarySpaces {
+                DebugLog.info("Could not get focused text element, inserting without boundary spaces", context: "ClipboardManager")
+            }
+        }
+        let shouldInsertTrailingSpace = addBoundarySpaces && shouldInsertTrailingSpace(after: text)
+        if shouldInsertTrailingSpace {
+            textToPaste = textByRemovingTrailingWhitespace(textToPaste)
+        }
+
+        DebugLog.info("Target app for paste: \(app.localizedName ?? "unknown")", context: "ClipboardManager")
+        _ = writePasteText(textToPaste, to: pasteboard)
         app.activate(options: [])
 
         DispatchQueue.main.asyncAfter(deadline: .now() + appActivationDelay) {
-            let element = getFocusedTextElement(preferredApp: app)
-            var textToInsert = text
-
-            if addLeadingSpace, let element, shouldAddLeadingSpaceBeforePaste(in: element) {
-                textToInsert = " " + text
-                DebugLog.info("Added leading space before direct insertion", context: "ClipboardManager")
+            let pasteboardChangeCount = writePasteText(textToPaste, to: pasteboard)
+            simulatePaste()
+            if shouldInsertTrailingSpace {
+                DispatchQueue.main.asyncAfter(deadline: .now() + postPasteSpaceDelay) {
+                    simulateSpaceKey()
+                }
             }
-
-            if let element, insertTextUsingSelectedRange(in: element, text: textToInsert) {
-                DebugLog.info("Inserted text via AX selected range/value", context: "ClipboardManager")
-                previousApp = nil
-                return
-            }
-
-            let targetPid = app.processIdentifier
-            if postUnicodeText(textToInsert, targetPID: targetPid) {
-                DebugLog.info("Inserted text via Unicode CGEvents to PID \(targetPid)", context: "ClipboardManager")
-            } else if postUnicodeText(textToInsert, targetPID: nil) {
-                DebugLog.info("Inserted text via Unicode CGEvents to HID tap", context: "ClipboardManager")
-            } else {
-                DebugLog.error("Direct text insertion failed; clipboard fallback is disabled", context: "ClipboardManager")
-            }
-
+            scheduleClipboardRestore(
+                originalSnapshot,
+                expectedChangeCount: pasteboardChangeCount,
+                pasteboard: pasteboard
+            )
             previousApp = nil
         }
     }
 
-    private static func insertTextUsingSelectedRange(in element: AXUIElement, text: String) -> Bool {
-        guard let currentValue = getTextFromElement(element),
-              var range = getSelectedTextRange(from: element)
-        else {
-            return false
-        }
-
-        let currentNSString = currentValue as NSString
-        let maxLength = currentNSString.length
-        let safeLocation = max(0, min(range.location, maxLength))
-        let safeLength = max(0, min(range.length, maxLength - safeLocation))
-        range = CFRange(location: safeLocation, length: safeLength)
-
-        let updatedText = NSMutableString(string: currentValue)
-        updatedText.replaceCharacters(
-            in: NSRange(location: range.location, length: range.length),
-            with: text
-        )
-
-        let setValueResult = AXUIElementSetAttributeValue(
-            element,
-            kAXValueAttribute as CFString,
-            updatedText as CFString
-        )
-
-        guard setValueResult == .success else {
-            DebugLog.info("AX value insertion failed: \(setValueResult.rawValue)", context: "ClipboardManager")
-            return false
-        }
-
-        let insertedLength = (text as NSString).length
-        var newRange = CFRange(location: range.location + insertedLength, length: 0)
-        if let axRange = AXValueCreate(.cfRange, &newRange) {
-            _ = AXUIElementSetAttributeValue(
-                element,
-                kAXSelectedTextRangeAttribute as CFString,
-                axRange
-            )
-        }
-
-        return true
+    @discardableResult
+    private static func writePasteText(_ text: String, to pasteboard: NSPasteboard) -> Int {
+        pasteboard.clearContents()
+        let success = pasteboard.setString(text, forType: .string)
+        DebugLog.info("Pasteboard set success: \(success), changeCount: \(pasteboard.changeCount)", context: "ClipboardManager")
+        return pasteboard.changeCount
     }
 
-    private static func postUnicodeText(_ text: String, targetPID: pid_t?) -> Bool {
-        guard !text.isEmpty else { return true }
+    private static func originalSnapshotForNewPaste(from pasteboard: NSPasteboard) -> PasteboardSnapshot {
+        if let state = clipboardRestoreState, state.stillOwns(pasteboard) {
+            DebugLog.info("Reusing pending original pasteboard snapshot", context: "ClipboardManager")
+            cancelClipboardRestore()
+            return state.originalSnapshot
+        }
 
-        let chunks = unicodeChunks(for: text)
-        guard !chunks.isEmpty else { return false }
+        cancelClipboardRestore()
+        return PasteboardSnapshot.capture(from: pasteboard)
+    }
 
-        for chunk in chunks {
-            let utf16 = Array(chunk.utf16)
-            guard !utf16.isEmpty,
-                  let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+    private static func cancelClipboardRestore() {
+        clipboardRestoreWorkItem?.cancel()
+        clipboardRestoreWorkItem = nil
+        clipboardRestoreState = nil
+    }
+
+    private static func scheduleClipboardRestore(
+        _ originalSnapshot: PasteboardSnapshot,
+        expectedChangeCount: Int,
+        pasteboard: NSPasteboard
+    ) {
+        let state = ClipboardRestoreState(
+            originalSnapshot: originalSnapshot,
+            expectedChangeCount: expectedChangeCount
+        )
+        clipboardRestoreState = state
+
+        let workItem = DispatchWorkItem {
+            guard let currentState = clipboardRestoreState,
+                  currentState.expectedChangeCount == expectedChangeCount
             else {
-                return false
+                return
             }
 
-            keyDown.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-            keyUp.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-
-            if let targetPID {
-                keyDown.postToPid(targetPID)
-                usleep(2_000)
-                keyUp.postToPid(targetPID)
-            } else {
-                keyDown.post(tap: .cghidEventTap)
-                usleep(2_000)
-                keyUp.post(tap: .cghidEventTap)
+            guard currentState.stillOwns(pasteboard) else {
+                DebugLog.info("Skipping pasteboard restore because pasteboard changed after paste", context: "ClipboardManager")
+                clipboardRestoreWorkItem = nil
+                clipboardRestoreState = nil
+                return
             }
 
-            usleep(1_000)
+            originalSnapshot.restore(to: pasteboard)
+            DebugLog.info("Restored original pasteboard contents", context: "ClipboardManager")
+            clipboardRestoreWorkItem = nil
+            clipboardRestoreState = nil
         }
 
-        return true
+        clipboardRestoreWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + clipboardRestoreDelay, execute: workItem)
     }
 
-    private static func unicodeChunks(for text: String) -> [String] {
-        var chunks: [String] = []
-        var current = ""
-        var currentLength = 0
+    private static func simulatePaste() {
+        DebugLog.info("simulatePaste started", context: "ClipboardManager")
+        HotkeyManager.shared.suppressFnKeyDetection()
 
-        for character in text {
-            let characterLength = String(character).utf16.count
-            if currentLength > 0, currentLength + characterLength > unicodeEventChunkLimit {
-                chunks.append(current)
-                current = ""
-                currentLength = 0
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            DebugLog.info("ERROR: Failed to create CGEventSource", context: "ClipboardManager")
+            return
+        }
+
+        let commandKeyCode: CGKeyCode = 0x37
+        let vKeyCode: CGKeyCode = 0x09
+        let eventTap = CGEventTapLocation.cghidEventTap
+
+        guard let commandDown = CGEvent(keyboardEventSource: source, virtualKey: commandKeyCode, keyDown: true),
+              let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true),
+              let vUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false),
+              let commandUp = CGEvent(keyboardEventSource: source, virtualKey: commandKeyCode, keyDown: false)
+        else {
+            DebugLog.info("ERROR: Failed to create paste key events", context: "ClipboardManager")
+            return
+        }
+
+        commandDown.flags = .maskCommand
+        vDown.flags = .maskCommand
+        vUp.flags = .maskCommand
+
+        commandDown.post(tap: eventTap)
+        usleep(pasteKeyEventDelay)
+        vDown.post(tap: eventTap)
+        usleep(pasteKeyEventDelay)
+        vUp.post(tap: eventTap)
+        usleep(pasteKeyEventDelay)
+        commandUp.post(tap: eventTap)
+
+        DebugLog.info("Paste key events posted", context: "ClipboardManager")
+    }
+
+    private static func simulateSpaceKey() {
+        DebugLog.info("simulateSpaceKey started", context: "ClipboardManager")
+        HotkeyManager.shared.suppressFnKeyDetection()
+
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: false)
+        else {
+            DebugLog.info("ERROR: Failed to create space key events", context: "ClipboardManager")
+            return
+        }
+
+        let eventTap = CGEventTapLocation.cghidEventTap
+        keyDown.post(tap: eventTap)
+        usleep(pasteKeyEventDelay)
+        keyUp.post(tap: eventTap)
+        DebugLog.info("Space key events posted", context: "ClipboardManager")
+    }
+
+    private struct ClipboardRestoreState {
+        let originalSnapshot: PasteboardSnapshot
+        let expectedChangeCount: Int
+
+        func stillOwns(_ pasteboard: NSPasteboard) -> Bool {
+            pasteboard.changeCount == expectedChangeCount
+        }
+    }
+
+    private struct PasteboardSnapshot {
+        let items: [[NSPasteboard.PasteboardType: Data]]
+
+        static func capture(from pasteboard: NSPasteboard) -> PasteboardSnapshot {
+            let capturedItems = pasteboard.pasteboardItems?.compactMap { item -> [NSPasteboard.PasteboardType: Data]? in
+                var itemData: [NSPasteboard.PasteboardType: Data] = [:]
+
+                for type in item.types {
+                    if let data = item.data(forType: type) {
+                        itemData[type] = data
+                    }
+                }
+
+                return itemData.isEmpty ? nil : itemData
+            } ?? []
+
+            DebugLog.info("Captured pasteboard snapshot with \(capturedItems.count) item(s)", context: "ClipboardManager")
+            return PasteboardSnapshot(items: capturedItems)
+        }
+
+        func restore(to pasteboard: NSPasteboard) {
+            pasteboard.clearContents()
+
+            guard !items.isEmpty else {
+                return
             }
 
-            current.append(character)
-            currentLength += characterLength
-        }
+            let pasteboardItems = items.map { storedItem -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in storedItem {
+                    _ = item.setData(data, forType: type)
+                }
+                return item
+            }
 
-        if !current.isEmpty {
-            chunks.append(current)
+            _ = pasteboard.writeObjects(pasteboardItems)
         }
-
-        return chunks
     }
 
     // MARK: - Cursor Editing Helpers
@@ -337,32 +410,112 @@ class ClipboardManager {
         return range
     }
 
-    private static func shouldAddLeadingSpaceBeforePaste(in element: AXUIElement) -> Bool {
+    private static func textByAddingBoundarySpaces(_ text: String, in element: AXUIElement) -> String {
         guard let existingText = getTextFromElement(element) else {
-            DebugLog.info("Could not read focused text, inserting without leading space", context: "ClipboardManager")
-            return false
+            DebugLog.info("Could not read focused text, inserting without boundary spaces", context: "ClipboardManager")
+            return text
         }
 
         let nsText = existingText as NSString
-        guard nsText.length > 0 else {
+        guard nsText.length > 0,
+              let selectedRange = getSelectedTextRange(from: element)
+        else {
+            return text
+        }
+
+        let safeLocation = max(0, min(selectedRange.location, nsText.length))
+        let safeLength = max(0, min(selectedRange.length, nsText.length - safeLocation))
+        let insertionEnd = safeLocation + safeLength
+        var result = text
+
+        if shouldAddLeadingSpace(to: text, existingText: nsText, insertionLocation: safeLocation) {
+            result = " " + result
+            DebugLog.info("Added leading boundary space", context: "ClipboardManager")
+        }
+
+        if shouldAddTrailingSpace(to: text, existingText: nsText, insertionEnd: insertionEnd) {
+            result += " "
+            DebugLog.info("Added trailing boundary space", context: "ClipboardManager")
+        }
+
+        return result
+    }
+
+    private static func shouldInsertTrailingSpace(after text: String) -> Bool {
+        guard let lastScalar = text.unicodeScalars.last,
+              !CharacterSet.whitespacesAndNewlines.contains(lastScalar)
+        else {
             return false
         }
 
-        guard let selectedRange = getSelectedTextRange(from: element) else {
-            DebugLog.info("Could not read insertion point, inserting without leading space", context: "ClipboardManager")
+        DebugLog.info("Will insert trailing space after paste", context: "ClipboardManager")
+        return true
+    }
+
+    private static func textByRemovingTrailingWhitespace(_ text: String) -> String {
+        String(text.reversed().drop { character in
+            character.unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
+        }.reversed())
+    }
+
+    private static func shouldAddLeadingSpace(
+        to text: String,
+        existingText: NSString,
+        insertionLocation: Int
+    ) -> Bool {
+        guard insertionLocation > 0,
+              let firstInsertedScalar = text.unicodeScalars.first,
+              !CharacterSet.whitespacesAndNewlines.contains(firstInsertedScalar)
+        else {
             return false
         }
 
-        let insertionLocation = max(0, min(selectedRange.location, nsText.length))
-        guard insertionLocation > 0 else {
-            return false
-        }
-
-        let textBeforeCursor = nsText.substring(to: insertionLocation)
+        let textBeforeCursor = existingText.substring(to: insertionLocation)
         guard let previousScalar = textBeforeCursor.unicodeScalars.last else {
             return false
         }
 
-        return !CharacterSet.whitespacesAndNewlines.contains(previousScalar)
+        return shouldAddBoundarySpace(between: previousScalar, and: firstInsertedScalar)
+    }
+
+    private static func shouldAddTrailingSpace(
+        to text: String,
+        existingText: NSString,
+        insertionEnd: Int
+    ) -> Bool {
+        guard insertionEnd < existingText.length,
+              let lastInsertedScalar = text.unicodeScalars.last,
+              !CharacterSet.whitespacesAndNewlines.contains(lastInsertedScalar)
+        else {
+            return false
+        }
+
+        let textAfterCursor = existingText.substring(from: insertionEnd)
+        guard let nextScalar = textAfterCursor.unicodeScalars.first else {
+            return false
+        }
+
+        return shouldAddBoundarySpace(between: lastInsertedScalar, and: nextScalar)
+    }
+
+    private static func shouldAddBoundarySpace(between left: Unicode.Scalar, and right: Unicode.Scalar) -> Bool {
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        guard !whitespace.contains(left), !whitespace.contains(right) else {
+            return false
+        }
+
+        if isOpeningBoundary(left) || isClosingBoundary(right) {
+            return false
+        }
+
+        return true
+    }
+
+    private static func isOpeningBoundary(_ scalar: Unicode.Scalar) -> Bool {
+        "([{<\"'`".unicodeScalars.contains(scalar)
+    }
+
+    private static func isClosingBoundary(_ scalar: Unicode.Scalar) -> Bool {
+        ")]}>.,!?;:%\"'`".unicodeScalars.contains(scalar)
     }
 }

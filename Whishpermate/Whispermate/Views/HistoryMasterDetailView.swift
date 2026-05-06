@@ -72,6 +72,19 @@ private struct HistoryMasterDetailContentView: View {
                 selectedRecording = recording
             }
         }
+        .onChange(of: selectedRecording) { _ in
+            updateWindowTitle()
+        }
+        .onAppear {
+            updateWindowTitle()
+        }
+    }
+
+    private func updateWindowTitle() {
+        let title = selectedRecording?.formattedDate ?? "Select a recording"
+        for window in NSApplication.shared.windows where window.identifier == WindowIdentifiers.history || window.title == "History" {
+            window.title = title
+        }
     }
 }
 
@@ -81,13 +94,6 @@ private struct HistoryDetailPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("History")
-                .dsFont(.h4)
-                .foregroundStyle(Color.dsForeground)
-                .padding(.horizontal, 24)
-                .padding(.top, 20)
-                .padding(.bottom, 12)
-
             if let selectedId = selectedRecording?.id,
                let recording = historyManager.recordings.first(where: { $0.id == selectedId })
             {
@@ -359,6 +365,7 @@ struct RecordingDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(recording.formattedDate)
         .toolbar {
             // All action buttons grouped together
             ToolbarItemGroup(placement: .automatic) {

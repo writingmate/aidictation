@@ -272,9 +272,13 @@ class HotkeyManager: ObservableObject {
 
         DebugLog.info("registerHotkey: dictation=\(dictationHotkey?.displayString ?? "none"), command=\(cmdHotkey?.displayString ?? "none")", context: "HotkeyManager LOG")
 
-        // Determine which event monitoring to use based on configured hotkeys
+        // Determine which event monitoring to use based on configured hotkeys.
+        // Fn/Globe alone is special: on several macOS/keyboard combinations it
+        // does not behave like a normal key and is more reliably handled through
+        // the dedicated flags monitor used by onboarding.
+        let needsDictationFnMonitor = dictationHotkey.map(isFnOnlyHotkey) ?? false
         let needsMouseTap = (dictationHotkey?.isMouseButton == true) || (cmdHotkey?.isMouseButton == true)
-        let needsKeyTap = (dictationHotkey != nil && dictationHotkey?.isMouseButton != true) ||
+        let needsKeyTap = (dictationHotkey != nil && dictationHotkey?.isMouseButton != true && !needsDictationFnMonitor) ||
             (cmdHotkey != nil && cmdHotkey?.isMouseButton != true)
 
         if let dictationHotkey, Diagnostics.trackedFunctionKeyCodes.contains(dictationHotkey.keyCode) {
@@ -292,6 +296,10 @@ class HotkeyManager: ObservableObject {
             setupMouseEventTap()
         }
 
+        if needsDictationFnMonitor {
+            setupFnOnlyMonitor()
+        }
+
         // Setup keyboard event tap if needed
         if needsKeyTap {
             DebugLog.info("Using regular key path with CGEventTap for global consumption", context: "HotkeyManager LOG")
@@ -299,6 +307,23 @@ class HotkeyManager: ObservableObject {
         }
 
         setupSystemDefinedDiagnosticsIfNeeded(dictationHotkey: dictationHotkey)
+    }
+
+    private func setupFnOnlyMonitor() {
+        DebugLog.info("Using dedicated Fn-only monitor for dictation hotkey", context: "HotkeyManager LOG")
+
+        fnKeyMonitor = FnKeyMonitor()
+        fnKeyMonitor?.onFnPressed = { [weak self] in
+            guard let self else { return }
+            DebugLog.info("Fn-only dictation pressed", context: "HotkeyManager LOG")
+            self.handleModifierFlagsStateChange(isModifierPressed: true, isDictation: true)
+        }
+        fnKeyMonitor?.onFnReleased = { [weak self] in
+            guard let self else { return }
+            DebugLog.info("Fn-only dictation released", context: "HotkeyManager LOG")
+            self.handleModifierFlagsStateChange(isModifierPressed: false, isDictation: true)
+        }
+        fnKeyMonitor?.startMonitoring(consumePureFnEvents: AXIsProcessTrusted())
     }
 
     private func setupEventTap() {
@@ -803,6 +828,10 @@ class HotkeyManager: ObservableObject {
         // These keys generate flagsChanged events instead of regular keyDown/keyUp.
         let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 58, 59, 60, 61, 62, 63, 179]
         return modifierKeyCodes.contains(hotkey.keyCode)
+    }
+
+    private func isFnOnlyHotkey(_ hotkey: Hotkey) -> Bool {
+        hotkey.modifiers == .function && (hotkey.keyCode == 63 || hotkey.keyCode == 179)
     }
 
     private func shouldLogFunctionDiagnostics(for event: NSEvent) -> Bool {

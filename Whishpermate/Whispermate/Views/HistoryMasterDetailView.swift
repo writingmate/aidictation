@@ -43,40 +43,30 @@ enum AIApp: String, CaseIterable, Identifiable {
 /// Master-detail view that combines history list with recording interface
 struct HistoryMasterDetailView: View {
     var body: some View {
-        if #available(macOS 13.0, *) {
-            ModernHistoryMasterDetailView()
-        } else {
-            LegacyHistoryMasterDetailView()
-        }
+        HistoryMasterDetailContentView()
     }
 }
 
-@available(macOS 13.0, *)
-private struct ModernHistoryMasterDetailView: View {
+private struct HistoryMasterDetailContentView: View {
     @ObservedObject private var historyManager = HistoryManager.shared
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var selectedRecording: Recording?
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            // Sidebar: History List
+        HStack(spacing: 0) {
             HistorySidebarView(
                 historyManager: historyManager,
                 selectedRecording: $selectedRecording
             )
-            .navigationTitle("History")
-            .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 400)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                Color.clear.frame(height: 0)
-            }
-        } detail: {
+            .frame(width: 300)
+            .frame(maxHeight: .infinity)
+
             if let selectedId = selectedRecording?.id,
                let recording = historyManager.recordings.first(where: { $0.id == selectedId })
             {
                 RecordingDetailView(
                     recording: recording,
                     historyManager: historyManager,
-                    leadingPadding: columnVisibility == .detailOnly ? 80 : 16,
+                    leadingPadding: 16,
                     onDelete: { recordingToDelete in
                         // Find index before deletion
                         guard let index = historyManager.recordings.firstIndex(where: { $0.id == recordingToDelete.id }) else {
@@ -105,7 +95,6 @@ private struct ModernHistoryMasterDetailView: View {
                 )
                 .id("\(recording.id)-\(recording.status)-\(recording.transcription?.hashValue ?? 0)")
             } else {
-                // Empty state when no recording is selected
                 VStack(spacing: 12) {
                     Image(systemName: "mic.circle")
                         .dsFont(.iconLarge)
@@ -120,84 +109,11 @@ private struct ModernHistoryMasterDetailView: View {
                 .navigationTitle("")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: .windowBackgroundColor))
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        EmptyView()
-                    }
-                }
-                .toolbarBackground(.hidden, for: .automatic)
             }
         }
-        .navigationSplitViewStyle(.balanced)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onReceive(NotificationCenter.default.publisher(for: .recordingCompleted)) { notification in
             // Switch to detail view when recording is completed
-            if let recording = notification.object as? Recording {
-                selectedRecording = recording
-                columnVisibility = .all
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .showHistory)) { _ in
-            // Show sidebar when history is requested from menu
-            columnVisibility = .all
-        }
-    }
-}
-
-private struct LegacyHistoryMasterDetailView: View {
-    @ObservedObject private var historyManager = HistoryManager.shared
-    @State private var selectedRecording: Recording?
-
-    var body: some View {
-        HSplitView {
-            HistorySidebarView(
-                historyManager: historyManager,
-                selectedRecording: $selectedRecording
-            )
-            .frame(minWidth: 250, idealWidth: 300, maxWidth: 400, maxHeight: .infinity)
-
-            if let selectedId = selectedRecording?.id,
-               let recording = historyManager.recordings.first(where: { $0.id == selectedId })
-            {
-                RecordingDetailView(
-                    recording: recording,
-                    historyManager: historyManager,
-                    leadingPadding: 16,
-                    onDelete: { recordingToDelete in
-                        guard let index = historyManager.recordings.firstIndex(where: { $0.id == recordingToDelete.id }) else {
-                            return
-                        }
-
-                        let nextSelection: Recording?
-                        if index < historyManager.recordings.count - 1 {
-                            nextSelection = historyManager.recordings[index + 1]
-                        } else if index > 0 {
-                            nextSelection = historyManager.recordings[index - 1]
-                        } else {
-                            nextSelection = nil
-                        }
-
-                        historyManager.deleteRecording(recordingToDelete)
-                        selectedRecording = nextSelection
-                    }
-                )
-                .id("\(recording.id)-\(recording.status)-\(recording.transcription?.hashValue ?? 0)")
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "mic.circle")
-                        .dsFont(.iconLarge)
-                        .foregroundStyle(.tertiary)
-                    Text("Select a recording")
-                        .dsFont(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("Press Fn to start recording")
-                        .dsFont(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .recordingCompleted)) { notification in
             if let recording = notification.object as? Recording {
                 selectedRecording = recording
             }
@@ -279,8 +195,6 @@ struct HistorySidebarView: View {
                     } label: {
                         Label("Reveal in Finder", systemImage: "folder")
                     }
-
-                    Divider()
 
                     Button(role: .destructive) {
                         deleteRecording(recording)

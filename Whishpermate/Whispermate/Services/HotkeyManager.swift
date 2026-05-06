@@ -60,6 +60,8 @@ class HotkeyManager: ObservableObject {
     private var eventTapRunLoopSource: CFRunLoopSource?
     private var flagsMonitor: Any?
     private var wakeObserver: NSObjectProtocol?
+    private var accessibilityRetryScheduled = false
+    private var accessibilityRetryAttempts = 0
 
     // Double-tap detection
     private var lastTapTime: Date?
@@ -323,7 +325,65 @@ class HotkeyManager: ObservableObject {
             DebugLog.info("Fn-only dictation released", context: "HotkeyManager LOG")
             self.handleModifierFlagsStateChange(isModifierPressed: false, isDictation: true)
         }
-        fnKeyMonitor?.startMonitoring(consumePureFnEvents: AXIsProcessTrusted())
+
+        let accessibilityTrusted = AXIsProcessTrusted()
+        if !accessibilityTrusted {
+            requestAccessibilityForFnHotkey()
+            scheduleAccessibilityRetryForFnHotkey()
+        } else {
+            accessibilityRetryScheduled = false
+            accessibilityRetryAttempts = 0
+        }
+
+        fnKeyMonitor?.startMonitoring(consumePureFnEvents: accessibilityTrusted)
+    }
+
+    private func requestAccessibilityForFnHotkey() {
+        DebugLog.error(
+            "Fn dictation hotkey needs Accessibility permission; requesting access",
+            context: "HotkeyManager LOG"
+        )
+        let options = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+        ] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    private func scheduleAccessibilityRetryForFnHotkey() {
+        guard !accessibilityRetryScheduled else { return }
+
+        accessibilityRetryScheduled = true
+        accessibilityRetryAttempts = 0
+        pollAccessibilityForFnHotkey()
+    }
+
+    private func pollAccessibilityForFnHotkey() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self else { return }
+            guard self.accessibilityRetryScheduled else { return }
+            guard let currentHotkey = self.currentHotkey, self.isFnOnlyHotkey(currentHotkey), !self.deferRegistration else {
+                self.accessibilityRetryScheduled = false
+                self.accessibilityRetryAttempts = 0
+                return
+            }
+
+            if AXIsProcessTrusted() {
+                DebugLog.info("Accessibility permission granted; re-registering Fn hotkey", context: "HotkeyManager LOG")
+                self.accessibilityRetryScheduled = false
+                self.accessibilityRetryAttempts = 0
+                self.registerHotkey()
+                return
+            }
+
+            self.accessibilityRetryAttempts += 1
+            if self.accessibilityRetryAttempts < 30 {
+                self.pollAccessibilityForFnHotkey()
+            } else {
+                DebugLog.error("Accessibility permission still missing; Fn hotkey remains inactive", context: "HotkeyManager LOG")
+                self.accessibilityRetryScheduled = false
+                self.accessibilityRetryAttempts = 0
+            }
+        }
     }
 
     private func setupEventTap() {

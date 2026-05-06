@@ -60,6 +60,34 @@ private struct HistoryMasterDetailContentView: View {
             .frame(width: 300)
             .frame(maxHeight: .infinity)
 
+            HistoryDetailPane(
+                historyManager: historyManager,
+                selectedRecording: $selectedRecording
+            )
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onReceive(NotificationCenter.default.publisher(for: .recordingCompleted)) { notification in
+            // Switch to detail view when recording is completed
+            if let recording = notification.object as? Recording {
+                selectedRecording = recording
+            }
+        }
+    }
+}
+
+private struct HistoryDetailPane: View {
+    @ObservedObject var historyManager: HistoryManager
+    @Binding var selectedRecording: Recording?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("History")
+                .dsFont(.h4)
+                .foregroundStyle(Color.dsForeground)
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+
             if let selectedId = selectedRecording?.id,
                let recording = historyManager.recordings.first(where: { $0.id == selectedId })
             {
@@ -67,31 +95,7 @@ private struct HistoryMasterDetailContentView: View {
                     recording: recording,
                     historyManager: historyManager,
                     leadingPadding: 16,
-                    onDelete: { recordingToDelete in
-                        // Find index before deletion
-                        guard let index = historyManager.recordings.firstIndex(where: { $0.id == recordingToDelete.id }) else {
-                            return
-                        }
-
-                        // Determine next selection before deleting
-                        let nextSelection: Recording?
-                        if index < historyManager.recordings.count - 1 {
-                            // Select next recording
-                            nextSelection = historyManager.recordings[index + 1]
-                        } else if index > 0 {
-                            // Select previous recording
-                            nextSelection = historyManager.recordings[index - 1]
-                        } else {
-                            // No recordings left
-                            nextSelection = nil
-                        }
-
-                        // Delete the recording
-                        historyManager.deleteRecording(recordingToDelete)
-
-                        // Update selection
-                        selectedRecording = nextSelection
-                    }
+                    onDelete: deleteRecording
                 )
                 .id("\(recording.id)-\(recording.status)-\(recording.transcription?.hashValue ?? 0)")
             } else {
@@ -106,18 +110,29 @@ private struct HistoryMasterDetailContentView: View {
                         .dsFont(.caption)
                         .foregroundStyle(.tertiary)
                 }
-                .navigationTitle("")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onReceive(NotificationCenter.default.publisher(for: .recordingCompleted)) { notification in
-            // Switch to detail view when recording is completed
-            if let recording = notification.object as? Recording {
-                selectedRecording = recording
-            }
+    }
+
+    private func deleteRecording(_ recordingToDelete: Recording) {
+        guard let index = historyManager.recordings.firstIndex(where: { $0.id == recordingToDelete.id }) else {
+            return
         }
+
+        let nextSelection: Recording?
+        if index < historyManager.recordings.count - 1 {
+            nextSelection = historyManager.recordings[index + 1]
+        } else if index > 0 {
+            nextSelection = historyManager.recordings[index - 1]
+        } else {
+            nextSelection = nil
+        }
+
+        historyManager.deleteRecording(recordingToDelete)
+        selectedRecording = nextSelection
     }
 }
 
@@ -344,7 +359,6 @@ struct RecordingDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(recording.formattedDate)
         .toolbar {
             // All action buttons grouped together
             ToolbarItemGroup(placement: .automatic) {

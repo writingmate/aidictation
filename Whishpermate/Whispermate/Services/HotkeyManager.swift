@@ -38,6 +38,7 @@ class HotkeyManager: ObservableObject {
 
     private enum Constants {
         static let doubleTapInterval: TimeInterval = 0.3 // 300ms
+        static let eventTapHealthInterval: TimeInterval = 5.0
         // Command mode has not been shipped publicly yet. Keep any saved value
         // untouched, but do not register it until the feature is enabled.
         static let commandHotkeyEnabled = false
@@ -59,7 +60,9 @@ class HotkeyManager: ObservableObject {
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
     private var flagsMonitor: Any?
-    private var wakeObserver: NSObjectProtocol?
+    private var screenWakeObserver: NSObjectProtocol?
+    private var systemWakeObserver: NSObjectProtocol?
+    private var eventTapHealthTimer: Timer?
     private var accessibilityRetryScheduled = false
     private var accessibilityRetryAttempts = 0
 
@@ -85,19 +88,20 @@ class HotkeyManager: ObservableObject {
         // Re-register hotkeys after system wake from sleep/hibernation.
         // macOS can invalidate CGEvent taps during hibernation, so we need to
         // tear down and recreate them on wake.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            DebugLog.info("System woke from sleep - re-registering hotkeys", context: "HotkeyManager LOG")
-            if !self.deferRegistration, self.currentHotkey != nil || self.commandHotkey != nil {
-                // Small delay to let the system stabilize after wake
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.registerHotkey()
-                }
-            }
+            self?.scheduleHotkeyReregistrationAfterWake(reason: "screens did wake")
+        }
+
+        systemWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleHotkeyReregistrationAfterWake(reason: "system did wake")
         }
     }
 
@@ -416,6 +420,7 @@ class HotkeyManager: ObservableObject {
         eventTapRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), eventTapRunLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        startEventTapHealthTimer()
 
         DebugLog.info("Event tap created and enabled (includes flagsChanged for modifier keys)", context: "HotkeyManager LOG")
     }
@@ -445,8 +450,52 @@ class HotkeyManager: ObservableObject {
         eventTapRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), eventTapRunLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        startEventTapHealthTimer()
 
         DebugLog.info("Mouse event tap created and enabled", context: "HotkeyManager LOG")
+    }
+
+    private func scheduleHotkeyReregistrationAfterWake(reason: String) {
+        DebugLog.info("Wake notification (\(reason)) - scheduling hotkey re-registration", context: "HotkeyManager LOG")
+        guard !deferRegistration, currentHotkey != nil || commandHotkey != nil else { return }
+
+        // Small delay to let macOS finish rebuilding input devices/event taps after wake.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self else { return }
+            guard !self.deferRegistration, self.currentHotkey != nil || self.commandHotkey != nil else { return }
+            self.registerHotkey()
+        }
+    }
+
+    private func startEventTapHealthTimer() {
+        stopEventTapHealthTimer()
+
+        let timer = Timer(timeInterval: Constants.eventTapHealthInterval, repeats: true) { [weak self] _ in
+            self?.validateEventTapHealth()
+        }
+        eventTapHealthTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopEventTapHealthTimer() {
+        eventTapHealthTimer?.invalidate()
+        eventTapHealthTimer = nil
+    }
+
+    private func validateEventTapHealth() {
+        guard let tap = eventTap else { return }
+
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            enableEventTap(reason: "health check")
+        }
+    }
+
+    private func enableEventTap(reason: String) {
+        guard let tap = eventTap else { return }
+
+        previousFunctionKeyState = false
+        CGEvent.tapEnable(tap: tap, enable: true)
+        DebugLog.error("Re-enabled hotkey event tap after \(reason)", context: "HotkeyDiagnostics")
     }
 
     private func setupSystemDefinedDiagnosticsIfNeeded(dictationHotkey: Hotkey?) {
@@ -572,10 +621,7 @@ class HotkeyManager: ObservableObject {
 
     private func handleCGEvent(proxy _: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            DebugLog.error("Event tap disabled (\(type.rawValue)); re-enabling", context: "HotkeyDiagnostics")
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-            }
+            enableEventTap(reason: "callback disabled event \(type.rawValue)")
             return Unmanaged.passUnretained(event)
         }
 
@@ -662,6 +708,8 @@ class HotkeyManager: ObservableObject {
 
     private func unregisterHotkey() {
         DebugLog.info("unregisterHotkey called", context: "HotkeyManager LOG")
+
+        stopEventTapHealthTimer()
 
         // Disable and remove event tap
         if let tap = eventTap {
@@ -1007,8 +1055,11 @@ class HotkeyManager: ObservableObject {
 
     deinit {
         unregisterHotkey()
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        if let screenWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(screenWakeObserver)
+        }
+        if let systemWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(systemWakeObserver)
         }
     }
 }

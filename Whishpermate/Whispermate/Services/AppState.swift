@@ -141,6 +141,7 @@ class AppState: ObservableObject {
         startRealtimeTranscriptionIfAvailable()
 
         // Start audio recording
+        overlayManager.initializeAudioObservers()
         audioRecorder.startRecording()
 
         if audioRecorder.isRecording {

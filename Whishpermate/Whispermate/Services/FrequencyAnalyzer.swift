@@ -66,18 +66,8 @@ class FrequencyAnalyzer {
             }
         }
 
-        // DEBUG: Log raw spectrum info
-        let maxMag = magnitudes.max() ?? 0
-        let avgMag = magnitudes.reduce(0, +) / Float(magnitudes.count)
-        print("[FreqAnalyzer] RAW SPECTRUM - Max: \(String(format: "%.4f", maxMag)), Avg: \(String(format: "%.4f", avgMag))")
-
         // Group into frequency bands focused on voice
         var bands = groupIntoBands(magnitudes: magnitudes, bandCount: bandCount, sampleRate: sampleRate)
-
-        // DEBUG: Log voice band before processing
-        let rawBandMax = bands.max() ?? 0
-        let rawBandAvg = bands.reduce(0, +) / Float(bands.count)
-        print("[FreqAnalyzer] VOICE BANDS RAW - Max: \(String(format: "%.4f", rawBandMax)), Avg: \(String(format: "%.4f", rawBandAvg))")
 
         // Apply noise gate - ignore very quiet signals
         let noiseGate: Float = 0.5 // Aggressive threshold to filter background noise
@@ -90,11 +80,6 @@ class FrequencyAnalyzer {
             return min(scaled, 1.0)
         }
 
-        // DEBUG: Log after gain
-        let gainedMax = bands.max() ?? 0
-        let gainedAvg = bands.reduce(0, +) / Float(bands.count)
-        print("[FreqAnalyzer] AFTER GAIN - Max: \(String(format: "%.4f", gainedMax)), Avg: \(String(format: "%.4f", gainedAvg))")
-
         // Apply asymmetric smoothing: fast attack, slow decay
         for i in 0 ..< bandCount {
             if bands[i] > previousBands[i] {
@@ -106,13 +91,6 @@ class FrequencyAnalyzer {
             }
         }
         previousBands = bands
-
-        // DEBUG: Final output
-        let finalMax = bands.max() ?? 0
-        let finalAvg = bands.reduce(0, +) / Float(bands.count)
-        let nonZero = bands.filter { $0 > 0.01 }.count
-        print("[FreqAnalyzer] FINAL - Max: \(String(format: "%.4f", finalMax)), Avg: \(String(format: "%.4f", finalAvg)), Active: \(nonZero)/\(bandCount)")
-        print("---")
 
         return bands
     }
@@ -132,23 +110,6 @@ class FrequencyAnalyzer {
         let voiceRangeStart = Int((voiceStartHz / nyquistFreq) * Float(magnitudeCount))
         let voiceRangeEnd = Int((voiceEndHz / nyquistFreq) * Float(magnitudeCount))
         let voiceRangeWidth = voiceRangeEnd - voiceRangeStart
-
-        // DEBUG: Log frequency range info (only once on first call)
-
-        var debugOnce = true
-        if debugOnce {
-            debugOnce = false
-            print("=== FREQUENCY ANALYZER SETUP ===")
-            print("Sample Rate: \(Int(sampleRate)) Hz")
-            print("Nyquist Frequency: \(Int(nyquistFreq)) Hz")
-            print("FFT Size: \(magnitudeCount * 2)")
-            print("Voice Range: \(Int(voiceStartHz))-\(Int(voiceEndHz)) Hz")
-            print("Voice Bins: \(voiceRangeStart)-\(voiceRangeEnd) (of \(magnitudeCount))")
-            print("Bins per Band: ~\(voiceRangeWidth / bandCount)")
-            let hzPerBand = (voiceEndHz - voiceStartHz) / Float(bandCount)
-            print("Hz per Band: ~\(Int(hzPerBand)) Hz")
-            print("================================")
-        }
 
         // Linear distribution in voice range
         for i in 0 ..< bandCount {

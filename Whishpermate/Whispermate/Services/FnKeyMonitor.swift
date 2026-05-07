@@ -10,12 +10,14 @@ class FnKeyMonitor {
     private var localMonitor: Any?
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
+    private var eventTapHealthTimer: Timer?
     private var previousFnState = false
     private var suppressUntil: Date?
     private var consumePureFnEvents = false
 
     private enum Constants {
         static let suppressionDuration: TimeInterval = 0.5
+        static let eventTapHealthInterval: TimeInterval = 5.0
     }
 
     var onFnPressed: (() -> Void)?
@@ -56,12 +58,15 @@ class FnKeyMonitor {
             return event
         }
 
+        startEventTapHealthTimer()
         DebugLog.info("Fn key monitors registered", context: "FnKeyMonitor")
     }
 
     /// Stop monitoring the Fn key
     func stopMonitoring() {
         DebugLog.info("Stopping Fn key monitoring", context: "FnKeyMonitor")
+
+        stopEventTapHealthTimer()
 
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
@@ -101,11 +106,21 @@ class FnKeyMonitor {
             options: .defaultTap,
             eventsOfInterest: CGEventMask(eventMask),
             callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
-                guard type == .flagsChanged, let refcon else {
+                guard let refcon else {
                     return Unmanaged.passUnretained(event)
                 }
 
                 let monitor = Unmanaged<FnKeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
+
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    monitor.enableEventTap(reason: "callback disabled event \(type.rawValue)")
+                    return Unmanaged.passUnretained(event)
+                }
+
+                guard type == .flagsChanged else {
+                    return Unmanaged.passUnretained(event)
+                }
+
                 if let nsEvent = NSEvent(cgEvent: event), monitor.handleFlagsChanged(nsEvent), monitor.consumePureFnEvents {
                     return nil
                 }
@@ -125,6 +140,48 @@ class FnKeyMonitor {
         }
         CGEvent.tapEnable(tap: tap, enable: true)
         DebugLog.info("Consuming Fn event tap created and enabled", context: "FnKeyMonitor")
+    }
+
+    private func startEventTapHealthTimer() {
+        stopEventTapHealthTimer()
+
+        let timer = Timer(timeInterval: Constants.eventTapHealthInterval, repeats: true) { [weak self] _ in
+            self?.validateEventTapHealth()
+        }
+        eventTapHealthTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopEventTapHealthTimer() {
+        eventTapHealthTimer?.invalidate()
+        eventTapHealthTimer = nil
+    }
+
+    private func validateEventTapHealth() {
+        guard consumePureFnEvents else { return }
+
+        guard AXIsProcessTrusted() else {
+            DebugLog.error("Fn event tap health check: Accessibility permission is missing", context: "FnKeyMonitor")
+            return
+        }
+
+        guard let tap = eventTap else {
+            DebugLog.error("Fn event tap missing during health check; recreating", context: "FnKeyMonitor")
+            setupConsumingEventTap()
+            return
+        }
+
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            enableEventTap(reason: "health check")
+        }
+    }
+
+    private func enableEventTap(reason: String) {
+        guard let tap = eventTap else { return }
+
+        previousFnState = false
+        CGEvent.tapEnable(tap: tap, enable: true)
+        DebugLog.error("Re-enabled Fn event tap after \(reason)", context: "FnKeyMonitor")
     }
 
     @discardableResult

@@ -8,6 +8,12 @@ class AudioRecorder: NSObject, ObservableObject {
     static let shared = AudioRecorder()
     private static let frequencyBandCount = 10
 
+    private enum Constants {
+        static let recordingWatchdogInterval: TimeInterval = 1.0
+        static let recordingBufferStallThreshold: TimeInterval = 2.5
+        static let engineRecoveryCooldown: TimeInterval = 2.0
+    }
+
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount) // Frequency spectrum data
@@ -22,6 +28,9 @@ class AudioRecorder: NSObject, ObservableObject {
     private var outputFormat: AVAudioFormat?
     private var pendingEngineRefresh = false
     private var refreshWorkItem: DispatchWorkItem?
+    private var recordingWatchdogTimer: Timer?
+    private var lastAudioBufferAt: Date?
+    private var lastEngineRecoveryAt: Date?
     private var retiredEngines: [AVAudioEngine] = []
     private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
     private let realtimeOutputFormat = AVAudioFormat(
@@ -43,11 +52,22 @@ class AudioRecorder: NSObject, ObservableObject {
             object: nil
         )
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioEngineConfigurationChanged),
+            name: .AVAudioEngineConfigurationChange,
+            object: nil
+        )
+
         // Only pre-initialize the audio engine if microphone permission is already granted
         // This prevents triggering the permission dialog on app launch
         if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
-            AudioDeviceManager.shared.applyPreferredOrAutomaticDevice()
-            setupAudioEngine()
+            if let device = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() {
+                DebugLog.info("Pre-initializing audio engine with input device: \(device.name)", context: "AudioRecorder LOG")
+                setupAudioEngine()
+            } else {
+                DebugLog.info("Skipping audio engine pre-initialization because no preferred input device is available", context: "AudioRecorder LOG")
+            }
         }
     }
 
@@ -63,6 +83,16 @@ class AudioRecorder: NSObject, ObservableObject {
         }
     }
 
+    @objc private func handleAudioEngineConfigurationChanged(_: Notification) {
+        DebugLog.info("Audio engine configuration changed", context: "AudioRecorder LOG")
+        if isRecording {
+            recoverAudioEngineDuringRecording(reason: "configuration change")
+        } else {
+            pendingEngineRefresh = true
+            scheduleEngineRefresh()
+        }
+    }
+
     private func scheduleEngineRefresh() {
         refreshWorkItem?.cancel()
 
@@ -71,6 +101,12 @@ class AudioRecorder: NSObject, ObservableObject {
             guard self.pendingEngineRefresh, !self.isRecording else { return }
 
             DebugLog.info("Reinitializing engine with new device", context: "AudioRecorder LOG")
+            guard let device = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() else {
+                DebugLog.info("Deferring engine refresh because preferred input device is unavailable", context: "AudioRecorder LOG")
+                return
+            }
+
+            DebugLog.info("Refreshing engine with input device: \(device.name)", context: "AudioRecorder LOG")
             self.pendingEngineRefresh = false
             self.setupAudioEngine()
         }
@@ -119,7 +155,7 @@ class AudioRecorder: NSObject, ObservableObject {
                 interleaved: false
             )
 
-            guard let inputFormat = inputFormat, let outputFormat = outputFormat else {
+            guard inputFormat != nil, let outputFormat = outputFormat else {
                 DebugLog.info("❌ Failed to create audio formats", context: "AudioRecorder LOG")
                 return
             }
@@ -136,6 +172,7 @@ class AudioRecorder: NSObject, ObservableObject {
                     let level = self.calculateAudioLevel(from: buffer)
 
                     DispatchQueue.main.async {
+                        self.lastAudioBufferAt = Date()
                         self.frequencyBands = bands
                         self.audioLevel = level
                     }
@@ -199,7 +236,11 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
-        AudioDeviceManager.shared.applyPreferredOrAutomaticDevice()
+        guard let inputDevice = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() else {
+            DebugLog.info("❌ Preferred input device is unavailable; refusing to record from fallback microphone", context: "AudioRecorder LOG")
+            return
+        }
+        DebugLog.info("Using input device for recording: \(inputDevice.name)", context: "AudioRecorder LOG")
 
         if pendingEngineRefresh {
             DebugLog.info("Applying deferred audio engine refresh before recording", context: "AudioRecorder LOG")
@@ -233,7 +274,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
         recordingURL = newRecordingURL
 
-        guard let outputFormat = outputFormat else {
+        guard outputFormat != nil else {
             DebugLog.info("❌ Output format not initialized - audioEngine: \(audioEngine != nil)", context: "AudioRecorder LOG")
             return
         }
@@ -254,11 +295,14 @@ class AudioRecorder: NSObject, ObservableObject {
             // Ensure we're on main thread for @Published property updates
             if Thread.isMainThread {
                 isRecording = true
+                lastAudioBufferAt = Date()
             } else {
                 DispatchQueue.main.sync {
                     self.isRecording = true
+                    self.lastAudioBufferAt = Date()
                 }
             }
+            startRecordingWatchdog()
 
             let engineWasStarted = engine.isRunning
             if !engineWasStarted {
@@ -289,6 +333,7 @@ class AudioRecorder: NSObject, ObservableObject {
     }
 
     private func resetFailedStart() {
+        stopRecordingWatchdog()
         audioFile = nil
         if let recordingURL {
             try? FileManager.default.removeItem(at: recordingURL)
@@ -308,14 +353,78 @@ class AudioRecorder: NSObject, ObservableObject {
         volumeManager.restoreVolume()
     }
 
+    private func startRecordingWatchdog() {
+        stopRecordingWatchdog()
+
+        let timer = Timer(timeInterval: Constants.recordingWatchdogInterval, repeats: true) { [weak self] _ in
+            self?.checkRecordingHealth()
+        }
+        recordingWatchdogTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopRecordingWatchdog() {
+        recordingWatchdogTimer?.invalidate()
+        recordingWatchdogTimer = nil
+        lastAudioBufferAt = nil
+    }
+
+    private func checkRecordingHealth() {
+        guard isRecording else {
+            stopRecordingWatchdog()
+            return
+        }
+
+        guard let engine = audioEngine, engine.isRunning else {
+            recoverAudioEngineDuringRecording(reason: "engine stopped")
+            return
+        }
+
+        guard let lastAudioBufferAt else { return }
+        if Date().timeIntervalSince(lastAudioBufferAt) > Constants.recordingBufferStallThreshold {
+            recoverAudioEngineDuringRecording(reason: "audio tap stalled")
+        }
+    }
+
+    private func recoverAudioEngineDuringRecording(reason: String) {
+        guard isRecording else {
+            pendingEngineRefresh = true
+            scheduleEngineRefresh()
+            return
+        }
+
+        let now = Date()
+        if let lastEngineRecoveryAt,
+           now.timeIntervalSince(lastEngineRecoveryAt) < Constants.engineRecoveryCooldown
+        {
+            return
+        }
+        lastEngineRecoveryAt = now
+
+        guard let device = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() else {
+            DebugLog.info("Cannot recover recording engine after \(reason): preferred input device unavailable", context: "AudioRecorder LOG")
+            return
+        }
+
+        DebugLog.info("Recovering audio engine after \(reason) with input device: \(device.name)", context: "AudioRecorder LOG")
+        setupAudioEngine()
+
+        guard let engine = audioEngine else {
+            DebugLog.info("❌ Audio engine recovery failed: engine not available", context: "AudioRecorder LOG")
+            return
+        }
+
+        do {
+            try engine.start()
+            lastAudioBufferAt = Date()
+            DebugLog.info("✅ Audio engine recovered during recording", context: "AudioRecorder LOG")
+        } catch {
+            DebugLog.info("❌ Failed to recover audio engine during recording: \(error)", context: "AudioRecorder LOG")
+        }
+    }
+
     private func calculateAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {
-        guard let channelData = buffer.floatChannelData else { return 0.0 }
-
-        let channelDataValue = channelData.pointee
-        let channelDataValueArray = stride(from: 0, to: Int(buffer.frameLength), by: buffer.stride).map { channelDataValue[$0] }
-
-        // Calculate RMS (Root Mean Square)
-        let rms = sqrt(channelDataValueArray.map { $0 * $0 }.reduce(0, +) / Float(buffer.frameLength))
+        guard let rms = calculateRMS(from: buffer) else { return 0.0 }
 
         // Convert to dB
         let avgPower = 20 * log10(rms)
@@ -330,6 +439,49 @@ class AudioRecorder: NSObject, ObservableObject {
         let boosted = min(normalized * 1.5, 1.0)
 
         return max(0.0, min(1.0, boosted))
+    }
+
+    private func calculateRMS(from buffer: AVAudioPCMBuffer) -> Float? {
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return nil }
+
+        let sampleStride = max(1, Int(buffer.stride))
+        var sumSquares: Float = 0
+        var sampleCount = 0
+
+        switch buffer.format.commonFormat {
+        case .pcmFormatFloat32:
+            guard let channelData = buffer.floatChannelData?[0] else { return nil }
+            for frame in 0 ..< frameLength {
+                let sample = channelData[frame * sampleStride]
+                sumSquares += sample * sample
+                sampleCount += 1
+            }
+
+        case .pcmFormatInt16:
+            guard let channelData = buffer.int16ChannelData?[0] else { return nil }
+            let scale = Float(Int16.max)
+            for frame in 0 ..< frameLength {
+                let sample = Float(channelData[frame * sampleStride]) / scale
+                sumSquares += sample * sample
+                sampleCount += 1
+            }
+
+        case .pcmFormatInt32:
+            guard let channelData = buffer.int32ChannelData?[0] else { return nil }
+            let scale = Float(Int32.max)
+            for frame in 0 ..< frameLength {
+                let sample = Float(channelData[frame * sampleStride]) / scale
+                sumSquares += sample * sample
+                sampleCount += 1
+            }
+
+        default:
+            return nil
+        }
+
+        guard sampleCount > 0 else { return nil }
+        return sqrt(sumSquares / Float(sampleCount))
     }
 
     private func realtimePCMChunk(from buffer: AVAudioPCMBuffer) -> Data? {
@@ -374,6 +526,8 @@ class AudioRecorder: NSObject, ObservableObject {
     func stopRecording() -> URL? {
         DebugLog.info("⚡ stopRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
 
+        stopRecordingWatchdog()
+
         // Close audio file
         audioFile = nil
 
@@ -416,6 +570,7 @@ class AudioRecorder: NSObject, ObservableObject {
         DebugLog.info("🗑️ Deinit - cleaning up", context: "AudioRecorder LOG")
 
         refreshWorkItem?.cancel()
+        stopRecordingWatchdog()
 
         // Remove notification observers
         NotificationCenter.default.removeObserver(self)

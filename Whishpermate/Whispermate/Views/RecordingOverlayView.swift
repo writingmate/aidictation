@@ -3,6 +3,7 @@ import WhisperMateShared
 
 struct RecordingOverlayView: View {
     @ObservedObject var manager: OverlayWindowManager
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering = false
     @State private var shouldShowExpandedPill = false
     @State private var shouldShowContent = false
@@ -48,6 +49,10 @@ struct RecordingOverlayView: View {
         shouldShowExpandedPill || manager.isProcessing || recordingWithControls
     }
 
+    private var isCollapsedIdleState: Bool {
+        !manager.isRecording && !manager.isProcessing && !shouldShowExpandedPill
+    }
+
     private var idleHoverTopHitPadding: CGFloat {
         if usesExpandedGeometry {
             return 0
@@ -66,7 +71,11 @@ struct RecordingOverlayView: View {
         if manager.isRecording || manager.isProcessing || shouldShowExpandedPill {
             return themedColor
         }
-        return Color.dsMuted.opacity(0.85)
+        return Color.dsMuted.opacity(0.94)
+    }
+
+    private var idleBorderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.24) : Color.black.opacity(0.16)
     }
 
     private var themedColor: Color {
@@ -221,6 +230,12 @@ struct RecordingOverlayView: View {
                     y: 1 * RecordingOverlayView.overlayScale
                 )
                 .frame(width: targetPillWidth, height: targetPillHeight)
+                .overlay {
+                    if isCollapsedIdleState {
+                        Capsule()
+                            .stroke(idleBorderColor, lineWidth: 0.75)
+                    }
+                }
 
             // Overlay the actual content only when expanded and showing
             if manager.isRecording && manager.showsRecordingControls && shouldShowContent {
@@ -452,8 +467,18 @@ private struct OverlayLiveWaveView: View {
     let frequencyBands: [Float]
     let color: Color
 
+    private var normalizedAudioLevel: CGFloat {
+        max(0, min(1, CGFloat(audioLevel)))
+    }
+
+    private var shouldUseFrequencyBands: Bool {
+        guard frequencyBands.count == OverlayWaveMetrics.count else { return false }
+        let peak = frequencyBands.map { abs($0) }.max() ?? 0
+        return peak > 0.015 || normalizedAudioLevel <= 0.015
+    }
+
     private func height(for index: Int) -> CGFloat {
-        if frequencyBands.count == OverlayWaveMetrics.count {
+        if shouldUseFrequencyBands {
             let magnitude = max(0, min(1, CGFloat(frequencyBands[index])))
             return OverlayWaveMetrics.dotSize + ((OverlayWaveMetrics.maxBarHeight - OverlayWaveMetrics.dotSize) * magnitude)
         }
@@ -461,8 +486,7 @@ private struct OverlayLiveWaveView: View {
         let center = CGFloat(OverlayWaveMetrics.count - 1) / 2
         let distanceFromCenter = abs(CGFloat(index) - center) / center
         let waveformFactor = 1 - (distanceFromCenter * distanceFromCenter)
-        let level = max(0, min(1, CGFloat(audioLevel)))
-        return OverlayWaveMetrics.dotSize + ((OverlayWaveMetrics.maxBarHeight - OverlayWaveMetrics.dotSize) * level * waveformFactor)
+        return OverlayWaveMetrics.dotSize + ((OverlayWaveMetrics.maxBarHeight - OverlayWaveMetrics.dotSize) * normalizedAudioLevel * waveformFactor)
     }
 
     var body: some View {

@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -13,9 +14,22 @@ class AudioDeviceManager: ObservableObject {
         static let automaticallySelectAudioDevice = "automaticallySelectAudioDevice"
     }
 
+    private enum Constants {
+        static let wakeRecoveryDelays: [TimeInterval] = [0.5, 1.5, 3.0, 5.0, 8.0, 13.0]
+    }
+
     @Published private(set) var inputDevices: [AudioDevice] = []
     @Published private(set) var selectedDevice: AudioDevice?
     @Published private(set) var automaticallySelectDevice: Bool
+
+    var savedSelectedDeviceUID: String? {
+        AppDefaults.shared.string(forKey: Keys.selectedAudioDeviceID)
+    }
+
+    private var screenWakeObserver: NSObjectProtocol?
+    private var systemWakeObserver: NSObjectProtocol?
+    private var wakeRecoveryWorkItem: DispatchWorkItem?
+    private var wakeRecoveryGeneration = 0
 
     // MARK: - Types
 
@@ -41,6 +55,17 @@ class AudioDeviceManager: ObservableObject {
         automaticallySelectDevice = AppDefaults.shared.object(forKey: Keys.automaticallySelectAudioDevice) as? Bool ?? true
         refreshDevices()
         setupDeviceChangeListener()
+        setupWakeRecovery()
+    }
+
+    deinit {
+        wakeRecoveryWorkItem?.cancel()
+        if let screenWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(screenWakeObserver)
+        }
+        if let systemWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(systemWakeObserver)
+        }
     }
 
     // MARK: - Public API
@@ -55,8 +80,11 @@ class AudioDeviceManager: ObservableObject {
         AppDefaults.shared.set(enabled, forKey: Keys.automaticallySelectAudioDevice)
         if enabled {
             AppDefaults.shared.removeObject(forKey: Keys.selectedAudioDeviceID)
+            refreshDevices()
+            _ = applyAutomaticDevice(forceNotify: true)
+        } else {
+            _ = applyPreferredOrAutomaticDevice()
         }
-        _ = applyPreferredOrAutomaticDevice()
     }
 
     func selectDevice(_ device: AudioDevice) -> Bool {
@@ -82,29 +110,24 @@ class AudioDeviceManager: ObservableObject {
     func applyPreferredOrAutomaticDevice() -> AudioDevice? {
         refreshDevices()
 
-        let target: AudioDevice?
         if automaticallySelectDevice {
-            target = bestAutomaticInputDevice(in: inputDevices)
-        } else {
-            target = selectedDevice ?? bestAutomaticInputDevice(in: inputDevices)
+            return applyAutomaticDevice(forceNotify: false)
         }
 
-        guard let target else { return nil }
+        guard let savedUID = savedSelectedDeviceUID else {
+            return applyAutomaticDevice(forceNotify: false)
+        }
 
-        if getDefaultInputDevice()?.uniqueID != target.uniqueID {
-            DebugLog.info("Applying input device: \(target.name)", context: "AudioDeviceManager")
-            guard setDefaultInputDevice(deviceID: target.id) else {
-                refreshDevices()
-                return selectedDevice
-            }
-            NotificationCenter.default.post(
-                name: NSNotification.Name("AudioInputDeviceChanged"),
-                object: target.uniqueID
+        guard let preferred = preferredInputDevice(for: savedUID) else {
+            selectedDevice = nil
+            DebugLog.info(
+                "Preferred input device \(savedUID) is not available yet; keeping manual selection and waiting for reconnect",
+                context: "AudioDeviceManager"
             )
+            return nil
         }
 
-        selectedDevice = target
-        return target
+        return apply(device: preferred, forceNotify: false)
     }
 
     func getInputDevices() -> [AudioDevice] {
@@ -220,54 +243,91 @@ class AudioDeviceManager: ObservableObject {
     }
 
     /// Re-apply the user's preferred device when the device list changes (e.g. mic connected/disconnected)
-    func reapplyPreferredDevice() {
+    @discardableResult
+    func reapplyPreferredDevice(forceNotify: Bool = false) -> AudioDevice? {
         refreshDevices()
 
         if automaticallySelectDevice {
-            if let device = applyPreferredOrAutomaticDevice() {
+            if let device = applyAutomaticDevice(forceNotify: forceNotify) {
                 DebugLog.info("Automatic input device selected: \(device.name)", context: "AudioDeviceManager")
+                return device
             }
-            return
+            return nil
         }
 
-        guard let savedUID = AppDefaults.shared.string(forKey: Keys.selectedAudioDeviceID) else {
-            _ = applyPreferredOrAutomaticDevice()
-            return
+        guard let savedUID = savedSelectedDeviceUID else {
+            return applyAutomaticDevice(forceNotify: forceNotify)
         }
 
-        if let preferred = inputDevices.first(where: { $0.uniqueID == savedUID }) {
-            // Preferred device is available - ensure it's set as default
-            let current = getDefaultInputDevice()
-            if current?.uniqueID != preferred.uniqueID {
-                DebugLog.info("Reconnected preferred device: \(preferred.name)", context: "AudioDeviceManager")
-                _ = setDefaultInputDevice(deviceID: preferred.id)
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("AudioInputDeviceChanged"),
-                    object: preferred.uniqueID
-                )
-            }
-            selectedDevice = preferred
-        } else {
-            // Preferred device disconnected - notify so AudioRecorder reinitializes with system default
-            DebugLog.info("Preferred device disconnected, falling back to system default", context: "AudioDeviceManager")
-            selectedDevice = bestAutomaticInputDevice(in: inputDevices)
-            NotificationCenter.default.post(
-                name: NSNotification.Name("AudioInputDeviceChanged"),
-                object: nil
+        guard let preferred = preferredInputDevice(for: savedUID) else {
+            selectedDevice = nil
+            DebugLog.info(
+                "Preferred input device \(savedUID) is unavailable; not falling back to system default",
+                context: "AudioDeviceManager"
             )
+            return nil
         }
+
+        DebugLog.info("Resolved preferred input device: \(preferred.name)", context: "AudioDeviceManager")
+        return apply(device: preferred, forceNotify: forceNotify)
     }
 
     // MARK: - Private Methods
 
     private func currentSelectedDevice(in devices: [AudioDevice]) -> AudioDevice? {
-        if !automaticallySelectDevice,
-           let savedUID = AppDefaults.shared.string(forKey: Keys.selectedAudioDeviceID),
-           let savedDevice = devices.first(where: { $0.uniqueID == savedUID })
-        {
-            return savedDevice
+        if !automaticallySelectDevice {
+            guard let savedUID = savedSelectedDeviceUID else { return nil }
+            return preferredInputDevice(for: savedUID, in: devices)
         }
         return getDefaultInputDevice() ?? bestAutomaticInputDevice(in: devices)
+    }
+
+    private func preferredInputDevice(for uniqueID: String, in devices: [AudioDevice]? = nil) -> AudioDevice? {
+        let availableDevices = devices ?? inputDevices
+        if let listedDevice = availableDevices.first(where: { $0.uniqueID == uniqueID }), isInputDeviceAlive(listedDevice.id) {
+            return listedDevice
+        }
+
+        guard let deviceID = audioDeviceID(forUniqueID: uniqueID),
+              deviceID != kAudioDeviceUnknown,
+              hasInputStreams(deviceID: deviceID),
+              isInputDeviceAlive(deviceID),
+              let name = getDeviceName(deviceID: deviceID),
+              let resolvedUID = getDeviceUID(deviceID: deviceID)
+        else {
+            return nil
+        }
+
+        return AudioDevice(id: deviceID, name: name, uniqueID: resolvedUID)
+    }
+
+    private func applyAutomaticDevice(forceNotify: Bool) -> AudioDevice? {
+        guard let target = bestAutomaticInputDevice(in: inputDevices) else { return nil }
+        return apply(device: target, forceNotify: forceNotify)
+    }
+
+    private func apply(device target: AudioDevice, forceNotify: Bool) -> AudioDevice? {
+        let current = getDefaultInputDevice()
+        let shouldNotify = forceNotify || current?.uniqueID != target.uniqueID
+
+        if current?.uniqueID != target.uniqueID {
+            DebugLog.info("Applying input device: \(target.name)", context: "AudioDeviceManager")
+            guard setDefaultInputDevice(deviceID: target.id) else {
+                refreshDevices()
+                return selectedDevice
+            }
+        }
+
+        selectedDevice = target
+
+        if shouldNotify {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AudioInputDeviceChanged"),
+                object: target.uniqueID
+            )
+        }
+
+        return target
     }
 
     private func bestAutomaticInputDevice(in devices: [AudioDevice]) -> AudioDevice? {
@@ -328,6 +388,62 @@ class AudioDeviceManager: ObservableObject {
         let bufferListPointer = baseAddress.assumingMemoryBound(to: AudioBufferList.self)
         let bufferList = UnsafeMutableAudioBufferListPointer(bufferListPointer)
         return bufferList.contains { $0.mNumberChannels > 0 }
+    }
+
+    private func isInputDeviceAlive(_ deviceID: AudioDeviceID) -> Bool {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var isAlive: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize,
+            &isAlive
+        )
+
+        return status == noErr && isAlive != 0
+    }
+
+    private func audioDeviceID(forUniqueID uniqueID: String) -> AudioDeviceID? {
+        var uid = uniqueID as CFString
+        var deviceID = AudioDeviceID(kAudioDeviceUnknown)
+
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDeviceForUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var dataSize = UInt32(MemoryLayout<AudioValueTranslation>.size)
+        let status = withUnsafeMutablePointer(to: &uid) { uidPointer in
+            withUnsafeMutablePointer(to: &deviceID) { deviceIDPointer in
+                var translation = AudioValueTranslation(
+                    mInputData: UnsafeMutableRawPointer(uidPointer),
+                    mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+                    mOutputData: UnsafeMutableRawPointer(deviceIDPointer),
+                    mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
+                )
+
+                return AudioObjectGetPropertyData(
+                    AudioObjectID(kAudioObjectSystemObject),
+                    &propertyAddress,
+                    0,
+                    nil,
+                    &dataSize,
+                    &translation
+                )
+            }
+        }
+
+        guard status == noErr else { return nil }
+        return deviceID
     }
 
     private func getDeviceName(deviceID: AudioDeviceID) -> String? {
@@ -420,6 +536,66 @@ class AudioDeviceManager: ObservableObject {
             deviceListChangedCallback,
             nil
         )
+    }
+
+    private func setupWakeRecovery() {
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleWakeRecovery(reason: "screens did wake", restart: true)
+        }
+
+        systemWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleWakeRecovery(reason: "system did wake", restart: true)
+        }
+    }
+
+    private func scheduleWakeRecovery(reason: String, restart: Bool) {
+        if restart {
+            wakeRecoveryGeneration += 1
+            wakeRecoveryWorkItem?.cancel()
+            DebugLog.info("Scheduling audio device wake recovery: \(reason)", context: "AudioDeviceManager")
+        }
+
+        guard !automaticallySelectDevice, savedSelectedDeviceUID != nil else { return }
+        runWakeRecoveryAttempt(reason: reason, generation: wakeRecoveryGeneration, attempt: 0)
+    }
+
+    private func runWakeRecoveryAttempt(reason: String, generation: Int, attempt: Int) {
+        guard attempt < Constants.wakeRecoveryDelays.count else { return }
+
+        let delay = Constants.wakeRecoveryDelays[attempt]
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard generation == self.wakeRecoveryGeneration else { return }
+
+            let resolvedDevice = self.reapplyPreferredDevice(forceNotify: true)
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AudioDeviceListChanged"),
+                object: nil
+            )
+
+            guard self.shouldContinueWakeRecovery(resolvedDevice: resolvedDevice) else {
+                DebugLog.info("Audio device wake recovery finished after \(reason)", context: "AudioDeviceManager")
+                return
+            }
+
+            self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
+        }
+
+        wakeRecoveryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func shouldContinueWakeRecovery(resolvedDevice: AudioDevice?) -> Bool {
+        guard !automaticallySelectDevice, let savedUID = savedSelectedDeviceUID else { return false }
+        return resolvedDevice?.uniqueID != savedUID
     }
 }
 

@@ -105,6 +105,7 @@ struct SettingsView: View {
     @State private var showingLLMKeySaved = false
     @State private var audioDevices: [AudioDeviceManager.AudioDevice] = []
     @State private var selectedAudioDevice: AudioDeviceManager.AudioDevice?
+    @State private var isSyncingAudioDeviceSelection = false
     @State private var selectedBillingPeriod: BillingPeriod = .monthly
     @State private var isCheckingPayment = false
     @State private var paymentCheckTask: Task<Void, Never>?
@@ -125,6 +126,7 @@ struct SettingsView: View {
             loadAudioDevices()
         }
         .onChange(of: selectedAudioDevice) { newValue in
+            guard !isSyncingAudioDeviceSelection else { return }
             saveSelectedAudioDevice(newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AudioDeviceListChanged"))) { _ in
@@ -1509,10 +1511,14 @@ struct SettingsView: View {
 
     private func loadAudioDevices() {
         // Get all available audio input devices using Core Audio
+        isSyncingAudioDeviceSelection = true
         audioDeviceManager.refreshDevices()
         audioDevices = audioDeviceManager.inputDevices
 
         selectedAudioDevice = audioDeviceManager.automaticallySelectDevice ? nil : audioDeviceManager.selectedDevice
+        DispatchQueue.main.async {
+            isSyncingAudioDeviceSelection = false
+        }
     }
 
     private func saveSelectedAudioDevice(_ device: AudioDeviceManager.AudioDevice?) {

@@ -89,6 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let subscriptionManager = SubscriptionManager.shared
 
     func applicationDidFinishLaunching(_: Notification) {
+        DockIconManager.shared.applySavedPreference()
         statusBarManager.setupMenuBar()
         _ = UpdateManager.shared
 

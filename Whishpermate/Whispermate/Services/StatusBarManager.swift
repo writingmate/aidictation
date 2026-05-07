@@ -93,6 +93,12 @@ class StatusBarManager: NSObject, NSMenuDelegate {
     // MARK: - Public API
 
     static func requestMenuBarIconVisibility(_ visible: Bool) {
+        if !visible, !DockIconManager.isDockIconVisible {
+            isMenuBarIconVisible = true
+            NotificationCenter.default.post(name: .menuBarIconVisibilityChanged, object: true)
+            return
+        }
+
         isMenuBarIconVisible = visible
         NotificationCenter.default.post(name: .menuBarIconVisibilityRequested, object: visible)
     }
@@ -180,6 +186,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
             keyEquivalent: ""
         )
         hideMenuBarItem.target = self
+        hideMenuBarItem.isEnabled = DockIconManager.isDockIconVisible
         menu?.addItem(hideMenuBarItem)
 
         menu?.addItem(NSMenuItem.separator())
@@ -272,6 +279,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
 
         let hideMenuBarItem = NSMenuItem(title: "Hide Menu Bar Icon", action: #selector(hideMenuBarIcon), keyEquivalent: "")
         hideMenuBarItem.target = self
+        hideMenuBarItem.isEnabled = DockIconManager.isDockIconVisible
         menu?.addItem(hideMenuBarItem)
 
         menu?.addItem(NSMenuItem.separator())

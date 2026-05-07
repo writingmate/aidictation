@@ -96,6 +96,7 @@ struct SettingsView: View {
     @ObservedObject var screenCaptureManager = ScreenCaptureManager.shared
     @ObservedObject var parakeetService = ParakeetTranscriptionService.shared
     @ObservedObject var updateManager = UpdateManager.shared
+    @ObservedObject var dockIconManager = DockIconManager.shared
     @Binding var selectedSection: SettingsSection
     @State private var transcriptionApiKey = ""
     @State private var llmApiKey = ""
@@ -838,6 +839,36 @@ struct SettingsView: View {
                             set: { newValue in
                                 showMenuBarIcon = newValue
                                 StatusBarManager.requestMenuBarIconVisibility(newValue)
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                        .disabled(!dockIconManager.isDockIconVisible)
+                    }
+                    .padding(.vertical, 2)
+
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    // Dock Icon
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Dock Icon")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Show AIDictation in the Dock and app switcher")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { dockIconManager.isDockIconVisible },
+                            set: { newValue in
+                                DockIconManager.requestDockIconVisibility(newValue)
+                                if !newValue {
+                                    showMenuBarIcon = true
+                                }
                             }
                         ))
                         .toggleStyle(.switch)

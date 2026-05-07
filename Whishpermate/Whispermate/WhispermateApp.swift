@@ -540,18 +540,14 @@ enum WindowBridge {
 
     static func openLegacyWindow(id: String) {
         if id == "main" {
-            guard let window = retainedWindows[id]
+            let window = retainedWindows[id]
                 ?? findMainWindow()
                 ?? NSApplication.shared.windows.first(where: { $0.title == "AIDictation" })
-            else {
-                DebugLog.info("openLegacyWindow: main WindowGroup is not ready yet", context: "WindowManagement")
-                return
-            }
+                ?? makeMainSettingsWindow()
 
             retainedWindows[id] = window
-            window.setIsVisible(true)
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
+            configureMainSettingsWindowIfNeeded()
+            presentMainSettingsWindow(window)
             return
         }
 
@@ -610,6 +606,24 @@ enum WindowBridge {
         window.isReleasedWhenClosed = false
         return window
     }
+
+    private static func makeMainSettingsWindow() -> NSWindow {
+        DebugLog.info("openLegacyWindow: creating main Settings window on demand", context: "WindowManagement")
+        return makeWindow(
+            id: WindowIdentifiers.main,
+            title: "AIDictation",
+            size: AppWindowDefaults.mainFrameSize,
+            rootView: AnyView(SettingsWindowView())
+        )
+    }
+
+    private static func configureMainSettingsWindowIfNeeded() {
+        guard let appDelegate = NSApp.delegate as? AppDelegate, appDelegate.mainWindow == nil else {
+            return
+        }
+
+        appDelegate.configureMainWindow()
+    }
 }
 
 @main
@@ -617,11 +631,10 @@ struct WhishpermateApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        LegacyAppScenes()
+        ModernAppScenes()
     }
 }
 
-@available(macOS 13.0, *)
 private struct ModernAppScenes: Scene {
     @Environment(\.openWindow) private var openWindow
 

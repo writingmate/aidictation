@@ -37,8 +37,6 @@ struct HistoryView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
 
-                Divider()
-
                 // Search Bar
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -96,18 +94,11 @@ struct HistoryView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(filteredRecordings) { recording in
                                 RecordingRow(recording: recording, historyManager: historyManager)
-
-                                if recording.id != filteredRecordings.last?.id {
-                                    Divider()
-                                        .padding(.horizontal, 24)
-                                }
                             }
                         }
                         .padding(.vertical, 8)
                     }
                 }
-
-                Divider()
 
                 // Bottom Actions
                 HStack {

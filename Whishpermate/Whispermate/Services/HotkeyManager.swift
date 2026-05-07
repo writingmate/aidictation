@@ -60,6 +60,8 @@ class HotkeyManager: ObservableObject {
     private var eventTapRunLoopSource: CFRunLoopSource?
     private var flagsMonitor: Any?
     private var wakeObserver: NSObjectProtocol?
+    private var accessibilityRetryScheduled = false
+    private var accessibilityRetryAttempts = 0
 
     // Double-tap detection
     private var lastTapTime: Date?
@@ -272,9 +274,13 @@ class HotkeyManager: ObservableObject {
 
         DebugLog.info("registerHotkey: dictation=\(dictationHotkey?.displayString ?? "none"), command=\(cmdHotkey?.displayString ?? "none")", context: "HotkeyManager LOG")
 
-        // Determine which event monitoring to use based on configured hotkeys
+        // Determine which event monitoring to use based on configured hotkeys.
+        // Fn/Globe alone is special: on several macOS/keyboard combinations it
+        // does not behave like a normal key and is more reliably handled through
+        // the dedicated flags monitor used by onboarding.
+        let needsDictationFnMonitor = dictationHotkey.map(isFnOnlyHotkey) ?? false
         let needsMouseTap = (dictationHotkey?.isMouseButton == true) || (cmdHotkey?.isMouseButton == true)
-        let needsKeyTap = (dictationHotkey != nil && dictationHotkey?.isMouseButton != true) ||
+        let needsKeyTap = (dictationHotkey != nil && dictationHotkey?.isMouseButton != true && !needsDictationFnMonitor) ||
             (cmdHotkey != nil && cmdHotkey?.isMouseButton != true)
 
         if let dictationHotkey, Diagnostics.trackedFunctionKeyCodes.contains(dictationHotkey.keyCode) {
@@ -292,6 +298,10 @@ class HotkeyManager: ObservableObject {
             setupMouseEventTap()
         }
 
+        if needsDictationFnMonitor {
+            setupFnOnlyMonitor()
+        }
+
         // Setup keyboard event tap if needed
         if needsKeyTap {
             DebugLog.info("Using regular key path with CGEventTap for global consumption", context: "HotkeyManager LOG")
@@ -299,6 +309,81 @@ class HotkeyManager: ObservableObject {
         }
 
         setupSystemDefinedDiagnosticsIfNeeded(dictationHotkey: dictationHotkey)
+    }
+
+    private func setupFnOnlyMonitor() {
+        DebugLog.info("Using dedicated Fn-only monitor for dictation hotkey", context: "HotkeyManager LOG")
+
+        fnKeyMonitor = FnKeyMonitor()
+        fnKeyMonitor?.onFnPressed = { [weak self] in
+            guard let self else { return }
+            DebugLog.info("Fn-only dictation pressed", context: "HotkeyManager LOG")
+            self.handleModifierFlagsStateChange(isModifierPressed: true, isDictation: true)
+        }
+        fnKeyMonitor?.onFnReleased = { [weak self] in
+            guard let self else { return }
+            DebugLog.info("Fn-only dictation released", context: "HotkeyManager LOG")
+            self.handleModifierFlagsStateChange(isModifierPressed: false, isDictation: true)
+        }
+
+        let accessibilityTrusted = AXIsProcessTrusted()
+        if !accessibilityTrusted {
+            requestAccessibilityForFnHotkey()
+            scheduleAccessibilityRetryForFnHotkey()
+        } else {
+            accessibilityRetryScheduled = false
+            accessibilityRetryAttempts = 0
+        }
+
+        fnKeyMonitor?.startMonitoring(consumePureFnEvents: accessibilityTrusted)
+    }
+
+    private func requestAccessibilityForFnHotkey() {
+        DebugLog.error(
+            "Fn dictation hotkey needs Accessibility permission; requesting access",
+            context: "HotkeyManager LOG"
+        )
+        let options = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+        ] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    private func scheduleAccessibilityRetryForFnHotkey() {
+        guard !accessibilityRetryScheduled else { return }
+
+        accessibilityRetryScheduled = true
+        accessibilityRetryAttempts = 0
+        pollAccessibilityForFnHotkey()
+    }
+
+    private func pollAccessibilityForFnHotkey() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self else { return }
+            guard self.accessibilityRetryScheduled else { return }
+            guard let currentHotkey = self.currentHotkey, self.isFnOnlyHotkey(currentHotkey), !self.deferRegistration else {
+                self.accessibilityRetryScheduled = false
+                self.accessibilityRetryAttempts = 0
+                return
+            }
+
+            if AXIsProcessTrusted() {
+                DebugLog.info("Accessibility permission granted; re-registering Fn hotkey", context: "HotkeyManager LOG")
+                self.accessibilityRetryScheduled = false
+                self.accessibilityRetryAttempts = 0
+                self.registerHotkey()
+                return
+            }
+
+            self.accessibilityRetryAttempts += 1
+            if self.accessibilityRetryAttempts < 30 {
+                self.pollAccessibilityForFnHotkey()
+            } else {
+                DebugLog.error("Accessibility permission still missing; Fn hotkey remains inactive", context: "HotkeyManager LOG")
+                self.accessibilityRetryScheduled = false
+                self.accessibilityRetryAttempts = 0
+            }
+        }
     }
 
     private func setupEventTap() {
@@ -803,6 +888,10 @@ class HotkeyManager: ObservableObject {
         // These keys generate flagsChanged events instead of regular keyDown/keyUp.
         let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 58, 59, 60, 61, 62, 63, 179]
         return modifierKeyCodes.contains(hotkey.keyCode)
+    }
+
+    private func isFnOnlyHotkey(_ hotkey: Hotkey) -> Bool {
+        hotkey.modifiers == .function && (hotkey.keyCode == 63 || hotkey.keyCode == 179)
     }
 
     private func shouldLogFunctionDiagnostics(for event: NSEvent) -> Bool {

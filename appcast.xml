@@ -1,275 +1,172 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"
-     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-     xmlns:dc="http://purl.org/dc/elements/1.1/">
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
     <channel>
         <title>AIDictation Updates</title>
         <link>https://github.com/writingmate/aidictation/releases</link>
         <description>Latest AIDictation releases.</description>
         <language>en</language>
         <item>
+            <title>0.0.80</title>
+            <pubDate>Thu, 07 May 2026 03:39:08 +0000</pubDate>
+            <sparkle:version>80</sparkle:version>
+            <sparkle:shortVersionString>0.0.80</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.80/AIDictation-v0.0.80.dmg" length="7179010" type="application/octet-stream"/>
+        </item>
+        <item>
             <title>AIDictation 0.0.79</title>
             <pubDate>Thu, 07 May 2026 03:06:34 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.79</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.79/AIDictation-v0.0.79.dmg"
-                sparkle:version="79"
-                sparkle:shortVersionString="0.0.79"
-                length="7188281"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.79/AIDictation-v0.0.79.dmg" sparkle:version="79" sparkle:shortVersionString="0.0.79" length="7188281" type="application/octet-stream"/>
         </item>
         <item>
-    <title>AIDictation 0.0.78</title>
-    <pubDate>Tue, 05 May 2026 22:43:35 +0000</pubDate>
-    <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.78</link>
-    <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-    <enclosure
-        url="https://github.com/writingmate/aidictation/releases/download/v0.0.78/AIDictation-v0.0.78.dmg"
-        sparkle:version="78"
-        sparkle:shortVersionString="0.0.78"
-        length="7194453"
-        type="application/octet-stream" />
-</item>
+            <title>AIDictation 0.0.78</title>
+            <pubDate>Tue, 05 May 2026 22:43:35 +0000</pubDate>
+            <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.78</link>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.78/AIDictation-v0.0.78.dmg" sparkle:version="78" sparkle:shortVersionString="0.0.78" length="7194453" type="application/octet-stream"/>
+        </item>
         <item>
             <title>AIDictation 0.0.74</title>
             <pubDate>Tue, 05 May 2026 20:09:20 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.74</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.74/AIDictation-v0.0.74.dmg"
-                sparkle:version="74"
-                sparkle:shortVersionString="0.0.74"
-                length="7194595"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.74/AIDictation-v0.0.74.dmg" sparkle:version="74" sparkle:shortVersionString="0.0.74" length="7194595" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.72</title>
             <pubDate>Tue, 05 May 2026 18:40:14 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.72</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.72/AIDictation-v0.0.72.dmg"
-                sparkle:version="72"
-                sparkle:shortVersionString="0.0.72"
-                length="7198394"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.72/AIDictation-v0.0.72.dmg" sparkle:version="72" sparkle:shortVersionString="0.0.72" length="7198394" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.71</title>
             <pubDate>Tue, 05 May 2026 18:00:24 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.71</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.71/AIDictation-v0.0.71.dmg"
-                sparkle:version="71"
-                sparkle:shortVersionString="0.0.71"
-                length="7180277"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.71/AIDictation-v0.0.71.dmg" sparkle:version="71" sparkle:shortVersionString="0.0.71" length="7180277" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.70</title>
             <pubDate>Tue, 05 May 2026 17:43:37 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.70</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.70/AIDictation-v0.0.70.dmg"
-                sparkle:version="70"
-                sparkle:shortVersionString="0.0.70"
-                length="7179997"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.70/AIDictation-v0.0.70.dmg" sparkle:version="70" sparkle:shortVersionString="0.0.70" length="7179997" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.69</title>
             <pubDate>Tue, 28 Apr 2026 19:52:26 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.69</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.69/AIDictation-v0.0.69.dmg"
-                sparkle:version="69"
-                sparkle:shortVersionString="0.0.69"
-                length="10513201"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.69/AIDictation-v0.0.69.dmg" sparkle:version="69" sparkle:shortVersionString="0.0.69" length="10513201" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.68</title>
             <pubDate>Tue, 28 Apr 2026 19:33:45 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.68</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.68/AIDictation-v0.0.68.dmg"
-                sparkle:version="68"
-                sparkle:shortVersionString="0.0.68"
-                length="10516339"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.68/AIDictation-v0.0.68.dmg" sparkle:version="68" sparkle:shortVersionString="0.0.68" length="10516339" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.67</title>
             <pubDate>Tue, 28 Apr 2026 19:04:14 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.67</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.67/AIDictation-v0.0.67.dmg"
-                sparkle:version="67"
-                sparkle:shortVersionString="0.0.67"
-                length="10516757"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.67/AIDictation-v0.0.67.dmg" sparkle:version="67" sparkle:shortVersionString="0.0.67" length="10516757" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.65</title>
             <pubDate>Tue, 28 Apr 2026 18:26:31 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.65</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.65/AIDictation-v0.0.65.dmg"
-                sparkle:version="65"
-                sparkle:shortVersionString="0.0.65"
-                length="10516284"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.65/AIDictation-v0.0.65.dmg" sparkle:version="65" sparkle:shortVersionString="0.0.65" length="10516284" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.64</title>
             <pubDate>Tue, 28 Apr 2026 17:05:08 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.64</link>
             <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.64/AIDictation-v0.0.64.dmg"
-                sparkle:version="64"
-                sparkle:shortVersionString="0.0.64"
-                length="10253369"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.64/AIDictation-v0.0.64.dmg" sparkle:version="64" sparkle:shortVersionString="0.0.64" length="10253369" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.63</title>
             <pubDate>Fri, 24 Apr 2026 18:51:32 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.63</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.63/AIDictation-v0.0.63.dmg"
-                sparkle:version="63"
-                sparkle:shortVersionString="0.0.63"
-                length="10083016"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.63/AIDictation-v0.0.63.dmg" sparkle:version="63" sparkle:shortVersionString="0.0.63" length="10083016" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.62</title>
             <pubDate>Fri, 24 Apr 2026 18:41:04 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.62</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.62/AIDictation-v0.0.62.dmg"
-                sparkle:version="62"
-                sparkle:shortVersionString="0.0.62"
-                length="10084721"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.62/AIDictation-v0.0.62.dmg" sparkle:version="62" sparkle:shortVersionString="0.0.62" length="10084721" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.60</title>
             <pubDate>Fri, 24 Apr 2026 16:38:44 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.60</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.60/AIDictation-v0.0.60.dmg"
-                sparkle:version="60"
-                sparkle:shortVersionString="0.0.60"
-                length="10981774"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.60/AIDictation-v0.0.60.dmg" sparkle:version="60" sparkle:shortVersionString="0.0.60" length="10981774" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.59</title>
             <pubDate>Fri, 24 Apr 2026 15:08:58 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.59</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.59/AIDictation-v0.0.59.dmg"
-                sparkle:version="59"
-                sparkle:shortVersionString="0.0.59"
-                length="10937179"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.59/AIDictation-v0.0.59.dmg" sparkle:version="59" sparkle:shortVersionString="0.0.59" length="10937179" type="application/octet-stream"/>
         </item>
         <item>
-    <title>AIDictation 0.0.58</title>
-    <pubDate>Fri, 24 Apr 2026 07:09:27 +0000</pubDate>
-    <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.58</link>
-    <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-    <enclosure
-        url="https://github.com/writingmate/aidictation/releases/download/v0.0.58/AIDictation-v0.0.58.dmg"
-        sparkle:version="58"
-        sparkle:shortVersionString="0.0.58"
-        length="6828431"
-        type="application/octet-stream" />
-</item>
+            <title>AIDictation 0.0.58</title>
+            <pubDate>Fri, 24 Apr 2026 07:09:27 +0000</pubDate>
+            <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.58</link>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.58/AIDictation-v0.0.58.dmg" sparkle:version="58" sparkle:shortVersionString="0.0.58" length="6828431" type="application/octet-stream"/>
+        </item>
         <item>
             <title>AIDictation 0.0.56</title>
             <pubDate>Sun, 30 Mar 2026 07:08:00 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.56</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.56/AIDictation-v0.0.56.dmg"
-                sparkle:version="56"
-                sparkle:shortVersionString="0.0.56"
-                length="9057051"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.56/AIDictation-v0.0.56.dmg" sparkle:version="56" sparkle:shortVersionString="0.0.56" length="9057051" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.55</title>
             <pubDate>Sat, 28 Mar 2026 00:20:41 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.55</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.55/AIDictation-v0.0.55.dmg"
-                sparkle:version="55"
-                sparkle:shortVersionString="0.0.55"
-                length="8466862"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.55/AIDictation-v0.0.55.dmg" sparkle:version="55" sparkle:shortVersionString="0.0.55" length="8466862" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.54</title>
             <pubDate>Thu, 26 Feb 2026 00:44:13 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.54</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.54/AIDictation-v0.0.54.dmg"
-                sparkle:version="54"
-                sparkle:shortVersionString="0.0.54"
-                length="9010059"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.54/AIDictation-v0.0.54.dmg" sparkle:version="54" sparkle:shortVersionString="0.0.54" length="9010059" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.53</title>
             <pubDate>Sun, 22 Feb 2026 07:15:53 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.53</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.53/AIDictation-v0.0.53.dmg"
-                sparkle:version="53"
-                sparkle:shortVersionString="0.0.53"
-                length="9001241"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.53/AIDictation-v0.0.53.dmg" sparkle:version="53" sparkle:shortVersionString="0.0.53" length="9001241" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.52</title>
             <pubDate>Sat, 21 Feb 2026 05:29:58 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.52</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.52/AIDictation-v0.0.52.dmg"
-                sparkle:version="52"
-                sparkle:shortVersionString="0.0.52"
-                length="8994117"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.52/AIDictation-v0.0.52.dmg" sparkle:version="52" sparkle:shortVersionString="0.0.52" length="8994117" type="application/octet-stream"/>
         </item>
         <item>
             <title>AIDictation 0.0.51</title>
             <pubDate>Tue, 18 Feb 2026 15:00:00 +0000</pubDate>
             <link>https://github.com/writingmate/aidictation/releases/tag/v0.0.51</link>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/writingmate/aidictation/releases/download/v0.0.51/AIDictation-v0.0.51.dmg"
-                sparkle:version="51"
-                sparkle:shortVersionString="0.0.51"
-                length="8982762"
-                type="application/octet-stream" />
+            <enclosure url="https://github.com/writingmate/aidictation/releases/download/v0.0.51/AIDictation-v0.0.51.dmg" sparkle:version="51" sparkle:shortVersionString="0.0.51" length="8982762" type="application/octet-stream"/>
         </item>
     </channel>
 </rss>

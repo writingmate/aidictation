@@ -183,59 +183,84 @@ jobs:
             --team-id "$NOTARIZE_TEAM_ID" \
             --wait
           xcrun stapler staple /tmp/AIDictation-v${VERSION}.dmg
+          xcrun stapler validate /tmp/AIDictation-v${VERSION}.dmg
+          hdiutil verify /tmp/AIDictation-v${VERSION}.dmg
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          gh release create "v${VERSION}" \
-            /tmp/AIDictation-v${VERSION}.dmg \
-            --title "AIDictation v${VERSION}" \
-            --generate-notes \
-            --repo "${{ github.repository }}"
+          TAG="v${VERSION}"
+          DMG="/tmp/AIDictation-v${VERSION}.dmg"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" --clobber --repo "${{ github.repository }}"
+            gh release edit "$TAG" --title "AIDictation v${VERSION}" --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" \
+              "$DMG" \
+              --title "AIDictation v${VERSION}" \
+              --generate-notes \
+              --repo "${{ github.repository }}"
+          fi
 
       - name: Update appcast
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           BUILD="${{ steps.version.outputs.build }}"
-          SIZE=$(stat -f%z /tmp/AIDictation-v${VERSION}.dmg)
-          DATE=$(date -u "+%a, %d %b %Y %H:%M:%S +0000")
-          REPO="writingmate/aidictation"
+          REPO="${{ github.repository }}"
+          SPARKLE_GENERATE_APPCAST="$(
+            find "$HOME/Library/Developer/Xcode/DerivedData" \
+              -path '*/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast' \
+              -type f \
+              -print \
+              -quit
+          )"
+          if [[ ! -x "$SPARKLE_GENERATE_APPCAST" ]]; then
+            echo "Sparkle generate_appcast tool not found"
+            exit 1
+          fi
 
-          python3 - "$VERSION" "$BUILD" "$SIZE" "$DATE" "$REPO" << 'PYEOF'
-          import sys, re
+          APPCAST_WORK_DIR="$(mktemp -d)"
+          cp appcast.xml "$APPCAST_WORK_DIR/appcast.xml"
+          cp "/tmp/AIDictation-v${VERSION}.dmg" "$APPCAST_WORK_DIR/"
 
-          version, build, size, date, repo = sys.argv[1:]
+          "$SPARKLE_GENERATE_APPCAST" \
+            --download-url-prefix "https://github.com/${REPO}/releases/download/v${VERSION}/" \
+            --maximum-versions 0 \
+            --maximum-deltas 0 \
+            "$APPCAST_WORK_DIR"
 
-          new_item = f"""        <item>
-              <title>AIDictation {version}</title>
-              <pubDate>{date}</pubDate>
-              <link>https://github.com/{repo}/releases/tag/v{version}</link>
-              <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-              <enclosure
-                  url="https://github.com/{repo}/releases/download/v{version}/AIDictation-v{version}.dmg"
-                  sparkle:version="{build}"
-                  sparkle:shortVersionString="{version}"
-                  length="{size}"
-                  type="application/octet-stream" />
-          </item>"""
+          cp "$APPCAST_WORK_DIR/appcast.xml" appcast.xml
+          xmllint --noout appcast.xml
 
-          with open("appcast.xml") as f:
-              content = f.read()
+          python3 - "$VERSION" "$BUILD" << 'PYEOF'
+          import sys
+          import xml.etree.ElementTree as ET
 
-          # Remove existing entries for this version (in case of re-release)
-          import re as _re
-          pattern = r'\s*<item>\s*\n\s*<title>AIDictation ' + _re.escape(version) + r'</title>.*?</item>'
-          content = _re.sub(pattern, '', content, flags=_re.DOTALL)
+          version, build = sys.argv[1:]
+          namespaces = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+          root = ET.parse("appcast.xml").getroot()
+          first_item = root.find("./channel/item")
+          if first_item is None:
+              raise SystemExit("appcast has no items")
 
-          # Insert as the first <item> in the feed
-          content = content.replace("        <item>", new_item + "\n        <item>", 1)
+          minimum_os = first_item.findtext("sparkle:minimumSystemVersion", namespaces=namespaces)
+          sparkle_version = first_item.findtext("sparkle:version", namespaces=namespaces)
+          short_version = first_item.findtext("sparkle:shortVersionString", namespaces=namespaces)
 
-          with open("appcast.xml", "w") as f:
-              f.write(content)
+          if minimum_os != "13.0":
+              raise SystemExit(f"expected macOS minimum 13.0, got {minimum_os!r}")
+          if sparkle_version != build:
+              raise SystemExit(f"expected sparkle version {build}, got {sparkle_version!r}")
+          if short_version != version:
+              raise SystemExit(f"expected short version {version}, got {short_version!r}")
 
-          print(f"appcast updated for v{version} (build {build}, {size} bytes)")
+          enclosure = first_item.find("enclosure")
+          if enclosure is None or f"AIDictation-v{version}.dmg" not in enclosure.attrib.get("url", ""):
+              raise SystemExit("top appcast enclosure does not point at this release DMG")
+
+          print(f"appcast validated for v{version} (build {build}, macOS {minimum_os})")
           PYEOF
 
       - name: Commit appcast and version bump to main

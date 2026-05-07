@@ -52,38 +52,25 @@ private struct HistoryMasterDetailContentView: View {
     @State private var selectedRecording: Recording?
 
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             HistorySidebarView(
                 historyManager: historyManager,
                 selectedRecording: $selectedRecording
             )
-            .frame(width: 300)
-            .frame(maxHeight: .infinity)
-
+            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 360)
+        } detail: {
             HistoryDetailPane(
                 historyManager: historyManager,
                 selectedRecording: $selectedRecording
             )
         }
+        .navigationSplitViewStyle(.balanced)
         .background(Color(nsColor: .windowBackgroundColor))
         .onReceive(NotificationCenter.default.publisher(for: .recordingCompleted)) { notification in
             // Switch to detail view when recording is completed
             if let recording = notification.object as? Recording {
                 selectedRecording = recording
             }
-        }
-        .onChange(of: selectedRecording) { _ in
-            updateWindowTitle()
-        }
-        .onAppear {
-            updateWindowTitle()
-        }
-    }
-
-    private func updateWindowTitle() {
-        let title = selectedRecording?.formattedDate ?? "Select a recording"
-        for window in NSApplication.shared.windows where window.identifier == WindowIdentifiers.history || window.title == "History" {
-            window.title = title
         }
     }
 }
@@ -121,6 +108,17 @@ private struct HistoryDetailPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(detailTitle)
+    }
+
+    private var detailTitle: String {
+        if let selectedId = selectedRecording?.id,
+           let recording = historyManager.recordings.first(where: { $0.id == selectedId })
+        {
+            return recording.formattedDate
+        }
+
+        return "Select a recording"
     }
 
     private func deleteRecording(_ recordingToDelete: Recording) {
@@ -175,11 +173,7 @@ struct HistorySidebarView: View {
 
     @ViewBuilder
     private var recordingsList: some View {
-        if #available(macOS 13.0, *) {
-            recordingsListWithSelectionContextMenu
-        } else {
-            recordingsListContent
-        }
+        recordingsListWithSelectionContextMenu
     }
 
     private var recordingsListContent: some View {
@@ -193,7 +187,6 @@ struct HistorySidebarView: View {
         .onChange(of: selectedRecording) { _ in }
     }
 
-    @available(macOS 13.0, *)
     private var recordingsListWithSelectionContextMenu: some View {
         recordingsListContent
             .contextMenu(forSelectionType: Recording.self) { recordings in
@@ -365,7 +358,6 @@ struct RecordingDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(recording.formattedDate)
         .toolbar {
             // All action buttons grouped together
             ToolbarItemGroup(placement: .automatic) {

@@ -631,11 +631,10 @@ struct WhishpermateApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        LegacyAppScenes()
+        ModernAppScenes()
     }
 }
 
-@available(macOS 13.0, *)
 private struct ModernAppScenes: Scene {
     @Environment(\.openWindow) private var openWindow
 

@@ -113,6 +113,28 @@ public class ContextRulesManager: ObservableObject {
         }
     }
 
+    // MARK: - ToneStyle Migration Compatibility
+
+    public var styles: [ToneStyle] {
+        rules
+    }
+
+    public func addStyle(name: String, appBundleIds: [String], titlePatterns: [String] = [], instructions: String) {
+        addRule(name: name, appBundleIds: appBundleIds, titlePatterns: titlePatterns, instructions: instructions)
+    }
+
+    public func removeStyle(_ style: ToneStyle) {
+        removeRule(style)
+    }
+
+    public func toggleStyle(_ style: ToneStyle) {
+        toggleRule(style)
+    }
+
+    public func updateStyle(_ style: ToneStyle, name: String, appBundleIds: [String], titlePatterns: [String] = [], instructions: String) {
+        updateRule(style, name: name, appBundleIds: appBundleIds, titlePatterns: titlePatterns, instructions: instructions)
+    }
+
     // MARK: - Context Matching
 
     /// Get instructions for a specific app bundle ID and window title

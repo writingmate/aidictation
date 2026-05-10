@@ -17,7 +17,7 @@ Environment:
     NOTARY_PROFILE      default: AIDictation-notary
     GH_REPO             default: writingmate/aidictation
     DMG_SIGN_IDENTITY   default: Developer ID Application
-    RELEASE_ARCHS       default: arm64
+    RELEASE_ARCHS       default: arm64 x86_64
 
   Optional credential bootstrap (via 1Password):
     APPLE_ID
@@ -76,7 +76,7 @@ fi
 NOTARY_PROFILE="${NOTARY_PROFILE:-AIDictation-notary}"
 GH_REPO="${GH_REPO:-writingmate/aidictation}"
 DMG_SIGN_IDENTITY="${DMG_SIGN_IDENTITY:-Developer ID Application}"
-RELEASE_ARCHS="${RELEASE_ARCHS:-arm64}"
+RELEASE_ARCHS="${RELEASE_ARCHS:-arm64 x86_64}"
 
 require_tool git
 require_tool xcodebuild
@@ -153,6 +153,7 @@ ARCHIVE_CMD=(
   -configuration Release
   -archivePath "$ARCHIVE_PATH"
   ARCHS="$RELEASE_ARCHS"
+  ONLY_ACTIVE_ARCH=NO
   MARKETING_VERSION="$VERSION"
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 )
@@ -199,6 +200,9 @@ xcodebuild -exportArchive \
   -exportPath "$EXPORT_DIR"
 
 [[ -d "$APP_PATH" ]] || fatal "Exported app not found at $APP_PATH"
+
+echo "==> Validating universal app architecture"
+"$SCRIPT_DIR/validate_macos_universal_app.sh" "$APP_PATH"
 
 echo "==> Notarizing app bundle"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP"

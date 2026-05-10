@@ -97,7 +97,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM=G7DJ6P37KU \
-            ARCHS=arm64 \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
             archive
 
       - name: Export with Developer ID signing
@@ -125,6 +126,7 @@ jobs:
           AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
         run: |
           APP=/tmp/AIDictation-export/AIDictation.app
+          scripts/validate_macos_universal_app.sh "$APP"
           python3 scripts/validate_release_transcription_config.py \
             --secrets "$APP/Contents/Resources/Secrets.plist" \
             --require-auth

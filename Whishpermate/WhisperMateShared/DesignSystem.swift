@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(AppKit)
+    import AppKit
+#elseif canImport(UIKit)
+    import UIKit
+#endif
 
 // MARK: - Design System
 
@@ -33,8 +38,8 @@ public struct DSSecondaryButtonStyle: ButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .dsFont(.bodyMedium)
-            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-            .background(Capsule().stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+            .foregroundStyle(Color.dsSecondary)
+            .background(Capsule().stroke(Color.dsBorder, lineWidth: 1))
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1.0) : 0.5)
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
@@ -208,38 +213,70 @@ public extension View {
 
 // Default SwiftUI colors with orange accent
 
+#if canImport(AppKit)
+private extension Color {
+    static var dsSystemBackground: Color { Color(nsColor: .windowBackgroundColor) }
+    static var dsSystemForeground: Color { Color(nsColor: .labelColor) }
+    static var dsSystemSecondaryForeground: Color { Color(nsColor: .secondaryLabelColor) }
+    static var dsSystemControlBackground: Color { Color(nsColor: .controlBackgroundColor) }
+    static var dsSystemMutedBackground: Color { Color(nsColor: .unemphasizedSelectedContentBackgroundColor) }
+    static var dsSystemSeparator: Color { Color(nsColor: .separatorColor) }
+    static var dsSystemTextBackground: Color { Color(nsColor: .textBackgroundColor) }
+}
+#elseif canImport(UIKit)
+private extension Color {
+    static var dsSystemBackground: Color { Color(uiColor: .systemBackground) }
+    static var dsSystemForeground: Color { Color(uiColor: .label) }
+    static var dsSystemSecondaryForeground: Color { Color(uiColor: .secondaryLabel) }
+    static var dsSystemControlBackground: Color { Color(uiColor: .secondarySystemBackground) }
+    static var dsSystemMutedBackground: Color { Color(uiColor: .tertiarySystemFill) }
+    static var dsSystemSeparator: Color { Color(uiColor: .separator) }
+    static var dsSystemTextBackground: Color { Color(uiColor: .systemBackground) }
+}
+#else
+private extension Color {
+    static var dsSystemBackground: Color { .white }
+    static var dsSystemForeground: Color { .primary }
+    static var dsSystemSecondaryForeground: Color { .secondary }
+    static var dsSystemControlBackground: Color { .white }
+    static var dsSystemMutedBackground: Color { Color.black.opacity(0.08) }
+    static var dsSystemSeparator: Color { Color.black.opacity(0.12) }
+    static var dsSystemTextBackground: Color { .white }
+}
+#endif
+
 public extension Color {
     // Background & Foreground - use system colors
-    static var dsBackground: Color { Color(nsColor: .windowBackgroundColor) }
-    static var dsForeground: Color { Color(nsColor: .labelColor) }
+    static var dsBackground: Color { dsSystemBackground }
+    static var dsForeground: Color { dsSystemForeground }
 
     // Primary (Orange accent)
     static var dsPrimary: Color { .orange }
     static var dsPrimaryForeground: Color { .white }
 
     // Secondary - use system secondary
-    static var dsSecondary: Color { Color(nsColor: .secondaryLabelColor) }
+    static var dsSecondary: Color { dsSystemSecondaryForeground }
     static var dsSecondaryForeground: Color { .white }
 
     // Accent (Orange)
     static var dsAccent: Color { .orange }
-    static var dsAccentForeground: Color { Color(nsColor: .labelColor) }
+    static var dsAccentForeground: Color { dsSystemForeground }
 
     // Card - use system control background
-    static var dsCard: Color { Color(nsColor: .controlBackgroundColor) }
-    static var dsCardForeground: Color { Color(nsColor: .labelColor) }
+    static var dsCard: Color { dsSystemControlBackground }
+    static var dsCardForeground: Color { dsSystemForeground }
 
     // Popover - use system popover background
-    static var dsPopover: Color { Color(nsColor: .controlBackgroundColor) }
-    static var dsPopoverForeground: Color { Color(nsColor: .labelColor) }
+    static var dsPopover: Color { dsSystemControlBackground }
+    static var dsPopoverForeground: Color { dsSystemForeground }
 
     // Muted - use system colors
-    static var dsMuted: Color { Color(nsColor: .unemphasizedSelectedContentBackgroundColor) }
-    static var dsMutedForeground: Color { Color(nsColor: .secondaryLabelColor) }
+    static var dsMuted: Color { dsSystemMutedBackground }
+    static var dsMutedForeground: Color { dsSystemSecondaryForeground }
 
     // Border, Input, Ring - use system colors
-    static var dsBorder: Color { Color(nsColor: .separatorColor) }
-    static var dsInput: Color { Color(nsColor: .textBackgroundColor) }
+    static var dsBorder: Color { dsSystemSeparator }
+    static var dsInput: Color { dsSystemTextBackground }
     static var dsRing: Color { .orange }
 
     // Destructive
@@ -247,13 +284,13 @@ public extension Color {
     static var dsDestructiveForeground: Color { .white }
 
     // Sidebar - use system sidebar colors
-    static var dsSidebarBackground: Color { Color(nsColor: .controlBackgroundColor) }
-    static var dsSidebarForeground: Color { Color(nsColor: .labelColor) }
+    static var dsSidebarBackground: Color { dsSystemControlBackground }
+    static var dsSidebarForeground: Color { dsSystemForeground }
     static var dsSidebarPrimary: Color { .orange }
     static var dsSidebarPrimaryForeground: Color { .white }
     static var dsSidebarAccent: Color { .orange }
     static var dsSidebarAccentForeground: Color { .white }
-    static var dsSidebarBorder: Color { Color(nsColor: .separatorColor) }
+    static var dsSidebarBorder: Color { dsSystemSeparator }
     static var dsSidebarRing: Color { .orange }
 
     // Charts - use standard SwiftUI colors
@@ -289,8 +326,8 @@ public struct DSCardStyle: ViewModifier {
 
     public func body(content: Content) -> some View {
         content
-            .background(RoundedRectangle(cornerRadius: cornerRadius).fill(Color(nsColor: .controlBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: cornerRadius).fill(Color.dsCard))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.dsBorder, lineWidth: 1))
             .shadow(color: hasShadow ? Color.black.opacity(0.05) : .clear, radius: 8, y: 4)
     }
 }

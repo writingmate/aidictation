@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import CoreAudio
 import Foundation
+import IOKit
 import WhisperMateShared
 internal import Combine
 
@@ -28,6 +29,7 @@ class AudioDeviceManager: ObservableObject {
 
     private var screenWakeObserver: NSObjectProtocol?
     private var systemWakeObserver: NSObjectProtocol?
+    private var screenParametersObserver: NSObjectProtocol?
     private var wakeRecoveryWorkItem: DispatchWorkItem?
     private var wakeRecoveryGeneration = 0
 
@@ -65,6 +67,9 @@ class AudioDeviceManager: ObservableObject {
         }
         if let systemWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(systemWakeObserver)
+        }
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
         }
     }
 
@@ -125,6 +130,14 @@ class AudioDeviceManager: ObservableObject {
                 context: "AudioDeviceManager"
             )
             return nil
+        }
+
+        if shouldAvoidSelectingPreferredDevice(preferred) {
+            DebugLog.info(
+                "Preferred input device \(preferred.name) is unavailable in clamshell mode; temporarily selecting another input",
+                context: "AudioDeviceManager"
+            )
+            return applyAutomaticDevice(forceNotify: false)
         }
 
         return apply(device: preferred, forceNotify: false)
@@ -268,6 +281,14 @@ class AudioDeviceManager: ObservableObject {
             return nil
         }
 
+        if shouldAvoidSelectingPreferredDevice(preferred) {
+            DebugLog.info(
+                "Preferred input device \(preferred.name) is unavailable in clamshell mode; temporarily selecting another input",
+                context: "AudioDeviceManager"
+            )
+            return applyAutomaticDevice(forceNotify: forceNotify)
+        }
+
         DebugLog.info("Resolved preferred input device: \(preferred.name)", context: "AudioDeviceManager")
         return apply(device: preferred, forceNotify: forceNotify)
     }
@@ -277,9 +298,13 @@ class AudioDeviceManager: ObservableObject {
     private func currentSelectedDevice(in devices: [AudioDevice]) -> AudioDevice? {
         if !automaticallySelectDevice {
             guard let savedUID = savedSelectedDeviceUID else { return nil }
-            return preferredInputDevice(for: savedUID, in: devices)
+            guard let preferred = preferredInputDevice(for: savedUID, in: devices) else { return nil }
+            if shouldAvoidSelectingPreferredDevice(preferred) {
+                return bestAutomaticInputDevice(in: devices)
+            }
+            return preferred
         }
-        return getDefaultInputDevice() ?? bestAutomaticInputDevice(in: devices)
+        return bestAutomaticInputDevice(in: devices)
     }
 
     private func preferredInputDevice(for uniqueID: String, in devices: [AudioDevice]? = nil) -> AudioDevice? {
@@ -331,14 +356,21 @@ class AudioDeviceManager: ObservableObject {
     }
 
     private func bestAutomaticInputDevice(in devices: [AudioDevice]) -> AudioDevice? {
+        let clamshellClosed = isClamshellClosed()
+
         if let defaultDevice = getDefaultInputDevice(),
-           devices.contains(defaultDevice)
+           devices.contains(defaultDevice),
+           !shouldAvoidAutomaticallySelecting(defaultDevice, clamshellClosed: clamshellClosed)
         {
             return defaultDevice
         }
 
+        let allowedCandidates = devices.filter { device in
+            !shouldAvoidAutomaticallySelecting(device, clamshellClosed: clamshellClosed)
+        }
+
         let virtualNameFragments = ["blackhole", "loopback", "soundflower", "aggregate", "multi-output"]
-        let physicalCandidates = devices.filter { device in
+        let physicalCandidates = allowedCandidates.filter { device in
             let lowercasedName = device.name.lowercased()
             return !virtualNameFragments.contains { lowercasedName.contains($0) }
         }
@@ -346,7 +378,94 @@ class AudioDeviceManager: ObservableObject {
         return physicalCandidates.first { device in
             let lowercasedName = device.name.lowercased()
             return lowercasedName.contains("microphone") || lowercasedName.contains("mic")
-        } ?? physicalCandidates.first ?? devices.first
+        } ?? physicalCandidates.first ?? allowedCandidates.first
+    }
+
+    private func shouldAvoidAutomaticallySelecting(_ device: AudioDevice, clamshellClosed: Bool) -> Bool {
+        guard isBuiltInInputDevice(device.id) else { return false }
+        return clamshellClosed || !hasActiveBuiltInDisplay() || shouldPreferExternalInputOverBuiltIn()
+    }
+
+    private func shouldAvoidSelectingPreferredDevice(_ device: AudioDevice) -> Bool {
+        shouldAvoidAutomaticallySelecting(device, clamshellClosed: isClamshellClosed())
+    }
+
+    private func isBuiltInInputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        if let transportType = getDeviceTransportType(deviceID: deviceID),
+           transportType == kAudioDeviceTransportTypeBuiltIn
+        {
+            return true
+        }
+
+        guard let name = getDeviceName(deviceID: deviceID)?.lowercased() else { return false }
+        return name.contains("built-in") || name.contains("macbook") || name.contains("internal microphone")
+    }
+
+    private func getDeviceTransportType(deviceID: AudioDeviceID) -> UInt32? {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var transportType: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize,
+            &transportType
+        )
+
+        guard status == noErr else { return nil }
+        return transportType
+    }
+
+    private func isClamshellClosed() -> Bool {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard service != IO_OBJECT_NULL else { return false }
+        defer { IOObjectRelease(service) }
+
+        guard let property = IORegistryEntryCreateCFProperty(
+            service,
+            "AppleClamshellState" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue() else {
+            return false
+        }
+
+        return (property as? Bool) ?? false
+    }
+
+    private func hasActiveBuiltInDisplay() -> Bool {
+        var displayCount: UInt32 = 0
+        let countStatus = CGGetActiveDisplayList(0, nil, &displayCount)
+        guard countStatus == .success, displayCount > 0 else { return true }
+
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        let listStatus = CGGetActiveDisplayList(displayCount, &displays, &displayCount)
+        guard listStatus == .success else { return true }
+
+        return displays.contains { CGDisplayIsBuiltin($0) != 0 }
+    }
+
+    private func hasActiveExternalDisplay() -> Bool {
+        var displayCount: UInt32 = 0
+        let countStatus = CGGetActiveDisplayList(0, nil, &displayCount)
+        guard countStatus == .success, displayCount > 0 else { return false }
+
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        let listStatus = CGGetActiveDisplayList(displayCount, &displays, &displayCount)
+        guard listStatus == .success else { return false }
+
+        return displays.contains { CGDisplayIsBuiltin($0) == 0 }
+    }
+
+    private func shouldPreferExternalInputOverBuiltIn() -> Bool {
+        hasActiveExternalDisplay() && inputDevices.contains { !isBuiltInInputDevice($0.id) }
     }
 
     private func hasInputStreams(deviceID: AudioDeviceID) -> Bool {
@@ -554,6 +673,14 @@ class AudioDeviceManager: ObservableObject {
         ) { [weak self] _ in
             self?.scheduleWakeRecovery(reason: "system did wake", restart: true)
         }
+
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleWakeRecovery(reason: "screen parameters changed", restart: true)
+        }
     }
 
     private func scheduleWakeRecovery(reason: String, restart: Bool) {
@@ -563,7 +690,7 @@ class AudioDeviceManager: ObservableObject {
             DebugLog.info("Scheduling audio device wake recovery: \(reason)", context: "AudioDeviceManager")
         }
 
-        guard !automaticallySelectDevice, savedSelectedDeviceUID != nil else { return }
+        guard automaticallySelectDevice || savedSelectedDeviceUID != nil else { return }
         runWakeRecoveryAttempt(reason: reason, generation: wakeRecoveryGeneration, attempt: 0)
     }
 
@@ -594,8 +721,18 @@ class AudioDeviceManager: ObservableObject {
     }
 
     private func shouldContinueWakeRecovery(resolvedDevice: AudioDevice?) -> Bool {
-        guard !automaticallySelectDevice, let savedUID = savedSelectedDeviceUID else { return false }
-        return resolvedDevice?.uniqueID != savedUID
+        if automaticallySelectDevice {
+            return resolvedDevice == nil
+        }
+
+        guard let savedUID = savedSelectedDeviceUID else { return false }
+        guard let resolvedDevice else { return true }
+
+        if resolvedDevice.uniqueID == savedUID {
+            return false
+        }
+
+        return isClamshellClosed()
     }
 }
 

@@ -1,19 +1,36 @@
 import Foundation
 #if canImport(AppKit)
     import AppKit
+    public typealias InstalledAppIcon = NSImage
+#else
+    public struct InstalledAppIcon: Hashable {
+        public init() {}
+    }
 #endif
 
 public struct InstalledApp: Identifiable, Hashable {
     public let id: String // bundle ID
     public let name: String
     public let bundleID: String
-    public let icon: NSImage?
+    public let icon: InstalledAppIcon?
 
-    public init(name: String, bundleID: String, icon: NSImage? = nil) {
+    public init(name: String, bundleID: String, icon: InstalledAppIcon? = nil) {
         id = bundleID
         self.name = name
         self.bundleID = bundleID
         self.icon = icon
+    }
+
+    public static func == (lhs: InstalledApp, rhs: InstalledApp) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.bundleID == rhs.bundleID
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(bundleID)
     }
 }
 

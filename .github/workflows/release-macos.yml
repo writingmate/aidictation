@@ -72,8 +72,13 @@ jobs:
       - name: Install Secrets.plist
         env:
           SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
+          test -n "$SENTRY_DSN"
           echo "$SECRETS_PLIST" | base64 --decode > Whishpermate/Whispermate/Secrets.plist
+          /usr/libexec/PlistBuddy -c "Delete :SentryDSN" Whishpermate/Whispermate/Secrets.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :SentryDSN string $SENTRY_DSN" Whishpermate/Whispermate/Secrets.plist
+          /usr/libexec/PlistBuddy -c "Print :SentryDSN" Whishpermate/Whispermate/Secrets.plist >/dev/null
 
       - name: Validate release transcription secret
         run: |

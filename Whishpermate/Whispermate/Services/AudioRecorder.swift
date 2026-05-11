@@ -73,6 +73,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
     @objc private func handleAudioDeviceChanged(_: Notification) {
         DebugLog.info("Audio input device changed", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioEngineEvent("input_device_changed")
         // Don't restart if currently recording - let the current recording finish
         // Only reinitialize the engine when not recording
         if !isRecording {
@@ -84,7 +85,15 @@ class AudioRecorder: NSObject, ObservableObject {
     }
 
     @objc private func handleAudioEngineConfigurationChanged(_: Notification) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.handleAudioEngineConfigurationChanged(Notification(name: .AVAudioEngineConfigurationChange))
+            }
+            return
+        }
+
         DebugLog.info("Audio engine configuration changed", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioEngineEvent("configuration_changed")
         if isRecording {
             recoverAudioEngineDuringRecording(reason: "configuration change")
         } else {
@@ -107,6 +116,7 @@ class AudioRecorder: NSObject, ObservableObject {
             }
 
             DebugLog.info("Refreshing engine with input device: \(device.name)", context: "AudioRecorder LOG")
+            SentryTelemetry.recordAudioDeviceEvent("engine_refresh_device", device: device)
             self.pendingEngineRefresh = false
             self.setupAudioEngine()
         }
@@ -123,12 +133,17 @@ class AudioRecorder: NSObject, ObservableObject {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self = self else { return }
+            let releasedEngines = self.retiredEngines.filter { $0 === engine }
             self.retiredEngines.removeAll { $0 === engine }
+            DispatchQueue.global(qos: .utility).async {
+                _ = releasedEngines
+            }
         }
     }
 
     private func setupAudioEngine() {
         DebugLog.info("🎙️ Setting up audio engine (persistent mode)", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioEngineEvent("setup")
 
         // Clean up existing engine if any
         if let engine = audioEngine {
@@ -230,6 +245,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
     func startRecording() {
         DebugLog.info("⚡ startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioEngineEvent("start_recording")
 
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             DebugLog.info("❌ Microphone permission is not authorized", context: "AudioRecorder LOG")
@@ -241,6 +257,7 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
         DebugLog.info("Using input device for recording: \(inputDevice.name)", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioDeviceEvent("recording_input_device", device: inputDevice)
 
         if pendingEngineRefresh {
             DebugLog.info("Applying deferred audio engine refresh before recording", context: "AudioRecorder LOG")
@@ -407,6 +424,8 @@ class AudioRecorder: NSObject, ObservableObject {
         }
 
         DebugLog.info("Recovering audio engine after \(reason) with input device: \(device.name)", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioDeviceEvent("recover_engine_device", device: device)
+        SentryTelemetry.recordAudioEngineEvent("recover", reason: reason)
         setupAudioEngine()
 
         guard let engine = audioEngine else {
@@ -525,6 +544,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
     func stopRecording() -> URL? {
         DebugLog.info("⚡ stopRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
+        SentryTelemetry.recordAudioEngineEvent("stop_recording")
 
         stopRecordingWatchdog()
 

@@ -54,6 +54,7 @@ enum DebugLog {
 
         print(fullMessage)
         logger.error("\(fullMessage, privacy: .public)")
+        SentryTelemetry.captureError(message, context: context)
     }
 
     /// Log sensitive data (only in DEBUG, never in Release)

@@ -31,6 +31,7 @@ class AudioDeviceManager: ObservableObject {
     private var systemWakeObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
     private var wakeRecoveryWorkItem: DispatchWorkItem?
+    private var deviceChangeWorkItem: DispatchWorkItem?
     private var wakeRecoveryGeneration = 0
 
     // MARK: - Types
@@ -62,6 +63,7 @@ class AudioDeviceManager: ObservableObject {
 
     deinit {
         wakeRecoveryWorkItem?.cancel()
+        deviceChangeWorkItem?.cancel()
         if let screenWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(screenWakeObserver)
         }
@@ -90,6 +92,11 @@ class AudioDeviceManager: ObservableObject {
         } else {
             _ = applyPreferredOrAutomaticDevice()
         }
+        SentryTelemetry.recordAudioDeviceEvent(
+            "automatic_selection_changed",
+            device: selectedDevice,
+            mode: enabled ? "automatic" : "manual"
+        )
     }
 
     func selectDevice(_ device: AudioDevice) -> Bool {
@@ -103,6 +110,7 @@ class AudioDeviceManager: ObservableObject {
         AppDefaults.shared.set(false, forKey: Keys.automaticallySelectAudioDevice)
         AppDefaults.shared.set(device.uniqueID, forKey: Keys.selectedAudioDeviceID)
         selectedDevice = device
+        SentryTelemetry.recordAudioDeviceEvent("manual_input_selected", device: device, mode: "manual")
 
         NotificationCenter.default.post(
             name: NSNotification.Name("AudioInputDeviceChanged"),
@@ -124,20 +132,18 @@ class AudioDeviceManager: ObservableObject {
         }
 
         guard let preferred = preferredInputDevice(for: savedUID) else {
-            selectedDevice = nil
+            let fallback = applyAutomaticDevice(forceNotify: false)
             DebugLog.info(
-                "Preferred input device \(savedUID) is not available yet; keeping manual selection and waiting for reconnect",
+                "Preferred input device \(savedUID) is not available yet; using temporary fallback \(fallback?.name ?? "none") while keeping manual selection",
                 context: "AudioDeviceManager"
             )
-            return nil
-        }
-
-        if shouldAvoidSelectingPreferredDevice(preferred) {
-            DebugLog.info(
-                "Preferred input device \(preferred.name) is unavailable in clamshell mode; temporarily selecting another input",
-                context: "AudioDeviceManager"
+            SentryTelemetry.recordAudioDeviceEvent(
+                "preferred_unavailable_temporary_fallback",
+                device: fallback,
+                mode: "manual",
+                fallback: true
             )
-            return applyAutomaticDevice(forceNotify: false)
+            return fallback
         }
 
         return apply(device: preferred, forceNotify: false)
@@ -273,20 +279,18 @@ class AudioDeviceManager: ObservableObject {
         }
 
         guard let preferred = preferredInputDevice(for: savedUID) else {
-            selectedDevice = nil
+            let fallback = applyAutomaticDevice(forceNotify: forceNotify)
             DebugLog.info(
-                "Preferred input device \(savedUID) is unavailable; not falling back to system default",
+                "Preferred input device \(savedUID) is unavailable; using temporary fallback \(fallback?.name ?? "none") while waiting for reconnect",
                 context: "AudioDeviceManager"
             )
-            return nil
-        }
-
-        if shouldAvoidSelectingPreferredDevice(preferred) {
-            DebugLog.info(
-                "Preferred input device \(preferred.name) is unavailable in clamshell mode; temporarily selecting another input",
-                context: "AudioDeviceManager"
+            SentryTelemetry.recordAudioDeviceEvent(
+                "preferred_missing_reapply_fallback",
+                device: fallback,
+                mode: "manual",
+                fallback: true
             )
-            return applyAutomaticDevice(forceNotify: forceNotify)
+            return fallback
         }
 
         DebugLog.info("Resolved preferred input device: \(preferred.name)", context: "AudioDeviceManager")
@@ -298,11 +302,7 @@ class AudioDeviceManager: ObservableObject {
     private func currentSelectedDevice(in devices: [AudioDevice]) -> AudioDevice? {
         if !automaticallySelectDevice {
             guard let savedUID = savedSelectedDeviceUID else { return nil }
-            guard let preferred = preferredInputDevice(for: savedUID, in: devices) else { return nil }
-            if shouldAvoidSelectingPreferredDevice(preferred) {
-                return bestAutomaticInputDevice(in: devices)
-            }
-            return preferred
+            return preferredInputDevice(for: savedUID, in: devices) ?? bestAutomaticInputDevice(in: devices)
         }
         return bestAutomaticInputDevice(in: devices)
     }
@@ -339,11 +339,13 @@ class AudioDeviceManager: ObservableObject {
             DebugLog.info("Applying input device: \(target.name)", context: "AudioDeviceManager")
             guard setDefaultInputDevice(deviceID: target.id) else {
                 refreshDevices()
+                SentryTelemetry.recordAudioDeviceEvent("input_apply_failed", device: target)
                 return selectedDevice
             }
         }
 
         selectedDevice = target
+        SentryTelemetry.recordAudioDeviceEvent("input_applied", device: target)
 
         if shouldNotify {
             NotificationCenter.default.post(
@@ -384,10 +386,6 @@ class AudioDeviceManager: ObservableObject {
     private func shouldAvoidAutomaticallySelecting(_ device: AudioDevice, clamshellClosed: Bool) -> Bool {
         guard isBuiltInInputDevice(device.id) else { return false }
         return clamshellClosed || !hasActiveBuiltInDisplay() || shouldPreferExternalInputOverBuiltIn()
-    }
-
-    private func shouldAvoidSelectingPreferredDevice(_ device: AudioDevice) -> Bool {
-        shouldAvoidAutomaticallySelecting(device, clamshellClosed: isClamshellClosed())
     }
 
     private func isBuiltInInputDevice(_ deviceID: AudioDeviceID) -> Bool {
@@ -657,6 +655,28 @@ class AudioDeviceManager: ObservableObject {
         )
     }
 
+    func handleAudioHardwareChanged() {
+        deviceChangeWorkItem?.cancel()
+        SentryTelemetry.recordAudioEngineEvent("hardware_changed")
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+
+            // Re-apply saved device preference when devices change. AirPods and other
+            // Bluetooth devices often emit a burst of Core Audio notifications while
+            // connecting/disconnecting, so debounce before touching the default input.
+            self.reapplyPreferredDevice()
+
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AudioDeviceListChanged"),
+                object: nil
+            )
+        }
+
+        deviceChangeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+    }
+
     private func setupWakeRecovery() {
         screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidWakeNotification,
@@ -744,13 +764,7 @@ private func deviceListChangedCallback(
     _: UnsafeMutableRawPointer?
 ) -> OSStatus {
     DispatchQueue.main.async {
-        // Re-apply saved device preference when devices change
-        AudioDeviceManager.shared.reapplyPreferredDevice()
-
-        NotificationCenter.default.post(
-            name: NSNotification.Name("AudioDeviceListChanged"),
-            object: nil
-        )
+        AudioDeviceManager.shared.handleAudioHardwareChanged()
     }
     return noErr
 }

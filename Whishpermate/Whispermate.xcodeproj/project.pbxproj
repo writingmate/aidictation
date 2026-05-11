@@ -15,6 +15,7 @@
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		C3E1A9012F8A000000000001 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = C3E1A9022F8A000000000002 /* Sentry */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
 		D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */; };
 		D1B200012F65000200000005 /* PermissionFlowRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -198,6 +199,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C2A100012F2B000000000001 /* Sparkle in Frameworks */,
+				C3E1A9012F8A000000000001 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -378,6 +380,10 @@
 				C18566D52EA0D31000B46F55 /* Whispermate */,
 			);
 			name = Whispermate;
+			packageProductDependencies = (
+				C2A100032F2B000000000003 /* Sparkle */,
+				C3E1A9022F8A000000000002 /* Sentry */,
+			);
 			productName = Whishpermate;
 			productReference = C1CE643F2ED8417000D24235 /* AIDictation.app */;
 			productType = "com.apple.product-type.application";
@@ -486,6 +492,7 @@
 				C12A3A0D2ED4CF91002D97E6 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				C1FA00012F0B000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				C3E1A9002F8A000000000000 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -1295,6 +1302,14 @@
 				minimumVersion = 2.6.0;
 			};
 		};
+		C3E1A9002F8A000000000000 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.56.2;
+			};
+		};
 		D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/jaywcjlove/PermissionFlow.git";
@@ -1335,6 +1350,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		C3E1A9022F8A000000000002 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3E1A9002F8A000000000000 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 		D1A1F1002F65000100000002 /* PermissionFlow */ = {
 			isa = XCSwiftPackageProductDependency;

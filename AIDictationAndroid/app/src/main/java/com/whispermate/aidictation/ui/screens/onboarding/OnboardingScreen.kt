@@ -47,6 +47,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -88,6 +89,7 @@ fun OnboardingScreen(
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
     var testInputText by remember { mutableStateOf("") }
+    var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     val hasTestedDictation = testInputText.isNotBlank()
 
     val contextRulesEnabled = remember {
@@ -128,7 +130,7 @@ fun OnboardingScreen(
                 .padding(vertical = 16.dp),
             horizontalArrangement = Arrangement.Center
         ) {
-            repeat(3) { index ->
+            repeat(4) { index ->
                 Box(
                     modifier = Modifier
                         .size(8.dp)
@@ -138,7 +140,7 @@ fun OnboardingScreen(
                             else MaterialTheme.colorScheme.outlineVariant
                         )
                 )
-                if (index < 2) {
+                if (index < 3) {
                     Spacer(modifier = Modifier.width(8.dp))
                 }
             }
@@ -165,6 +167,10 @@ fun OnboardingScreen(
                         onTestInputChanged = { testInputText = it },
                         onOpenSettings = { openAccessibilitySettings(context) }
                     )
+                    3 -> VolumeShortcutStep(
+                        isEnabled = volumeShortcutEnabled,
+                        onEnabledChanged = { volumeShortcutEnabled = it }
+                    )
                 }
             }
         }
@@ -186,9 +192,13 @@ fun OnboardingScreen(
                         if (!isOverlayServiceEnabled) {
                             openAccessibilitySettings(context)
                         } else if (hasTestedDictation) {
-                            onSaveContextRules(contextRulesEnabled.toList())
-                            onComplete()
+                            currentStep = 3
                         }
+                    }
+                    3 -> {
+                        setVolumeShortcutEnabled(context, volumeShortcutEnabled)
+                        onSaveContextRules(contextRulesEnabled.toList())
+                        onComplete()
                     }
                 }
             },
@@ -210,12 +220,87 @@ fun OnboardingScreen(
                     }
                     2 -> when {
                         !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
-                        hasTestedDictation -> stringResource(R.string.onboarding_get_started)
+                        hasTestedDictation -> stringResource(R.string.onboarding_continue)
                         else -> stringResource(R.string.onboarding_try_dictation)
                     }
+                    3 -> stringResource(R.string.onboarding_get_started)
                     else -> ""
                 },
                 style = MaterialTheme.typography.titleMedium
+            )
+        }
+    }
+}
+
+@Composable
+private fun VolumeShortcutStep(
+    isEnabled: Boolean,
+    onEnabledChanged: (Boolean) -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = MaterialTheme.colorScheme.secondary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_volume_shortcut_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_volume_shortcut_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable { onEnabledChanged(!isEnabled) }
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.onboarding_volume_shortcut_toggle),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_volume_shortcut_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = onEnabledChanged
             )
         }
     }
@@ -680,4 +765,19 @@ private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
     return enabledServices.split(':').any { serviceId ->
         ComponentName.unflattenFromString(serviceId) == expected
     }
+}
+
+private const val SHORTCUT_PREFS = "dictation_shortcuts"
+private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
+
+private fun isVolumeShortcutEnabled(context: Context): Boolean {
+    return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, false)
+}
+
+private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(VOLUME_SHORTCUT_ENABLED_KEY, enabled)
+        .apply()
 }

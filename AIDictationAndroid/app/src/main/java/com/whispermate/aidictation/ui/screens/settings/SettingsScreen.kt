@@ -405,7 +405,7 @@ private fun restoreOverlayBubble(context: Context) {
 
 private fun isVolumeShortcutEnabled(context: Context): Boolean {
     return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
-        .getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, true)
+        .getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, false)
 }
 
 private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {

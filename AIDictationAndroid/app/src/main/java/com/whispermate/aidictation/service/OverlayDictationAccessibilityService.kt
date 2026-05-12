@@ -241,7 +241,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
         if (isBubbleSuppressed()) return false
-        if (!isKeyboardVisible()) return false
         val focusedNode = resolveFocusedEditableNode(source) ?: return false
         return true
     }

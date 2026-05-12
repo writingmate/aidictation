@@ -1,8 +1,6 @@
 package com.whispermate.aidictation.ui.screens.transcription
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,15 +28,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -124,7 +119,8 @@ fun TranscriptionSettingsScreen(
                             viewModel.addDictionaryEntry(trigger, replacement.ifEmpty { null })
                         },
                         onToggle = { viewModel.toggleDictionaryEntry(it) },
-                        onDelete = { viewModel.deleteDictionaryEntry(it) }
+                        onDelete = { viewModel.deleteDictionaryEntry(it) },
+                        onRestoreDefaults = { viewModel.restoreDefaultDictionaryEntries() }
                     )
                     1 -> ToneStyleTab(
                         styles = toneStyles,
@@ -132,7 +128,8 @@ fun TranscriptionSettingsScreen(
                             viewModel.addToneStyle(name, packages, instructions)
                         },
                         onToggle = { viewModel.toggleToneStyle(it) },
-                        onDelete = { viewModel.deleteToneStyle(it) }
+                        onDelete = { viewModel.deleteToneStyle(it) },
+                        onRestoreDefaults = { viewModel.restoreDefaultToneStyles() }
                     )
                     2 -> ShortcutsTab(
                         shortcuts = shortcuts,
@@ -140,7 +137,8 @@ fun TranscriptionSettingsScreen(
                             viewModel.addShortcut(trigger, expansion)
                         },
                         onToggle = { viewModel.toggleShortcut(it) },
-                        onDelete = { viewModel.deleteShortcut(it) }
+                        onDelete = { viewModel.deleteShortcut(it) },
+                        onRestoreDefaults = { viewModel.restoreDefaultShortcuts() }
                     )
                 }
             }
@@ -154,7 +152,8 @@ private fun DictionaryTab(
     entries: List<DictionaryEntry>,
     onAdd: (String, String) -> Unit,
     onToggle: (DictionaryEntry) -> Unit,
-    onDelete: (DictionaryEntry) -> Unit
+    onDelete: (DictionaryEntry) -> Unit,
+    onRestoreDefaults: () -> Unit
 ) {
     var trigger by remember { mutableStateOf("") }
     var replacement by remember { mutableStateOf("") }
@@ -211,48 +210,31 @@ private fun DictionaryTab(
         }
 
         item {
-            Text(
-                text = stringResource(R.string.dictionary_footer),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.dictionary_footer),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(onClick = onRestoreDefaults) {
+                    Text(stringResource(R.string.restore_defaults))
+                }
+            }
         }
 
         items(entries, key = { it.id }) { entry ->
-            val dismissState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    if (value == SwipeToDismissBoxValue.EndToStart) {
-                        onDelete(entry)
-                        true
-                    } else false
-                }
+            DictionaryEntryItem(
+                entry = entry,
+                onToggle = { onToggle(entry) },
+                onDelete = { onDelete(entry) }
             )
-
-            SwipeToDismissBox(
-                state = dismissState,
-                backgroundContent = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.error, MaterialTheme.shapes.medium)
-                            .padding(horizontal = 20.dp),
-                        contentAlignment = Alignment.CenterEnd
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onError
-                        )
-                    }
-                },
-                enableDismissFromStartToEnd = false
-            ) {
-                DictionaryEntryItem(
-                    entry = entry,
-                    onToggle = { onToggle(entry) }
-                )
-            }
         }
     }
 }
@@ -260,7 +242,8 @@ private fun DictionaryTab(
 @Composable
 private fun DictionaryEntryItem(
     entry: DictionaryEntry,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -292,6 +275,12 @@ private fun DictionaryEntryItem(
                 checked = entry.isEnabled,
                 onCheckedChange = { onToggle() }
             )
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.delete_entry)
+                )
+            }
         }
     }
 }
@@ -302,7 +291,8 @@ private fun ToneStyleTab(
     styles: List<ToneStyle>,
     onAdd: (String, List<String>, String) -> Unit,
     onToggle: (ToneStyle) -> Unit,
-    onDelete: (ToneStyle) -> Unit
+    onDelete: (ToneStyle) -> Unit,
+    onRestoreDefaults: () -> Unit
 ) {
     var showAddSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
@@ -313,50 +303,30 @@ private fun ToneStyleTab(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Button(
-                onClick = { showAddSheet = true },
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.tone_add))
+                Button(
+                    onClick = { showAddSheet = true },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.tone_add))
+                }
+                Button(onClick = onRestoreDefaults) {
+                    Text(stringResource(R.string.restore_defaults))
+                }
             }
         }
 
         items(styles, key = { it.id }) { style ->
-            val dismissState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    if (value == SwipeToDismissBoxValue.EndToStart) {
-                        onDelete(style)
-                        true
-                    } else false
-                }
+            ToneStyleItem(
+                style = style,
+                onToggle = { onToggle(style) },
+                onDelete = { onDelete(style) }
             )
-
-            SwipeToDismissBox(
-                state = dismissState,
-                backgroundContent = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.error, MaterialTheme.shapes.medium)
-                            .padding(horizontal = 20.dp),
-                        contentAlignment = Alignment.CenterEnd
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onError
-                        )
-                    }
-                },
-                enableDismissFromStartToEnd = false
-            ) {
-                ToneStyleItem(
-                    style = style,
-                    onToggle = { onToggle(style) }
-                )
-            }
         }
     }
 
@@ -458,7 +428,8 @@ private fun AddToneStyleSheet(
 @Composable
 private fun ToneStyleItem(
     style: ToneStyle,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -499,6 +470,12 @@ private fun ToneStyleItem(
                 checked = style.isEnabled,
                 onCheckedChange = { onToggle() }
             )
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.delete_rule)
+                )
+            }
         }
     }
 }
@@ -509,7 +486,8 @@ private fun ShortcutsTab(
     shortcuts: List<Shortcut>,
     onAdd: (String, String) -> Unit,
     onToggle: (Shortcut) -> Unit,
-    onDelete: (Shortcut) -> Unit
+    onDelete: (Shortcut) -> Unit,
+    onRestoreDefaults: () -> Unit
 ) {
     var trigger by remember { mutableStateOf("") }
     var expansion by remember { mutableStateOf("") }
@@ -519,6 +497,15 @@ private fun ShortcutsTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        item {
+            Button(
+                onClick = onRestoreDefaults,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.restore_defaults))
+            }
+        }
+
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -565,39 +552,11 @@ private fun ShortcutsTab(
         }
 
         items(shortcuts, key = { it.id }) { shortcut ->
-            val dismissState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    if (value == SwipeToDismissBoxValue.EndToStart) {
-                        onDelete(shortcut)
-                        true
-                    } else false
-                }
+            ShortcutItem(
+                shortcut = shortcut,
+                onToggle = { onToggle(shortcut) },
+                onDelete = { onDelete(shortcut) }
             )
-
-            SwipeToDismissBox(
-                state = dismissState,
-                backgroundContent = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.error, MaterialTheme.shapes.medium)
-                            .padding(horizontal = 20.dp),
-                        contentAlignment = Alignment.CenterEnd
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onError
-                        )
-                    }
-                },
-                enableDismissFromStartToEnd = false
-            ) {
-                ShortcutItem(
-                    shortcut = shortcut,
-                    onToggle = { onToggle(shortcut) }
-                )
-            }
         }
     }
 }
@@ -605,7 +564,8 @@ private fun ShortcutsTab(
 @Composable
 private fun ShortcutItem(
     shortcut: Shortcut,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -637,6 +597,12 @@ private fun ShortcutItem(
                 checked = shortcut.isEnabled,
                 onCheckedChange = { onToggle() }
             )
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.delete_shortcut)
+                )
+            }
         }
     }
 }

@@ -38,6 +38,7 @@
     <string name="copied">Copied</string>
     <string name="cancel">Cancel</string>
     <string name="delete">Delete</string>
+    <string name="restore_defaults">Restore defaults</string>
     <string name="play">Play</string>
     <string name="back">Back</string>
 
@@ -83,6 +84,9 @@
     <string name="shortcut_trigger">Voice trigger</string>
     <string name="shortcut_expansion">Expansion text</string>
     <string name="shortcut_add">Add Shortcut</string>
+    <string name="delete_entry">Delete entry</string>
+    <string name="delete_rule">Delete rule</string>
+    <string name="delete_shortcut">Delete shortcut</string>
 
     <!-- Errors -->
     <string name="error_transcription_failed">Transcription failed</string>

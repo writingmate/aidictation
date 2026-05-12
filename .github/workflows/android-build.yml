@@ -394,7 +394,12 @@ jobs:
           fi
           cp "$apk_path" "release-artifacts/AIDictation-Android-${artifact_version}.apk"
           cp "$aab_path" "release-artifacts/AIDictation-Android-${artifact_version}.aab"
-          (cd release-artifacts && shasum -a 256 * > SHA256SUMS.txt)
+          (
+            cd release-artifacts
+            shasum -a 256 *.apk > "AIDictation-Android-${artifact_version}.apk.sha256"
+            shasum -a 256 *.aab > "AIDictation-Android-${artifact_version}.aab.sha256"
+            shasum -a 256 *.apk *.aab > SHA256SUMS.txt
+          )
           ls -lh release-artifacts
 
       - name: Upload release APK

@@ -660,32 +660,6 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 2)
 
-                    Divider()
-                        .padding(.vertical, 6)
-
-                    // Overlay Color
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Overlay Color")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text("Accent color for the recording overlay")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { overlayManager.colorTheme },
-                            set: { overlayManager.setColorThemeFromMenu($0) }
-                        )) {
-                            ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
-                                Text(theme.displayName).tag(theme)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .fixedSize()
-                    }
-                    .padding(.vertical, 2)
                 }
             }
 
@@ -791,6 +765,33 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .controlSize(.mini)
                         .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
+
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    // Overlay Color
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Overlay Color")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Accent color for the recording overlay")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { overlayManager.colorTheme },
+                            set: { overlayManager.setColorThemeFromMenu($0) }
+                        )) {
+                            ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
+                                Text(theme.displayName).tag(theme)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .fixedSize()
                     }
                     .padding(.vertical, 2)
 

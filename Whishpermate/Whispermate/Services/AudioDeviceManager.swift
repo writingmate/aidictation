@@ -17,6 +17,14 @@ class AudioDeviceManager: ObservableObject {
 
     private enum Constants {
         static let wakeRecoveryDelays: [TimeInterval] = [0.5, 1.5, 3.0, 5.0, 8.0, 13.0]
+        static let virtualDeviceNameFragments = [
+            "cadeviceaggregate",
+            "aggregate",
+            "multi-output",
+            "blackhole",
+            "loopback",
+            "soundflower"
+        ]
     }
 
     @Published private(set) var inputDevices: [AudioDevice] = []
@@ -194,8 +202,10 @@ class AudioDeviceManager: ObservableObject {
         // Filter for input devices only
         for deviceID in audioDevices {
             if hasInputStreams(deviceID: deviceID),
+               isInputDeviceAlive(deviceID),
                let name = getDeviceName(deviceID: deviceID),
-               let uid = getDeviceUID(deviceID: deviceID)
+               let uid = getDeviceUID(deviceID: deviceID),
+               !shouldHideFromInputDeviceList(deviceID: deviceID, name: name)
             {
                 devices.append(AudioDevice(id: deviceID, name: name, uniqueID: uid))
             }
@@ -371,10 +381,9 @@ class AudioDeviceManager: ObservableObject {
             !shouldAvoidAutomaticallySelecting(device, clamshellClosed: clamshellClosed)
         }
 
-        let virtualNameFragments = ["blackhole", "loopback", "soundflower", "aggregate", "multi-output"]
         let physicalCandidates = allowedCandidates.filter { device in
             let lowercasedName = device.name.lowercased()
-            return !virtualNameFragments.contains { lowercasedName.contains($0) }
+            return !Constants.virtualDeviceNameFragments.contains { lowercasedName.contains($0) }
         }
 
         return physicalCandidates.first { device in
@@ -419,6 +428,17 @@ class AudioDeviceManager: ObservableObject {
 
         guard status == noErr else { return nil }
         return transportType
+    }
+
+    private func shouldHideFromInputDeviceList(deviceID: AudioDeviceID, name: String) -> Bool {
+        if let transportType = getDeviceTransportType(deviceID: deviceID),
+           transportType == kAudioDeviceTransportTypeAggregate
+        {
+            return true
+        }
+
+        let lowercasedName = name.lowercased()
+        return Constants.virtualDeviceNameFragments.contains { lowercasedName.contains($0) }
     }
 
     private func isClamshellClosed() -> Bool {
@@ -637,22 +657,29 @@ class AudioDeviceManager: ObservableObject {
             mElement: kAudioObjectPropertyElementMain
         )
 
-        AudioObjectAddPropertyListener(
+        let devicesListenerStatus = AudioObjectAddPropertyListener(
             AudioObjectID(kAudioObjectSystemObject),
             &propertyAddress,
             deviceListChangedCallback,
             nil
         )
+        if devicesListenerStatus != noErr {
+            DebugLog.info("Failed to register Core Audio device-list listener: \(devicesListenerStatus)", context: "AudioDeviceManager")
+        }
 
         // Listen for default device changes
         propertyAddress.mSelector = kAudioHardwarePropertyDefaultInputDevice
 
-        AudioObjectAddPropertyListener(
+        let defaultInputListenerStatus = AudioObjectAddPropertyListener(
             AudioObjectID(kAudioObjectSystemObject),
             &propertyAddress,
             deviceListChangedCallback,
             nil
         )
+        if defaultInputListenerStatus != noErr {
+            DebugLog.info("Failed to register Core Audio default-input listener: \(defaultInputListenerStatus)", context: "AudioDeviceManager")
+        }
+
     }
 
     func handleAudioHardwareChanged() {

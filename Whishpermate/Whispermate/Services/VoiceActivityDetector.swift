@@ -40,16 +40,12 @@ class VoiceActivityDetector {
     }
 
     private static var isCoreMLVADSupported: Bool {
-        #if arch(x86_64)
-            // Crash reports show the Silero CoreML package can trigger a process-level
-            // EXC_ARITHMETIC inside Espresso on Intel macOS 13 during first recording.
-            // Swift error handling cannot catch that signal, so fail open before loading it.
-            if #available(macOS 14.0, *) {
-                return true
-            }
-            return false
-        #else
+        // Crash reports show the bundled Silero CoreML package can trigger process-level
+        // crashes inside Espresso/BNNS on macOS 13 and 14. Swift error handling cannot
+        // catch those signals, so fail open before loading the model on affected systems.
+        if #available(macOS 15.0, *) {
             return true
-        #endif
+        }
+        return false
     }
 }

@@ -111,6 +111,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             name: .onboardingComplete,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(bringOnboardingToFront),
+            name: .bringOnboardingToFront,
+            object: nil
+        )
 
         // Check if onboarding is needed and open window if necessary
         checkAndShowOnboarding()
@@ -155,7 +161,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Settings menu item
         let settingsItem = NSMenuItem(
-            title: "Settings",
+            title: "AIDictation Settings",
             action: #selector(openSettings),
             keyEquivalent: ""
         )
@@ -323,6 +329,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         showMainSettingsWindow()
+    }
+
+    @objc private func bringOnboardingToFront() {
+        DebugLog.info("Bringing onboarding window to front", context: "AppDelegate")
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        WindowBridge.openWindow?("onboarding")
     }
 
     private func checkAndShowOnboarding() {
@@ -656,6 +668,12 @@ private struct ModernAppScenes: Scene {
         .commands {
             // Remove File > New Window command since we only want one main window
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .appSettings) {
+                Button("AIDictation Settings") {
+                    showMainSettingsWindow()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...") {
                     UpdateManager.shared.checkForUpdates()
@@ -704,6 +722,12 @@ private struct LegacyAppScenes: Scene {
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .appSettings) {
+                Button("AIDictation Settings") {
+                    showMainSettingsWindow()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...") {
                     UpdateManager.shared.checkForUpdates()

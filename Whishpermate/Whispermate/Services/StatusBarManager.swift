@@ -51,6 +51,7 @@ extension NSNotification.Name {
     static let showHistory = NSNotification.Name("ShowHistory")
     static let showSettings = NSNotification.Name("ShowSettings")
     static let showOnboarding = NSNotification.Name("ShowOnboarding")
+    static let bringOnboardingToFront = NSNotification.Name("BringOnboardingToFront")
     static let onboardingComplete = NSNotification.Name("OnboardingComplete")
     static let recordingStarted = NSNotification.Name("RecordingStarted")
     static let recordingCompleted = NSNotification.Name("RecordingCompleted")
@@ -137,16 +138,6 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         menu?.delegate = self
 
         // Show/Hide Window
-        let showHideItem = NSMenuItem(
-            title: "Show AIDictation",
-            action: #selector(toggleWindow),
-            keyEquivalent: ""
-        )
-        showHideItem.target = self
-        menu?.addItem(showHideItem)
-
-        menu?.addItem(NSMenuItem.separator())
-
         addMicrophoneMenu()
         addTranscriptionModeMenu()
 
@@ -163,7 +154,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
 
         // Settings
         let settingsItem = NSMenuItem(
-            title: "Settings",
+            title: "AIDictation Settings",
             action: #selector(showSettings),
             keyEquivalent: ","
         )
@@ -249,15 +240,6 @@ class StatusBarManager: NSObject, NSMenuDelegate {
     private func rebuildMenu() {
         menu?.removeAllItems()
 
-        let showHideItem = NSMenuItem(
-            title: "Show AIDictation",
-            action: #selector(toggleWindow),
-            keyEquivalent: ""
-        )
-        showHideItem.target = self
-        menu?.addItem(showHideItem)
-
-        menu?.addItem(NSMenuItem.separator())
         addMicrophoneMenu()
         addTranscriptionModeMenu()
 
@@ -267,7 +249,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         historyItem.target = self
         menu?.addItem(historyItem)
 
-        let settingsItem = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: "AIDictation Settings", action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu?.addItem(settingsItem)
 

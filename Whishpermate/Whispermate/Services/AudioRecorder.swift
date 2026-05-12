@@ -27,12 +27,12 @@ class AudioRecorder: NSObject, ObservableObject {
     private var inputFormat: AVAudioFormat?
     private var outputFormat: AVAudioFormat?
     private var pendingEngineRefresh = false
-    private var refreshWorkItem: DispatchWorkItem?
     private var recordingWatchdogTimer: Timer?
     private var lastAudioBufferAt: Date?
     private var lastEngineRecoveryAt: Date?
     private var retiredEngines: [AVAudioEngine] = []
     private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
+    private let engineStartQueue = DispatchQueue(label: "ai.writingmate.audio-engine-start", qos: .userInitiated)
     private let realtimeOutputFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
         sampleRate: 24_000,
@@ -59,16 +59,9 @@ class AudioRecorder: NSObject, ObservableObject {
             object: nil
         )
 
-        // Only pre-initialize the audio engine if microphone permission is already granted
-        // This prevents triggering the permission dialog on app launch
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
-            if let device = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() {
-                DebugLog.info("Pre-initializing audio engine with input device: \(device.name)", context: "AudioRecorder LOG")
-                setupAudioEngine()
-            } else {
-                DebugLog.info("Skipping audio engine pre-initialization because no preferred input device is available", context: "AudioRecorder LOG")
-            }
-        }
+        // Build the AVAudioEngine only for active recording sessions. Keeping an idle
+        // engine registered with Core Audio makes Bluetooth route-change bursts more
+        // likely to hit AVAudioIOUnit's hardware-format callbacks.
     }
 
     @objc private func handleAudioDeviceChanged(_: Notification) {
@@ -78,7 +71,7 @@ class AudioRecorder: NSObject, ObservableObject {
         // Only reinitialize the engine when not recording
         if !isRecording {
             pendingEngineRefresh = true
-            scheduleEngineRefresh()
+            teardownCurrentEngine()
         } else {
             DebugLog.info("Currently recording - will use new device on next recording", context: "AudioRecorder LOG")
         }
@@ -95,37 +88,12 @@ class AudioRecorder: NSObject, ObservableObject {
         DebugLog.info("Audio engine configuration changed", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("configuration_changed")
         if isRecording {
-            recoverAudioEngineDuringRecording(reason: "configuration change")
+            pendingEngineRefresh = true
+            DebugLog.info("Deferring audio engine rebuild until recording stops", context: "AudioRecorder LOG")
         } else {
             pendingEngineRefresh = true
-            scheduleEngineRefresh()
+            teardownCurrentEngine()
         }
-    }
-
-    private func scheduleEngineRefresh() {
-        refreshWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            guard self.pendingEngineRefresh, !self.isRecording else { return }
-
-            DebugLog.info("Reinitializing engine with new device", context: "AudioRecorder LOG")
-            guard let device = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() else {
-                DebugLog.info("Deferring engine refresh because preferred input device is unavailable", context: "AudioRecorder LOG")
-                return
-            }
-
-            DebugLog.info("Refreshing engine with input device: \(device.name)", context: "AudioRecorder LOG")
-            SentryTelemetry.recordAudioDeviceEvent("engine_refresh_device", device: device)
-            self.pendingEngineRefresh = false
-            self.setupAudioEngine()
-        }
-
-        refreshWorkItem = workItem
-
-        // Audio route changes often arrive in bursts; debounce to avoid tearing down the engine
-        // while AVAudioIOUnit is still dispatching internal callbacks.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
     }
 
     private func retireEngine(_ engine: AVAudioEngine) {
@@ -142,18 +110,10 @@ class AudioRecorder: NSObject, ObservableObject {
     }
 
     private func setupAudioEngine() {
-        DebugLog.info("🎙️ Setting up audio engine (persistent mode)", context: "AudioRecorder LOG")
+        DebugLog.info("🎙️ Setting up audio engine", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("setup")
 
-        // Clean up existing engine if any
-        if let engine = audioEngine {
-            if engine.isRunning {
-                engine.stop()
-            }
-            engine.inputNode.removeTap(onBus: 0)
-            audioEngine = nil
-            retireEngine(engine)
-        }
+        teardownCurrentEngine()
 
         do {
             // Create AVAudioEngine
@@ -237,7 +197,7 @@ class AudioRecorder: NSObject, ObservableObject {
             // Don't start the engine yet - only start when recording begins
             audioEngine = engine
 
-            DebugLog.info("✅ Audio engine initialized (will start on recording)", context: "AudioRecorder LOG")
+            DebugLog.info("✅ Audio engine initialized", context: "AudioRecorder LOG")
         } catch {
             DebugLog.info("❌ Failed to setup audio engine: \(error)", context: "AudioRecorder LOG")
         }
@@ -262,7 +222,6 @@ class AudioRecorder: NSObject, ObservableObject {
         if pendingEngineRefresh {
             DebugLog.info("Applying deferred audio engine refresh before recording", context: "AudioRecorder LOG")
             pendingEngineRefresh = false
-            refreshWorkItem?.cancel()
             setupAudioEngine()
         }
 
@@ -323,30 +282,49 @@ class AudioRecorder: NSObject, ObservableObject {
 
             let engineWasStarted = engine.isRunning
             if !engineWasStarted {
-                do {
-                    try engine.start()
-                    DebugLog.info("✅ Audio engine started", context: "AudioRecorder LOG")
-                    // Give the engine a moment to start processing audio
-                    usleep(50000) // 50ms delay to let audio pipeline stabilize
-                } catch {
-                    DebugLog.info("❌ Failed to start audio engine: \(error)", context: "AudioRecorder LOG")
-                    resetFailedStart()
-                    return
+                startEngineOffMainThread(engine, reason: "recording start") { [weak self] in
+                    self?.finishEngineStart()
                 }
+                return
             }
 
-            // Lower system volume to duck other audio only after recording has actually started.
-            let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
-            DebugLog.info("Mute audio setting: \(shouldMuteAudio)", context: "AudioRecorder")
-            if shouldMuteAudio {
-                volumeManager.lowerVolume()
-            }
-
-            DebugLog.info("✅ Recording started", context: "AudioRecorder LOG")
+            finishEngineStart()
         } catch {
             DebugLog.info("❌ Failed to create audio file: \(error)", context: "AudioRecorder LOG")
             resetFailedStart()
         }
+    }
+
+    private func startEngineOffMainThread(_ engine: AVAudioEngine, reason: String, onStarted: @escaping () -> Void) {
+        engineStartQueue.async { [weak self, weak engine] in
+            guard let self, let engine else { return }
+
+            do {
+                try engine.start()
+
+                DispatchQueue.main.async { [weak self, weak engine] in
+                    guard let self, let engine, self.audioEngine === engine else { return }
+                    DebugLog.info("✅ Audio engine started for \(reason)", context: "AudioRecorder LOG")
+                    onStarted()
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self, weak engine] in
+                    guard let self, let engine, self.audioEngine === engine else { return }
+                    DebugLog.info("❌ Failed to start audio engine for \(reason): \(error)", context: "AudioRecorder LOG")
+                    self.resetFailedStart()
+                }
+            }
+        }
+    }
+
+    private func finishEngineStart() {
+        let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
+        DebugLog.info("Mute audio setting: \(shouldMuteAudio)", context: "AudioRecorder")
+        if shouldMuteAudio {
+            volumeManager.lowerVolume()
+        }
+
+        DebugLog.info("✅ Recording started", context: "AudioRecorder LOG")
     }
 
     private func resetFailedStart() {
@@ -392,6 +370,8 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
+        guard !pendingEngineRefresh else { return }
+
         guard let engine = audioEngine, engine.isRunning else {
             recoverAudioEngineDuringRecording(reason: "engine stopped")
             return
@@ -399,6 +379,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
         guard let lastAudioBufferAt else { return }
         if Date().timeIntervalSince(lastAudioBufferAt) > Constants.recordingBufferStallThreshold {
+            guard !pendingEngineRefresh else { return }
             recoverAudioEngineDuringRecording(reason: "audio tap stalled")
         }
     }
@@ -406,7 +387,7 @@ class AudioRecorder: NSObject, ObservableObject {
     private func recoverAudioEngineDuringRecording(reason: String) {
         guard isRecording else {
             pendingEngineRefresh = true
-            scheduleEngineRefresh()
+            teardownCurrentEngine()
             return
         }
 
@@ -433,12 +414,9 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
-        do {
-            try engine.start()
-            lastAudioBufferAt = Date()
+        startEngineOffMainThread(engine, reason: "recording recovery") { [weak self] in
+            self?.lastAudioBufferAt = Date()
             DebugLog.info("✅ Audio engine recovered during recording", context: "AudioRecorder LOG")
-        } catch {
-            DebugLog.info("❌ Failed to recover audio engine during recording: \(error)", context: "AudioRecorder LOG")
         }
     }
 
@@ -551,11 +529,7 @@ class AudioRecorder: NSObject, ObservableObject {
         // Close audio file
         audioFile = nil
 
-        // Stop the audio engine to release microphone
-        if let engine = audioEngine, engine.isRunning {
-            engine.stop()
-            DebugLog.info("✅ Audio engine stopped", context: "AudioRecorder LOG")
-        }
+        teardownCurrentEngine()
 
         // Restore system volume
         let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
@@ -583,26 +557,37 @@ class AudioRecorder: NSObject, ObservableObject {
         // Clear recordingURL for next session
         recordingURL = nil
 
+        if pendingEngineRefresh {
+            pendingEngineRefresh = false
+        }
+
         return url
+    }
+
+    private func teardownCurrentEngine() {
+        guard let engine = audioEngine else { return }
+
+        audioEngine = nil
+
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning {
+            engine.stop()
+            DebugLog.info("✅ Audio engine stopped", context: "AudioRecorder LOG")
+        }
+
+        retireEngine(engine)
     }
 
     deinit {
         DebugLog.info("🗑️ Deinit - cleaning up", context: "AudioRecorder LOG")
 
-        refreshWorkItem?.cancel()
         stopRecordingWatchdog()
 
         // Remove notification observers
         NotificationCenter.default.removeObserver(self)
 
         // Stop engine and clean up
-        if let engine = audioEngine {
-            if engine.isRunning {
-                engine.stop()
-            }
-            engine.inputNode.removeTap(onBus: 0)
-        }
-        audioEngine = nil
+        teardownCurrentEngine()
         audioFile = nil
 
         // Restore volume as a safety measure

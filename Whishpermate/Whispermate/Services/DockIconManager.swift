@@ -51,25 +51,30 @@ final class DockIconManager: ObservableObject {
 
         let windowSnapshot = restoreVisibleWindows ? currentVisibleWindowSnapshot() : nil
 
-        if persist {
-            AppDefaults.shared.set(visible, forKey: Keys.showDockIcon)
-        }
-
         if !visible, !StatusBarManager.isMenuBarIconVisible {
             StatusBarManager.requestMenuBarIconVisibility(true)
         }
 
-        let policy: NSApplication.ActivationPolicy = visible ? .regular : .accessory
-        let applied = NSApp.setActivationPolicy(policy)
-        let actualVisibility = applied ? visible : (NSApp.activationPolicy() == .regular)
+        let targetPolicy: NSApplication.ActivationPolicy = visible ? .regular : .accessory
+        let startingPolicy = NSApp.activationPolicy()
+        let applied = startingPolicy == targetPolicy || NSApp.setActivationPolicy(targetPolicy)
+        let actualPolicy = NSApp.activationPolicy()
+        let actualVisibility = actualPolicy == .regular
+
+        if persist {
+            AppDefaults.shared.set(actualVisibility, forKey: Keys.showDockIcon)
+        }
 
         isDockIconVisible = actualVisibility
         NotificationCenter.default.post(name: .dockIconVisibilityChanged, object: actualVisibility)
 
-        if applied {
+        if applied && actualVisibility == visible {
             DebugLog.info("Dock icon visibility set to \(actualVisibility)", context: "DockIconManager")
         } else {
-            DebugLog.error("Failed to set Dock icon visibility to \(visible)", context: "DockIconManager")
+            DebugLog.info(
+                "Dock icon visibility request was not applied (requested: \(visible), actual: \(actualVisibility), policy: \(actualPolicy))",
+                context: "DockIconManager"
+            )
         }
 
         if restoreVisibleWindows, let windowSnapshot {

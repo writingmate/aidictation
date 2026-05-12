@@ -86,7 +86,14 @@ class OnboardingManager: ObservableObject {
     // MARK: - Public API
 
     func updateAccessibilityStatus() {
-        accessibilityGranted = AXIsProcessTrusted()
+        let wasGranted = accessibilityGranted
+        let isGranted = AXIsProcessTrusted()
+        accessibilityGranted = isGranted
+
+        if showOnboarding, !wasGranted, isGranted {
+            DebugLog.info("Accessibility permission granted during onboarding; bringing onboarding forward", context: "OnboardingManager")
+            NotificationCenter.default.post(name: .bringOnboardingToFront, object: nil)
+        }
     }
 
     func updateMicrophoneStatus() {

@@ -4,10 +4,22 @@
 # Android SDK location
 sdk.dir=/path/to/Android/Sdk
 
+# Optional local version overrides. CI uses these for Play dev releases.
+VERSION_CODE=5
+VERSION_NAME=0.0.5
+
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here
 TRANSCRIPTION_ENDPOINT=https://writingmate.ai/api/openai/v1/audio/transcriptions
 TRANSCRIPTION_MODEL=groq/whisper-large-v3-turbo
+
+# Optional local Parakeet runtime. Leave empty for cloud transcription.
+# Use `litert` only with converted `.tflite` files in parakeetpack.
+PARAKEET_RUNTIME=
+
+# Optional sideload APK mode. When true, the APK embeds Parakeet weights and
+# copies them from APK assets to app storage on first local transcription.
+PACKAGE_OFFLINE_MODELS=false
 
 # Writingmate post-processing configuration
 # Matches AIDictationPostProcessing* in the macOS Secrets.plist.
@@ -24,3 +36,8 @@ STRIPE_PAYMENT_LINK=https://buy.stripe.com/your_default_checkout_link
 STRIPE_PAYMENT_LINK_MONTHLY=https://buy.stripe.com/your_monthly_checkout_link
 STRIPE_PAYMENT_LINK_ANNUAL=https://buy.stripe.com/your_annual_checkout_link
 STRIPE_PAYMENT_LINK_LIFETIME=https://buy.stripe.com/your_lifetime_checkout_link
+
+# Optional Google Play publishing configuration for local Gradle Play Publisher runs.
+# CI normally writes PLAY_SERVICE_ACCOUNT_CREDENTIALS from a GitHub secret.
+PLAY_TRACK=internal
+PLAY_SERVICE_ACCOUNT_CREDENTIALS=/path/to/google-play-service-account.json

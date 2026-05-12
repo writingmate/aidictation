@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.data.preferences
 
 import com.whispermate.aidictation.BuildConfig
+import com.whispermate.aidictation.data.local.ParakeetRuntime
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -43,7 +44,10 @@ class ApiConfigManager @Inject constructor() {
             private set
 
         fun defaultTranscriptionModel(provider: ApiProvider): String = when (provider) {
-            ApiProvider.PARAKEET -> "parakeet-tdt-0.6b"
+            ApiProvider.PARAKEET -> when (ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)) {
+                ParakeetRuntime.ONNX -> "parakeet-tdt-0.6b-v3"
+                ParakeetRuntime.LITERT -> "parakeet-tdt-0.6b-v3-litert"
+            }
             ApiProvider.WRITINGMATE -> "groq/whisper-large-v3-turbo"
             ApiProvider.OPENAI -> "whisper-1"
             ApiProvider.GROQ -> "whisper-large-v3-turbo"
@@ -64,6 +68,10 @@ class ApiConfigManager @Inject constructor() {
     fun getPostProcessingConfig(): ApiConfig = postProcessingConfig
 
     private fun defaultTranscriptionProvider(): ApiProvider {
+        if (ParakeetRuntime.isLocalRuntime(BuildConfig.PARAKEET_RUNTIME)) {
+            return ApiProvider.PARAKEET
+        }
+
         val endpoint = BuildConfig.TRANSCRIPTION_ENDPOINT
         return when {
             endpoint.contains("writingmate", ignoreCase = true) -> ApiProvider.WRITINGMATE
@@ -85,11 +93,20 @@ class ApiConfigManager @Inject constructor() {
 
     private fun buildDefaultTranscriptionConfig(): ApiConfig {
         val provider = defaultTranscriptionProvider()
+        val isLocalParakeet = provider == ApiProvider.PARAKEET
         return ApiConfig(
             provider = provider,
             apiKey = BuildConfig.TRANSCRIPTION_API_KEY,
-            model = BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) },
-            endpoint = BuildConfig.TRANSCRIPTION_ENDPOINT.ifEmpty { provider.transcriptionEndpoint() }
+            model = if (isLocalParakeet) {
+                defaultTranscriptionModel(provider)
+            } else {
+                BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) }
+            },
+            endpoint = if (isLocalParakeet) {
+                provider.transcriptionEndpoint()
+            } else {
+                BuildConfig.TRANSCRIPTION_ENDPOINT.ifEmpty { provider.transcriptionEndpoint() }
+            }
         )
     }
 

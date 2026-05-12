@@ -22,6 +22,10 @@
 -keep class ai.onnxruntime.** { *; }
 -keepclassmembers class ai.onnxruntime.** { *; }
 
+# LiteRT JNI looks up exception/status classes by their original names.
+-keep class com.google.ai.edge.litert.** { *; }
+-keepclassmembers class com.google.ai.edge.litert.** { *; }
+
 # Tink (via androidx.security.crypto) references errorprone annotations at
 # compile time; they're not shipped at runtime, so tell R8 to ignore them.
 -dontwarn com.google.errorprone.annotations.**

@@ -60,6 +60,13 @@ jobs:
       AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
       AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
       AIDICTATION_POST_PROCESSING_MODEL: ${{ secrets.AIDICTATION_POST_PROCESSING_MODEL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+      STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
+      STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
+      STRIPE_PAYMENT_LINK_LIFETIME: ${{ secrets.STRIPE_PAYMENT_LINK_LIFETIME }}
       # Shared macOS Secrets.plist (base64). If set, the Writingmate key is
       # extracted from CustomTranscriptionKey so both platforms share one secret.
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
@@ -93,14 +100,14 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: Resolve Writingmate creds from SECRETS_PLIST
+      - name: Resolve app config from SECRETS_PLIST
         if: env.SECRETS_PLIST != ''
         shell: bash
         run: |
           # The macOS release workflow ships a base64-encoded Secrets.plist that
-          # holds the Writingmate transcription key, endpoint, and model. Reuse
-          # it here so a single repo secret drives both platforms. Only fills
-          # fields that weren't set via dedicated Android secrets.
+          # holds the shared Writingmate, Supabase, auth, and Stripe config.
+          # Reuse it here so a single repo secret drives both platforms. Only
+          # fills fields that weren't set via dedicated Android secrets.
           echo "$SECRETS_PLIST" | base64 -d > /tmp/secrets.plist
           extract() {
             python3 - "$1" <<'PY'
@@ -115,6 +122,13 @@ jobs:
           pp_key=$(extract AIDictationPostProcessingKey)
           pp_endpoint=$(extract AIDictationPostProcessingEndpoint)
           pp_model=$(extract AIDictationPostProcessingModel)
+          supabase_url=$(extract SUPABASE_URL)
+          supabase_anon_key=$(extract SUPABASE_ANON_KEY)
+          auth_web_url=$(extract AUTH_WEB_URL)
+          stripe_link=$(extract STRIPE_PAYMENT_LINK)
+          stripe_monthly=$(extract STRIPE_PAYMENT_LINK_MONTHLY)
+          stripe_annual=$(extract STRIPE_PAYMENT_LINK_ANNUAL)
+          stripe_lifetime=$(extract STRIPE_PAYMENT_LINK_LIFETIME)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -132,6 +146,27 @@ jobs:
           fi
           if [ -z "$AIDICTATION_POST_PROCESSING_MODEL" ] && [ -n "$pp_model" ]; then
             echo "AIDICTATION_POST_PROCESSING_MODEL=$pp_model" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$SUPABASE_URL" ] && [ -n "$supabase_url" ]; then
+            echo "SUPABASE_URL=$supabase_url" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$SUPABASE_ANON_KEY" ] && [ -n "$supabase_anon_key" ]; then
+            echo "SUPABASE_ANON_KEY=$supabase_anon_key" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$AUTH_WEB_URL" ] && [ -n "$auth_web_url" ]; then
+            echo "AUTH_WEB_URL=$auth_web_url" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK" ] && [ -n "$stripe_link" ]; then
+            echo "STRIPE_PAYMENT_LINK=$stripe_link" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK_MONTHLY" ] && [ -n "$stripe_monthly" ]; then
+            echo "STRIPE_PAYMENT_LINK_MONTHLY=$stripe_monthly" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK_ANNUAL" ] && [ -n "$stripe_annual" ]; then
+            echo "STRIPE_PAYMENT_LINK_ANNUAL=$stripe_annual" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK_LIFETIME" ] && [ -n "$stripe_lifetime" ]; then
+            echo "STRIPE_PAYMENT_LINK_LIFETIME=$stripe_lifetime" >> "$GITHUB_ENV"
           fi
           rm /tmp/secrets.plist
 
@@ -156,6 +191,13 @@ jobs:
           AIDICTATION_POST_PROCESSING_KEY=${AIDICTATION_POST_PROCESSING_KEY}
           AIDICTATION_POST_PROCESSING_ENDPOINT=${AIDICTATION_POST_PROCESSING_ENDPOINT:-https://writingmate.ai/api/openai/v1/chat/completions}
           AIDICTATION_POST_PROCESSING_MODEL=${AIDICTATION_POST_PROCESSING_MODEL:-openai/gpt-oss-20b}
+          SUPABASE_URL=${SUPABASE_URL}
+          SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+          AUTH_WEB_URL=${AUTH_WEB_URL:-https://voicesinmyhead.co/auth}
+          STRIPE_PAYMENT_LINK=${STRIPE_PAYMENT_LINK}
+          STRIPE_PAYMENT_LINK_MONTHLY=${STRIPE_PAYMENT_LINK_MONTHLY}
+          STRIPE_PAYMENT_LINK_ANNUAL=${STRIPE_PAYMENT_LINK_ANNUAL}
+          STRIPE_PAYMENT_LINK_LIFETIME=${STRIPE_PAYMENT_LINK_LIFETIME}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}
@@ -198,6 +240,13 @@ jobs:
       AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
       AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
       AIDICTATION_POST_PROCESSING_MODEL: ${{ secrets.AIDICTATION_POST_PROCESSING_MODEL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+      STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
+      STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
+      STRIPE_PAYMENT_LINK_LIFETIME: ${{ secrets.STRIPE_PAYMENT_LINK_LIFETIME }}
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -278,6 +327,13 @@ jobs:
           echo "AIDICTATION_POST_PROCESSING_KEY:      $(present "$AIDICTATION_POST_PROCESSING_KEY")"
           echo "AIDICTATION_POST_PROCESSING_ENDPOINT: $(present "$AIDICTATION_POST_PROCESSING_ENDPOINT")"
           echo "AIDICTATION_POST_PROCESSING_MODEL:    $(present "$AIDICTATION_POST_PROCESSING_MODEL")"
+          echo "SUPABASE_URL:            $(present "$SUPABASE_URL")"
+          echo "SUPABASE_ANON_KEY:       $(present "$SUPABASE_ANON_KEY")"
+          echo "AUTH_WEB_URL:            $(present "$AUTH_WEB_URL")"
+          echo "STRIPE_PAYMENT_LINK:     $(present "$STRIPE_PAYMENT_LINK")"
+          echo "STRIPE_PAYMENT_LINK_MONTHLY:  $(present "$STRIPE_PAYMENT_LINK_MONTHLY")"
+          echo "STRIPE_PAYMENT_LINK_ANNUAL:   $(present "$STRIPE_PAYMENT_LINK_ANNUAL")"
+          echo "STRIPE_PAYMENT_LINK_LIFETIME: $(present "$STRIPE_PAYMENT_LINK_LIFETIME")"
           echo "SECRETS_PLIST:             $(present "$SECRETS_PLIST")"
           echo "ANDROID_KEYSTORE_BASE64:   $(present "$ANDROID_KEYSTORE_BASE64")"
           echo "ANDROID_KEYSTORE_PASSWORD: $(present "$KEYSTORE_PASSWORD")"
@@ -308,7 +364,7 @@ jobs:
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
 
-      - name: Resolve Writingmate creds from SECRETS_PLIST
+      - name: Resolve app config from SECRETS_PLIST
         if: env.SECRETS_PLIST != ''
         shell: bash
         run: |
@@ -326,6 +382,13 @@ jobs:
           pp_key=$(extract AIDictationPostProcessingKey)
           pp_endpoint=$(extract AIDictationPostProcessingEndpoint)
           pp_model=$(extract AIDictationPostProcessingModel)
+          supabase_url=$(extract SUPABASE_URL)
+          supabase_anon_key=$(extract SUPABASE_ANON_KEY)
+          auth_web_url=$(extract AUTH_WEB_URL)
+          stripe_link=$(extract STRIPE_PAYMENT_LINK)
+          stripe_monthly=$(extract STRIPE_PAYMENT_LINK_MONTHLY)
+          stripe_annual=$(extract STRIPE_PAYMENT_LINK_ANNUAL)
+          stripe_lifetime=$(extract STRIPE_PAYMENT_LINK_LIFETIME)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -343,6 +406,27 @@ jobs:
           fi
           if [ -z "$AIDICTATION_POST_PROCESSING_MODEL" ] && [ -n "$pp_model" ]; then
             echo "AIDICTATION_POST_PROCESSING_MODEL=$pp_model" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$SUPABASE_URL" ] && [ -n "$supabase_url" ]; then
+            echo "SUPABASE_URL=$supabase_url" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$SUPABASE_ANON_KEY" ] && [ -n "$supabase_anon_key" ]; then
+            echo "SUPABASE_ANON_KEY=$supabase_anon_key" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$AUTH_WEB_URL" ] && [ -n "$auth_web_url" ]; then
+            echo "AUTH_WEB_URL=$auth_web_url" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK" ] && [ -n "$stripe_link" ]; then
+            echo "STRIPE_PAYMENT_LINK=$stripe_link" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK_MONTHLY" ] && [ -n "$stripe_monthly" ]; then
+            echo "STRIPE_PAYMENT_LINK_MONTHLY=$stripe_monthly" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK_ANNUAL" ] && [ -n "$stripe_annual" ]; then
+            echo "STRIPE_PAYMENT_LINK_ANNUAL=$stripe_annual" >> "$GITHUB_ENV"
+          fi
+          if [ -z "$STRIPE_PAYMENT_LINK_LIFETIME" ] && [ -n "$stripe_lifetime" ]; then
+            echo "STRIPE_PAYMENT_LINK_LIFETIME=$stripe_lifetime" >> "$GITHUB_ENV"
           fi
           rm /tmp/secrets.plist
 
@@ -367,6 +451,13 @@ jobs:
           AIDICTATION_POST_PROCESSING_KEY=${AIDICTATION_POST_PROCESSING_KEY}
           AIDICTATION_POST_PROCESSING_ENDPOINT=${AIDICTATION_POST_PROCESSING_ENDPOINT:-https://writingmate.ai/api/openai/v1/chat/completions}
           AIDICTATION_POST_PROCESSING_MODEL=${AIDICTATION_POST_PROCESSING_MODEL:-openai/gpt-oss-20b}
+          SUPABASE_URL=${SUPABASE_URL}
+          SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+          AUTH_WEB_URL=${AUTH_WEB_URL:-https://voicesinmyhead.co/auth}
+          STRIPE_PAYMENT_LINK=${STRIPE_PAYMENT_LINK}
+          STRIPE_PAYMENT_LINK_MONTHLY=${STRIPE_PAYMENT_LINK_MONTHLY}
+          STRIPE_PAYMENT_LINK_ANNUAL=${STRIPE_PAYMENT_LINK_ANNUAL}
+          STRIPE_PAYMENT_LINK_LIFETIME=${STRIPE_PAYMENT_LINK_LIFETIME}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}

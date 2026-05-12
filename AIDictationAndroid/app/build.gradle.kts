@@ -50,8 +50,8 @@ android {
         applicationId = "com.whispermate.aidictation"
         minSdk = 26
         targetSdk = 35
-        versionCode = configValue("VERSION_CODE", "7").toInt()
-        versionName = configValue("VERSION_NAME", "0.0.7")
+        versionCode = configValue("VERSION_CODE", "8").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.8")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -69,20 +69,20 @@ android {
 
         // Writingmate post-processing, matching the macOS app's
         // AIDictationPostProcessing* secrets.
-        buildConfigField("String", "AIDICTATION_POST_PROCESSING_KEY", "\"${localProperties.getProperty("AIDICTATION_POST_PROCESSING_KEY", "")}\"")
-        buildConfigField("String", "AIDICTATION_POST_PROCESSING_ENDPOINT", "\"${localProperties.getProperty("AIDICTATION_POST_PROCESSING_ENDPOINT", "https://writingmate.ai/api/openai/v1/chat/completions")}\"")
-        buildConfigField("String", "AIDICTATION_POST_PROCESSING_MODEL", "\"${localProperties.getProperty("AIDICTATION_POST_PROCESSING_MODEL", "openai/gpt-oss-20b")}\"")
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_KEY", "\"${configValue("AIDICTATION_POST_PROCESSING_KEY", "")}\"")
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_ENDPOINT", "\"${configValue("AIDICTATION_POST_PROCESSING_ENDPOINT", "https://writingmate.ai/api/openai/v1/chat/completions")}\"")
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_MODEL", "\"${configValue("AIDICTATION_POST_PROCESSING_MODEL", "openai/gpt-oss-20b")}\"")
 
         // Auth, usage, and purchase links. Android uses the same web auth and
         // Stripe checkout flow as the macOS app; empty values leave those entry
         // points disabled in local builds.
-        buildConfigField("String", "SUPABASE_URL", "\"${localProperties.getProperty("SUPABASE_URL", "")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProperties.getProperty("SUPABASE_ANON_KEY", "")}\"")
-        buildConfigField("String", "AUTH_WEB_URL", "\"${localProperties.getProperty("AUTH_WEB_URL", "https://voicesinmyhead.co/auth")}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK", "")}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK_MONTHLY", localProperties.getProperty("STRIPE_PAYMENT_LINK", ""))}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK_ANNUAL", "")}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", "\"${localProperties.getProperty("STRIPE_PAYMENT_LINK_LIFETIME", "")}\"")
+        buildConfigField("String", "SUPABASE_URL", "\"${configValue("SUPABASE_URL", "")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${configValue("SUPABASE_ANON_KEY", "")}\"")
+        buildConfigField("String", "AUTH_WEB_URL", "\"${configValue("AUTH_WEB_URL", "https://voicesinmyhead.co/auth")}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK", "\"${configValue("STRIPE_PAYMENT_LINK", "")}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", "\"${configValue("STRIPE_PAYMENT_LINK_MONTHLY", configValue("STRIPE_PAYMENT_LINK", ""))}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", "\"${configValue("STRIPE_PAYMENT_LINK_ANNUAL", "")}\"")
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", "\"${configValue("STRIPE_PAYMENT_LINK_LIFETIME", "")}\"")
     }
 
     buildTypes {

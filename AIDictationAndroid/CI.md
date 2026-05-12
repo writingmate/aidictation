@@ -41,7 +41,14 @@ runs, matching the local-developer layout described in
 | `AIDICTATION_POST_PROCESSING_KEY` | Writingmate post-processing key for suggestions, commands, and cleanup. |
 | `AIDICTATION_POST_PROCESSING_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/chat/completions`. |
 | `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
-| `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present, the workflow extracts `CustomTranscription*` and `AIDictationPostProcessing*` so both platforms ship with the same Writingmate credentials. |
+| `SUPABASE_URL` | Optional dedicated Android override for Supabase auth/profile requests. |
+| `SUPABASE_ANON_KEY` | Optional dedicated Android override for the Supabase anon key. |
+| `AUTH_WEB_URL` | Optional dedicated Android override for the hosted auth page. Defaults to `https://voicesinmyhead.co/auth`. |
+| `STRIPE_PAYMENT_LINK` | Optional default Stripe checkout link. |
+| `STRIPE_PAYMENT_LINK_MONTHLY` | Optional monthly checkout link. |
+| `STRIPE_PAYMENT_LINK_ANNUAL` | Optional annual checkout link. |
+| `STRIPE_PAYMENT_LINK_LIFETIME` | Optional lifetime checkout link. |
+| `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present, the workflow extracts `CustomTranscription*`, `AIDictationPostProcessing*`, `SUPABASE_*`, `AUTH_WEB_URL`, and `STRIPE_PAYMENT_LINK*` so both platforms ship with the same Writingmate auth and billing configuration. |
 
 ### Release signing (only needed for the `release` job on `main`)
 
@@ -70,11 +77,15 @@ Google Cloud project, and grant the service account release access to this app.
 # Either: dedicated Android secret
 gh secret set TRANSCRIPTION_API_KEY --repo writingmate/aidictation
 
-# Or: reuse the Mac Secrets.plist (base64-encoded) — Writingmate
-# transcription and post-processing keys are pulled automatically.
+# Or: reuse the Mac Secrets.plist (base64-encoded) — Writingmate,
+# Supabase auth, and Stripe values are pulled automatically.
 base64 -w0 Secrets.plist | gh secret set SECRETS_PLIST --repo writingmate/aidictation
 
 gh secret set AIDICTATION_POST_PROCESSING_KEY --repo writingmate/aidictation
+gh secret set SUPABASE_URL --repo writingmate/aidictation
+gh secret set SUPABASE_ANON_KEY --repo writingmate/aidictation
+gh secret set AUTH_WEB_URL --repo writingmate/aidictation
+gh secret set STRIPE_PAYMENT_LINK_MONTHLY --repo writingmate/aidictation
 base64 -w0 release.keystore | gh secret set ANDROID_KEYSTORE_BASE64 --repo writingmate/aidictation
 gh secret set ANDROID_KEYSTORE_PASSWORD --repo writingmate/aidictation
 gh secret set ANDROID_KEY_ALIAS         --repo writingmate/aidictation

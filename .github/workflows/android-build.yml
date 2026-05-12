@@ -216,8 +216,8 @@ jobs:
         id: release_meta
         shell: bash
         run: |
-          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
-          version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' app/build.gradle.kts | head -n 1)
+          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p; s/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*configValue\("VERSION_NAME", "([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p; s/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*configValue\("VERSION_CODE", "([0-9]+)".*/\1/p' app/build.gradle.kts | head -n 1)
           if [ -z "$version_name" ] || [ -z "$version_code" ]; then
             echo "Could not read Android versionName/versionCode from app/build.gradle.kts" >&2
             exit 1

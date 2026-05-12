@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.gradle.play.publisher)
 }
 
 // Load local.properties
@@ -15,6 +16,14 @@ val localProperties = Properties().apply {
         load(localPropertiesFile.inputStream())
     }
 }
+
+fun configValue(name: String, defaultValue: String = ""): String {
+    return providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+        ?: localProperties.getProperty(name, defaultValue)
+}
+
+val packageOfflineModels = configValue("PACKAGE_OFFLINE_MODELS", "false").toBooleanStrictOrNull() ?: false
 
 android {
     namespace = "com.whispermate.aidictation"
@@ -33,8 +42,8 @@ android {
         applicationId = "com.whispermate.aidictation"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.0.5"
+        versionCode = configValue("VERSION_CODE", "5").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.5")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -42,9 +51,11 @@ android {
         // app, which ships with Writingmate AI as the default transcription provider
         // routing Groq Whisper through the Writingmate proxy unless a custom
         // endpoint is set in local.properties.
-        buildConfigField("String", "TRANSCRIPTION_API_KEY", "\"${localProperties.getProperty("TRANSCRIPTION_API_KEY", "")}\"")
-        buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${localProperties.getProperty("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")}\"")
-        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${localProperties.getProperty("TRANSCRIPTION_MODEL", "groq/whisper-large-v3-turbo")}\"")
+        buildConfigField("String", "TRANSCRIPTION_API_KEY", "\"${configValue("TRANSCRIPTION_API_KEY", "")}\"")
+        buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${configValue("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")}\"")
+        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${configValue("TRANSCRIPTION_MODEL", "groq/whisper-large-v3-turbo")}\"")
+        buildConfigField("String", "PARAKEET_RUNTIME", "\"${configValue("PARAKEET_RUNTIME", "")}\"")
+        buildConfigField("boolean", "PACKAGE_OFFLINE_MODELS", packageOfflineModels.toString())
 
         // Writingmate post-processing, matching the macOS app's
         // AIDictationPostProcessing* secrets.
@@ -86,8 +97,31 @@ android {
         buildConfig = true
     }
 
-    // Play-delivered on-device model pack for Parakeet.
-    assetPacks.add(":parakeetpack")
+    androidResources {
+        noCompress += listOf("onnx", "tflite", "txt", "json")
+    }
+
+    if (packageOfflineModels) {
+        sourceSets.getByName("main").assets.srcDir(rootProject.file("parakeetpack/src/main/assets"))
+    } else {
+        // Play-delivered on-device model pack for Parakeet.
+        assetPacks.add(":parakeetpack")
+    }
+}
+
+play {
+    val credentialsPath = configValue("PLAY_SERVICE_ACCOUNT_CREDENTIALS", "")
+    val releaseNameOverride = configValue("PLAY_RELEASE_NAME", "")
+    if (credentialsPath.isNotBlank()) {
+        serviceAccountCredentials.set(file(credentialsPath))
+    }
+    track.set(configValue("PLAY_TRACK", "internal"))
+    defaultToAppBundles.set(true)
+    releaseName.set(
+        releaseNameOverride.ifBlank {
+            "AIDictation Android ${android.defaultConfig.versionName} (${android.defaultConfig.versionCode})"
+        }
+    )
 }
 
 dependencies {
@@ -137,6 +171,7 @@ dependencies {
     // ONNX Runtime for Silero VAD
     implementation(libs.onnx.runtime)
     implementation(libs.play.asset.delivery)
+    implementation(libs.litert)
 
     // Debug
     debugImplementation(libs.androidx.ui.tooling)

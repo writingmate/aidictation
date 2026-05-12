@@ -6,6 +6,13 @@ Android source tree. A push to `main`, an `android-v*` tag, or a manual
 workflow dispatch also runs the signed release job and publishes APK/AAB
 assets to a GitHub Release named `android-v<versionName>`.
 
+`.github/workflows/android-play-dev.yml` is a manual dev-release workflow
+that publishes the signed release AAB to a Google Play testing track
+(`internal` by default). It is intended for Play Store tester installs,
+including the on-demand `parakeet_v3_pack` asset pack. The workflow assigns
+dev builds `versionCode = 1000 + GITHUB_RUN_NUMBER` so repeated internal
+uploads do not collide with the checked-in production version.
+
 ## Required repository secrets
 
 These are written into `local.properties` on the runner before Gradle
@@ -19,6 +26,8 @@ runs, matching the local-developer layout described in
 | `TRANSCRIPTION_API_KEY` | Writingmate transcription key. Sent as `Authorization: Bearer …`. |
 | `TRANSCRIPTION_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/audio/transcriptions` (matches the Mac app's `.custom` provider). |
 | `TRANSCRIPTION_MODEL` | Optional override. Defaults to `groq/whisper-large-v3-turbo`. The workflow normalizes stale `gpt-4o-transcribe` values from secrets to this Android-supported model. |
+| `PARAKEET_RUNTIME` | Local prototype runtime. Leave empty for cloud releases; use `litert` only for builds that include converted Parakeet `.tflite` files in `parakeetpack`. |
+| `PACKAGE_OFFLINE_MODELS` | Optional sideload APK mode. Set to `true` with `PARAKEET_RUNTIME=onnx` to embed Parakeet weights directly in the APK. Play releases should leave this `false` and use the on-demand asset pack. |
 | `AIDICTATION_POST_PROCESSING_KEY` | Writingmate post-processing key for suggestions, commands, and cleanup. |
 | `AIDICTATION_POST_PROCESSING_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/chat/completions`. |
 | `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
@@ -32,6 +41,18 @@ runs, matching the local-developer layout described in
 | `ANDROID_KEYSTORE_PASSWORD` | Maps to `KEYSTORE_PASSWORD` in `local.properties` |
 | `ANDROID_KEY_ALIAS` | Maps to `KEY_ALIAS` in `local.properties` (default `release`) |
 | `ANDROID_KEY_PASSWORD` | Maps to `KEY_PASSWORD` in `local.properties` |
+
+### Google Play dev releases
+
+| Secret | Purpose |
+|---|---|
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` | Preferred. Base64-encoded Google Play service account JSON. |
+| `ANDROID_PUBLISHER_CREDENTIALS` | Optional fallback. Raw Google Play service account JSON used by Gradle Play Publisher. |
+
+Before the workflow can publish, create the app once in Play Console and
+upload the first signed AAB manually if the package has never been uploaded.
+Then enable the Android Publisher API, link the Play Console account to the
+Google Cloud project, and grant the service account release access to this app.
 
 ## Adding secrets
 
@@ -48,4 +69,6 @@ base64 -w0 release.keystore | gh secret set ANDROID_KEYSTORE_BASE64 --repo writi
 gh secret set ANDROID_KEYSTORE_PASSWORD --repo writingmate/aidictation
 gh secret set ANDROID_KEY_ALIAS         --repo writingmate/aidictation
 gh secret set ANDROID_KEY_PASSWORD      --repo writingmate/aidictation
+
+base64 -w0 google-play-service-account.json | gh secret set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 --repo writingmate/aidictation
 ```

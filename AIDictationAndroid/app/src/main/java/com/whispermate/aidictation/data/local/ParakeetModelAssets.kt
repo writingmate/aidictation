@@ -2,6 +2,7 @@ package com.whispermate.aidictation.data.local
 
 import android.content.Context
 import android.util.Log
+import com.whispermate.aidictation.BuildConfig
 import com.google.android.gms.tasks.Task
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
@@ -24,10 +25,18 @@ class ParakeetModelAssets @Inject constructor(
         private const val TAG = "ParakeetModelAssets"
         private const val PACK_NAME = "parakeet_v3_pack"
 
-        val REQUIRED_FILES = listOf(
+        val REQUIRED_ONNX_FILES = listOf(
             "nemo128.onnx",
             "encoder-model.int8.onnx",
             "decoder_joint-model.int8.onnx",
+            "vocab.txt"
+        )
+
+        val REQUIRED_LITERT_FILES = listOf(
+            "nemo128.onnx",
+            "encoder-model.int8.onnx",
+            "decoder_model_float32.tflite",
+            "joint_model_float32.tflite",
             "vocab.txt"
         )
     }
@@ -36,26 +45,46 @@ class ParakeetModelAssets @Inject constructor(
         AssetPackManagerFactory.getInstance(context)
     }
 
-    suspend fun requireModelDirectory(): File {
-        findExistingModelDirectory()?.let { return it }
+    suspend fun requireModelDirectory(runtime: ParakeetRuntime = ParakeetRuntime.ONNX): File {
+        findExternalModelDirectory(runtime)?.let {
+            removeStaleInternalModelDirectory()
+            return it
+        }
+
+        if (BuildConfig.PACKAGE_OFFLINE_MODELS) {
+            runCatching { installBundledModelDirectory(runtime) }
+                .onSuccess { return it }
+                .onFailure { Log.w(TAG, "Unable to install bundled Parakeet model", it) }
+        }
+
+        findInternalModelDirectory(runtime)?.let { return it }
+
+        findAssetPackModelDirectory(runtime)?.let { return it }
 
         runCatching { requestAssetPack() }
             .onFailure { Log.w(TAG, "Unable to fetch Parakeet asset pack", it) }
 
-        return findExistingModelDirectory()
+        findAssetPackModelDirectory(runtime)?.let { return it }
+
+        return findInternalModelDirectory(runtime)
             ?: throw IllegalStateException(
-                "Parakeet model files are not installed. Install the $PACK_NAME asset pack or push files to ${externalModelDir().absolutePath}."
+                "Parakeet ${runtime.displayName} model files are not installed. Install the $PACK_NAME asset pack, build with PACKAGE_OFFLINE_MODELS=true, or push files to ${externalModelDir().absolutePath}."
             )
     }
 
-    private fun findExistingModelDirectory(): File? {
-        val localDirs = listOf(externalModelDir(), internalModelDir())
-        localDirs.firstOrNull { hasRequiredFiles(it) }?.let { return it }
+    private fun findInternalModelDirectory(runtime: ParakeetRuntime): File? {
+        return internalModelDir().takeIf { hasRequiredFiles(it, runtime) }
+    }
 
-        val packDir = runCatching { assetPackManager.getPackLocation(PACK_NAME)?.assetsPath() }
+    private fun findExternalModelDirectory(runtime: ParakeetRuntime): File? {
+        return externalModelDir().takeIf { hasRequiredFiles(it, runtime) }
+    }
+
+    private fun findAssetPackModelDirectory(runtime: ParakeetRuntime): File? {
+        return runCatching { assetPackManager.getPackLocation(PACK_NAME)?.assetsPath() }
             .getOrNull()
             ?.let(::File)
-        return packDir?.takeIf { hasRequiredFiles(it) }
+            ?.takeIf { hasRequiredFiles(it, runtime) }
     }
 
     private fun externalModelDir(): File {
@@ -64,8 +93,59 @@ class ParakeetModelAssets @Inject constructor(
 
     private fun internalModelDir(): File = File(context.filesDir, "parakeet")
 
-    private fun hasRequiredFiles(directory: File): Boolean {
-        return directory.isDirectory && REQUIRED_FILES.all { File(directory, it).isFile }
+    private fun hasRequiredFiles(directory: File, runtime: ParakeetRuntime): Boolean {
+        return directory.isDirectory && requiredFiles(runtime).all {
+            File(directory, it).let { file -> file.isFile && file.length() > 0L }
+        }
+    }
+
+    private fun requiredFiles(runtime: ParakeetRuntime): List<String> {
+        return when (runtime) {
+            ParakeetRuntime.ONNX -> REQUIRED_ONNX_FILES
+            ParakeetRuntime.LITERT -> REQUIRED_LITERT_FILES
+        }
+    }
+
+    private fun removeStaleInternalModelDirectory() {
+        val internalDir = internalModelDir()
+        if (!internalDir.exists()) return
+        Log.d(TAG, "Removing stale internal Parakeet model cache at ${internalDir.absolutePath}")
+        internalDir.deleteRecursively()
+    }
+
+    private fun installBundledModelDirectory(runtime: ParakeetRuntime): File {
+        val destination = internalModelDir()
+        val files = requiredFiles(runtime)
+        if (bundledAssetsMatch(destination, files)) return destination
+
+        Log.d(TAG, "Installing bundled Parakeet ${runtime.displayName} model to ${destination.absolutePath}")
+        destination.deleteRecursively()
+        destination.mkdirs()
+
+        for (fileName in files) {
+            context.assets.open(fileName).use { input ->
+                File(destination, fileName).outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+
+        return destination.takeIf { hasRequiredFiles(it, runtime) }
+            ?: throw IllegalStateException("Bundled Parakeet ${runtime.displayName} model copy failed.")
+    }
+
+    private fun bundledAssetsMatch(directory: File, files: List<String>): Boolean {
+        if (!directory.isDirectory) return false
+        return files.all { fileName ->
+            val destination = File(directory, fileName)
+            destination.isFile && destination.length() > 0L && destination.length() == bundledAssetLength(fileName)
+        }
+    }
+
+    private fun bundledAssetLength(fileName: String): Long {
+        return context.assets.openFd(fileName).use { descriptor ->
+            descriptor.length
+        }
     }
 
     private suspend fun requestAssetPack() {

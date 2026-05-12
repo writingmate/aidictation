@@ -1,6 +1,8 @@
 package com.whispermate.aidictation.ui.screens.onboarding
 
 import android.Manifest
+import android.net.Uri
+import android.os.Build
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -46,11 +48,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +64,6 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -77,10 +80,22 @@ import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 
+private enum class OnboardingStep {
+    Welcome,
+    Microphone,
+    RestrictedSettings,
+    Overlay,
+    OnDeviceTranscription,
+    VolumeShortcut
+}
+
 @Composable
 fun OnboardingScreen(
     onComplete: () -> Unit,
-    onSaveContextRules: (List<Boolean>) -> Unit = {}
+    onSaveContextRules: (List<Boolean>) -> Unit = {},
+    onDeviceTranscriptionEnabled: Boolean = false,
+    onDeviceModelState: OnboardingOnDeviceModelState = OnboardingOnDeviceModelState(),
+    onSetOnDeviceTranscriptionEnabled: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -90,10 +105,33 @@ fun OnboardingScreen(
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
     var testInputText by remember { mutableStateOf("") }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
+    var hasOpenedRestrictedSettings by remember { mutableStateOf(false) }
     val hasTestedDictation = testInputText.isNotBlank()
+
+    val showRestrictedSettingsStep = shouldShowRestrictedSettingsStep(
+        context = context,
+        isOverlayServiceEnabled = isOverlayServiceEnabled
+    )
+    val onboardingSteps = remember(showRestrictedSettingsStep) {
+        buildList {
+            add(OnboardingStep.Welcome)
+            add(OnboardingStep.Microphone)
+            if (showRestrictedSettingsStep) add(OnboardingStep.RestrictedSettings)
+            add(OnboardingStep.Overlay)
+            add(OnboardingStep.OnDeviceTranscription)
+            add(OnboardingStep.VolumeShortcut)
+        }
+    }
+    val currentOnboardingStep = onboardingSteps[currentStep.coerceAtMost(onboardingSteps.lastIndex)]
 
     val contextRulesEnabled = remember {
         AppPreferences.defaultContextRules.map { false }.toMutableStateList()
+    }
+
+    LaunchedEffect(onboardingSteps.size) {
+        if (currentStep > onboardingSteps.lastIndex) {
+            currentStep = onboardingSteps.lastIndex
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -114,8 +152,12 @@ fun OnboardingScreen(
     ) { granted ->
         hasMicPermission = granted
         if (granted) {
-            currentStep = 2
+            currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
         }
+    }
+
+    fun goToNextStep() {
+        currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
     }
 
     Column(
@@ -130,7 +172,7 @@ fun OnboardingScreen(
                 .padding(vertical = 16.dp),
             horizontalArrangement = Arrangement.Center
         ) {
-            repeat(4) { index ->
+            repeat(onboardingSteps.size) { index ->
                 Box(
                     modifier = Modifier
                         .size(8.dp)
@@ -140,7 +182,7 @@ fun OnboardingScreen(
                             else MaterialTheme.colorScheme.outlineVariant
                         )
                 )
-                if (index < 3) {
+                if (index < onboardingSteps.lastIndex) {
                     Spacer(modifier = Modifier.width(8.dp))
                 }
             }
@@ -154,20 +196,32 @@ fun OnboardingScreen(
             verticalArrangement = Arrangement.Center
         ) {
             AnimatedContent(
-                targetState = currentStep,
+                targetState = currentOnboardingStep,
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                 label = "onboarding_step"
             ) { step ->
                 when (step) {
-                    0 -> WelcomeStep()
-                    1 -> MicrophonePermissionStep(hasPermission = hasMicPermission)
-                    2 -> OverlaySetupStep(
+                    OnboardingStep.Welcome -> WelcomeStep()
+                    OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
+                    OnboardingStep.RestrictedSettings -> RestrictedSettingsStep(
+                        hasOpenedAppInfo = hasOpenedRestrictedSettings,
+                        onOpenAppInfo = {
+                            hasOpenedRestrictedSettings = true
+                            openAppInfoSettings(context)
+                        }
+                    )
+                    OnboardingStep.Overlay -> OverlaySetupStep(
                         isEnabled = isOverlayServiceEnabled,
                         testInputText = testInputText,
                         onTestInputChanged = { testInputText = it },
                         onOpenSettings = { openAccessibilitySettings(context) }
                     )
-                    3 -> VolumeShortcutStep(
+                    OnboardingStep.OnDeviceTranscription -> OnDeviceTranscriptionStep(
+                        enabled = onDeviceTranscriptionEnabled,
+                        state = onDeviceModelState,
+                        onEnabledChanged = onSetOnDeviceTranscriptionEnabled
+                    )
+                    OnboardingStep.VolumeShortcut -> VolumeShortcutStep(
                         isEnabled = volumeShortcutEnabled,
                         onEnabledChanged = { volumeShortcutEnabled = it }
                     )
@@ -179,23 +233,32 @@ fun OnboardingScreen(
 
         Button(
             onClick = {
-                when (currentStep) {
-                    0 -> currentStep = 1
-                    1 -> {
+                when (currentOnboardingStep) {
+                    OnboardingStep.Welcome -> goToNextStep()
+                    OnboardingStep.Microphone -> {
                         if (hasMicPermission) {
-                            currentStep = 2
+                            goToNextStep()
                         } else {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     }
-                    2 -> {
+                    OnboardingStep.RestrictedSettings -> {
+                        if (hasOpenedRestrictedSettings) {
+                            goToNextStep()
+                        } else {
+                            hasOpenedRestrictedSettings = true
+                            openAppInfoSettings(context)
+                        }
+                    }
+                    OnboardingStep.Overlay -> {
                         if (!isOverlayServiceEnabled) {
                             openAccessibilitySettings(context)
                         } else if (hasTestedDictation) {
-                            currentStep = 3
+                            goToNextStep()
                         }
                     }
-                    3 -> {
+                    OnboardingStep.OnDeviceTranscription -> goToNextStep()
+                    OnboardingStep.VolumeShortcut -> {
                         setVolumeShortcutEnabled(context, volumeShortcutEnabled)
                         onSaveContextRules(contextRulesEnabled.toList())
                         onComplete()
@@ -205,30 +268,229 @@ fun OnboardingScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
-            enabled = currentStep != 2 || !isOverlayServiceEnabled || hasTestedDictation,
+            enabled = when (currentOnboardingStep) {
+                OnboardingStep.Overlay -> !isOverlayServiceEnabled || hasTestedDictation
+                OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
+                else -> true
+            },
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary
             )
         ) {
             Text(
-                text = when (currentStep) {
-                    0 -> stringResource(R.string.onboarding_continue)
-                    1 -> if (hasMicPermission) {
+                text = when (currentOnboardingStep) {
+                    OnboardingStep.Welcome -> stringResource(R.string.onboarding_continue)
+                    OnboardingStep.Microphone -> if (hasMicPermission) {
                         stringResource(R.string.onboarding_continue)
                     } else {
                         stringResource(R.string.onboarding_mic_enable)
                     }
-                    2 -> when {
+                    OnboardingStep.RestrictedSettings -> if (hasOpenedRestrictedSettings) {
+                        stringResource(R.string.onboarding_continue)
+                    } else {
+                        stringResource(R.string.onboarding_restricted_open_app_info)
+                    }
+                    OnboardingStep.Overlay -> when {
                         !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
                         hasTestedDictation -> stringResource(R.string.onboarding_continue)
                         else -> stringResource(R.string.onboarding_try_dictation)
                     }
-                    3 -> stringResource(R.string.onboarding_get_started)
-                    else -> ""
+                    OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
+                    OnboardingStep.VolumeShortcut -> stringResource(R.string.onboarding_get_started)
                 },
                 style = MaterialTheme.typography.titleMedium
             )
         }
+    }
+}
+
+@Composable
+private fun RestrictedSettingsStep(
+    hasOpenedAppInfo: Boolean,
+    onOpenAppInfo: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = MaterialTheme.colorScheme.secondary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_restricted_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_restricted_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        SetupStepItem(
+            number = "1",
+            text = stringResource(R.string.onboarding_restricted_step1),
+            isCompleted = hasOpenedAppInfo,
+            onClick = if (!hasOpenedAppInfo) onOpenAppInfo else null
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        SetupStepItem(
+            number = "2",
+            text = stringResource(R.string.onboarding_restricted_step2)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        SetupStepItem(
+            number = "3",
+            text = stringResource(R.string.onboarding_restricted_step3)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        SetupStepItem(
+            number = "4",
+            text = stringResource(R.string.onboarding_restricted_step4)
+        )
+    }
+}
+
+@Composable
+private fun OnDeviceTranscriptionStep(
+    enabled: Boolean,
+    state: OnboardingOnDeviceModelState,
+    onEnabledChanged: (Boolean) -> Unit
+) {
+    val progress = state.downloadProgress?.coerceIn(0f, 1f)
+    val status = when {
+        state.isDownloading && progress != null -> {
+            stringResource(R.string.settings_on_device_downloading, (progress * 100).toInt())
+        }
+        state.isDownloading -> stringResource(R.string.settings_on_device_downloading_unknown)
+        enabled -> stringResource(R.string.settings_on_device_local)
+        state.isInstalled -> stringResource(R.string.settings_on_device_ready)
+        else -> stringResource(R.string.settings_on_device_cloud)
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(
+                    if (enabled) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.secondaryContainer
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (enabled) Icons.Default.Check else Icons.Default.Mic,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = if (enabled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.secondary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_on_device_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_on_device_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .then(
+                    if (!state.isDownloading) {
+                        Modifier.clickable { onEnabledChanged(!enabled) }
+                    } else {
+                        Modifier
+                    }
+                )
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.onboarding_on_device_toggle),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Switch(
+                checked = enabled || state.isDownloading,
+                enabled = !state.isDownloading,
+                onCheckedChange = onEnabledChanged
+            )
+        }
+
+        if (state.isDownloading) {
+            Spacer(modifier = Modifier.height(12.dp))
+            LinearProgressIndicator(
+                progress = { progress ?: 0f },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        state.errorMessage?.let { error ->
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = stringResource(R.string.onboarding_on_device_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -747,6 +1009,38 @@ private fun openAccessibilitySettings(context: Context) {
     context.startActivity(intent)
 }
 
+private fun openAppInfoSettings(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.fromParts("package", context.packageName, null)
+    ).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    context.startActivity(intent)
+}
+
+private fun shouldShowRestrictedSettingsStep(
+    context: Context,
+    isOverlayServiceEnabled: Boolean
+): Boolean {
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        !isOverlayServiceEnabled &&
+        isInstalledOutsideGooglePlay(context)
+}
+
+private fun isInstalledOutsideGooglePlay(context: Context): Boolean {
+    val installerPackageName = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getInstallerPackageName(context.packageName)
+        }
+    }.getOrNull()
+
+    return installerPackageName != GOOGLE_PLAY_PACKAGE
+}
+
 private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
     val enabled = Settings.Secure.getInt(
         context.contentResolver,
@@ -769,6 +1063,7 @@ private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
 
 private const val SHORTCUT_PREFS = "dictation_shortcuts"
 private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
+private const val GOOGLE_PLAY_PACKAGE = "com.android.vending"
 
 private fun isVolumeShortcutEnabled(context: Context): Boolean {
     return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)

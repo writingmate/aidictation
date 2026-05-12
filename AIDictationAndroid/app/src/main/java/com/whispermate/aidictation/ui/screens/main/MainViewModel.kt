@@ -1,7 +1,9 @@
 package com.whispermate.aidictation.ui.screens.main
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.local.ParakeetModelAssets
 import com.whispermate.aidictation.data.local.ParakeetRuntime
 import com.whispermate.aidictation.data.preferences.AppPreferences
@@ -45,6 +47,11 @@ class MainViewModel @Inject constructor(
     private val subscriptionRepository: SubscriptionRepository,
     private val appPreferences: AppPreferences
 ) : ViewModel() {
+    companion object {
+        private const val TAG = "MainViewModel"
+    }
+
+    private val parakeetRuntime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
 
     val recordings: StateFlow<List<Recording>> = recordingRepository.recordings
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -95,7 +102,7 @@ class MainViewModel @Inject constructor(
                     downloadProgress = 0f
                 )
                 withContext(Dispatchers.IO) {
-                    parakeetModelAssets.ensureModelDirectory(ParakeetRuntime.ONNX) { progress ->
+                    parakeetModelAssets.ensureModelDirectory(parakeetRuntime) { progress ->
                         _onDeviceModelState.value = _onDeviceModelState.value.copy(
                             isDownloading = true,
                             downloadProgress = progress
@@ -104,11 +111,12 @@ class MainViewModel @Inject constructor(
                 }
                 appPreferences.setOnDeviceTranscriptionEnabled(true)
                 _onDeviceModelState.value = OnDeviceModelUiState(isInstalled = true)
+                prewarmOnDeviceTranscriber()
             } catch (error: Throwable) {
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
                 _onDeviceModelState.value = OnDeviceModelUiState(
                     isInstalled = withContext(Dispatchers.IO) {
-                        parakeetModelAssets.isModelInstalled(ParakeetRuntime.ONNX)
+                        parakeetModelAssets.isModelInstalled(parakeetRuntime)
                     }
                 )
                 _error.value = error.message ?: "On-device model download failed"
@@ -119,7 +127,7 @@ class MainViewModel @Inject constructor(
     private fun refreshOnDeviceModelState() {
         viewModelScope.launch {
             val isInstalled = withContext(Dispatchers.IO) {
-                parakeetModelAssets.isModelInstalled(ParakeetRuntime.ONNX)
+                parakeetModelAssets.isModelInstalled(parakeetRuntime)
             }
             _onDeviceModelState.value = _onDeviceModelState.value.copy(
                 isInstalled = isInstalled,
@@ -129,6 +137,18 @@ class MainViewModel @Inject constructor(
             if (!isInstalled && appPreferences.onDeviceTranscriptionEnabled.first()) {
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
             }
+            if (isInstalled && appPreferences.onDeviceTranscriptionEnabled.first()) {
+                prewarmOnDeviceTranscriber()
+            }
+        }
+    }
+
+    private fun prewarmOnDeviceTranscriber() {
+        viewModelScope.launch(Dispatchers.Default) {
+            transcriptionRepository.prewarmOnDeviceIfEnabled()
+                .onFailure { error ->
+                    Log.w(TAG, "Unable to prewarm on-device transcription", error)
+                }
         }
     }
 

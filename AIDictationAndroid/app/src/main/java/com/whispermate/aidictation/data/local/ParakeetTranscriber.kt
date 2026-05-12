@@ -39,6 +39,36 @@ class ParakeetTranscriber @Inject constructor(
     private var onnxEncoderModel: LoadedParakeetModel? = null
     private var liteRtModel: ParakeetLiteRtModel? = null
 
+    suspend fun prewarm(): Result<Unit> = withContext(Dispatchers.Default) {
+        runCatching {
+            mutex.withLock {
+                val runtime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
+                val startMs = System.currentTimeMillis()
+                Log.d(TAG, "Prewarming Parakeet ${runtime.displayName}")
+                when (runtime) {
+                    ParakeetRuntime.ONNX -> {
+                        if (onnxModel == null) {
+                            onnxModel = loadOnnxModel()
+                        }
+                    }
+                    ParakeetRuntime.LITERT -> {
+                        if (onnxEncoderModel == null) {
+                            onnxEncoderModel = loadOnnxModel(
+                                loadDecoder = false,
+                                runtime = ParakeetRuntime.LITERT
+                            )
+                        }
+                        if (liteRtModel == null) {
+                            liteRtModel = loadLiteRtModel()
+                        }
+                    }
+                }
+                Log.d(TAG, "Prewarmed Parakeet ${runtime.displayName} in ${System.currentTimeMillis() - startMs}ms")
+                Unit
+            }
+        }
+    }
+
     suspend fun transcribe(audioFile: File): Result<String> = withContext(Dispatchers.Default) {
         runCatching {
             mutex.withLock {

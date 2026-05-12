@@ -81,6 +81,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val VOLUME_SHORTCUT_WINDOW_MS = 1_200L
         private const val VOLUME_SHORTCUT_PRESS_COUNT = 3
+        private const val VOLUME_SHORTCUT_NO_SPEECH_TIMEOUT_MS = 8_000L
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
@@ -158,6 +159,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private var audioRecorder: AudioRecorder? = null
     private var vadJob: Job? = null
+    private var volumeShortcutNoSpeechJob: Job? = null
+    private var recordingStartedByVolumeShortcut = false
     private var bubbleAnimationJob: Job? = null
     private var bubbleHideJob: Job? = null
     private var bubbleSnapAnimator: ValueAnimator? = null
@@ -189,7 +192,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        
+
+        prewarmOnDeviceTranscriber()
         refreshOverlayVisibility(null)
     }
 
@@ -250,11 +254,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return true
         }
 
-        if (resolveFocusedEditableNode(null) == null || isBubbleSuppressed()) {
+        if (resolveFocusedEditableNode(null) == null) {
             Toast.makeText(this, "Tap a text field first", Toast.LENGTH_SHORT).show()
             return true
         }
-        startRecording(mode = RecordingMode.Dictation)
+        startRecording(mode = RecordingMode.Dictation, startedByVolumeShortcut = true)
         return true
     }
 
@@ -273,11 +277,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             bubbleHideJob?.cancel()
             bubbleHideJob = null
             bubbleShouldBeVisible = true
-            if (isVolumeShortcutEnabled() && recordingState == RecordingState.Idle) {
-                hideBubble(animated = false)
-                hideCommandActions(animated = false)
-                return
-            }
             showBubble()
             updateCommandActionsVisibility(source)
             return
@@ -303,13 +302,28 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        if (isBubbleSuppressed()) return false
         val focusedNode = resolveFocusedEditableNode(source) ?: return false
+        if (recordingStartedByVolumeShortcut && recordingState != RecordingState.Idle) {
+            return true
+        }
+        if (isBubbleSuppressed()) return false
+        if (isVolumeShortcutEnabled() && recordingState == RecordingState.Idle) {
+            return false
+        }
         return true
     }
 
     private fun isVolumeShortcutEnabled(): Boolean {
-        return shortcutPrefs.getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, true)
+        return shortcutPrefs.getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, false)
+    }
+
+    private fun prewarmOnDeviceTranscriber() {
+        serviceScope.launch(Dispatchers.Default) {
+            transcriptionRepository.prewarmOnDeviceIfEnabled()
+                .onFailure { error ->
+                    Log.w(TAG, "Unable to prewarm on-device transcription", error)
+                }
+        }
     }
 
     private fun isKeyboardVisible(): Boolean {
@@ -1267,8 +1281,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         startRecording(mode = RecordingMode.RewriteInstruction)
     }
 
-    private fun startRecording(mode: RecordingMode) {
+    private fun startRecording(
+        mode: RecordingMode,
+        startedByVolumeShortcut: Boolean = false
+    ) {
         if (recordingState != RecordingState.Idle) return
+
+        volumeShortcutNoSpeechJob?.cancel()
+        volumeShortcutNoSpeechJob = null
+        recordingStartedByVolumeShortcut = false
 
         if (mode == RecordingMode.Dictation) {
             pendingRewriteTarget = null
@@ -1325,7 +1346,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         audioRecorder = recorder
         recordingMode = mode
         recordingState = RecordingState.Recording
+        recordingStartedByVolumeShortcut = startedByVolumeShortcut
+        if (startedByVolumeShortcut) {
+            showBubbleNearVolumeButton()
+        }
         updateBubbleUi()
+        scheduleVolumeShortcutNoSpeechTimeout(recorder)
 
         vadJob?.cancel()
         vadJob = serviceScope.launch {
@@ -1337,12 +1363,56 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun scheduleVolumeShortcutNoSpeechTimeout(recorder: AudioRecorder) {
+        if (!recordingStartedByVolumeShortcut) return
+
+        volumeShortcutNoSpeechJob = serviceScope.launch {
+            delay(VOLUME_SHORTCUT_NO_SPEECH_TIMEOUT_MS)
+            if (
+                recordingState == RecordingState.Recording &&
+                recordingStartedByVolumeShortcut &&
+                audioRecorder === recorder &&
+                !recorder.hasSpeechBeenDetected()
+            ) {
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.overlay_volume_no_speech,
+                    Toast.LENGTH_SHORT
+                ).show()
+                stopRecording(discard = true)
+            }
+        }
+    }
+
+    private fun showBubbleNearVolumeButton() {
+        ensureBubbleCreated()
+        positionBubbleNearVolumeButton()
+        showBubble()
+        updateBubblePosition()
+    }
+
+    private fun positionBubbleNearVolumeButton() {
+        val params = bubbleParams ?: return
+        val margin = dp(BUBBLE_MARGIN_DP)
+        val bubbleSize = dp(BUBBLE_SIZE_DP)
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+
+        params.x = (screenWidth - bubbleSize - margin).coerceAtLeast(margin)
+        params.y = (screenHeight * 0.38f)
+            .roundToInt()
+            .coerceIn(margin, (screenHeight - bubbleSize - margin).coerceAtLeast(margin))
+    }
+
     private fun stopRecording(discard: Boolean) {
         if (recordingState != RecordingState.Recording) return
         val mode = recordingMode
 
         vadJob?.cancel()
         vadJob = null
+        volumeShortcutNoSpeechJob?.cancel()
+        volumeShortcutNoSpeechJob = null
+        recordingStartedByVolumeShortcut = false
 
         val recorder = audioRecorder ?: run {
             recordingState = RecordingState.Idle
@@ -1352,6 +1422,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
             recordingMode = RecordingMode.Dictation
             updateBubbleUi()
+            refreshOverlayVisibility(null)
             return
         }
 
@@ -1370,6 +1441,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
             recordingMode = RecordingMode.Dictation
             updateBubbleUi()
+            refreshOverlayVisibility(null)
             return
         }
 
@@ -1381,6 +1453,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
             recordingMode = RecordingMode.Dictation
             updateBubbleUi()
+            refreshOverlayVisibility(null)
             return
         }
 
@@ -1394,6 +1467,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
             recordingMode = RecordingMode.Dictation
             updateBubbleUi()
+            refreshOverlayVisibility(null)
             return
         }
 
@@ -1407,6 +1481,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
             recordingMode = RecordingMode.Dictation
             updateBubbleUi()
+            refreshOverlayVisibility(null)
             return
         }
 

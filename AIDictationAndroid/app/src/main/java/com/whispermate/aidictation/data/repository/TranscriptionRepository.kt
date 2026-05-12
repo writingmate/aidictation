@@ -17,6 +17,18 @@ class TranscriptionRepository @Inject constructor(
     private val appPreferences: AppPreferences,
     private val parakeetTranscriber: ParakeetTranscriber
 ) {
+    suspend fun prewarmOnDeviceIfEnabled(): Result<Unit> {
+        val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
+        val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
+        val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
+
+        if (!onDeviceTranscription && provider != ApiProvider.PARAKEET) {
+            return Result.success(Unit)
+        }
+
+        return parakeetTranscriber.prewarm()
+    }
+
     suspend fun transcribe(
         audioFile: File,
         prompt: String? = null,

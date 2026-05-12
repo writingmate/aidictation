@@ -5,8 +5,8 @@
 sdk.dir=/path/to/Android/Sdk
 
 # Optional local version overrides. CI uses these for Play dev releases.
-VERSION_CODE=5
-VERSION_NAME=0.0.5
+VERSION_CODE=7
+VERSION_NAME=0.0.7
 
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here

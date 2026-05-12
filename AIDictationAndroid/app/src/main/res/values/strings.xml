@@ -23,6 +23,10 @@
     <string name="onboarding_try_dictation">Say a short test first</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_volume_shortcut_title">Volume button shortcut</string>
+    <string name="onboarding_volume_shortcut_subtitle">Optionally start dictation by triple-pressing Volume Down while a text field is focused.</string>
+    <string name="onboarding_volume_shortcut_toggle">Enable triple-press Volume Down</string>
+    <string name="onboarding_volume_shortcut_note">You can turn this on or off later in Settings.</string>
 
     <!-- Main -->
     <string name="tab_history">History</string>
@@ -112,6 +116,7 @@
     <string name="overlay_command_apply_failed">Could not apply command</string>
     <string name="overlay_command_failed">%1$s failed</string>
     <string name="overlay_command_no_instruction">No instruction heard</string>
+    <string name="overlay_volume_no_speech">No speech heard</string>
     <string name="overlay_dismiss_hide">Hide</string>
     <string name="overlay_dismiss_snooze">Snooze 10 min</string>
     <string name="overlay_hidden_permanently">Dictation bubble hidden</string>

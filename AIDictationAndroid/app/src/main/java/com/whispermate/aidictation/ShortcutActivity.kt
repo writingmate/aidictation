@@ -1,6 +1,7 @@
 package com.whispermate.aidictation
 
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -48,16 +49,9 @@ class ShortcutActivity : Activity() {
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
 
-        val className = OverlayDictationAccessibilityService::class.java.name
-        val classNameWithoutPackage = className.removePrefix("${packageName}.")
-        val fullServiceId = "$packageName/$className"
-        val shortServiceId = "$packageName/.$classNameWithoutPackage"
-        val shortSimpleServiceId = "$packageName/.${OverlayDictationAccessibilityService::class.java.simpleName}"
-
+        val expected = ComponentName(this, OverlayDictationAccessibilityService::class.java)
         return enabledServices.split(':').any { serviceId ->
-            serviceId.equals(fullServiceId, ignoreCase = true) ||
-                    serviceId.equals(shortServiceId, ignoreCase = true) ||
-                    serviceId.equals(shortSimpleServiceId, ignoreCase = true)
+            ComponentName.unflattenFromString(serviceId) == expected
         }
     }
 }

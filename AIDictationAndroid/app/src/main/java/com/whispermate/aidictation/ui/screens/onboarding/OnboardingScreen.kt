@@ -1,10 +1,16 @@
 package com.whispermate.aidictation.ui.screens.onboarding
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.view.ViewGroup
+import android.widget.EditText
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -12,6 +18,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -39,7 +47,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -52,6 +59,8 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -59,6 +68,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -476,15 +486,79 @@ private fun OverlaySetupStep(
             )
         } else {
             Spacer(modifier = Modifier.height(12.dp))
-            OutlinedTextField(
-                value = testInputText,
-                onValueChange = onTestInputChanged,
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2,
-                label = { Text(stringResource(R.string.onboarding_overlay_test_label)) },
-                placeholder = { Text(stringResource(R.string.onboarding_overlay_test_placeholder)) }
+            OnboardingEditText(
+                text = testInputText,
+                hint = stringResource(R.string.onboarding_overlay_test_placeholder),
+                onTextChanged = onTestInputChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(128.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun OnboardingEditText(
+    text: String,
+    hint: String,
+    onTextChanged: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
+    val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
+    val containerColor = MaterialTheme.colorScheme.surface.toArgb()
+    val shape = RoundedCornerShape(12.dp)
+
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, shape)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { context ->
+                EditText(context).apply {
+                    minLines = 3
+                    setSingleLine(false)
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                    inputType = InputType.TYPE_CLASS_TEXT or
+                        InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                        InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    background = null
+                    includeFontPadding = false
+                    setPadding(0, 0, 0, 0)
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    setTextColor(textColor)
+                    setHintTextColor(hintColor)
+                    setBackgroundColor(containerColor)
+                    this.hint = hint
+                    setText(text)
+                    addTextChangedListener(object : TextWatcher {
+                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                            onTextChanged(s?.toString().orEmpty())
+                        }
+                        override fun afterTextChanged(s: Editable?) = Unit
+                    })
+                }
+            },
+            update = { editText ->
+                editText.hint = hint
+                editText.setTextColor(textColor)
+                editText.setHintTextColor(hintColor)
+                editText.setBackgroundColor(containerColor)
+                if (editText.text.toString() != text) {
+                    editText.setText(text)
+                    editText.setSelection(editText.text.length)
+                }
+            }
+        )
     }
 }
 
@@ -602,15 +676,8 @@ private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
     ) ?: return false
 
-    val className = OverlayDictationAccessibilityService::class.java.name
-    val classNameWithoutPackage = className.removePrefix("${context.packageName}.")
-    val fullServiceId = "${context.packageName}/$className"
-    val shortServiceId = "${context.packageName}/.$classNameWithoutPackage"
-    val shortSimpleServiceId = "${context.packageName}/.${OverlayDictationAccessibilityService::class.java.simpleName}"
-
+    val expected = ComponentName(context, OverlayDictationAccessibilityService::class.java)
     return enabledServices.split(':').any { serviceId ->
-        serviceId.equals(fullServiceId, ignoreCase = true) ||
-            serviceId.equals(shortServiceId, ignoreCase = true) ||
-            serviceId.equals(shortSimpleServiceId, ignoreCase = true)
+        ComponentName.unflattenFromString(serviceId) == expected
     }
 }

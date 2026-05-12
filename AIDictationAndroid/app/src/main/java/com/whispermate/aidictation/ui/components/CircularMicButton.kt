@@ -34,11 +34,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.sqrt
 import kotlin.math.sin
 import kotlin.random.Random
 
 private val activeColor = Color(0xFFFF9500) // iOS Orange
 private const val minActiveBars = 3
+private const val waveformLevelGain = 1.7f
+private const val waveformLevelMix = 0.28f
+private const val waveformFloorThreshold = 0.045f
+private const val waveformActiveFloor = 0.16f
 
 enum class MicButtonState {
     Idle,       // Frozen sine wave pattern (like app logo)
@@ -113,7 +119,8 @@ fun CircularMicButton(
         MicButtonState.Idle -> totalBars
         MicButtonState.Recording -> {
             val range = totalBars - minActiveBars
-            (minActiveBars + (range * audioLevel * 2.5f).toInt()).coerceIn(minActiveBars, totalBars)
+            val boostedLevel = boostWaveformLevel(audioLevel)
+            (minActiveBars + (range * boostedLevel * 2.5f).toInt()).coerceIn(minActiveBars, totalBars)
         }
         MicButtonState.Processing -> totalBars
     }
@@ -154,10 +161,11 @@ fun CircularMicButton(
                         } else {
                             // Use frequency band directly if available, otherwise fall back to audio level
                             val bandValue = frequencyBands?.getOrNull(index)?.coerceIn(0f, 1f) ?: audioLevel
+                            val boostedBand = boostWaveformLevel(bandValue, audioLevel)
                             // Max height for this bar is its frozen height (maintains circular shape)
                             val maxForThisBar = frozenHeights[index]
                             val heightRange = maxBarHeight - dotSize
-                            dotSize + heightRange * bandValue * maxForThisBar
+                            dotSize + heightRange * boostedBand * maxForThisBar
                         }
                     }
                     MicButtonState.Processing -> {
@@ -190,4 +198,11 @@ fun CircularMicButton(
             }
         }
     }
+}
+
+private fun boostWaveformLevel(level: Float, overallLevel: Float = level): Float {
+    val mixed = (level * waveformLevelGain + overallLevel * waveformLevelMix).coerceIn(0f, 1f)
+    val eased = sqrt(mixed)
+    val floor = if (overallLevel > waveformFloorThreshold) waveformActiveFloor else 0f
+    return max(eased, floor).coerceIn(0f, 1f)
 }

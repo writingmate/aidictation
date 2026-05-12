@@ -12,15 +12,15 @@
     <string name="onboarding_mic_title">Microphone Access</string>
     <string name="onboarding_mic_subtitle">We need microphone access to transcribe your voice</string>
     <string name="onboarding_mic_enable">Enable Microphone</string>
-    <string name="onboarding_overlay_title">Enable Overlay Dictation</string>
-    <string name="onboarding_overlay_subtitle">Enable Accessibility to show a mic bubble only when text input is focused</string>
-    <string name="onboarding_overlay_step1">Enable AIDictation in Accessibility settings</string>
-    <string name="onboarding_overlay_step2">Focus any text field and tap the bubble to dictate</string>
-    <string name="onboarding_overlay_step3">Use the test field below to confirm dictation works</string>
-    <string name="onboarding_overlay_hint">The overlay stays hidden in password and secure fields.</string>
-    <string name="onboarding_overlay_test_label">Test field</string>
-    <string name="onboarding_overlay_test_placeholder">Tap here, then tap the bubble and start dictating...</string>
-    <string name="onboarding_try_dictation">Try dictation first</string>
+    <string name="onboarding_overlay_title">Turn on the floating mic</string>
+    <string name="onboarding_overlay_subtitle">A small mic appears when you tap into a place where you can type.</string>
+    <string name="onboarding_overlay_step1">Turn on AIDictation in Accessibility settings</string>
+    <string name="onboarding_overlay_step2">Tap the writing area below so your keyboard opens</string>
+    <string name="onboarding_overlay_step3">Use the floating mic and make sure your words appear</string>
+    <string name="onboarding_overlay_hint">The mic does not appear in password fields or secure screens.</string>
+    <string name="onboarding_overlay_test_label">Try it here</string>
+    <string name="onboarding_overlay_test_placeholder">Tap here. When the mic appears, say something like “This is a quick test.”</string>
+    <string name="onboarding_try_dictation">Say a short test first</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
 
@@ -38,7 +38,10 @@
     <string name="copied">Copied</string>
     <string name="cancel">Cancel</string>
     <string name="delete">Delete</string>
+    <string name="loading">Loading…</string>
     <string name="restore_defaults">Restore defaults</string>
+    <string name="deleted">Deleted</string>
+    <string name="undo">Undo</string>
     <string name="play">Play</string>
     <string name="back">Back</string>
 
@@ -52,6 +55,7 @@
     <string name="settings_permissions">Permissions</string>
     <string name="settings_microphone">Microphone Access</string>
     <string name="settings_overlay_access">Overlay Accessibility</string>
+    <string name="settings_volume_button_shortcut">Triple-press Volume Down</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
     <string name="settings_account">Account</string>
     <string name="account_sign_in">Sign in</string>

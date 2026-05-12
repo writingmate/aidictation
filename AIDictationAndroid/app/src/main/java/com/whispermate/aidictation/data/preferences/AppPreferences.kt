@@ -238,7 +238,7 @@ class AppPreferences @Inject constructor(
         if (json.isNullOrEmpty()) {
             defaultCommands
         } else {
-            commandAdapter.fromJson(json) ?: defaultCommands
+            mergeDefaultBuiltInCommands(commandAdapter.fromJson(json) ?: defaultCommands)
         }
     }
 
@@ -355,7 +355,31 @@ class AppPreferences @Inject constructor(
                 isBuiltIn = true,
                 isEnabled = true
             ),
+            Command(
+                id = "bullet_list",
+                name = "Bullet list",
+                voiceTriggers = listOf("make this a bullet list", "format as bullets", "bullet list", "bullets"),
+                systemPrompt = "Format the text as a concise bullet list. Preserve the original meaning and do not add facts.",
+                iconRes = null,
+                isBuiltIn = true,
+                isEnabled = true
+            ),
+            Command(
+                id = "numbered_list",
+                name = "Numbered list",
+                voiceTriggers = listOf("make this a numbered list", "format as a numbered list", "numbered list"),
+                systemPrompt = "Format the text as a concise numbered list. Preserve the original meaning and do not add facts.",
+                iconRes = null,
+                isBuiltIn = true,
+                isEnabled = true
+            ),
         )
+    }
+
+    private fun mergeDefaultBuiltInCommands(commands: List<Command>): List<Command> {
+        val existingIds = commands.map { it.id }.toSet()
+        val missingDefaults = defaultCommands.filter { it.id !in existingIds }
+        return commands + missingDefaults
     }
 
     private fun nextMonthStartMillis(): Long {

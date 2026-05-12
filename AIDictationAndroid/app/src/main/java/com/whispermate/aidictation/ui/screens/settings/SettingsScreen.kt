@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.ui.screens.settings
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -83,6 +84,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(isOverlayBubbleSuppressed(context)) }
+    var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
 
     val hasMicPermission = ContextCompat.checkSelfPermission(
         context,
@@ -128,6 +130,24 @@ fun SettingsScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Mic,
+                title = stringResource(R.string.settings_volume_button_shortcut),
+                enabled = hasOverlayPermission,
+                trailingContent = {
+                    Switch(
+                        checked = volumeShortcutEnabled,
+                        enabled = hasOverlayPermission,
+                        onCheckedChange = { enabled ->
+                            setVolumeShortcutEnabled(context, enabled)
+                            volumeShortcutEnabled = enabled
+                        }
+                    )
                 }
             )
 
@@ -348,6 +368,8 @@ fun SettingsScreen(
 private const val OVERLAY_BUBBLE_PREFS = "overlay_bubble"
 private const val OVERLAY_BUBBLE_HIDDEN_KEY = "bubble_hidden"
 private const val OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY = "bubble_snooze_until_ms"
+private const val SHORTCUT_PREFS = "dictation_shortcuts"
+private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
 
 private fun isOverlayBubbleSuppressed(context: Context): Boolean {
     val prefs = context.getSharedPreferences(OVERLAY_BUBBLE_PREFS, Context.MODE_PRIVATE)
@@ -366,6 +388,18 @@ private fun restoreOverlayBubble(context: Context) {
         .edit()
         .remove(OVERLAY_BUBBLE_HIDDEN_KEY)
         .remove(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY)
+        .apply()
+}
+
+private fun isVolumeShortcutEnabled(context: Context): Boolean {
+    return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, true)
+}
+
+private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {
+    context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(VOLUME_SHORTCUT_ENABLED_KEY, enabled)
         .apply()
 }
 
@@ -531,15 +565,8 @@ private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
     ) ?: return false
 
-    val className = OverlayDictationAccessibilityService::class.java.name
-    val classNameWithoutPackage = className.removePrefix("${context.packageName}.")
-    val fullServiceId = "${context.packageName}/$className"
-    val shortServiceId = "${context.packageName}/.$classNameWithoutPackage"
-    val shortSimpleServiceId = "${context.packageName}/.${OverlayDictationAccessibilityService::class.java.simpleName}"
-
+    val expected = ComponentName(context, OverlayDictationAccessibilityService::class.java)
     return enabledServices.split(':').any { serviceId ->
-        serviceId.equals(fullServiceId, ignoreCase = true) ||
-            serviceId.equals(shortServiceId, ignoreCase = true) ||
-            serviceId.equals(shortSimpleServiceId, ignoreCase = true)
+        ComponentName.unflattenFromString(serviceId) == expected
     }
 }

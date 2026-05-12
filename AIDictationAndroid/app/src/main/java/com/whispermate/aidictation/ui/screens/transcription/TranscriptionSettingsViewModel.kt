@@ -56,6 +56,31 @@ class TranscriptionSettingsViewModel @Inject constructor(
         }
     }
 
+    fun restoreDictionaryEntry(entry: DictionaryEntry) {
+        viewModelScope.launch {
+            val current = appPreferences.dictionaryEntries.first().toMutableList()
+            if (current.none { it.id == entry.id }) {
+                current.add(0, entry)
+                appPreferences.saveDictionaryEntries(current)
+            }
+        }
+    }
+
+    fun restoreDefaultDictionaryEntries() {
+        viewModelScope.launch {
+            val current = appPreferences.dictionaryEntries.first().toMutableList()
+            AppPreferences.defaultDictionaryEntries
+                .filterNot { default ->
+                    current.any {
+                        it.trigger == default.trigger &&
+                            it.replacement == default.replacement
+                    }
+                }
+                .forEach { current.add(it) }
+            appPreferences.saveDictionaryEntries(current)
+        }
+    }
+
     // Tone Style operations
     fun addToneStyle(name: String, appPackageNames: List<String>, instructions: String) {
         viewModelScope.launch {
@@ -84,6 +109,31 @@ class TranscriptionSettingsViewModel @Inject constructor(
         }
     }
 
+    fun restoreToneStyle(style: ToneStyle) {
+        viewModelScope.launch {
+            val current = appPreferences.toneStyles.first().toMutableList()
+            if (current.none { it.id == style.id }) {
+                current.add(0, style)
+                appPreferences.saveToneStyles(current)
+            }
+        }
+    }
+
+    fun restoreDefaultToneStyles() {
+        viewModelScope.launch {
+            val current = appPreferences.toneStyles.first().toMutableList()
+            AppPreferences.defaultContextRules
+                .filterNot { default ->
+                    current.any {
+                        it.name == default.name &&
+                            it.instructions == default.instructions
+                    }
+                }
+                .forEach { current.add(it) }
+            appPreferences.saveToneStyles(current)
+        }
+    }
+
     // Shortcut operations
     fun addShortcut(voiceTrigger: String, expansion: String) {
         viewModelScope.launch {
@@ -108,6 +158,31 @@ class TranscriptionSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val current = appPreferences.shortcuts.first().toMutableList()
             current.removeAll { it.id == shortcut.id }
+            appPreferences.saveShortcuts(current)
+        }
+    }
+
+    fun restoreShortcut(shortcut: Shortcut) {
+        viewModelScope.launch {
+            val current = appPreferences.shortcuts.first().toMutableList()
+            if (current.none { it.id == shortcut.id }) {
+                current.add(0, shortcut)
+                appPreferences.saveShortcuts(current)
+            }
+        }
+    }
+
+    fun restoreDefaultShortcuts() {
+        viewModelScope.launch {
+            val current = appPreferences.shortcuts.first().toMutableList()
+            AppPreferences.defaultShortcuts
+                .filterNot { default ->
+                    current.any {
+                        it.voiceTrigger == default.voiceTrigger &&
+                            it.expansion == default.expansion
+                    }
+                }
+                .forEach { current.add(it) }
             appPreferences.saveShortcuts(current)
         }
     }

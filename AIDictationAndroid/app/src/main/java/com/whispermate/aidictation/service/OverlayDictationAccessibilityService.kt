@@ -22,6 +22,7 @@ import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -70,11 +71,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_Y_KEY = "bubble_y"
         private const val BUBBLE_HIDDEN_KEY = "bubble_hidden"
         private const val BUBBLE_SNOOZE_UNTIL_MS_KEY = "bubble_snooze_until_ms"
+        private const val SHORTCUT_PREFS = "dictation_shortcuts"
+        private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
         private const val MIN_RECORDING_MS = 500L
         private const val BUBBLE_SIZE_DP = 55
         private const val BUBBLE_MARGIN_DP = 8
         private const val BUBBLE_ANIMATION_MS = 140L
+        private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
+        private const val VOLUME_SHORTCUT_WINDOW_MS = 1_200L
+        private const val VOLUME_SHORTCUT_PRESS_COUNT = 3
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
@@ -153,6 +159,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var audioRecorder: AudioRecorder? = null
     private var vadJob: Job? = null
     private var bubbleAnimationJob: Job? = null
+    private var bubbleHideJob: Job? = null
     private var bubbleSnapAnimator: ValueAnimator? = null
 
     private var activeCommandAction: CommandAction? = null
@@ -173,8 +180,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
+    private var volumeDownPressCount = 0
+    private var lastVolumeDownPressAtMs = 0L
 
     private val bubblePrefs by lazy { getSharedPreferences(BUBBLE_PREFS, Context.MODE_PRIVATE) }
+    private val shortcutPrefs by lazy { getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE) }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -212,6 +222,42 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         stopBubbleSnapAnimation()
     }
 
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (!isVolumeShortcutEnabled()) return false
+        if (
+            event.action != KeyEvent.ACTION_DOWN ||
+            event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN ||
+            event.repeatCount != 0
+        ) {
+            return false
+        }
+
+        val now = System.currentTimeMillis()
+        volumeDownPressCount = if (now - lastVolumeDownPressAtMs <= VOLUME_SHORTCUT_WINDOW_MS) {
+            volumeDownPressCount + 1
+        } else {
+            1
+        }
+        lastVolumeDownPressAtMs = now
+
+        if (volumeDownPressCount < VOLUME_SHORTCUT_PRESS_COUNT) return false
+
+        volumeDownPressCount = 0
+        lastVolumeDownPressAtMs = 0L
+
+        if (recordingState == RecordingState.Recording) {
+            stopRecording(discard = false)
+            return true
+        }
+
+        if (resolveFocusedEditableNode(null) == null || isBubbleSuppressed()) {
+            Toast.makeText(this, "Tap a text field first", Toast.LENGTH_SHORT).show()
+            return true
+        }
+        startRecording(mode = RecordingMode.Dictation)
+        return true
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stopRecording(discard = true)
@@ -220,30 +266,50 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         hideDismissActions()
         stopBubbleAnimation()
         stopBubbleSnapAnimation()
-        serviceScope.cancel()
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
         if (shouldShowBubble(source)) {
+            bubbleHideJob?.cancel()
+            bubbleHideJob = null
             bubbleShouldBeVisible = true
+            if (isVolumeShortcutEnabled() && recordingState == RecordingState.Idle) {
+                hideBubble(animated = false)
+                hideCommandActions(animated = false)
+                return
+            }
             showBubble()
             updateCommandActionsVisibility(source)
             return
         }
 
-        bubbleShouldBeVisible = false
-        if (recordingState == RecordingState.Recording) {
-            stopRecording(discard = true)
+        bubbleHideJob?.cancel()
+        bubbleHideJob = serviceScope.launch {
+            delay(BUBBLE_HIDE_DEBOUNCE_MS)
+            if (shouldShowBubble(null)) {
+                bubbleShouldBeVisible = true
+                showBubble()
+                updateCommandActionsVisibility(null)
+                return@launch
+            }
+
+            bubbleShouldBeVisible = false
+            if (recordingState == RecordingState.Recording) {
+                stopRecording(discard = true)
+            }
+            hideBubble(animated = false)
+            hideCommandActions(animated = false)
         }
-        hideBubble(animated = false)
-        hideCommandActions(animated = false)
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
         if (isBubbleSuppressed()) return false
-        if (!isKeyboardVisible()) return false
         val focusedNode = resolveFocusedEditableNode(source) ?: return false
         return true
+    }
+
+    private fun isVolumeShortcutEnabled(): Boolean {
+        return shortcutPrefs.getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, true)
     }
 
     private fun isKeyboardVisible(): Boolean {
@@ -296,6 +362,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun suppressBubbleNow(messageRes: Int) {
+        bubbleHideJob?.cancel()
+        bubbleHideJob = null
         hideDismissActions()
         if (recordingState == RecordingState.Recording) {
             stopRecording(discard = true)
@@ -390,6 +458,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun hideBubble(animated: Boolean = true) {
+        bubbleHideJob?.cancel()
+        bubbleHideJob = null
         bubbleShouldBeVisible = false
         if (!isBubbleAttached) return
         val bubble = bubbleView ?: return

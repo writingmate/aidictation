@@ -70,6 +70,10 @@ class CircularMicButtonView @JvmOverloads constructor(
     companion object {
         private const val TOTAL_BARS = 6
         private const val MIN_ACTIVE_BARS = 3
+        private const val WAVEFORM_LEVEL_GAIN = 1.65f
+        private const val WAVEFORM_LEVEL_MIX = 0.3f
+        private const val WAVEFORM_FLOOR_THRESHOLD = 0.045f
+        private const val WAVEFORM_ACTIVE_FLOOR = 0.16f
         private val FROZEN_HEIGHTS = floatArrayOf(0.51f, 0.86f, 0.99f, 0.99f, 0.86f, 0.51f)
     }
 
@@ -166,7 +170,8 @@ class CircularMicButtonView @JvmOverloads constructor(
             State.Idle -> TOTAL_BARS
             State.Recording -> {
                 val range = TOTAL_BARS - MIN_ACTIVE_BARS
-                (MIN_ACTIVE_BARS + (range * audioLevel * 2.5f).toInt()).coerceIn(MIN_ACTIVE_BARS, TOTAL_BARS)
+                val boostedLevel = boostWaveformLevel(audioLevel)
+                (MIN_ACTIVE_BARS + (range * boostedLevel * 2.5f).toInt()).coerceIn(MIN_ACTIVE_BARS, TOTAL_BARS)
             }
             State.Processing -> TOTAL_BARS
         }
@@ -183,10 +188,7 @@ class CircularMicButtonView @JvmOverloads constructor(
                         0f // Dot size (will be scaled in onDraw)
                     } else {
                         val bandValue = frequencyBands?.getOrNull(i)?.coerceIn(0f, 1f) ?: audioLevel
-                        val boosted = (bandValue * 1.35f + audioLevel * 0.22f).coerceIn(0f, 1f)
-                        val eased = sqrt(boosted)
-                        val floor = if (audioLevel > 0.08f) 0.12f else 0f
-                        max(eased, floor) * FROZEN_HEIGHTS[i]
+                        boostWaveformLevel(bandValue, audioLevel) * FROZEN_HEIGHTS[i]
                     }
                 }
                 State.Processing -> {
@@ -199,6 +201,13 @@ class CircularMicButtonView @JvmOverloads constructor(
                 animateBarTo(i, targetHeight)
             }
         }
+    }
+
+    private fun boostWaveformLevel(level: Float, overallLevel: Float = level): Float {
+        val mixed = (level * WAVEFORM_LEVEL_GAIN + overallLevel * WAVEFORM_LEVEL_MIX).coerceIn(0f, 1f)
+        val eased = sqrt(mixed)
+        val floor = if (overallLevel > WAVEFORM_FLOOR_THRESHOLD) WAVEFORM_ACTIVE_FLOOR else 0f
+        return max(eased, floor).coerceIn(0f, 1f)
     }
 
     private fun animateBarTo(index: Int, targetHeight: Float) {

@@ -376,10 +376,10 @@ jobs:
         run: chmod +x gradlew
 
       - name: Assemble release APK
-        run: ./gradlew assembleRelease -PPARAKEET_RUNTIME=onnx -PPACKAGE_OFFLINE_MODELS=true --stacktrace
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Bundle release AAB
-        run: ./gradlew bundleRelease -PPARAKEET_RUNTIME=onnx --stacktrace
+        run: ./gradlew bundleRelease --stacktrace
 
       - name: Collect release assets
         run: |

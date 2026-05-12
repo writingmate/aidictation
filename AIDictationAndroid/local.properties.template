@@ -17,9 +17,11 @@ TRANSCRIPTION_MODEL=groq/whisper-large-v3-turbo
 # Use `litert` only with converted `.tflite` files in parakeetpack.
 PARAKEET_RUNTIME=
 
-# Optional sideload APK mode. When true, the APK embeds Parakeet weights and
-# copies them from APK assets to app storage on first local transcription.
+# Optional sideload APK mode for local debugging only. Release APKs keep this
+# false and download Parakeet weights on demand from inside the app.
 PACKAGE_OFFLINE_MODELS=false
+PARAKEET_ON_DEMAND_MODEL_URL=https://github.com/writingmate/aidictation/releases/download/android-parakeet-assets-v3/AIDictation-Parakeet-Assets-v3.zip
+PARAKEET_ON_DEMAND_MODEL_SHA256=b0ba6367c660c9fb5b9cc711ae35dc4bb96b8ebee199a58a7e8b680acc169824
 
 # Writingmate post-processing configuration
 # Matches AIDictationPostProcessing* in the macOS Secrets.plist.

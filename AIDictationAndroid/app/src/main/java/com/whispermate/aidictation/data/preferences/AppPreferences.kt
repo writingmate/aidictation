@@ -43,6 +43,7 @@ class AppPreferences @Inject constructor(
         val SELECTED_LANGUAGES = stringPreferencesKey("selected_languages")
         val MULTILINGUAL_ENABLED = booleanPreferencesKey("multilingual_enabled")
         val POST_PROCESSING_ENABLED = booleanPreferencesKey("post_processing_enabled")
+        val ON_DEVICE_TRANSCRIPTION_ENABLED = booleanPreferencesKey("on_device_transcription_enabled")
         val LOCAL_MONTHLY_WORD_COUNT = intPreferencesKey("local_monthly_word_count")
         val LOCAL_WORD_COUNT_RESET_AT = longPreferencesKey("local_word_count_reset_at")
     }
@@ -88,6 +89,16 @@ class AppPreferences @Inject constructor(
     suspend fun setPostProcessingEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[Keys.POST_PROCESSING_ENABLED] = enabled
+        }
+    }
+
+    val onDeviceTranscriptionEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[Keys.ON_DEVICE_TRANSCRIPTION_ENABLED] ?: false
+    }
+
+    suspend fun setOnDeviceTranscriptionEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[Keys.ON_DEVICE_TRANSCRIPTION_ENABLED] = enabled
         }
     }
 

@@ -39,6 +39,8 @@ permissions:
 env:
   JAVA_VERSION: '17'
   ANDROID_PROJECT_DIR: AIDictationAndroid
+  PARAKEET_ASSETS_RELEASE_TAG: android-parakeet-assets-v3
+  PARAKEET_ASSETS_ARCHIVE: AIDictation-Parakeet-Assets-v3.zip
 
 jobs:
   build:
@@ -210,7 +212,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: true
+          lfs: false
+
+      - name: Download Parakeet model assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          archive_dir=/tmp/parakeet-assets
+          rm -rf "$archive_dir" parakeetpack/src/main/assets
+          mkdir -p "$archive_dir" parakeetpack/src/main/assets
+          gh release download "$PARAKEET_ASSETS_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$PARAKEET_ASSETS_ARCHIVE" \
+            --dir "$archive_dir"
+          unzip -q "$archive_dir/$PARAKEET_ASSETS_ARCHIVE" -d parakeetpack/src/main/assets
+          test -s parakeetpack/src/main/assets/encoder-model.int8.onnx
+          test -s parakeetpack/src/main/assets/decoder_joint-model.int8.onnx
+          test -s parakeetpack/src/main/assets/nemo128.onnx
+          test -s parakeetpack/src/main/assets/vocab.txt
+          test -s parakeetpack/src/main/assets/config.json
 
       - name: Resolve release metadata
         id: release_meta
@@ -356,14 +376,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Assemble release APK
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease -PPARAKEET_RUNTIME=onnx -PPACKAGE_OFFLINE_MODELS=true --stacktrace
 
       - name: Bundle release AAB
-        run: ./gradlew bundleRelease --stacktrace
+        run: ./gradlew bundleRelease -PPARAKEET_RUNTIME=onnx --stacktrace
 
       - name: Collect release assets
         run: |
           tag="${{ steps.release_meta.outputs.tag }}"
+          artifact_version="${tag#android-v}"
           mkdir -p release-artifacts
           apk_path=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -n 1)
           aab_path=$(find app/build/outputs/bundle/release -maxdepth 1 -name '*.aab' | head -n 1)
@@ -371,8 +392,9 @@ jobs:
             echo "Release APK or AAB was not produced" >&2
             exit 1
           fi
-          cp "$apk_path" "release-artifacts/AIDictation-Android-${tag}.apk"
-          cp "$aab_path" "release-artifacts/AIDictation-Android-${tag}.aab"
+          cp "$apk_path" "release-artifacts/AIDictation-Android-${artifact_version}.apk"
+          cp "$aab_path" "release-artifacts/AIDictation-Android-${artifact_version}.aab"
+          (cd release-artifacts && shasum -a 256 * > SHA256SUMS.txt)
           ls -lh release-artifacts
 
       - name: Upload release APK

@@ -6,6 +6,13 @@ Android source tree. A push to `main`, an `android-v*` tag, or a manual
 workflow dispatch also runs the signed release job and publishes APK/AAB
 assets to a GitHub Release named `android-v<versionName>`.
 
+The GitHub release job does not rely on Git LFS bandwidth for Parakeet
+weights. It checks out source with LFS disabled, downloads
+`AIDictation-Parakeet-Assets-v3.zip` from the
+`android-parakeet-assets-v3` GitHub Release, builds the sideload APK with
+`PACKAGE_OFFLINE_MODELS=true`, and builds the Play AAB with the
+`parakeet_v3_pack` asset pack.
+
 `.github/workflows/android-play-dev.yml` is a manual dev-release workflow
 that publishes the signed release AAB to a Google Play testing track
 (`internal` by default). It is intended for Play Store tester installs,

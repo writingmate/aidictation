@@ -67,6 +67,12 @@
     <string name="account_anonymous_hint">Sign in only when you need more words or want to purchase.</string>
     <string name="account_authenticated_hint">Your word usage and purchases are linked to this account.</string>
     <string name="settings_transcription">Transcription</string>
+    <string name="settings_on_device_transcription">On-device transcription</string>
+    <string name="settings_on_device_cloud">Cloud</string>
+    <string name="settings_on_device_ready">Ready</string>
+    <string name="settings_on_device_local">Local</string>
+    <string name="settings_on_device_downloading">Downloading %1$d%%</string>
+    <string name="settings_on_device_downloading_unknown">Downloading</string>
     <string name="settings_post_processing_settings">Post-processing Settings</string>
     <string name="settings_about">About</string>
     <string name="settings_version">Version</string>

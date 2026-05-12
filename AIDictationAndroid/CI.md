@@ -9,9 +9,10 @@ assets to a GitHub Release named `android-v<versionName>`.
 The GitHub release job does not rely on Git LFS bandwidth for Parakeet
 weights. It checks out source with LFS disabled, downloads
 `AIDictation-Parakeet-Assets-v3.zip` from the
-`android-parakeet-assets-v3` GitHub Release, builds the sideload APK with
-`PACKAGE_OFFLINE_MODELS=true`, and builds the Play AAB with the
-`parakeet_v3_pack` asset pack.
+`android-parakeet-assets-v3` GitHub Release for the Play asset pack, builds
+a small sideload APK that downloads Parakeet only when the user enables
+on-device transcription, and builds the Play AAB with the `parakeet_v3_pack`
+asset pack.
 
 `.github/workflows/android-play-dev.yml` is a manual dev-release workflow
 that publishes the signed release AAB to a Google Play testing track
@@ -33,8 +34,10 @@ runs, matching the local-developer layout described in
 | `TRANSCRIPTION_API_KEY` | Writingmate transcription key. Sent as `Authorization: Bearer …`. |
 | `TRANSCRIPTION_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/audio/transcriptions` (matches the Mac app's `.custom` provider). |
 | `TRANSCRIPTION_MODEL` | Optional override. Defaults to `groq/whisper-large-v3-turbo`. The workflow normalizes stale `gpt-4o-transcribe` values from secrets to this Android-supported model. |
-| `PARAKEET_RUNTIME` | Local prototype runtime. Leave empty for cloud releases; use `litert` only for builds that include converted Parakeet `.tflite` files in `parakeetpack`. |
-| `PACKAGE_OFFLINE_MODELS` | Optional sideload APK mode. Set to `true` with `PARAKEET_RUNTIME=onnx` to embed Parakeet weights directly in the APK. Play releases should leave this `false` and use the on-demand asset pack. |
+| `PARAKEET_RUNTIME` | Local prototype runtime. Leave empty for cloud releases; the app's Settings switch enables ONNX Parakeet at runtime after downloading weights. |
+| `PACKAGE_OFFLINE_MODELS` | Local-debug sideload mode. Release APKs leave this `false` and download Parakeet from inside the app only when requested. |
+| `PARAKEET_ON_DEMAND_MODEL_URL` | Optional override for the in-app Parakeet archive download URL. Defaults to the `android-parakeet-assets-v3` GitHub Release asset. |
+| `PARAKEET_ON_DEMAND_MODEL_SHA256` | Optional override for the in-app Parakeet archive checksum. |
 | `AIDICTATION_POST_PROCESSING_KEY` | Writingmate post-processing key for suggestions, commands, and cleanup. |
 | `AIDICTATION_POST_PROCESSING_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/chat/completions`. |
 | `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |

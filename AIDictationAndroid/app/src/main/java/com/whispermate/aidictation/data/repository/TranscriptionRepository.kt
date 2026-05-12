@@ -25,10 +25,11 @@ class TranscriptionRepository @Inject constructor(
         val languages = appPreferences.selectedLanguages.first()
         val multilingual = appPreferences.multilingualEnabled.first()
         val postProcess = appPreferences.postProcessingEnabled.first()
+        val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
         val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
 
-        if (provider == ApiProvider.PARAKEET) {
+        if (onDeviceTranscription || provider == ApiProvider.PARAKEET) {
             val raw = parakeetTranscriber.transcribe(audioFile)
                 .getOrElse { return Result.failure(it) }
             return if (postProcess) {
@@ -104,11 +105,18 @@ class TranscriptionRepository @Inject constructor(
     }
 
     suspend fun applyPostProcessing(text: String): String {
+        if (appPreferences.onDeviceTranscriptionEnabled.first()) {
+            return applyLocalTextExpansions(text)
+        }
+
         val provider = ApiConfigManager.instance?.getTranscriptionConfig()?.provider ?: ApiProvider.WRITINGMATE
         if (provider == ApiProvider.WRITINGMATE) return text
 
-        var result = text
+        return applyLocalTextExpansions(text)
+    }
 
+    private suspend fun applyLocalTextExpansions(text: String): String {
+        var result = text
         val dictionary = appPreferences.dictionaryEntries.first()
             .filter { it.isEnabled && it.replacement != null }
             .sortedByDescending { it.trigger.length }

@@ -64,6 +64,7 @@ import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
+import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
 
 @Composable
 fun SettingsScreen(
@@ -75,6 +76,9 @@ fun SettingsScreen(
     onMultilingualToggled: (Boolean) -> Unit = {},
     postProcessingEnabled: Boolean = true,
     onPostProcessingToggled: (Boolean) -> Unit = {},
+    onDeviceTranscriptionEnabled: Boolean = false,
+    onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
+    onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
     usageStatus: UsageStatus,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
@@ -237,6 +241,14 @@ fun SettingsScreen(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
+            OnDeviceTranscriptionItem(
+                enabled = onDeviceTranscriptionEnabled,
+                state = onDeviceModelState,
+                onToggle = onOnDeviceTranscriptionToggled
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
             SettingsItem(
                 icon = Icons.Default.Translate,
                 title = stringResource(R.string.settings_multilingual_mode),
@@ -471,6 +483,85 @@ private fun UsageSummary(usageStatus: UsageStatus) {
             LinearProgressIndicator(
                 progress = { usageStatus.percentage.coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun OnDeviceTranscriptionItem(
+    enabled: Boolean,
+    state: OnDeviceModelUiState,
+    onToggle: (Boolean) -> Unit
+) {
+    val progress = state.downloadProgress?.coerceIn(0f, 1f)
+    val status = when {
+        state.isDownloading && progress != null -> {
+            stringResource(R.string.settings_on_device_downloading, (progress * 100).toInt())
+        }
+        state.isDownloading -> stringResource(R.string.settings_on_device_downloading_unknown)
+        enabled -> stringResource(R.string.settings_on_device_local)
+        state.isInstalled -> stringResource(R.string.settings_on_device_ready)
+        else -> stringResource(R.string.settings_on_device_cloud)
+    }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (!state.isDownloading) {
+                        Modifier.clickable { onToggle(!enabled) }
+                    } else {
+                        Modifier
+                    }
+                )
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = stringResource(R.string.settings_on_device_transcription),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Switch(
+                checked = enabled || state.isDownloading,
+                enabled = !state.isDownloading,
+                onCheckedChange = onToggle
+            )
+        }
+
+        if (state.isDownloading) {
+            LinearProgressIndicator(
+                progress = { progress ?: 0f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 56.dp, end = 16.dp, bottom = 16.dp)
             )
         }
     }

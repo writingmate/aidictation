@@ -24,6 +24,14 @@ fun configValue(name: String, defaultValue: String = ""): String {
 }
 
 val packageOfflineModels = configValue("PACKAGE_OFFLINE_MODELS", "false").toBooleanStrictOrNull() ?: false
+val parakeetOnDemandModelUrl = configValue(
+    "PARAKEET_ON_DEMAND_MODEL_URL",
+    "https://github.com/writingmate/aidictation/releases/download/android-parakeet-assets-v3/AIDictation-Parakeet-Assets-v3.zip"
+)
+val parakeetOnDemandModelSha256 = configValue(
+    "PARAKEET_ON_DEMAND_MODEL_SHA256",
+    "b0ba6367c660c9fb5b9cc711ae35dc4bb96b8ebee199a58a7e8b680acc169824"
+)
 
 android {
     namespace = "com.whispermate.aidictation"
@@ -56,6 +64,8 @@ android {
         buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${configValue("TRANSCRIPTION_MODEL", "groq/whisper-large-v3-turbo")}\"")
         buildConfigField("String", "PARAKEET_RUNTIME", "\"${configValue("PARAKEET_RUNTIME", "")}\"")
         buildConfigField("boolean", "PACKAGE_OFFLINE_MODELS", packageOfflineModels.toString())
+        buildConfigField("String", "PARAKEET_ON_DEMAND_MODEL_URL", "\"$parakeetOnDemandModelUrl\"")
+        buildConfigField("String", "PARAKEET_ON_DEMAND_MODEL_SHA256", "\"$parakeetOnDemandModelSha256\"")
 
         // Writingmate post-processing, matching the macOS app's
         // AIDictationPostProcessing* secrets.

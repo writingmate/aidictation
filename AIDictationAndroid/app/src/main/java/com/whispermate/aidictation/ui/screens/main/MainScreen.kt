@@ -79,6 +79,8 @@ fun MainScreen(
     val error by viewModel.error.collectAsState()
     val multilingualEnabled by viewModel.multilingualEnabled.collectAsState()
     val postProcessingEnabled by viewModel.postProcessingEnabled.collectAsState()
+    val onDeviceTranscriptionEnabled by viewModel.onDeviceTranscriptionEnabled.collectAsState()
+    val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -228,6 +230,9 @@ fun MainScreen(
                 onMultilingualToggled = { viewModel.setMultilingualEnabled(it) },
                 postProcessingEnabled = postProcessingEnabled,
                 onPostProcessingToggled = { viewModel.setPostProcessingEnabled(it) },
+                onDeviceTranscriptionEnabled = onDeviceTranscriptionEnabled,
+                onDeviceModelState = onDeviceModelState,
+                onOnDeviceTranscriptionToggled = { viewModel.setOnDeviceTranscriptionEnabled(it) },
                 usageStatus = usageStatus,
                 onSignIn = { viewModel.openLogin() },
                 onSignOut = { viewModel.signOut() },

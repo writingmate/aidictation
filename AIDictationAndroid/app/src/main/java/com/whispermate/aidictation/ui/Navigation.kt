@@ -37,6 +37,8 @@ fun AIDictationNavHost(
 ) {
     val onboardingViewModel: OnboardingViewModel = hiltViewModel()
     val hasCompletedOnboarding by onboardingViewModel.hasCompletedOnboarding.collectAsState()
+    val onboardingOnDeviceTranscriptionEnabled by onboardingViewModel.onDeviceTranscriptionEnabled.collectAsState()
+    val onboardingOnDeviceModelState by onboardingViewModel.onDeviceModelState.collectAsState()
 
     val startDestination = if (hasCompletedOnboarding) Screen.Main.route else Screen.Onboarding.route
 
@@ -62,7 +64,10 @@ fun AIDictationNavHost(
                 },
                 onSaveContextRules = { enabledStates ->
                     onboardingViewModel.saveContextRulesFromOnboarding(enabledStates)
-                }
+                },
+                onDeviceTranscriptionEnabled = onboardingOnDeviceTranscriptionEnabled,
+                onDeviceModelState = onboardingOnDeviceModelState,
+                onSetOnDeviceTranscriptionEnabled = onboardingViewModel::setOnDeviceTranscriptionEnabled
             )
         }
 

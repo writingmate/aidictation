@@ -23,6 +23,17 @@
     <string name="onboarding_try_dictation">Say a short test first</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_restricted_title">Allow restricted settings</string>
+    <string name="onboarding_restricted_subtitle">This build was installed outside Google Play. Android may block Accessibility until you allow restricted settings for AIDictation.</string>
+    <string name="onboarding_restricted_open_app_info">Open App Info</string>
+    <string name="onboarding_restricted_step1">Open AIDictation app info</string>
+    <string name="onboarding_restricted_step2">Tap the three-dot menu in the top right</string>
+    <string name="onboarding_restricted_step3">Choose Allow restricted settings</string>
+    <string name="onboarding_restricted_step4">Return here, then turn on AIDictation in Accessibility</string>
+    <string name="onboarding_on_device_title">On-device transcription</string>
+    <string name="onboarding_on_device_subtitle">Optional: download the local Parakeet model so dictation can run on your phone.</string>
+    <string name="onboarding_on_device_toggle">Use local transcription</string>
+    <string name="onboarding_on_device_note">You can keep cloud transcription now and switch later in Settings.</string>
     <string name="onboarding_volume_shortcut_title">Volume button shortcut</string>
     <string name="onboarding_volume_shortcut_subtitle">Optionally start dictation by triple-pressing Volume Down while a text field is focused.</string>
     <string name="onboarding_volume_shortcut_toggle">Enable triple-press Volume Down</string>

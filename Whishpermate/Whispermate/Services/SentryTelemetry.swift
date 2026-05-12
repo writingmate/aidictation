@@ -89,11 +89,45 @@ enum SentryTelemetry {
         addBreadcrumb(event, category: "audio.engine", data: data)
     }
 
+    static func recordOnboardingStep(_ event: String, step: String, data: [String: Any] = [:]) {
+        var payload = data
+        payload["step"] = step
+        addBreadcrumb(event, category: "onboarding", data: payload)
+
+        guard started else { return }
+        SentrySDK.configureScope { scope in
+            scope.setTag(value: step, key: "onboarding.step")
+            for (key, value) in data {
+                guard let tagValue = tagValue(from: value) else { continue }
+                scope.setTag(value: tagValue, key: "onboarding.\(key)")
+            }
+        }
+    }
+
     private static func configureStaticContext() {
         SentrySDK.configureScope { scope in
             scope.setTag(value: architectureName, key: "device.arch")
             scope.setTag(value: ProcessInfo.processInfo.operatingSystemVersionString, key: "os.version")
             scope.setTag(value: Bundle.main.bundleIdentifier ?? "unknown", key: "app.bundle_id")
+        }
+    }
+
+    private static func tagValue(from value: Any) -> String? {
+        switch value {
+        case let string as String:
+            return string
+        case let bool as Bool:
+            return bool ? "true" : "false"
+        case let int as Int:
+            return String(int)
+        case let double as Double:
+            return String(double)
+        case let float as Float:
+            return String(float)
+        case let strings as [String]:
+            return strings.joined(separator: ",")
+        default:
+            return nil
         }
     }
 

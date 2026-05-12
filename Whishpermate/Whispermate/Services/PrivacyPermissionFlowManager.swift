@@ -61,6 +61,20 @@ final class PrivacyPermissionFlowManager {
         }
     }
 
+    func closeDragHelper() {
+        guard #available(macOS 13.0, *), let bridge = loadRuntimeBridge() else {
+            return
+        }
+
+        let selector = NSSelectorFromString("closePermissionFlow")
+        guard bridge.responds(to: selector), let method = bridge.method(for: selector) else {
+            return
+        }
+
+        typealias Function = @convention(c) (AnyObject, Selector) -> Void
+        unsafeBitCast(method, to: Function.self)(bridge, selector)
+    }
+
     @available(macOS 13.0, *)
     private func openWithPermissionFlowRuntime(_ pane: Pane) -> Bool {
         guard let bridge = loadRuntimeBridge() else { return false }

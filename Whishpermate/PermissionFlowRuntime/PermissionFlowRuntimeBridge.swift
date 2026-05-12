@@ -18,6 +18,12 @@ public final class PermissionFlowRuntimeBridge: NSObject {
         open(.screenRecording)
     }
 
+    @objc(closePermissionFlow)
+    public func closePermissionFlow() {
+        controller?.closePanel()
+        controller = nil
+    }
+
     private func open(_ pane: PermissionFlowPane) {
         controller?.closePanel()
         controller = PermissionFlow.makeController(

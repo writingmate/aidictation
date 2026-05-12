@@ -90,14 +90,41 @@ class OnboardingManager: ObservableObject {
         let isGranted = AXIsProcessTrusted()
         accessibilityGranted = isGranted
 
+        if showOnboarding, wasGranted != isGranted {
+            SentryTelemetry.recordOnboardingStep(
+                "permission_status_changed",
+                step: "permissions",
+                data: [
+                    "selected_setting": "accessibility",
+                    "accessibility_granted": isGranted,
+                    "microphone_granted": isMicrophoneGranted(),
+                ]
+            )
+        }
+
         if showOnboarding, !wasGranted, isGranted {
             DebugLog.info("Accessibility permission granted during onboarding; bringing onboarding forward", context: "OnboardingManager")
+            PrivacyPermissionFlowManager.shared.closeDragHelper()
             NotificationCenter.default.post(name: .bringOnboardingToFront, object: nil)
         }
     }
 
     func updateMicrophoneStatus() {
-        microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let wasGranted = microphoneGranted
+        let isGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        microphoneGranted = isGranted
+
+        if showOnboarding, wasGranted != isGranted {
+            SentryTelemetry.recordOnboardingStep(
+                "permission_status_changed",
+                step: "permissions",
+                data: [
+                    "selected_setting": "microphone",
+                    "microphone_granted": isGranted,
+                    "accessibility_granted": isAccessibilityGranted(),
+                ]
+            )
+        }
     }
 
     func checkOnboardingStatus() {
@@ -216,6 +243,16 @@ class OnboardingManager: ObservableObject {
     }
 
     func requestMicrophonePermission() {
+        SentryTelemetry.recordOnboardingStep(
+            "permission_requested",
+            step: "permissions",
+            data: [
+                "selected_setting": "microphone",
+                "microphone_granted": isMicrophoneGranted(),
+                "accessibility_granted": isAccessibilityGranted(),
+            ]
+        )
+
         let currentStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
         switch currentStatus {
@@ -252,6 +289,15 @@ class OnboardingManager: ObservableObject {
 
     func requestAccessibilityPermission() {
         DebugLog.info("Triggering accessibility permission request", context: "OnboardingManager")
+        SentryTelemetry.recordOnboardingStep(
+            "permission_requested",
+            step: "permissions",
+            data: [
+                "selected_setting": "accessibility",
+                "microphone_granted": isMicrophoneGranted(),
+                "accessibility_granted": isAccessibilityGranted(),
+            ]
+        )
         PrivacyPermissionFlowManager.shared.open(
             .accessibility,
             permissionGranted: { AXIsProcessTrusted() }

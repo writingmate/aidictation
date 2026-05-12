@@ -37,6 +37,19 @@ struct OnboardingView: View {
         case complete = 7
     }
 
+    private func stepName(_ step: OnboardingUIStep) -> String {
+        switch step {
+        case .permissions: return "permissions"
+        case .languages: return "languages"
+        case .transcriptionMode: return "transcription_mode"
+        case .overlayColor: return "overlay_color"
+        case .hotkeyTest: return showChangeHotkey ? "hotkey_change" : "hotkey_test"
+        case .firstRecording: return "first_recording"
+        case .account: return "account"
+        case .complete: return "complete"
+        }
+    }
+
     // Gradient colors
     private let gradientStart = Color(red: 1.0, green: 0.494, blue: 0.78) // #FF7EC7
     private let gradientEnd = Color(red: 1.0, green: 0.929, blue: 0.275) // #FFED46
@@ -68,6 +81,7 @@ struct OnboardingView: View {
             // Immediately refresh permission status before starting periodic checks
             onboardingManager.updateMicrophoneStatus()
             onboardingManager.updateAccessibilityStatus()
+            recordOnboardingStep("step_shown")
             startPermissionChecks()
         }
         .onDisappear {
@@ -78,6 +92,10 @@ struct OnboardingView: View {
             Button("Download Model") {
                 if let mode = pendingMode {
                     selectedOnboardingMode = mode
+                    recordOnboardingStep(
+                        "setting_selected",
+                        data: ["selected_setting": "transcription_mode", "model_download": "accepted"]
+                    )
                 }
                 let service = parakeetService
                 Task {
@@ -89,6 +107,10 @@ struct OnboardingView: View {
                 pendingMode = nil
             }
             Button("Not Now", role: .cancel) {
+                recordOnboardingStep(
+                    "setting_selected",
+                    data: ["selected_setting": "transcription_mode", "model_download": "declined"]
+                )
                 pendingMode = nil
             }
         } message: {
@@ -340,7 +362,10 @@ struct OnboardingView: View {
                         flag: language.flag,
                         name: language.displayName,
                         isSelected: languageManager.isSelected(language),
-                        action: { languageManager.toggleLanguage(language) }
+                        action: {
+                            languageManager.toggleLanguage(language)
+                            recordOnboardingStep("setting_selected", data: ["selected_setting": "languages"])
+                        }
                     )
                 }
             }
@@ -444,9 +469,14 @@ struct OnboardingView: View {
 
                     if needsModel && !isParakeetReady && !isParakeetDownloading {
                         pendingMode = mode
+                        recordOnboardingStep(
+                            "setting_selected",
+                            data: ["selected_setting": "transcription_mode", "pending_download_mode": mode.rawValue]
+                        )
                         showModelDownloadAlert = true
                     } else {
                         selectedOnboardingMode = mode
+                        recordOnboardingStep("setting_selected", data: ["selected_setting": "transcription_mode"])
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -602,6 +632,7 @@ struct OnboardingView: View {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                 overlayManager.setColorTheme(theme)
             }
+            recordOnboardingStep("setting_selected", data: ["selected_setting": "overlay_color"])
         } label: {
             HStack(spacing: 10) {
                 ZStack {
@@ -1021,6 +1052,106 @@ struct OnboardingView: View {
 
     // MARK: - Helpers
 
+    private func recordOnboardingStep(_ event: String, step: OnboardingUIStep? = nil, data: [String: Any] = [:]) {
+        let targetStep = step ?? currentUIStep
+        var payload = onboardingTelemetryData(for: targetStep)
+        for (key, value) in data {
+            payload[key] = value
+        }
+        SentryTelemetry.recordOnboardingStep(event, step: stepName(targetStep), data: payload)
+    }
+
+    private func onboardingTelemetryData(for step: OnboardingUIStep) -> [String: Any] {
+        let selectedLanguages = languageManager.selectedLanguages
+            .map(\.rawValue)
+            .sorted()
+        let selectedLanguageValue = selectedLanguages.joined(separator: ",")
+        let selectedHotkeyValue = hotkeyManager.currentHotkey?.displayString
+        let selectedAccountValue = authManager.currentUser?.email ?? "not_signed_in"
+
+        var data: [String: Any] = [
+            "microphone_granted": onboardingManager.isMicrophoneGranted(),
+            "accessibility_granted": onboardingManager.isAccessibilityGranted(),
+            "language_count": selectedLanguages.count,
+            "languages": selectedLanguages,
+            "selected_languages": selectedLanguages,
+            "transcription_mode": selectedOnboardingMode.rawValue,
+            "selected_transcription_mode": selectedOnboardingMode.rawValue,
+            "transcription_mode_available": selectedOnboardingMode.isAvailable,
+            "overlay_color": overlayManager.colorTheme.rawValue,
+            "selected_color": overlayManager.colorTheme.rawValue,
+            "hotkey_configured": hotkeyManager.currentHotkey != nil,
+            "fn_detected": fnKeyEverDetected,
+            "account_signed_in": isAccountSignedIn,
+        ]
+
+        if let selectedHotkeyValue {
+            data["hotkey"] = selectedHotkeyValue
+            data["selected_hotkey"] = selectedHotkeyValue
+        }
+
+        if let user = authManager.currentUser {
+            data["account_email"] = user.email
+            data["selected_email"] = user.email
+            data["account_user_id"] = user.userId.uuidString
+            data["account_subscription_status"] = user.subscriptionStatus
+            data["account_subscription_tier"] = user.subscriptionTier.displayName
+        }
+
+        switch parakeetService.state {
+        case .notInitialized:
+            data["local_model_state"] = "not_initialized"
+        case .downloading:
+            data["local_model_state"] = "downloading"
+        case .initializing:
+            data["local_model_state"] = "initializing"
+        case .ready:
+            data["local_model_state"] = "ready"
+        case .transcribing:
+            data["local_model_state"] = "transcribing"
+        case .error:
+            data["local_model_state"] = "error"
+        }
+
+        switch step {
+        case .permissions:
+            data["selected_setting"] = "permissions"
+            data["selected_setting_value"] = [
+                "microphone:\(onboardingManager.isMicrophoneGranted())",
+                "accessibility:\(onboardingManager.isAccessibilityGranted())",
+            ].joined(separator: ",")
+        case .languages:
+            data["selected_setting"] = "languages"
+            data["selected_setting_value"] = selectedLanguageValue
+        case .transcriptionMode:
+            data["selected_setting"] = "transcription_mode"
+            data["selected_setting_value"] = selectedOnboardingMode.rawValue
+        case .overlayColor:
+            data["selected_setting"] = "overlay_color"
+            data["selected_setting_value"] = overlayManager.colorTheme.rawValue
+        case .hotkeyTest:
+            data["selected_setting"] = showChangeHotkey ? "custom_hotkey" : "fn_hotkey"
+            data["selected_setting_value"] = selectedHotkeyValue ?? (fnKeyEverDetected ? "fn" : "not_configured")
+        case .firstRecording:
+            data["selected_setting"] = "first_recording"
+            data["selected_setting_value"] = firstRecordingText.isEmpty ? "empty" : "recorded"
+            data["first_recording_text_length"] = firstRecordingText.count
+        case .account:
+            data["selected_setting"] = isAccountSignedIn ? "signed_in" : "not_signed_in"
+            data["selected_setting_value"] = selectedAccountValue
+        case .complete:
+            data["selected_setting"] = "complete"
+            data["selected_setting_value"] = "complete"
+        }
+
+        return data
+    }
+
+    private func setOnboardingStep(_ nextStep: OnboardingUIStep) {
+        currentUIStep = nextStep
+        recordOnboardingStep("step_shown", step: nextStep)
+    }
+
     private var stepTitle: String {
         switch currentUIStep {
         case .permissions:
@@ -1064,14 +1195,17 @@ struct OnboardingView: View {
     }
 
     private func goBack() {
+        recordOnboardingStep("step_back")
+
         if showChangeHotkey {
             showChangeHotkey = false
             startFnKeyMonitoring()
+            recordOnboardingStep("step_shown")
             return
         }
 
         if let prevIndex = OnboardingUIStep(rawValue: currentUIStep.rawValue - 1) {
-            currentUIStep = prevIndex
+            setOnboardingStep(prevIndex)
             if prevIndex == .hotkeyTest {
                 startFnKeyMonitoring()
             }
@@ -1079,50 +1213,57 @@ struct OnboardingView: View {
     }
 
     private func goNext() {
+        recordOnboardingStep("step_completed")
+
         switch currentUIStep {
         case .permissions:
-            currentUIStep = .languages
+            setOnboardingStep(.languages)
         case .languages:
-            currentUIStep = .transcriptionMode
+            setOnboardingStep(.transcriptionMode)
         case .transcriptionMode:
             if !selectedOnboardingMode.isAvailable {
                 selectedOnboardingMode = .cloud
             }
             transcriptionProviderManager.setTranscriptionMode(selectedOnboardingMode)
-            currentUIStep = .overlayColor
+            recordOnboardingStep("setting_applied", data: ["selected_setting": "transcription_mode"])
+            setOnboardingStep(.overlayColor)
         case .overlayColor:
-            currentUIStep = .hotkeyTest
+            setOnboardingStep(.hotkeyTest)
             startFnKeyMonitoring()
         case .hotkeyTest:
             if showChangeHotkey {
                 if hotkeyManager.currentHotkey != nil {
-                    currentUIStep = .firstRecording
+                    setOnboardingStep(.firstRecording)
                 }
             } else if fnKeyEverDetected {
                 hotkeyManager.setHotkey(Hotkey(keyCode: 63, modifiers: .function))
-                currentUIStep = .firstRecording
+                recordOnboardingStep("setting_applied", data: ["selected_setting": "fn_hotkey"])
+                setOnboardingStep(.firstRecording)
             }
         case .firstRecording:
-            currentUIStep = .account
+            setOnboardingStep(.account)
         case .account:
             if isAccountSignedIn {
                 showCompleteScreen()
             } else {
+                recordOnboardingStep("account_sign_in_started")
                 authManager.openLogin()
             }
         case .complete:
+            recordOnboardingStep("onboarding_completed")
             onboardingManager.completeOnboarding()
         }
     }
 
     private func skipAccountStep() {
+        recordOnboardingStep("account_skipped")
         showCompleteScreen()
     }
 
     private func showCompleteScreen() {
         // Ensure hotkey stays enabled for complete screen
         hotkeyManager.setDeferRegistration(false)
-        currentUIStep = .complete
+        setOnboardingStep(.complete)
     }
 
     // MARK: - Permission Checking
@@ -1179,6 +1320,7 @@ struct OnboardingView: View {
             DebugLog.info("Fn key pressed", context: "OnboardingView")
             fnKeyDetected = true
             fnKeyEverDetected = true
+            recordOnboardingStep("setting_selected", data: ["selected_setting": "fn_hotkey"])
         }
         fnKeyMonitor?.onFnReleased = {
             DebugLog.info("Fn key released", context: "OnboardingView")

@@ -4,34 +4,14 @@ on:
   push:
     branches:
       - main
-      - 'claude/**'
-      - 'codex/**'
     tags:
       - 'android-v[0-9]*.[0-9]*.[0-9]*'
-    paths:
-      - 'AIDictationAndroid/**'
-      - '.github/workflows/android-build.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'AIDictationAndroid/**'
       - '.github/workflows/android-build.yml'
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'GitHub Release tag. Defaults to android-v<versionName>.'
-        required: false
-        type: string
-      draft:
-        description: 'Create the GitHub Release as a draft.'
-        required: false
-        default: false
-        type: boolean
-      prerelease:
-        description: 'Mark the GitHub Release as a prerelease.'
-        required: false
-        default: false
-        type: boolean
+      - '.github/workflows/android-play-release.yml'
 
 permissions:
   contents: write
@@ -226,7 +206,7 @@ jobs:
   release:
     name: Release (signed)
     needs: build
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/android-v')))
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/android-v')
     runs-on: ubuntu-latest
 
     defaults:
@@ -252,9 +232,6 @@ jobs:
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      RELEASE_DRAFT: ${{ github.event.inputs.draft || 'false' }}
-      RELEASE_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
-      RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag || '' }}
 
     steps:
       - name: Checkout
@@ -262,6 +239,48 @@ jobs:
         with:
           fetch-depth: 0
           lfs: false
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p; s/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*configValue\("VERSION_NAME", "([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p; s/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*configValue\("VERSION_CODE", "([0-9]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
+            echo "Could not read Android versionName/versionCode from app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Android releases must be created by pushing an android-v<versionName> tag." >&2
+            exit 1
+          fi
+
+          tag="${GITHUB_REF_NAME}"
+          expected_tag="android-v${version_name}"
+          if [ "$tag" != "$expected_tag" ]; then
+            echo "Tag $tag does not match Android versionName $version_name; expected $expected_tag." >&2
+            exit 1
+          fi
+          tag_sha=$(git rev-list -n 1 "$tag")
+
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          echo "title=AIDictation Android ${version_name} (${version_code})" >> "$GITHUB_OUTPUT"
+
+      - name: Guard main release tag
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_TAG_SHA: ${{ steps.release_meta.outputs.tag_sha }}
+        run: |
+          git fetch origin main --prune
+          if ! git merge-base --is-ancestor "$RELEASE_TAG_SHA" origin/main; then
+            echo "Release tag $RELEASE_TAG points to $RELEASE_TAG_SHA, which is not on origin/main." >&2
+            echo "Merge to main first, then tag the main commit." >&2
+            exit 1
+          fi
 
       - name: Download Parakeet model assets
         env:
@@ -280,43 +299,6 @@ jobs:
           test -s parakeetpack/src/main/assets/nemo128.onnx
           test -s parakeetpack/src/main/assets/vocab.txt
           test -s parakeetpack/src/main/assets/config.json
-
-      - name: Resolve release metadata
-        id: release_meta
-        shell: bash
-        run: |
-          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p; s/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*configValue\("VERSION_NAME", "([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
-          version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p; s/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*configValue\("VERSION_CODE", "([0-9]+)".*/\1/p' app/build.gradle.kts | head -n 1)
-          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
-            echo "Could not read Android versionName/versionCode from app/build.gradle.kts" >&2
-            exit 1
-          fi
-
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            tag="${GITHUB_REF_NAME}"
-          elif [ -n "$RELEASE_TAG_INPUT" ]; then
-            tag="$RELEASE_TAG_INPUT"
-          else
-            tag="android-v${version_name}"
-          fi
-
-          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
-          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "title=AIDictation Android ${version_name} (${version_code})" >> "$GITHUB_OUTPUT"
-
-      - name: Guard main release tag
-        env:
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-        run: |
-          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            tag_sha=$(git rev-list -n 1 "$RELEASE_TAG")
-            if [ "$tag_sha" != "$GITHUB_SHA" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
-              echo "Release tag $RELEASE_TAG already points to $tag_sha, not this main merge $GITHUB_SHA." >&2
-              echo "Bump Android versionName/versionCode before merging to main." >&2
-              exit 1
-            fi
-          fi
 
       - name: Report secret presence
         run: |
@@ -511,23 +493,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_TAG_SHA: ${{ steps.release_meta.outputs.tag_sha }}
           RELEASE_TITLE: ${{ steps.release_meta.outputs.title }}
         run: |
-          flags=(--repo "$GITHUB_REPOSITORY")
-          if [ "$RELEASE_DRAFT" = "true" ]; then
-            flags+=(--draft)
-          fi
-          if [ "$RELEASE_PRERELEASE" = "true" ]; then
-            flags+=(--prerelease)
-          fi
-
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-artifacts/* --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" release-artifacts/* \
-              --target "$GITHUB_SHA" \
+              --target "$RELEASE_TAG_SHA" \
               --title "$RELEASE_TITLE" \
               --generate-notes \
-              "${flags[@]}"
+              --repo "$GITHUB_REPOSITORY"
           fi

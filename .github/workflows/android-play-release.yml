@@ -1,35 +1,15 @@
-name: Android Play Dev Release
+name: Android Play Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      track:
-        description: 'Google Play track for the dev release.'
-        required: true
-        default: internal
-        type: choice
-        options:
-          - internal
-          - alpha
-          - beta
-      parakeet_runtime:
-        description: 'Local transcription runtime baked into BuildConfig.'
-        required: true
-        default: onnx
-        type: choice
-        options:
-          - onnx
-          - cloud
-      release_name:
-        description: 'Optional Play release name override.'
-        required: false
-        type: string
+  push:
+    tags:
+      - 'android-v[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-play-dev-${{ github.ref }}
+  group: android-play-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -48,9 +28,9 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      PLAY_TRACK: ${{ github.event.inputs.track || 'internal' }}
-      PLAY_RELEASE_NAME: ${{ github.event.inputs.release_name || '' }}
-      PARAKEET_RUNTIME: ${{ github.event.inputs.parakeet_runtime || 'onnx' }}
+      PLAY_TRACK: internal
+      PLAY_RELEASE_NAME: ''
+      PARAKEET_RUNTIME: onnx
 
       # Google Play API credentials. Prefer the base64 secret for copy/paste
       # safety; raw ANDROID_PUBLISHER_CREDENTIALS is also supported.
@@ -85,7 +65,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           lfs: false
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Play releases must be created by pushing an android-v<versionName> tag." >&2
+            exit 1
+          fi
+
+          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p; s/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*configValue\("VERSION_NAME", "([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p; s/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*configValue\("VERSION_CODE", "([0-9]+)".*/\1/p' app/build.gradle.kts | head -n 1)
+          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
+            echo "Could not read Android versionName/versionCode from app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+          expected_tag="android-v${version_name}"
+          if [ "$GITHUB_REF_NAME" != "$expected_tag" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match Android versionName $version_name; expected $expected_tag." >&2
+            exit 1
+          fi
+
+          tag_sha=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          git fetch origin main --prune
+          if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
+            echo "Release tag $GITHUB_REF_NAME points to $tag_sha, which is not on origin/main." >&2
+            echo "Merge to main first, then tag the main commit." >&2
+            exit 1
+          fi
+
+          echo "VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$version_name" >> "$GITHUB_ENV"
+          echo "PLAY_RELEASE_NAME=AIDictation Android ${version_name} (${version_code})" >> "$GITHUB_ENV"
 
       - name: Download Parakeet model assets
         env:
@@ -102,6 +117,8 @@ jobs:
           test -s parakeetpack/src/main/assets/encoder-model.int8.onnx
           test -s parakeetpack/src/main/assets/decoder_joint-model.int8.onnx
           test -s parakeetpack/src/main/assets/nemo128.onnx
+          test -s parakeetpack/src/main/assets/vocab.txt
+          test -s parakeetpack/src/main/assets/config.json
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
@@ -210,20 +227,8 @@ jobs:
           fi
           rm /tmp/secrets.plist
 
-      - name: Resolve dev version
-        run: |
-          base_version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*configValue\\("VERSION_NAME", "([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
-          if [ -z "$base_version_name" ]; then
-            base_version_name="0.0.5"
-          fi
-          echo "VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=${base_version_name}-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-
       - name: Write local.properties
         run: |
-          if [ "${PARAKEET_RUNTIME}" = "cloud" ]; then
-            PARAKEET_RUNTIME=""
-          fi
           normalize_transcription_model() {
             case "$1" in
               ""|*"gpt-4o-transcribe"*)
@@ -263,16 +268,10 @@ jobs:
 
       - name: Validate release bundle
         run: |
-          if [ "${PARAKEET_RUNTIME}" = "cloud" ]; then
-            PARAKEET_RUNTIME=""
-          fi
           ./gradlew :app:bundleRelease -PPARAKEET_RUNTIME="${PARAKEET_RUNTIME}" --stacktrace
 
       - name: Publish to Google Play
         run: |
-          if [ "${PARAKEET_RUNTIME}" = "cloud" ]; then
-            PARAKEET_RUNTIME=""
-          fi
           args=(
             :app:publishReleaseBundle
             -PPLAY_TRACK="${PLAY_TRACK}"

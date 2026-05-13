@@ -1,8 +1,6 @@
 package com.whispermate.aidictation.ui.screens.onboarding
 
 import android.Manifest
-import android.net.Uri
-import android.os.Build
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -83,7 +81,6 @@ import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 private enum class OnboardingStep {
     Welcome,
     Microphone,
-    RestrictedSettings,
     AccessibilityDisclosure,
     Overlay,
     OnDeviceTranscription,
@@ -106,19 +103,13 @@ fun OnboardingScreen(
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
     var testInputText by remember { mutableStateOf("") }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
-    var hasOpenedRestrictedSettings by remember { mutableStateOf(false) }
     var hasAcceptedAccessibilityDisclosure by remember { mutableStateOf(false) }
     val hasTestedDictation = testInputText.isNotBlank()
 
-    val showRestrictedSettingsStep = shouldShowRestrictedSettingsStep(
-        context = context,
-        isOverlayServiceEnabled = isOverlayServiceEnabled
-    )
-    val onboardingSteps = remember(showRestrictedSettingsStep) {
+    val onboardingSteps = remember {
         buildList {
             add(OnboardingStep.Welcome)
             add(OnboardingStep.Microphone)
-            if (showRestrictedSettingsStep) add(OnboardingStep.RestrictedSettings)
             add(OnboardingStep.AccessibilityDisclosure)
             add(OnboardingStep.Overlay)
             add(OnboardingStep.OnDeviceTranscription)
@@ -206,13 +197,6 @@ fun OnboardingScreen(
                 when (step) {
                     OnboardingStep.Welcome -> WelcomeStep()
                     OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
-                    OnboardingStep.RestrictedSettings -> RestrictedSettingsStep(
-                        hasOpenedAppInfo = hasOpenedRestrictedSettings,
-                        onOpenAppInfo = {
-                            hasOpenedRestrictedSettings = true
-                            openAppInfoSettings(context)
-                        }
-                    )
                     OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep(
                         hasAccepted = hasAcceptedAccessibilityDisclosure,
                         onAcceptedChanged = { hasAcceptedAccessibilityDisclosure = it }
@@ -247,14 +231,6 @@ fun OnboardingScreen(
                             goToNextStep()
                         } else {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
-                    OnboardingStep.RestrictedSettings -> {
-                        if (hasOpenedRestrictedSettings) {
-                            goToNextStep()
-                        } else {
-                            hasOpenedRestrictedSettings = true
-                            openAppInfoSettings(context)
                         }
                     }
                     OnboardingStep.AccessibilityDisclosure -> goToNextStep()
@@ -293,11 +269,6 @@ fun OnboardingScreen(
                         stringResource(R.string.onboarding_continue)
                     } else {
                         stringResource(R.string.onboarding_mic_enable)
-                    }
-                    OnboardingStep.RestrictedSettings -> if (hasOpenedRestrictedSettings) {
-                        stringResource(R.string.onboarding_continue)
-                    } else {
-                        stringResource(R.string.onboarding_restricted_open_app_info)
                     }
                     OnboardingStep.AccessibilityDisclosure -> {
                         stringResource(R.string.onboarding_accessibility_disclosure_continue)
@@ -391,73 +362,6 @@ private fun DisclosureText(text: String) {
             .fillMaxWidth()
             .padding(bottom = 8.dp)
     )
-}
-
-@Composable
-private fun RestrictedSettingsStep(
-    hasOpenedAppInfo: Boolean,
-    onOpenAppInfo: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.secondaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.secondary
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_restricted_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_restricted_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        SetupStepItem(
-            number = "1",
-            text = stringResource(R.string.onboarding_restricted_step1),
-            isCompleted = hasOpenedAppInfo,
-            onClick = if (!hasOpenedAppInfo) onOpenAppInfo else null
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        SetupStepItem(
-            number = "2",
-            text = stringResource(R.string.onboarding_restricted_step2)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        SetupStepItem(
-            number = "3",
-            text = stringResource(R.string.onboarding_restricted_step3)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        SetupStepItem(
-            number = "4",
-            text = stringResource(R.string.onboarding_restricted_step4)
-        )
-    }
 }
 
 @Composable
@@ -1098,38 +1002,6 @@ private fun openAccessibilitySettings(context: Context) {
     context.startActivity(intent)
 }
 
-private fun openAppInfoSettings(context: Context) {
-    val intent = Intent(
-        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-        Uri.fromParts("package", context.packageName, null)
-    ).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-    }
-    context.startActivity(intent)
-}
-
-private fun shouldShowRestrictedSettingsStep(
-    context: Context,
-    isOverlayServiceEnabled: Boolean
-): Boolean {
-    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-        !isOverlayServiceEnabled &&
-        isInstalledOutsideGooglePlay(context)
-}
-
-private fun isInstalledOutsideGooglePlay(context: Context): Boolean {
-    val installerPackageName = runCatching {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
-        } else {
-            @Suppress("DEPRECATION")
-            context.packageManager.getInstallerPackageName(context.packageName)
-        }
-    }.getOrNull()
-
-    return installerPackageName != GOOGLE_PLAY_PACKAGE
-}
-
 private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
     val enabled = Settings.Secure.getInt(
         context.contentResolver,
@@ -1152,7 +1024,6 @@ private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
 
 private const val SHORTCUT_PREFS = "dictation_shortcuts"
 private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
-private const val GOOGLE_PLAY_PACKAGE = "com.android.vending"
 
 private fun isVolumeShortcutEnabled(context: Context): Boolean {
     return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)

@@ -84,6 +84,7 @@ private enum class OnboardingStep {
     Welcome,
     Microphone,
     RestrictedSettings,
+    AccessibilityDisclosure,
     Overlay,
     OnDeviceTranscription,
     VolumeShortcut
@@ -106,6 +107,7 @@ fun OnboardingScreen(
     var testInputText by remember { mutableStateOf("") }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var hasOpenedRestrictedSettings by remember { mutableStateOf(false) }
+    var hasAcceptedAccessibilityDisclosure by remember { mutableStateOf(false) }
     val hasTestedDictation = testInputText.isNotBlank()
 
     val showRestrictedSettingsStep = shouldShowRestrictedSettingsStep(
@@ -117,6 +119,7 @@ fun OnboardingScreen(
             add(OnboardingStep.Welcome)
             add(OnboardingStep.Microphone)
             if (showRestrictedSettingsStep) add(OnboardingStep.RestrictedSettings)
+            add(OnboardingStep.AccessibilityDisclosure)
             add(OnboardingStep.Overlay)
             add(OnboardingStep.OnDeviceTranscription)
             add(OnboardingStep.VolumeShortcut)
@@ -210,6 +213,10 @@ fun OnboardingScreen(
                             openAppInfoSettings(context)
                         }
                     )
+                    OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep(
+                        hasAccepted = hasAcceptedAccessibilityDisclosure,
+                        onAcceptedChanged = { hasAcceptedAccessibilityDisclosure = it }
+                    )
                     OnboardingStep.Overlay -> OverlaySetupStep(
                         isEnabled = isOverlayServiceEnabled,
                         testInputText = testInputText,
@@ -250,6 +257,7 @@ fun OnboardingScreen(
                             openAppInfoSettings(context)
                         }
                     }
+                    OnboardingStep.AccessibilityDisclosure -> goToNextStep()
                     OnboardingStep.Overlay -> {
                         if (!isOverlayServiceEnabled) {
                             openAccessibilitySettings(context)
@@ -269,6 +277,7 @@ fun OnboardingScreen(
                 .fillMaxWidth()
                 .height(56.dp),
             enabled = when (currentOnboardingStep) {
+                OnboardingStep.AccessibilityDisclosure -> hasAcceptedAccessibilityDisclosure
                 OnboardingStep.Overlay -> !isOverlayServiceEnabled || hasTestedDictation
                 OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
                 else -> true
@@ -290,6 +299,9 @@ fun OnboardingScreen(
                     } else {
                         stringResource(R.string.onboarding_restricted_open_app_info)
                     }
+                    OnboardingStep.AccessibilityDisclosure -> {
+                        stringResource(R.string.onboarding_accessibility_disclosure_continue)
+                    }
                     OnboardingStep.Overlay -> when {
                         !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
                         hasTestedDictation -> stringResource(R.string.onboarding_continue)
@@ -302,6 +314,83 @@ fun OnboardingScreen(
             )
         }
     }
+}
+
+@Composable
+private fun AccessibilityDisclosureStep(
+    hasAccepted: Boolean,
+    onAcceptedChanged: (Boolean) -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = MaterialTheme.colorScheme.secondary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_disclosure_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_intro))
+        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_use))
+        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_data))
+        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_cloud))
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.small)
+                .clickable { onAcceptedChanged(!hasAccepted) }
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Checkbox(
+                checked = hasAccepted,
+                onCheckedChange = onAcceptedChanged
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.onboarding_accessibility_disclosure_consent),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun DisclosureText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Start,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    )
 }
 
 @Composable

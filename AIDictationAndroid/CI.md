@@ -23,6 +23,10 @@ Google Play version codes are monotonic across every track. Because an earlier
 internal upload used version code `1007`, Android release version codes must be
 greater than `1007`.
 
+The Play Console package name is `com.aidictation.app`. The Kotlin/Android
+namespace remains `com.whispermate.aidictation`, but `applicationId` must stay
+aligned with `com.aidictation.app` for Play uploads.
+
 ## Required repository secrets
 
 These are written into `local.properties` on the runner before Gradle

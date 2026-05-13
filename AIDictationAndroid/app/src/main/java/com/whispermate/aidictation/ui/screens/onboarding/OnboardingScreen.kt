@@ -321,10 +321,48 @@ private fun AccessibilityDisclosureStep(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_intro))
-        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_use))
-        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_data))
-        DisclosureText(stringResource(R.string.onboarding_accessibility_disclosure_cloud))
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_disclosure_intro),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        DisclosureVisualCard(
+            icon = Icons.Default.Tune,
+            title = stringResource(R.string.onboarding_accessibility_visual_find_title),
+            body = stringResource(R.string.onboarding_accessibility_visual_find_body)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        DisclosureVisualCard(
+            icon = Icons.Default.Mic,
+            title = stringResource(R.string.onboarding_accessibility_visual_insert_title),
+            body = stringResource(R.string.onboarding_accessibility_visual_insert_body)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        DisclosureVisualCard(
+            icon = Icons.Default.Security,
+            title = stringResource(R.string.onboarding_accessibility_visual_private_title),
+            body = stringResource(R.string.onboarding_accessibility_visual_private_body)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        DisclosureVisualCard(
+            icon = Icons.Default.Translate,
+            title = stringResource(R.string.onboarding_accessibility_visual_processing_title),
+            body = stringResource(R.string.onboarding_accessibility_visual_processing_body)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_next),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -352,16 +390,48 @@ private fun AccessibilityDisclosureStep(
 }
 
 @Composable
-private fun DisclosureText(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Start,
+private fun DisclosureVisualCard(
+    icon: ImageVector,
+    title: String,
+    body: String
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 8.dp)
-    )
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable

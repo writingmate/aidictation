@@ -16,6 +16,15 @@
     <string name="onboarding_overlay_subtitle">A small mic appears when you tap into a place where you can type.</string>
     <string name="onboarding_accessibility_disclosure_title">Accessibility disclosure</string>
     <string name="onboarding_accessibility_disclosure_intro">AIDictation uses Android AccessibilityService to show the floating microphone when a text field is focused and to insert your dictated text at the cursor.</string>
+    <string name="onboarding_accessibility_visual_find_title">Find text fields</string>
+    <string name="onboarding_accessibility_visual_find_body">Detects when an editable field is focused so the floating mic can appear.</string>
+    <string name="onboarding_accessibility_visual_insert_title">Insert your words</string>
+    <string name="onboarding_accessibility_visual_insert_body">Uses cursor position and current text only when you dictate or apply a command.</string>
+    <string name="onboarding_accessibility_visual_private_title">Skips secure fields</string>
+    <string name="onboarding_accessibility_visual_private_body">Does not read passwords, payment fields, or secure screens.</string>
+    <string name="onboarding_accessibility_visual_processing_title">Process only on action</string>
+    <string name="onboarding_accessibility_visual_processing_body">Cloud transcription or AI cleanup may send recorded audio and relevant text to complete your request. Local transcription is available where supported.</string>
+    <string name="onboarding_accessibility_next">Next: Android will ask you to enable AIDictation in Accessibility settings.</string>
     <string name="onboarding_accessibility_disclosure_use">AccessibilityService lets AIDictation detect editable text fields, read the current text and cursor position in the active field, and replace or insert text only when you start dictation or apply a command.</string>
     <string name="onboarding_accessibility_disclosure_data">Text from the active field may be processed for dictation insertion, grammar fixes, rewrites, shortcuts, and cleanup. It is not used to read passwords, payment fields, or secure screens.</string>
     <string name="onboarding_accessibility_disclosure_cloud">If cloud transcription or AI cleanup is enabled, your recorded audio and relevant text may be sent to the AIDictation transcription and AI providers to complete the requested action. You can use local transcription where available.</string>

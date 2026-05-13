@@ -1,10 +1,10 @@
 # Android CI
 
 The `.github/workflows/android-build.yml` pipeline builds the
-`AIDictationAndroid` Gradle project on every push/PR that touches the
-Android source tree. A push to `main`, an `android-v*` tag, or a manual
-workflow dispatch also runs the signed release job and publishes APK/AAB
-assets to a GitHub Release named `android-v<versionName>`.
+`AIDictationAndroid` Gradle project on pushes to `main`, Android release
+tags, and PRs into `main` that touch the Android source tree or Android
+release workflows. Only an `android-v<versionName>` tag runs the signed
+release job and publishes APK/AAB assets to a GitHub Release.
 
 The GitHub release job does not rely on Git LFS bandwidth for Parakeet
 weights. It checks out source with LFS disabled, downloads
@@ -14,12 +14,14 @@ a small sideload APK that downloads Parakeet only when the user enables
 on-device transcription, and builds the Play AAB with the `parakeet_v3_pack`
 asset pack.
 
-`.github/workflows/android-play-dev.yml` is a manual dev-release workflow
-that publishes the signed release AAB to a Google Play testing track
-(`internal` by default). It is intended for Play Store tester installs,
-including the on-demand `parakeet_v3_pack` asset pack. The workflow assigns
-dev builds `versionCode = 1000 + GITHUB_RUN_NUMBER` so repeated internal
-uploads do not collide with the checked-in production version.
+`.github/workflows/android-play-release.yml` publishes the signed release
+AAB to the Google Play `internal` track from the same `android-v<versionName>`
+tag. It uses the checked-in `versionName` and `versionCode`, and rejects tags
+that do not point at a commit reachable from `origin/main`.
+
+Google Play version codes are monotonic across every track. Because an earlier
+internal upload used version code `1007`, Android release version codes must be
+greater than `1007`.
 
 ## Required repository secrets
 
@@ -50,7 +52,7 @@ runs, matching the local-developer layout described in
 | `STRIPE_PAYMENT_LINK_LIFETIME` | Optional lifetime checkout link. |
 | `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present, the workflow extracts `CustomTranscription*`, `AIDictationPostProcessing*`, `SUPABASE_*`, `AUTH_WEB_URL`, and `STRIPE_PAYMENT_LINK*` so both platforms ship with the same Writingmate auth and billing configuration. |
 
-### Release signing (only needed for the `release` job on `main`)
+### Release signing (only needed for tagged Android releases)
 
 | Secret | Purpose |
 |---|---|
@@ -59,7 +61,7 @@ runs, matching the local-developer layout described in
 | `ANDROID_KEY_ALIAS` | Maps to `KEY_ALIAS` in `local.properties` (default `release`) |
 | `ANDROID_KEY_PASSWORD` | Maps to `KEY_PASSWORD` in `local.properties` |
 
-### Google Play dev releases
+### Google Play releases
 
 | Secret | Purpose |
 |---|---|

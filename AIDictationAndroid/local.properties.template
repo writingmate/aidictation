@@ -4,9 +4,9 @@
 # Android SDK location
 sdk.dir=/path/to/Android/Sdk
 
-# Optional local version overrides. CI uses these for Play dev releases.
-VERSION_CODE=10
-VERSION_NAME=0.0.10
+# Optional local version overrides. Tagged Android releases use these defaults.
+VERSION_CODE=1008
+VERSION_NAME=0.0.11
 
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here

@@ -35,6 +35,8 @@ concurrency:
 env:
   JAVA_VERSION: '17'
   ANDROID_PROJECT_DIR: AIDictationAndroid
+  PARAKEET_ASSETS_RELEASE_TAG: android-parakeet-assets-v3
+  PARAKEET_ASSETS_ARCHIVE: AIDictation-Parakeet-Assets-v3.zip
 
 jobs:
   publish:
@@ -83,7 +85,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
+
+      - name: Download Parakeet model assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          archive_dir=/tmp/parakeet-assets
+          rm -rf "$archive_dir" parakeetpack/src/main/assets
+          mkdir -p "$archive_dir" parakeetpack/src/main/assets
+          gh release download "$PARAKEET_ASSETS_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$PARAKEET_ASSETS_ARCHIVE" \
+            --dir "$archive_dir"
+          unzip -q "$archive_dir/$PARAKEET_ASSETS_ARCHIVE" -d parakeetpack/src/main/assets
+          test -s parakeetpack/src/main/assets/encoder-model.int8.onnx
+          test -s parakeetpack/src/main/assets/decoder_joint-model.int8.onnx
+          test -s parakeetpack/src/main/assets/nemo128.onnx
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4

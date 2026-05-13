@@ -36,7 +36,7 @@ import kotlin.random.Random
 fun AudioVisualization(
     audioLevel: Float,
     modifier: Modifier = Modifier,
-    barColor: Color = Color(0xFFFF9500) // iOS Orange
+    barColor: Color = Color(0xFFFF6300) // Brand orange
 ) {
     val totalBars = 14
     val barWidth = 4.dp
@@ -130,7 +130,7 @@ private fun calculateBarHeight(
 @Composable
 fun ProcessingWaveView(
     modifier: Modifier = Modifier,
-    barColor: Color = Color(0xFFFF9500) // iOS Orange
+    barColor: Color = Color(0xFFFF6300) // Brand orange
 ) {
     val totalBars = 14
     val barWidth = 4.dp

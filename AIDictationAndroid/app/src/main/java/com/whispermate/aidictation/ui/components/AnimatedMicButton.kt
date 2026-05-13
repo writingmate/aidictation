@@ -27,9 +27,8 @@ class AnimatedMicButton @JvmOverloads constructor(
 
     private var micDrawable: Drawable? = ContextCompat.getDrawable(context, R.drawable.ic_mic_toolbar)
 
-    // Orange color for active state
-    private val activeColor = 0xFFFF9500.toInt()
-    private val idleColor = ContextCompat.getColor(context, R.color.key_text_color_lxx_system)
+    private val activeColor = 0xFFFF6300.toInt()
+    private val idleColor = ContextCompat.getColor(context, R.color.brand_black)
 
     private var audioLevel = 0f
     private var isRecording = false

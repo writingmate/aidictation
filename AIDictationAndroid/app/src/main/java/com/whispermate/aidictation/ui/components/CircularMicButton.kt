@@ -39,7 +39,7 @@ import kotlin.math.sqrt
 import kotlin.math.sin
 import kotlin.random.Random
 
-private val activeColor = Color(0xFFFF9500) // iOS Orange
+private val activeColor = Color(0xFFFF6300) // Brand orange
 private const val minActiveBars = 3
 private const val waveformLevelGain = 1.7f
 private const val waveformLevelMix = 0.28f

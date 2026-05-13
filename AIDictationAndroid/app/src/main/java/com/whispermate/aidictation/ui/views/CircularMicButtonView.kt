@@ -22,9 +22,9 @@ import kotlin.math.sin
  * Displays a circular button with animated audio bars inside.
  *
  * States:
- * - Idle: Blue background, frozen sine wave pattern
- * - Recording: Orange background, bars respond to audio/frequency bands
- * - Processing: Orange background, animated sine wave
+ * - Idle: black background, frozen sine wave pattern
+ * - Recording: brand orange background, bars respond to audio/frequency bands
+ * - Processing: brand orange background, animated sine wave
  */
 class CircularMicButtonView @JvmOverloads constructor(
     context: Context,
@@ -35,8 +35,8 @@ class CircularMicButtonView @JvmOverloads constructor(
     enum class State { Idle, Recording, Processing }
 
     // Configuration
-    private var idleColor: Int = 0xFF2196F3.toInt() // Blue
-    private var activeColor: Int = 0xFFFF9500.toInt() // iOS Orange
+    private var idleColor: Int = 0xFF120B00.toInt()
+    private var activeColor: Int = 0xFFFF6300.toInt() // Brand orange
 
     // State
     private var state: State = State.Idle

@@ -28,8 +28,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -62,6 +64,7 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +80,57 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
+
+private val BrandOrange = Color(0xFFFF6300)
+private val BrandBlack = Color(0xFF120B00)
+private val BrandMuted = Color(0xFF645B55)
+private val BrandLightGrey = Color(0xFFF2F2F2)
+private val BrandBorder = Color(0xFFD1CFCC)
+private val BrandCard = Color.White
+
+@Composable
+private fun OnboardingHeroIcon(
+    icon: ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(72.dp)
+            .clip(CircleShape)
+            .background(BrandCard)
+            .border(1.dp, BrandBorder, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(36.dp),
+            tint = BrandOrange
+        )
+    }
+}
+
+@Composable
+private fun OnboardingSmallIcon(
+    icon: ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(BrandCard)
+            .border(1.dp, BrandBorder, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = BrandOrange
+        )
+    }
+}
 
 private enum class OnboardingStep {
     Welcome,
@@ -157,13 +211,15 @@ fun OnboardingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 16.dp),
+                .padding(top = 20.dp, bottom = 16.dp),
             horizontalArrangement = Arrangement.Center
         ) {
             repeat(onboardingSteps.size) { index ->
@@ -295,20 +351,7 @@ private fun AccessibilityDisclosureStep(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.secondaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.secondary
-            )
-        }
+        OnboardingHeroIcon(icon = Icons.Default.Security)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -316,6 +359,7 @@ private fun AccessibilityDisclosureStep(
             text = stringResource(R.string.onboarding_accessibility_disclosure_title),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
+            color = BrandBlack,
             textAlign = TextAlign.Center
         )
 
@@ -324,7 +368,7 @@ private fun AccessibilityDisclosureStep(
         Text(
             text = stringResource(R.string.onboarding_accessibility_disclosure_intro),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = BrandMuted,
             textAlign = TextAlign.Center
         )
 
@@ -359,7 +403,7 @@ private fun AccessibilityDisclosureStep(
         Text(
             text = stringResource(R.string.onboarding_accessibility_next),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = BrandOrange,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center
         )
@@ -371,18 +415,25 @@ private fun AccessibilityDisclosureStep(
                 .fillMaxWidth()
                 .clip(MaterialTheme.shapes.small)
                 .clickable { onAcceptedChanged(!hasAccepted) }
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .background(BrandLightGrey)
+                .border(1.dp, BrandOrange.copy(alpha = 0.35f), MaterialTheme.shapes.small)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Checkbox(
                 checked = hasAccepted,
-                onCheckedChange = onAcceptedChanged
+                onCheckedChange = onAcceptedChanged,
+                colors = androidx.compose.material3.CheckboxDefaults.colors(
+                    checkedColor = BrandOrange,
+                    uncheckedColor = BrandMuted,
+                    checkmarkColor = Color.White
+                )
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = stringResource(R.string.onboarding_accessibility_disclosure_consent),
                 style = MaterialTheme.typography.bodySmall,
+                color = BrandBlack,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -399,22 +450,32 @@ private fun DisclosureVisualCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(BrandCard)
+            .border(1.dp, BrandBorder, MaterialTheme.shapes.small)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
+                .width(4.dp)
+                .height(42.dp)
+                .clip(RoundedCornerShape(100.dp))
+                .background(BrandOrange)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
                 .size(38.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(BrandCard)
+                .border(1.dp, BrandBorder, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.primary
+                tint = BrandOrange
             )
         }
         Spacer(modifier = Modifier.width(10.dp))
@@ -422,13 +483,14 @@ private fun DisclosureVisualCard(
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = BrandBlack
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = body,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = BrandMuted
             )
         }
     }
@@ -441,37 +503,11 @@ private fun OnDeviceTranscriptionStep(
     onEnabledChanged: (Boolean) -> Unit
 ) {
     val progress = state.downloadProgress?.coerceIn(0f, 1f)
-    val status = when {
-        state.isDownloading && progress != null -> {
-            stringResource(R.string.settings_on_device_downloading, (progress * 100).toInt())
-        }
-        state.isDownloading -> stringResource(R.string.settings_on_device_downloading_unknown)
-        enabled -> stringResource(R.string.settings_on_device_local)
-        state.isInstalled -> stringResource(R.string.settings_on_device_ready)
-        else -> stringResource(R.string.settings_on_device_cloud)
-    }
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(
-                    if (enabled) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.secondaryContainer
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (enabled) Icons.Default.Check else Icons.Default.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = if (enabled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.secondary
-            )
-        }
+        OnboardingHeroIcon(icon = if (enabled) Icons.Default.Check else Icons.Default.Mic)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -493,41 +529,29 @@ private fun OnDeviceTranscriptionStep(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .then(
-                    if (!state.isDownloading) {
-                        Modifier.clickable { onEnabledChanged(!enabled) }
-                    } else {
-                        Modifier
-                    }
-                )
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.onboarding_on_device_toggle),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = enabled || state.isDownloading,
-                enabled = !state.isDownloading,
-                onCheckedChange = onEnabledChanged
-            )
-        }
+        TranscriptionModeChoice(
+            title = stringResource(R.string.onboarding_transcription_cloud_title),
+            body = stringResource(R.string.onboarding_transcription_cloud_body),
+            selected = !enabled && !state.isDownloading,
+            enabled = !state.isDownloading,
+            onClick = { onEnabledChanged(false) }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        TranscriptionModeChoice(
+            title = stringResource(R.string.onboarding_transcription_offline_title),
+            body = if (state.isDownloading && progress != null) {
+                stringResource(R.string.settings_on_device_downloading, (progress * 100).toInt())
+            } else if (state.isDownloading) {
+                stringResource(R.string.settings_on_device_downloading_unknown)
+            } else {
+                stringResource(R.string.onboarding_transcription_offline_body)
+            },
+            selected = enabled || state.isDownloading,
+            enabled = !state.isDownloading,
+            onClick = { onEnabledChanged(true) }
+        )
 
         if (state.isDownloading) {
             Spacer(modifier = Modifier.height(12.dp))
@@ -558,6 +582,68 @@ private fun OnDeviceTranscriptionStep(
 }
 
 @Composable
+private fun TranscriptionModeChoice(
+    title: String,
+    body: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) Color.White else MaterialTheme.colorScheme.surfaceVariant)
+            .border(
+                width = 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .border(
+                    width = 2.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 private fun VolumeShortcutStep(
     isEnabled: Boolean,
     onEnabledChanged: (Boolean) -> Unit
@@ -565,20 +651,7 @@ private fun VolumeShortcutStep(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.secondaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.secondary
-            )
-        }
+        OnboardingHeroIcon(icon = Icons.Default.Mic)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -636,20 +709,7 @@ private fun WelcomeStep() {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
+        OnboardingHeroIcon(icon = Icons.Default.Mic)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -693,24 +753,7 @@ private fun MicrophonePermissionStep(hasPermission: Boolean) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(
-                    if (hasPermission) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.secondaryContainer
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (hasPermission) Icons.Default.Check else Icons.Default.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = if (hasPermission) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.secondary
-            )
-        }
+        OnboardingHeroIcon(icon = if (hasPermission) Icons.Default.Check else Icons.Default.Mic)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -742,20 +785,7 @@ private fun ContextRulesStep(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Tune,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
+        OnboardingHeroIcon(icon = Icons.Default.Tune)
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -823,24 +853,7 @@ private fun OverlaySetupStep(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isEnabled) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.secondaryContainer
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (isEnabled) Icons.Default.Check else Icons.Default.Security,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-                tint = if (isEnabled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.secondary
-            )
-        }
+        OnboardingHeroIcon(icon = if (isEnabled) Icons.Default.Check else Icons.Default.Security)
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -978,20 +991,7 @@ private fun FeatureItem(icon: ImageVector, text: String) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(0.85f)
     ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
+        OnboardingSmallIcon(icon = icon)
         Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = text,

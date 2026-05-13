@@ -50,8 +50,8 @@ android {
         applicationId = "com.whispermate.aidictation"
         minSdk = 26
         targetSdk = 35
-        versionCode = configValue("VERSION_CODE", "9").toInt()
-        versionName = configValue("VERSION_NAME", "0.0.9")
+        versionCode = configValue("VERSION_CODE", "10").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.10")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

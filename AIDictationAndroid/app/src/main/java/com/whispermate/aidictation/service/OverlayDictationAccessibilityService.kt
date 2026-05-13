@@ -159,6 +159,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private var audioRecorder: AudioRecorder? = null
     private var vadJob: Job? = null
+    private var autoStopOnSilenceEnabled = false
     private var volumeShortcutNoSpeechJob: Job? = null
     private var recordingStartedByVolumeShortcut = false
     private var bubbleAnimationJob: Job? = null
@@ -192,6 +193,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        serviceScope.launch {
+            appPreferences.autoStopOnSilenceEnabled.collectLatest { enabled ->
+                autoStopOnSilenceEnabled = enabled
+            }
+        }
 
         prewarmOnDeviceTranscriber()
         refreshOverlayVisibility(null)
@@ -1330,7 +1337,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val recorder = AudioRecorder(this, enableVAD = true)
+        val recorder = AudioRecorder(
+            context = this,
+            autoStopOnSilenceEnabled = autoStopOnSilenceEnabled
+        )
         val file = recorder.start()
         if (file == null) {
             if (mode == RecordingMode.RewriteInstruction) {
@@ -1365,6 +1375,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun scheduleVolumeShortcutNoSpeechTimeout(recorder: AudioRecorder) {
         if (!recordingStartedByVolumeShortcut) return
+        if (!autoStopOnSilenceEnabled) return
 
         volumeShortcutNoSpeechJob = serviceScope.launch {
             delay(VOLUME_SHORTCUT_NO_SPEECH_TIMEOUT_MS)

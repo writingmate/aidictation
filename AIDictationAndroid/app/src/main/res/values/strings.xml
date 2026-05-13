@@ -88,6 +88,7 @@
     <string name="settings_on_device_local">Local</string>
     <string name="settings_on_device_downloading">Downloading %1$d%%</string>
     <string name="settings_on_device_downloading_unknown">Downloading</string>
+    <string name="settings_auto_stop_on_silence">Auto-stop on silence</string>
     <string name="settings_post_processing_settings">Post-processing Settings</string>
     <string name="settings_about">About</string>
     <string name="settings_version">Version</string>

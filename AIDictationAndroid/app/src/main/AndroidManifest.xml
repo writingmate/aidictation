@@ -51,7 +51,7 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.whispermate.aidictation.action.TOGGLE_DICTATION" />
+                <action android:name="com.aidictation.app.action.TOGGLE_DICTATION" />
             </intent-filter>
         </receiver>
 

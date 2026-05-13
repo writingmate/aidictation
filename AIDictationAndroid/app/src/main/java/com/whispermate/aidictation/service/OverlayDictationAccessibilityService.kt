@@ -64,7 +64,7 @@ import kotlin.math.roundToInt
 class OverlayDictationAccessibilityService : AccessibilityService() {
 
     companion object {
-        const val ACTION_START_DICTATION = "com.whispermate.aidictation.action.START_DICTATION"
+        const val ACTION_START_DICTATION = "com.aidictation.app.action.START_DICTATION"
         private const val TAG = "OverlayDictationSvc"
         private const val BUBBLE_PREFS = "overlay_bubble"
         private const val BUBBLE_X_KEY = "bubble_x"

@@ -7,8 +7,8 @@
         android:shortcutShortLabel="@string/shortcut_start_dictation"
         android:shortcutLongLabel="@string/shortcut_start_dictation">
         <intent
-            android:action="com.whispermate.aidictation.action.START_DICTATION"
-            android:targetPackage="com.whispermate.aidictation"
+            android:action="com.aidictation.app.action.START_DICTATION"
+            android:targetPackage="com.aidictation.app"
             android:targetClass="com.whispermate.aidictation.ShortcutActivity" />
         <categories android:name="android.shortcut.conversation" />
     </shortcut>

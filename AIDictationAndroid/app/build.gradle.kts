@@ -47,7 +47,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.whispermate.aidictation"
+        applicationId = "com.aidictation.app"
         minSdk = 26
         targetSdk = 35
         versionCode = configValue("VERSION_CODE", "10").toInt()

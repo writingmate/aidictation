@@ -5,7 +5,7 @@ Tap into a text field, use the floating mic, and speak naturally. AIDictation re
 Built for everyday writing:
 - Fast voice-to-text dictation for messages, notes, email, documents, and web forms
 - Floating microphone bubble that appears when text input is focused
-- Optional on-device transcription with the local Parakeet model
+- Optional offline transcription for speech processing on your device
 - Cloud transcription for accurate speech recognition when you want it
 - AI cleanup for punctuation, formatting, and cleaner prose
 - Custom dictionary entries for names, technical terms, and repeated phrases

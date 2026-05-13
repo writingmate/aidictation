@@ -1,1 +1,1 @@
-Android brand refresh with clearer onboarding, Cloud vs Offline transcription setup, floating mic dictation, AI cleanup, and shortcut controls.
+Full Play listing test release with branded screenshots, Cloud vs Offline onboarding, floating mic dictation, AI cleanup, and shortcut controls.

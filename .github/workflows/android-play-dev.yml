@@ -268,6 +268,14 @@ jobs:
           fi
           ./gradlew :app:bundleRelease -PPARAKEET_RUNTIME="${PARAKEET_RUNTIME}" --stacktrace
 
+      - name: Publish Play listing assets
+        run: |
+          ./gradlew \
+            :app:publishReleaseListing \
+            -PPLAY_TRACK="${PLAY_TRACK}" \
+            -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}" \
+            --stacktrace
+
       - name: Publish to Google Play
         run: |
           if [ "${PARAKEET_RUNTIME}" = "cloud" ]; then

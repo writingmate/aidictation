@@ -65,6 +65,9 @@ class MainViewModel @Inject constructor(
     val onDeviceTranscriptionEnabled: StateFlow<Boolean> = appPreferences.onDeviceTranscriptionEnabled
         .stateIn(viewModelScope, SharingStarted.Lazily, false)
 
+    val autoStopOnSilenceEnabled: StateFlow<Boolean> = appPreferences.autoStopOnSilenceEnabled
+        .stateIn(viewModelScope, SharingStarted.Lazily, false)
+
     val usageStatus = subscriptionRepository.usageStatus
 
     private val _onDeviceModelState = MutableStateFlow(OnDeviceModelUiState())
@@ -83,6 +86,12 @@ class MainViewModel @Inject constructor(
     fun setPostProcessingEnabled(enabled: Boolean) {
         viewModelScope.launch {
             appPreferences.setPostProcessingEnabled(enabled)
+        }
+    }
+
+    fun setAutoStopOnSilenceEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            appPreferences.setAutoStopOnSilenceEnabled(enabled)
         }
     }
 

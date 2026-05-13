@@ -20,7 +20,7 @@ import kotlin.math.pow
 
 class AudioRecorder(
     private val context: Context,
-    private val enableVAD: Boolean = true
+    private val autoStopOnSilenceEnabled: Boolean = false
 ) {
     companion object {
         private const val TAG = "AudioRecorder"
@@ -48,7 +48,7 @@ class AudioRecorder(
     private var speechDetected = false
     private var speechActive = false
     private var silenceStartTime: Long = 0
-    private val silenceDurationMs = 1500L // 1.5 seconds of silence to auto-stop
+    private val silenceDurationMs = 1500L
     private var noiseFloor: Float = BASE_NOISE_FLOOR
     private var speechStartThreshold: Float = MIN_START_THRESHOLD
     private var speechStopThreshold: Float = MIN_STOP_THRESHOLD
@@ -162,7 +162,7 @@ class AudioRecorder(
                             if (belowStop) {
                                 if (silenceStartTime == 0L) {
                                     silenceStartTime = now
-                                } else if (enableVAD && now - silenceStartTime > silenceDurationMs) {
+                                } else if (autoStopOnSilenceEnabled && now - silenceStartTime > silenceDurationMs) {
                                     _shouldAutoStop.value = true
                                 }
                             } else {

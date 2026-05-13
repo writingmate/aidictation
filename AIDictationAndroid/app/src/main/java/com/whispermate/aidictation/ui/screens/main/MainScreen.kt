@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,17 +81,25 @@ fun MainScreen(
     val multilingualEnabled by viewModel.multilingualEnabled.collectAsState()
     val postProcessingEnabled by viewModel.postProcessingEnabled.collectAsState()
     val onDeviceTranscriptionEnabled by viewModel.onDeviceTranscriptionEnabled.collectAsState()
+    val autoStopOnSilenceEnabled by viewModel.autoStopOnSilenceEnabled.collectAsState()
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val currentRecordingState by rememberUpdatedState(recordingState)
+    val currentAutoStopOnSilenceEnabled by rememberUpdatedState(autoStopOnSilenceEnabled)
 
     // Audio recorder state
     var audioRecorder by remember { mutableStateOf<AudioRecorder?>(null) }
     val audioLevel = audioRecorder?.audioLevel?.collectAsState()?.value ?: 0f
     val frequencyBands = audioRecorder?.frequencyBands?.collectAsState()?.value
     val shouldAutoStop = audioRecorder?.shouldAutoStop?.collectAsState()?.value ?: false
+
+    fun createAudioRecorder() = AudioRecorder(
+        context = context,
+        autoStopOnSilenceEnabled = currentAutoStopOnSilenceEnabled
+    )
 
     // Show error in snackbar
     LaunchedEffect(error) {
@@ -103,8 +112,8 @@ fun MainScreen(
     // Handle external start recording trigger
     LaunchedEffect(Unit) {
         viewModel.startRecordingTrigger.collect {
-            if (recordingState == RecordingState.Idle) {
-                val recorder = AudioRecorder(context)
+            if (currentRecordingState == RecordingState.Idle) {
+                val recorder = createAudioRecorder()
                 audioRecorder = recorder
                 val file = recorder.start()
                 if (file != null) {
@@ -119,7 +128,7 @@ fun MainScreen(
     // Handle initial start recording from navigation
     LaunchedEffect(shouldStartRecording) {
         if (shouldStartRecording && recordingState == RecordingState.Idle) {
-            val recorder = AudioRecorder(context)
+            val recorder = createAudioRecorder()
             audioRecorder = recorder
             val file = recorder.start()
             if (file != null) {
@@ -152,7 +161,7 @@ fun MainScreen(
     fun toggleRecording() {
         when (recordingState) {
             RecordingState.Idle -> {
-                val recorder = AudioRecorder(context)
+                val recorder = createAudioRecorder()
                 audioRecorder = recorder
                 val file = recorder.start()
                 if (file != null) {
@@ -233,6 +242,8 @@ fun MainScreen(
                 onDeviceTranscriptionEnabled = onDeviceTranscriptionEnabled,
                 onDeviceModelState = onDeviceModelState,
                 onOnDeviceTranscriptionToggled = { viewModel.setOnDeviceTranscriptionEnabled(it) },
+                autoStopOnSilenceEnabled = autoStopOnSilenceEnabled,
+                onAutoStopOnSilenceToggled = { viewModel.setAutoStopOnSilenceEnabled(it) },
                 usageStatus = usageStatus,
                 onSignIn = { viewModel.openLogin() },
                 onSignOut = { viewModel.signOut() },

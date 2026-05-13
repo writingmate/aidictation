@@ -79,6 +79,8 @@ fun SettingsScreen(
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
+    autoStopOnSilenceEnabled: Boolean = false,
+    onAutoStopOnSilenceToggled: (Boolean) -> Unit = {},
     usageStatus: UsageStatus,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
@@ -245,6 +247,19 @@ fun SettingsScreen(
                 enabled = onDeviceTranscriptionEnabled,
                 state = onDeviceModelState,
                 onToggle = onOnDeviceTranscriptionToggled
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Mic,
+                title = stringResource(R.string.settings_auto_stop_on_silence),
+                trailingContent = {
+                    Switch(
+                        checked = autoStopOnSilenceEnabled,
+                        onCheckedChange = onAutoStopOnSilenceToggled
+                    )
+                }
             )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))

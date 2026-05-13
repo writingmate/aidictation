@@ -1,0 +1,1 @@
+Initial Android testing release with floating mic dictation, on-device transcription support, cloud transcription, AI cleanup, and shortcut controls.

@@ -103,7 +103,7 @@ class OnboardingViewModel @Inject constructor(
                     isInstalled = withContext(Dispatchers.IO) {
                         parakeetModelAssets.isModelInstalled(parakeetRuntime)
                     },
-                    errorMessage = error.message ?: "On-device model download failed"
+                    errorMessage = error.message ?: "Offline transcription setup failed"
                 )
             }
         }

@@ -171,16 +171,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var fixGrammarButton: TextView? = null
     private var rewriteButton: TextView? = null
 
-    private var bubbleIdleColor: Int = 0xFF2196F3.toInt()
-    private var bubbleDictationActiveColor: Int = 0xFFFF9500.toInt()
-    private var bubbleRewriteActiveColor: Int = 0xFF4F46E5.toInt()
-    private var bubbleFixActiveColor: Int = 0xFF0D9488.toInt()
+    private var bubbleIdleColor: Int = 0xFF120B00.toInt()
+    private var bubbleDictationActiveColor: Int = 0xFFFF6300.toInt()
+    private var bubbleRewriteActiveColor: Int = 0xFFFF6300.toInt()
+    private var bubbleFixActiveColor: Int = 0xFFFF6300.toInt()
     private var commandChipIdleTextColor: Int = Color.WHITE
     private var commandChipIdleBackgroundColor: Int = 0x24FFFFFF
     private var commandChipFixTextColor: Int = Color.WHITE
-    private var commandChipFixBackgroundColor: Int = 0xFF0D9488.toInt()
+    private var commandChipFixBackgroundColor: Int = 0xFFFF6300.toInt()
     private var commandChipRewriteTextColor: Int = Color.WHITE
-    private var commandChipRewriteBackgroundColor: Int = 0xFF4F46E5.toInt()
+    private var commandChipRewriteBackgroundColor: Int = 0xFFFF6300.toInt()
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
@@ -514,15 +514,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val size = dp(BUBBLE_SIZE_DP)
         bubbleIdleColor = resolveThemeColor(
             android.R.attr.colorPrimary,
-            0xFF2196F3.toInt()
+            0xFF120B00.toInt()
         )
         bubbleDictationActiveColor = resolveThemeColor(
             android.R.attr.colorSecondary,
-            0xFFFF9500.toInt()
+            0xFFFF6300.toInt()
         )
         bubbleRewriteActiveColor = resolveThemeColor(
             android.R.attr.colorAccent,
-            0xFF4F46E5.toInt()
+            0xFFFF6300.toInt()
         )
         bubbleFixActiveColor = bubbleDictationActiveColor
 
@@ -570,11 +570,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         val fixAccent = resolveThemeColor(
             android.R.attr.colorSecondary,
-            0xFF0D9488.toInt()
+            0xFFFF6300.toInt()
         )
         val rewriteAccent = resolveThemeColor(
             android.R.attr.colorAccent,
-            0xFF4F46E5.toInt()
+            0xFFFF6300.toInt()
         )
         commandChipFixBackgroundColor = withAlpha(fixAccent, 0.9f)
         commandChipFixTextColor = preferredOnColor(commandChipFixBackgroundColor)

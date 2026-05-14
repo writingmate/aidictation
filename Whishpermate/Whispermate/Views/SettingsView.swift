@@ -1523,9 +1523,9 @@ struct SettingsView: View {
 
     private var cloudLanguageConfirmationMessage: String {
         guard let language = pendingCloudLanguage else {
-            return "This language is not available with offline Parakeet. To use it, AIDictation will switch transcription to cloud mode."
+            return "This language is not available in offline mode. To use it, AIDictation will switch transcription to cloud mode."
         }
-        return "\(language.displayName) is not available with offline Parakeet. To use it, AIDictation will switch transcription to cloud mode and then select \(language.displayName)."
+        return "\(language.displayName) is not available in offline mode. To use it, AIDictation will switch transcription to cloud mode and then select \(language.displayName)."
     }
 
     private func confirmCloudLanguageSelection() {

@@ -31,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -108,6 +109,7 @@ fun LanguageSettingsScreen(
                             englishName = item.language.englishName,
                             nativeName = item.language.nativeName,
                             isSelected = item.isSelected,
+                            isUnsupportedInLocalMode = item.isUnsupportedInLocalMode,
                             onClick = { viewModel.toggleLanguage(item.language.code) }
                         )
                         HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
@@ -123,12 +125,14 @@ private fun LanguageRow(
     englishName: String,
     nativeName: String,
     isSelected: Boolean,
+    isUnsupportedInLocalMode: Boolean,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .alpha(if (isUnsupportedInLocalMode && !isSelected) 0.55f else 1f)
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween

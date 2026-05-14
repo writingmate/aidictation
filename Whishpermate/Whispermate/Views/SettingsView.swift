@@ -1445,7 +1445,7 @@ struct SettingsView: View {
                             Text("Transcription Language")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text(transcriptionProviderManager.transcriptionMode == .local ? "Offline Parakeet supports its multilingual model languages only." : "Select languages for transcription. Auto-detect works for all languages.")
+                            Text(transcriptionProviderManager.transcriptionMode == .local ? "Languages unavailable offline are shown muted; selecting one switches transcription to cloud." : "Select languages for transcription. Auto-detect works for all languages.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1456,9 +1456,10 @@ struct SettingsView: View {
                     LazyVGrid(columns: [
                         GridItem(.adaptive(minimum: 140)),
                     ], spacing: 8) {
-                        ForEach(languageOptionsForCurrentMode) { language in
+                        ForEach(Language.allCases) { language in
+                            let isUnsupportedInLocalMode = transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet
                             Button(action: {
-                                languageManager.toggleLanguage(language)
+                                selectLanguage(language)
                             }) {
                                 HStack(spacing: 8) {
                                     Text(language.flag)
@@ -1466,7 +1467,7 @@ struct SettingsView: View {
 
                                     Text(language.displayName)
                                         .dsFont(.body)
-                                        .foregroundStyle(languageManager.isSelected(language) ? .white : Color.dsForeground)
+                                        .foregroundStyle(languageManager.isSelected(language) ? .white : (isUnsupportedInLocalMode ? Color.dsMutedForeground : Color.dsForeground))
                                         .lineLimit(1)
 
                                     Spacer()
@@ -1486,10 +1487,12 @@ struct SettingsView: View {
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: DSCornerRadius.small)
-                                        .stroke(Color.dsBorder, lineWidth: languageManager.isSelected(language) ? 0 : 1)
+                                        .stroke(isUnsupportedInLocalMode ? Color.dsBorder.opacity(0.5) : Color.dsBorder, lineWidth: languageManager.isSelected(language) ? 0 : 1)
                                 )
                             }
                             .buttonStyle(.plain)
+                            .opacity(isUnsupportedInLocalMode && !languageManager.isSelected(language) ? 0.55 : 1)
+                            .help(isUnsupportedInLocalMode ? "Switches to cloud transcription when selected" : "")
                         }
                     }
                 }
@@ -1497,8 +1500,11 @@ struct SettingsView: View {
         }
     }
 
-    private var languageOptionsForCurrentMode: [Language] {
-        transcriptionProviderManager.transcriptionMode == .local ? Language.parakeetSupportedCases : Language.allCases
+    private func selectLanguage(_ language: Language) {
+        if transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet {
+            transcriptionProviderManager.selectCloudModeForLanguageSelection()
+        }
+        languageManager.toggleLanguage(language)
     }
 
     // MARK: - Text Rules Section

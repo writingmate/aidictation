@@ -209,10 +209,6 @@ class TranscriptionProviderManager: ObservableObject {
             }
         }
 
-        if transcriptionMode == .local {
-            LanguageManager.shared.restrictToParakeetSupported()
-        }
-
         enableLLMPostProcessing = false
         postProcessingProvider = .aidictation
         if let savedTransport = AppDefaults.shared.string(forKey: Keys.customTransport),
@@ -246,6 +242,10 @@ class TranscriptionProviderManager: ObservableObject {
             }
         }
         DebugLog.info("Set mode: \(mode.displayName), provider: \(selectedProvider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    func selectCloudModeForLanguageSelection() {
+        setTranscriptionMode(.cloud)
     }
 
     @discardableResult

@@ -19,7 +19,8 @@ import javax.inject.Inject
 
 data class LanguageItem(
     val language: WhisperLanguage,
-    val isSelected: Boolean
+    val isSelected: Boolean,
+    val isUnsupportedInLocalMode: Boolean
 )
 
 @HiltViewModel
@@ -32,17 +33,10 @@ class LanguageSettingsViewModel @Inject constructor(
     private val initialOrdering = MutableStateFlow<Set<String>?>(null)
     private val isParakeetMode: Boolean
         get() = ApiConfigManager.instance?.getTranscriptionConfig()?.provider == ApiProvider.PARAKEET
-    private val selectableLanguages: List<WhisperLanguage>
-        get() = if (isParakeetMode) WhisperLanguages.parakeetSupported else WhisperLanguages.all
-
     init {
         viewModelScope.launch {
             val selected = appPreferences.selectedLanguages.first()
-            val sanitized = sanitizeLanguagesForProvider(selected)
-            if (sanitized != selected) {
-                appPreferences.saveSelectedLanguages(sanitized)
-            }
-            initialOrdering.value = sanitized.toSet()
+            initialOrdering.value = selected.toSet()
         }
     }
 
@@ -53,20 +47,27 @@ class LanguageSettingsViewModel @Inject constructor(
     ) { selected, query, initial ->
         val selectedSet = selected.toSet()
         val orderingSet = initial ?: selectedSet
-        selectableLanguages
+        WhisperLanguages.all
             .filter { lang ->
                 if (query.isBlank()) true
                 else lang.englishName.contains(query, ignoreCase = true) ||
                     lang.nativeName.contains(query, ignoreCase = true)
             }
             .sortedWith(compareByDescending { it.code in orderingSet })
-            .map { lang -> LanguageItem(lang, lang.code in selectedSet) }
+            .map { lang ->
+                LanguageItem(
+                    language = lang,
+                    isSelected = lang.code in selectedSet,
+                    isUnsupportedInLocalMode = isParakeetMode && !lang.supportsParakeet
+                )
+            }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun toggleLanguage(code: String) {
         viewModelScope.launch {
             if (isParakeetMode && !WhisperLanguages.isParakeetSupported(code)) {
-                return@launch
+                appPreferences.setOnDeviceTranscriptionEnabled(false)
+                ApiConfigManager.instance?.switchTranscriptionToCloud()
             }
             val current = appPreferences.selectedLanguages.first().toMutableList()
             if (current.contains(code)) {
@@ -80,12 +81,5 @@ class LanguageSettingsViewModel @Inject constructor(
 
     fun setSearchQuery(query: String) {
         searchQuery.value = query
-    }
-
-    private fun sanitizeLanguagesForProvider(languages: List<String>): List<String> {
-        if (!isParakeetMode) return languages
-
-        val supported = languages.filter { WhisperLanguages.isParakeetSupported(it) }
-        return supported.ifEmpty { listOf("en") }
     }
 }

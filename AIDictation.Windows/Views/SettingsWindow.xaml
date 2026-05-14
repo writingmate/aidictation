@@ -413,13 +413,18 @@
                     <WrapPanel>
                         <ToggleButton x:Name="LangAuto" Content="🌐 Auto-detect" Style="{StaticResource LanguageToggleButton}" Tag="auto" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangEn" Content="🇬🇧 English" Style="{StaticResource LanguageToggleButton}" Tag="en" Click="LanguageToggle_Click"/>
+                        <ToggleButton x:Name="LangEnGb" Content="🇬🇧 English - British" Style="{StaticResource LanguageToggleButton}" Tag="en-GB" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangRu" Content="🇷🇺 Russian" Style="{StaticResource LanguageToggleButton}" Tag="ru" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangDe" Content="🇩🇪 German" Style="{StaticResource LanguageToggleButton}" Tag="de" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangFr" Content="🇫🇷 French" Style="{StaticResource LanguageToggleButton}" Tag="fr" Click="LanguageToggle_Click"/>
+                        <ToggleButton x:Name="LangEl" Content="🇬🇷 Greek" Style="{StaticResource LanguageToggleButton}" Tag="el" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangEs" Content="🇪🇸 Spanish" Style="{StaticResource LanguageToggleButton}" Tag="es" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangIt" Content="🇮🇹 Italian" Style="{StaticResource LanguageToggleButton}" Tag="it" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangPt" Content="🇵🇹 Portuguese" Style="{StaticResource LanguageToggleButton}" Tag="pt" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangZh" Content="🇨🇳 Chinese" Style="{StaticResource LanguageToggleButton}" Tag="zh" Click="LanguageToggle_Click"/>
+                        <ToggleButton x:Name="LangYue" Content="🇭🇰 Cantonese" Style="{StaticResource LanguageToggleButton}" Tag="yue" Click="LanguageToggle_Click"/>
+                        <ToggleButton x:Name="LangHi" Content="🇮🇳 Hindi" Style="{StaticResource LanguageToggleButton}" Tag="hi" Click="LanguageToggle_Click"/>
+                        <ToggleButton x:Name="LangHinglish" Content="🇮🇳 Hinglish" Style="{StaticResource LanguageToggleButton}" Tag="hi-Latn" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangJa" Content="🇯🇵 Japanese" Style="{StaticResource LanguageToggleButton}" Tag="ja" Click="LanguageToggle_Click"/>
                         <ToggleButton x:Name="LangKo" Content="🇰🇷 Korean" Style="{StaticResource LanguageToggleButton}" Tag="ko" Click="LanguageToggle_Click"/>
                     </WrapPanel>

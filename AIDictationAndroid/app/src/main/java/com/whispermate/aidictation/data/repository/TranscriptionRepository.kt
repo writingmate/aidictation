@@ -45,9 +45,11 @@ class TranscriptionRepository @Inject constructor(
             val raw = parakeetTranscriber.transcribe(audioFile)
                 .getOrElse { return Result.failure(it) }
             return if (postProcess) {
-                val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
+                val languageNames = languages
+                    .filter { WhisperLanguages.isParakeetSupported(it) }
+                    .mapNotNull { WhisperLanguages.getName(it) }
                     .takeIf { it.isNotEmpty() }
-                    ?: listOf("auto")
+                    ?: listOf("English")
                 Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), languageNames, contextRules))
             } else {
                 Result.success(raw)

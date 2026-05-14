@@ -1445,7 +1445,7 @@ struct SettingsView: View {
                             Text("Transcription Language")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text("Select languages for transcription. Auto-detect works for all languages.")
+                            Text(transcriptionProviderManager.transcriptionMode == .local ? "Offline Parakeet supports its multilingual model languages only." : "Select languages for transcription. Auto-detect works for all languages.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1456,7 +1456,7 @@ struct SettingsView: View {
                     LazyVGrid(columns: [
                         GridItem(.adaptive(minimum: 140)),
                     ], spacing: 8) {
-                        ForEach(Language.allCases) { language in
+                        ForEach(languageOptionsForCurrentMode) { language in
                             Button(action: {
                                 languageManager.toggleLanguage(language)
                             }) {
@@ -1495,6 +1495,10 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var languageOptionsForCurrentMode: [Language] {
+        transcriptionProviderManager.transcriptionMode == .local ? Language.parakeetSupportedCases : Language.allCases
     }
 
     // MARK: - Text Rules Section

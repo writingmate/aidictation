@@ -2,6 +2,8 @@ package com.whispermate.aidictation.ui.screens.language
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.whispermate.aidictation.data.preferences.ApiConfigManager
+import com.whispermate.aidictation.data.preferences.ApiProvider
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
@@ -28,10 +30,19 @@ class LanguageSettingsViewModel @Inject constructor(
     val searchQuery = MutableStateFlow("")
 
     private val initialOrdering = MutableStateFlow<Set<String>?>(null)
+    private val isParakeetMode: Boolean
+        get() = ApiConfigManager.instance?.getTranscriptionConfig()?.provider == ApiProvider.PARAKEET
+    private val selectableLanguages: List<WhisperLanguage>
+        get() = if (isParakeetMode) WhisperLanguages.parakeetSupported else WhisperLanguages.all
 
     init {
         viewModelScope.launch {
-            initialOrdering.value = appPreferences.selectedLanguages.first().toSet()
+            val selected = appPreferences.selectedLanguages.first()
+            val sanitized = sanitizeLanguagesForProvider(selected)
+            if (sanitized != selected) {
+                appPreferences.saveSelectedLanguages(sanitized)
+            }
+            initialOrdering.value = sanitized.toSet()
         }
     }
 
@@ -42,7 +53,7 @@ class LanguageSettingsViewModel @Inject constructor(
     ) { selected, query, initial ->
         val selectedSet = selected.toSet()
         val orderingSet = initial ?: selectedSet
-        WhisperLanguages.all
+        selectableLanguages
             .filter { lang ->
                 if (query.isBlank()) true
                 else lang.englishName.contains(query, ignoreCase = true) ||
@@ -54,6 +65,9 @@ class LanguageSettingsViewModel @Inject constructor(
 
     fun toggleLanguage(code: String) {
         viewModelScope.launch {
+            if (isParakeetMode && !WhisperLanguages.isParakeetSupported(code)) {
+                return@launch
+            }
             val current = appPreferences.selectedLanguages.first().toMutableList()
             if (current.contains(code)) {
                 current.remove(code)
@@ -66,5 +80,12 @@ class LanguageSettingsViewModel @Inject constructor(
 
     fun setSearchQuery(query: String) {
         searchQuery.value = query
+    }
+
+    private fun sanitizeLanguagesForProvider(languages: List<String>): List<String> {
+        if (!isParakeetMode) return languages
+
+        val supported = languages.filter { WhisperLanguages.isParakeetSupported(it) }
+        return supported.ifEmpty { listOf("en") }
     }
 }

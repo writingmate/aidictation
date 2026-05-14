@@ -147,6 +147,16 @@
                             </StackPanel>
                         </ToggleButton>
 
+                        <!-- English - British -->
+                        <ToggleButton Style="{StaticResource LanguageToggleButton}"
+                                      Tag="en-GB"
+                                      Click="LanguageButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🇬🇧 " FontSize="14"/>
+                                <TextBlock Text="English - British" FontSize="14"/>
+                            </StackPanel>
+                        </ToggleButton>
+
                         <!-- Spanish -->
                         <ToggleButton Style="{StaticResource LanguageToggleButton}"
                                       Tag="es"
@@ -174,6 +184,16 @@
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🇩🇪 " FontSize="14"/>
                                 <TextBlock Text="German" FontSize="14"/>
+                            </StackPanel>
+                        </ToggleButton>
+
+                        <!-- Greek -->
+                        <ToggleButton Style="{StaticResource LanguageToggleButton}"
+                                      Tag="el"
+                                      Click="LanguageButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🇬🇷 " FontSize="14"/>
+                                <TextBlock Text="Greek" FontSize="14"/>
                             </StackPanel>
                         </ToggleButton>
 
@@ -214,6 +234,36 @@
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🇨🇳 " FontSize="14"/>
                                 <TextBlock Text="Chinese" FontSize="14"/>
+                            </StackPanel>
+                        </ToggleButton>
+
+                        <!-- Cantonese -->
+                        <ToggleButton Style="{StaticResource LanguageToggleButton}"
+                                      Tag="yue"
+                                      Click="LanguageButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🇭🇰 " FontSize="14"/>
+                                <TextBlock Text="Cantonese" FontSize="14"/>
+                            </StackPanel>
+                        </ToggleButton>
+
+                        <!-- Hindi -->
+                        <ToggleButton Style="{StaticResource LanguageToggleButton}"
+                                      Tag="hi"
+                                      Click="LanguageButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🇮🇳 " FontSize="14"/>
+                                <TextBlock Text="Hindi" FontSize="14"/>
+                            </StackPanel>
+                        </ToggleButton>
+
+                        <!-- Hinglish -->
+                        <ToggleButton Style="{StaticResource LanguageToggleButton}"
+                                      Tag="hi-Latn"
+                                      Click="LanguageButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🇮🇳 " FontSize="14"/>
+                                <TextBlock Text="Hinglish" FontSize="14"/>
                             </StackPanel>
                         </ToggleButton>
 

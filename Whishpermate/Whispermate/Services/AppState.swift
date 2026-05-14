@@ -697,7 +697,7 @@ class AppState: ObservableObject {
 
     private func singleAPILanguageCode() -> String? {
         guard let languageCode = languageManager.apiLanguageCode,
-              languageCode.count == 2
+              !languageCode.contains(",")
         else {
             return nil
         }

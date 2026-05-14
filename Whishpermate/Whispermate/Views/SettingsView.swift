@@ -112,7 +112,6 @@ struct SettingsView: View {
     @State private var paymentCheckTask: Task<Void, Never>?
     @State private var pendingTranscriptionMode: TranscriptionMode?
     @State private var pendingCloudLanguage: Language?
-    @State private var showingCloudLanguageConfirmation = false
     @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
     @Environment(\.dismiss) var dismiss
 
@@ -143,7 +142,7 @@ struct SettingsView: View {
         .onDisappear {
             stopPaymentConfirmationCheck()
         }
-        .alert("Switch to cloud transcription?", isPresented: $showingCloudLanguageConfirmation) {
+        .alert("Switch to cloud transcription?", isPresented: cloudLanguageConfirmationBinding) {
             Button("Cancel", role: .cancel) {
                 pendingCloudLanguage = nil
             }
@@ -1514,8 +1513,9 @@ struct SettingsView: View {
 
     private func selectLanguage(_ language: Language) {
         if transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet {
-            pendingCloudLanguage = language
-            showingCloudLanguageConfirmation = true
+            DispatchQueue.main.async {
+                pendingCloudLanguage = language
+            }
             return
         }
         languageManager.toggleLanguage(language)
@@ -1530,9 +1530,22 @@ struct SettingsView: View {
 
     private func confirmCloudLanguageSelection() {
         guard let language = pendingCloudLanguage else { return }
-        transcriptionProviderManager.selectCloudModeForLanguageSelection()
-        languageManager.toggleLanguage(language)
         pendingCloudLanguage = nil
+        DispatchQueue.main.async {
+            transcriptionProviderManager.selectCloudModeForLanguageSelection()
+            languageManager.toggleLanguage(language)
+        }
+    }
+
+    private var cloudLanguageConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { pendingCloudLanguage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingCloudLanguage = nil
+                }
+            }
+        )
     }
 
     // MARK: - Text Rules Section

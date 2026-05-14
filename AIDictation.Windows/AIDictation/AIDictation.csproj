@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon>Resources\Icons\app.ico</ApplicationIcon>
+    <ApplicationIcon>..\Assets\app.ico</ApplicationIcon>
     <AssemblyName>AIDictation</AssemblyName>
     <RootNamespace>AIDictation</RootNamespace>
     <Version>0.0.1</Version>
@@ -27,8 +27,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Resources\Icons\*.ico" />
-    <Resource Include="Resources\Icons\*.png" />
+    <Resource Include="..\Assets\*.ico" />
+    <Resource Include="..\Assets\*.png" />
     <Resource Include="Resources\Onboarding\*.png" />
   </ItemGroup>
 

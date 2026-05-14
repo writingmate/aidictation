@@ -6,7 +6,9 @@ struct HistoryWindowView: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        HistoryView(historyManager: historyManager)
+        HistoryView(historyManager: historyManager) { recording in
+            AppState.shared.retranscribe(recording: recording)
+        }
             .onAppear {
                 // Set window identifier for identification
                 if let window = NSApplication.shared.windows.first(where: { $0.title == "History" }) {

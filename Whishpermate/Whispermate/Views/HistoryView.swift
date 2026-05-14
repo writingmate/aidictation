@@ -8,7 +8,7 @@ struct HistoryView: View {
     @State private var showingClearConfirmation = false
     @Environment(\.dismiss) var dismiss
 
-    var onRetry: ((Recording) async throws -> Void)?
+    var onRetry: ((Recording) -> Void)?
 
     var filteredRecordings: [Recording] {
         historyManager.filteredRecordings(searchText: searchText)
@@ -93,7 +93,7 @@ struct HistoryView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(filteredRecordings) { recording in
-                                RecordingRow(recording: recording, historyManager: historyManager)
+                                RecordingRow(recording: recording, historyManager: historyManager, onRetry: onRetry)
                             }
                         }
                         .padding(.vertical, 8)
@@ -137,6 +137,7 @@ struct HistoryView: View {
 struct RecordingRow: View {
     let recording: Recording
     let historyManager: HistoryManager
+    let onRetry: ((Recording) -> Void)?
 
     @State private var isHovering = false
     @State private var showingDeleteConfirmation = false
@@ -204,7 +205,7 @@ struct RecordingRow: View {
                     .opacity(isHovering ? 1 : 0)
                 } else if recording.status == .failed {
                     Button(action: {
-                        // TODO: Implement retry from history
+                        onRetry?(recording)
                     }) {
                         Image(systemName: "arrow.clockwise")
                             .dsFont(.label)
@@ -213,7 +214,7 @@ struct RecordingRow: View {
                     .buttonStyle(.plain)
                     .help("Retry")
                     .opacity(isHovering ? 1 : 0)
-                    .disabled(recording.retryCount >= 3)
+                    .disabled(onRetry == nil || !FileManager.default.fileExists(atPath: recording.audioFileURL.path))
                 }
 
                 Button(action: {

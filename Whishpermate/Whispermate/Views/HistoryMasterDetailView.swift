@@ -384,7 +384,7 @@ struct RecordingDetailView: View {
                     Button(action: retryTranscription) {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     }
-                    .disabled(recording.retryCount >= 3)
+                    .disabled(!FileManager.default.fileExists(atPath: recording.audioFileURL.path))
                 }
 
                 // Copy button

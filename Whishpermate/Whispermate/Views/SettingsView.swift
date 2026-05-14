@@ -111,6 +111,8 @@ struct SettingsView: View {
     @State private var isCheckingPayment = false
     @State private var paymentCheckTask: Task<Void, Never>?
     @State private var pendingTranscriptionMode: TranscriptionMode?
+    @State private var pendingCloudLanguage: Language?
+    @State private var showingCloudLanguageConfirmation = false
     @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
     @Environment(\.dismiss) var dismiss
 
@@ -140,6 +142,16 @@ struct SettingsView: View {
         }
         .onDisappear {
             stopPaymentConfirmationCheck()
+        }
+        .alert("Switch to cloud transcription?", isPresented: $showingCloudLanguageConfirmation) {
+            Button("Cancel", role: .cancel) {
+                pendingCloudLanguage = nil
+            }
+            Button("Switch to Cloud") {
+                confirmCloudLanguageSelection()
+            }
+        } message: {
+            Text(cloudLanguageConfirmationMessage)
         }
     }
 
@@ -1502,9 +1514,25 @@ struct SettingsView: View {
 
     private func selectLanguage(_ language: Language) {
         if transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet {
-            transcriptionProviderManager.selectCloudModeForLanguageSelection()
+            pendingCloudLanguage = language
+            showingCloudLanguageConfirmation = true
+            return
         }
         languageManager.toggleLanguage(language)
+    }
+
+    private var cloudLanguageConfirmationMessage: String {
+        guard let language = pendingCloudLanguage else {
+            return "This language is not available with offline Parakeet. To use it, AIDictation will switch transcription to cloud mode."
+        }
+        return "\(language.displayName) is not available with offline Parakeet. To use it, AIDictation will switch transcription to cloud mode and then select \(language.displayName)."
+    }
+
+    private func confirmCloudLanguageSelection() {
+        guard let language = pendingCloudLanguage else { return }
+        transcriptionProviderManager.selectCloudModeForLanguageSelection()
+        languageManager.toggleLanguage(language)
+        pendingCloudLanguage = nil
     }
 
     // MARK: - Text Rules Section

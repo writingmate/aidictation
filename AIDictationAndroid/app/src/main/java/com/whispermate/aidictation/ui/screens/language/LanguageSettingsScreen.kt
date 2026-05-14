@@ -16,7 +16,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -29,6 +31,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -45,6 +50,32 @@ fun LanguageSettingsScreen(
 ) {
     val languages by viewModel.languages.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    var pendingCloudLanguage by remember { mutableStateOf<LanguageItem?>(null) }
+
+    pendingCloudLanguage?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingCloudLanguage = null },
+            title = { Text("Switch to cloud transcription?") },
+            text = {
+                Text("${item.language.englishName} is not available with offline Parakeet. To use it, AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.toggleLanguage(item.language.code)
+                        pendingCloudLanguage = null
+                    }
+                ) {
+                    Text("Switch to Cloud")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCloudLanguage = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -110,7 +141,13 @@ fun LanguageSettingsScreen(
                             nativeName = item.language.nativeName,
                             isSelected = item.isSelected,
                             isUnsupportedInLocalMode = item.isUnsupportedInLocalMode,
-                            onClick = { viewModel.toggleLanguage(item.language.code) }
+                            onClick = {
+                                if (item.isUnsupportedInLocalMode) {
+                                    pendingCloudLanguage = item
+                                } else {
+                                    viewModel.toggleLanguage(item.language.code)
+                                }
+                            }
                         )
                         HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
                     }

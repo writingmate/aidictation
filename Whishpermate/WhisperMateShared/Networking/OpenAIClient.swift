@@ -127,11 +127,12 @@ public class OpenAIClient {
         effectiveModel: String,
         prompt: String? = nil,
         sttPrompt: String? = nil,
-        postProcessingPrompt: String? = nil
+        postProcessingPrompt: String? = nil,
+        postProcessingEnabled: Bool = true
     ) async throws -> String {
         let startTime = CFAbsoluteTimeGetCurrent()
         DebugLog.api("Starting transcription", endpoint: config.transcriptionEndpoint)
-        DebugLog.info("Model: \(effectiveModel), Language: auto-detect", context: "OpenAIClient")
+        DebugLog.info("Model: \(effectiveModel), Language: auto-detect, postProcessingEnabled: \(postProcessingEnabled)", context: "OpenAIClient")
 
         // Create multipart form data
         let boundary = UUID().uuidString
@@ -184,6 +185,10 @@ public class OpenAIClient {
 
         if let postProcessingPrompt = postProcessingPrompt, !postProcessingPrompt.isEmpty {
             appendFormField(name: "post_processing_prompt", value: postProcessingPrompt)
+        }
+
+        if !postProcessingEnabled {
+            appendFormField(name: "post_processing", value: "false")
         }
 
         // Add response_format parameter (optional, default is json)
@@ -264,7 +269,8 @@ public class OpenAIClient {
                 effectiveModel: effectiveModel,
                 prompt: useWritingmateChunkFields ? nil : prompt,
                 sttPrompt: useWritingmateChunkFields ? prompt : nil,
-                postProcessingPrompt: nil
+                postProcessingPrompt: nil,
+                postProcessingEnabled: !useWritingmateChunkFields
             )
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {

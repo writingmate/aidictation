@@ -140,12 +140,13 @@ class OpenAIClient {
         prompt: String? = nil,
         language: String? = nil,
         sttPrompt: String? = nil,
-        postProcessingPrompt: String? = nil
+        postProcessingPrompt: String? = nil,
+        postProcessingEnabled: Bool = true
     ) async throws -> String {
 
         let startTime = CFAbsoluteTimeGetCurrent()
         DebugLog.api("Starting transcription", endpoint: config.transcriptionEndpoint)
-        DebugLog.info("Model: \(effectiveModel), Language: \(language ?? "auto-detect"), promptLength: \(prompt?.count ?? 0), sttPromptLength: \(sttPrompt?.count ?? 0), postProcessingPromptLength: \(postProcessingPrompt?.count ?? 0)", context: "OpenAIClient")
+        DebugLog.info("Model: \(effectiveModel), Language: \(language ?? "auto-detect"), promptLength: \(prompt?.count ?? 0), sttPromptLength: \(sttPrompt?.count ?? 0), postProcessingPromptLength: \(postProcessingPrompt?.count ?? 0), postProcessingEnabled: \(postProcessingEnabled)", context: "OpenAIClient")
 
         // Create multipart form data
         let boundary = UUID().uuidString
@@ -202,6 +203,10 @@ class OpenAIClient {
 
         if let postProcessingPrompt = postProcessingPrompt, !postProcessingPrompt.isEmpty {
             appendFormField(name: "post_processing_prompt", value: postProcessingPrompt)
+        }
+
+        if !postProcessingEnabled {
+            appendFormField(name: "post_processing", value: "false")
         }
 
         // Add response_format parameter (optional, default is json)
@@ -296,7 +301,8 @@ class OpenAIClient {
                 prompt: chunkPrompt,
                 language: language,
                 sttPrompt: chunkSTTPrompt,
-                postProcessingPrompt: nil
+                postProcessingPrompt: nil,
+                postProcessingEnabled: !useWritingmateChunkFields
             )
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {

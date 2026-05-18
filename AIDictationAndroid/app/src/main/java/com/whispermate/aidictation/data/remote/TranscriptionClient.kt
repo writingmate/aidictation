@@ -142,6 +142,7 @@ object TranscriptionClient {
         language: String?,
         sttPrompt: String?,
         postProcessingPrompt: String?,
+        postProcessingEnabled: Boolean = true,
         endpoint: String,
         apiKey: String,
         model: String
@@ -166,6 +167,9 @@ object TranscriptionClient {
                     }
                     if (!postProcessingPrompt.isNullOrEmpty()) {
                         addFormDataPart("post_processing_prompt", postProcessingPrompt)
+                    }
+                    if (!postProcessingEnabled) {
+                        addFormDataPart("post_processing", "false")
                     }
                     if (!language.isNullOrEmpty()) {
                         addFormDataPart("language", language)
@@ -243,6 +247,7 @@ object TranscriptionClient {
                     language = language,
                     sttPrompt = sttPrompt ?: prompt,
                     postProcessingPrompt = null,
+                    postProcessingEnabled = false,
                     endpoint = endpoint,
                     apiKey = apiKey,
                     model = model

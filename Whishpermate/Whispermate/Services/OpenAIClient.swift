@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 enum OpenAIError: Error {
@@ -11,6 +12,16 @@ enum OpenAIError: Error {
 /// Unified OpenAI-compatible client that works with Groq, OpenAI, and any OpenAI-compatible API
 /// Single client configured once and used everywhere
 class OpenAIClient {
+    private struct AudioUploadChunk {
+        let url: URL
+        let isTemporary: Bool
+    }
+
+    private static let maxSingleUploadAudioBytes = 3_600_000
+    private static let maxChunkDuration: TimeInterval = 240
+    private static let minChunkDuration: TimeInterval = 20
+    private static let chunkDurationSafetyFactor = 0.9
+
     // Custom URLSession optimized for persistent connections and SSL session reuse
     private static let urlSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -29,6 +40,7 @@ class OpenAIClient {
         var chatCompletionEndpoint: String
         var chatCompletionModel: String
         var apiKey: String
+        var chatCompletionApiKey: String?
         var customHeaders: [String: String]
 
         init(
@@ -37,6 +49,7 @@ class OpenAIClient {
             chatCompletionEndpoint: String = "",
             chatCompletionModel: String = "",
             apiKey: String = "",
+            chatCompletionApiKey: String? = nil,
             customHeaders: [String: String] = [:]
         ) {
             self.transcriptionEndpoint = transcriptionEndpoint
@@ -44,6 +57,7 @@ class OpenAIClient {
             self.chatCompletionEndpoint = chatCompletionEndpoint
             self.chatCompletionModel = chatCompletionModel
             self.apiKey = apiKey
+            self.chatCompletionApiKey = chatCompletionApiKey
             self.customHeaders = customHeaders
         }
     }
@@ -79,6 +93,56 @@ class OpenAIClient {
             throw OpenAIError.invalidURL
         }
 
+        let audioByteCount = Self.fileSize(at: audioURL)
+        let shouldChunkImmediately = Self.shouldUseChunkedUpload(for: url) &&
+            audioByteCount > Self.maxSingleUploadAudioBytes
+
+        do {
+            if shouldChunkImmediately {
+                return try await transcribeChunked(
+                    audioURL: audioURL,
+                    endpointURL: url,
+                    effectiveModel: effectiveModel,
+                    prompt: prompt,
+                    language: language,
+                    sttPrompt: sttPrompt,
+                    postProcessingPrompt: postProcessingPrompt
+                )
+            }
+
+            return try await transcribeSinglePart(
+                audioURL: audioURL,
+                endpointURL: url,
+                effectiveModel: effectiveModel,
+                prompt: prompt,
+                language: language,
+                sttPrompt: sttPrompt,
+                postProcessingPrompt: postProcessingPrompt
+            )
+        } catch OpenAIError.apiError(let message) where audioByteCount > Self.maxSingleUploadAudioBytes && Self.isPayloadTooLarge(message) {
+            DebugLog.warning("Single transcription upload rejected as too large; retrying with chunks", context: "OpenAIClient")
+            return try await transcribeChunked(
+                audioURL: audioURL,
+                endpointURL: url,
+                effectiveModel: effectiveModel,
+                prompt: prompt,
+                language: language,
+                sttPrompt: sttPrompt,
+                postProcessingPrompt: postProcessingPrompt
+            )
+        }
+    }
+
+    private func transcribeSinglePart(
+        audioURL: URL,
+        endpointURL url: URL,
+        effectiveModel: String,
+        prompt: String? = nil,
+        language: String? = nil,
+        sttPrompt: String? = nil,
+        postProcessingPrompt: String? = nil
+    ) async throws -> String {
+
         let startTime = CFAbsoluteTimeGetCurrent()
         DebugLog.api("Starting transcription", endpoint: config.transcriptionEndpoint)
         DebugLog.info("Model: \(effectiveModel), Language: \(language ?? "auto-detect"), promptLength: \(prompt?.count ?? 0), sttPromptLength: \(sttPrompt?.count ?? 0), postProcessingPromptLength: \(postProcessingPrompt?.count ?? 0)", context: "OpenAIClient")
@@ -112,8 +176,8 @@ class OpenAIClient {
 
         // Add file parameter (required)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(Self.uploadFileName(for: audioURL))\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(Self.contentType(for: audioURL))\r\n\r\n".data(using: .utf8)!)
         body.append(audioData)
         body.append("\r\n".data(using: .utf8)!)
 
@@ -188,6 +252,237 @@ class OpenAIClient {
         }
     }
 
+    private func transcribeChunked(
+        audioURL: URL,
+        endpointURL url: URL,
+        effectiveModel: String,
+        prompt: String?,
+        language: String?,
+        sttPrompt: String?,
+        postProcessingPrompt: String?
+    ) async throws -> String {
+        let chunks = try await Self.makeUploadChunks(for: audioURL)
+        defer {
+            for chunk in chunks where chunk.isTemporary {
+                try? FileManager.default.removeItem(at: chunk.url)
+            }
+        }
+
+        if chunks.count == 1 {
+            return try await transcribeSinglePart(
+                audioURL: chunks[0].url,
+                endpointURL: url,
+                effectiveModel: effectiveModel,
+                prompt: prompt,
+                language: language,
+                sttPrompt: sttPrompt,
+                postProcessingPrompt: postProcessingPrompt
+            )
+        }
+
+        DebugLog.info("Transcribing large audio as \(chunks.count) chunks", context: "OpenAIClient")
+        var transcripts: [String] = []
+        transcripts.reserveCapacity(chunks.count)
+        let useWritingmateChunkFields = Self.shouldUseChunkedUpload(for: url)
+        let chunkPrompt = useWritingmateChunkFields ? nil : prompt
+        let chunkSTTPrompt = useWritingmateChunkFields ? (sttPrompt ?? prompt) : sttPrompt
+
+        for (index, chunk) in chunks.enumerated() {
+            DebugLog.info("Transcribing chunk \(index + 1)/\(chunks.count), size=\(Self.fileSize(at: chunk.url)) bytes", context: "OpenAIClient")
+            let text = try await transcribeSinglePart(
+                audioURL: chunk.url,
+                endpointURL: url,
+                effectiveModel: effectiveModel,
+                prompt: chunkPrompt,
+                language: language,
+                sttPrompt: chunkSTTPrompt,
+                postProcessingPrompt: nil
+            )
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                transcripts.append(trimmed)
+            }
+        }
+
+        let mergedTranscript = transcripts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let postProcessingPrompt,
+              !postProcessingPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return mergedTranscript
+        }
+
+        guard !mergedTranscript.isEmpty else {
+            return mergedTranscript
+        }
+
+        DebugLog.info("Applying one LLM post-processing pass to merged chunk transcript", context: "OpenAIClient")
+        do {
+            return try await applyFormattingRules(
+                transcription: mergedTranscript,
+                rules: [postProcessingPrompt],
+                languageCodes: language
+            )
+        } catch {
+            DebugLog.warning("Merged transcript post-processing failed; returning raw merged transcript: \(error)", context: "OpenAIClient")
+            return mergedTranscript
+        }
+    }
+
+    private static func makeUploadChunks(for audioURL: URL) async throws -> [AudioUploadChunk] {
+        let fileBytes = fileSize(at: audioURL)
+        guard fileBytes > maxSingleUploadAudioBytes else {
+            return [AudioUploadChunk(url: audioURL, isTemporary: false)]
+        }
+
+        let asset = AVURLAsset(url: audioURL)
+        let duration = CMTimeGetSeconds(asset.duration)
+        guard duration.isFinite, duration > minChunkDuration else {
+            return [AudioUploadChunk(url: audioURL, isTemporary: false)]
+        }
+
+        let bytesPerSecond = Double(fileBytes) / duration
+        var segmentDuration = min(
+            maxChunkDuration,
+            max(minChunkDuration, (Double(maxSingleUploadAudioBytes) / max(bytesPerSecond, 1)) * chunkDurationSafetyFactor)
+        )
+
+        var lastOversizedBytes = 0
+        for _ in 0..<5 {
+            let chunks = try await exportChunks(
+                for: asset,
+                sourceURL: audioURL,
+                sourceDuration: duration,
+                segmentDuration: segmentDuration
+            )
+
+            let oversizedBytes = chunks.map { fileSize(at: $0.url) }.max() ?? 0
+            if oversizedBytes <= maxSingleUploadAudioBytes {
+                return chunks
+            }
+
+            lastOversizedBytes = oversizedBytes
+            cleanup(chunks)
+            segmentDuration *= 0.75
+            if segmentDuration < minChunkDuration {
+                break
+            }
+        }
+
+        throw OpenAIError.apiError("Unable to split audio under upload limit; largest chunk was \(lastOversizedBytes) bytes")
+    }
+
+    private static func exportChunks(
+        for asset: AVAsset,
+        sourceURL: URL,
+        sourceDuration: TimeInterval,
+        segmentDuration: TimeInterval
+    ) async throws -> [AudioUploadChunk] {
+        var chunks: [AudioUploadChunk] = []
+
+        do {
+            var start: TimeInterval = 0
+            var index = 0
+            while start < sourceDuration {
+                let end = min(sourceDuration, start + segmentDuration)
+                if end - start < 0.25 {
+                    break
+                }
+
+                let outputURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("\(sourceURL.deletingPathExtension().lastPathComponent)_chunk_\(index)_\(UUID().uuidString).m4a")
+                try? FileManager.default.removeItem(at: outputURL)
+
+                let startTime = CMTime(seconds: start, preferredTimescale: 600)
+                let endTime = CMTime(seconds: end, preferredTimescale: 600)
+                try await exportChunk(asset: asset, timeRange: CMTimeRangeFromTimeToTime(start: startTime, end: endTime), outputURL: outputURL)
+
+                if fileSize(at: outputURL) > 0 {
+                    chunks.append(AudioUploadChunk(url: outputURL, isTemporary: true))
+                } else {
+                    try? FileManager.default.removeItem(at: outputURL)
+                }
+
+                start = end
+                index += 1
+            }
+
+            guard !chunks.isEmpty else {
+                throw OpenAIError.encodingError
+            }
+
+            return chunks
+        } catch {
+            cleanup(chunks)
+            throw error
+        }
+    }
+
+    private static func exportChunk(asset: AVAsset, timeRange: CMTimeRange, outputURL: URL) async throws {
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw OpenAIError.encodingError
+        }
+
+        exporter.outputURL = outputURL
+        exporter.outputFileType = .m4a
+        exporter.timeRange = timeRange
+        exporter.shouldOptimizeForNetworkUse = true
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            exporter.exportAsynchronously {
+                switch exporter.status {
+                case .completed:
+                    continuation.resume()
+                case .failed, .cancelled:
+                    continuation.resume(throwing: exporter.error ?? OpenAIError.encodingError)
+                default:
+                    continuation.resume(throwing: exporter.error ?? OpenAIError.encodingError)
+                }
+            }
+        }
+    }
+
+    private static func shouldUseChunkedUpload(for url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "writingmate.ai" || host.hasSuffix(".writingmate.ai")
+    }
+
+    private static func isPayloadTooLarge(_ message: String) -> Bool {
+        let lowercased = message.lowercased()
+        return lowercased.contains("413") ||
+            lowercased.contains("payload_too_large") ||
+            lowercased.contains("function_payload_too_large") ||
+            lowercased.contains("request entity too large")
+    }
+
+    private static func contentType(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "wav":
+            return "audio/wav"
+        case "mp3":
+            return "audio/mpeg"
+        case "aac":
+            return "audio/aac"
+        default:
+            return "audio/m4a"
+        }
+    }
+
+    private static func uploadFileName(for url: URL) -> String {
+        let fileName = url.lastPathComponent
+        return fileName.isEmpty ? "audio.m4a" : fileName
+    }
+
+    private static func fileSize(at url: URL) -> Int {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.intValue ?? 0
+    }
+
+    private static func cleanup(_ chunks: [AudioUploadChunk]) {
+        for chunk in chunks where chunk.isTemporary {
+            try? FileManager.default.removeItem(at: chunk.url)
+        }
+    }
+
     // MARK: - Chat Completion
 
     func chatCompletion(
@@ -220,8 +515,9 @@ class OpenAIClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        if !config.apiKey.isEmpty, config.apiKey != "not-needed" {
-            request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        let apiKey = config.chatCompletionApiKey ?? config.apiKey
+        if !apiKey.isEmpty, apiKey != "not-needed" {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -425,7 +721,7 @@ class OpenAIClient {
 
         DebugLog.info("LLM Post-processing request - System: \(systemPrompt)", context: "OpenAIClient")
         DebugLog.info("LLM Post-processing request - User: \(userMessage)", context: "OpenAIClient")
-        let result = try await chatCompletion(messages: messages)
+        let result = try await chatCompletion(messages: messages, maxTokens: 8192)
         DebugLog.info("LLM Post-processing response: \(result)", context: "OpenAIClient")
         return result
     }

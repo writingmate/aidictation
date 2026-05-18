@@ -20,8 +20,14 @@ import javax.inject.Inject
 data class LanguageItem(
     val language: WhisperLanguage,
     val isSelected: Boolean,
-    val isUnsupportedInLocalMode: Boolean
+    val localModeReason: LocalModeReason
 )
+
+enum class LocalModeReason {
+    Available,
+    CloudRecommended,
+    CloudOnly
+}
 
 @HiltViewModel
 class LanguageSettingsViewModel @Inject constructor(
@@ -58,14 +64,22 @@ class LanguageSettingsViewModel @Inject constructor(
                 LanguageItem(
                     language = lang,
                     isSelected = lang.code in selectedSet,
-                    isUnsupportedInLocalMode = isParakeetMode && !lang.supportsParakeet
+                    localModeReason = if (!isParakeetMode) {
+                        LocalModeReason.Available
+                    } else if (!lang.supportsParakeet) {
+                        LocalModeReason.CloudOnly
+                    } else if (WhisperLanguages.requiresCloudTranscription(lang.code)) {
+                        LocalModeReason.CloudRecommended
+                    } else {
+                        LocalModeReason.Available
+                    }
                 )
             }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun toggleLanguage(code: String) {
         viewModelScope.launch {
-            if (isParakeetMode && !WhisperLanguages.isParakeetSupported(code)) {
+            if (isParakeetMode && !WhisperLanguages.isReliableOffline(code)) {
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
                 ApiConfigManager.instance?.switchTranscriptionToCloud()
             }

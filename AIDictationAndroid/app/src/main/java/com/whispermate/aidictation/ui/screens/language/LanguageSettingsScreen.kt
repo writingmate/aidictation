@@ -53,11 +53,18 @@ fun LanguageSettingsScreen(
     var pendingCloudLanguage by remember { mutableStateOf<LanguageItem?>(null) }
 
     pendingCloudLanguage?.let { item ->
+        val isCloudRecommended = item.localModeReason == LocalModeReason.CloudRecommended
         AlertDialog(
             onDismissRequest = { pendingCloudLanguage = null },
             title = { Text("Switch to cloud transcription?") },
             text = {
-                Text("${item.language.englishName} is not available with offline Parakeet. To use it, AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}.")
+                Text(
+                    if (isCloudRecommended) {
+                        "${item.language.englishName} has lower offline accuracy. AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}."
+                    } else {
+                        "${item.language.englishName} is not available in offline mode. AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}."
+                    }
+                )
             },
             confirmButton = {
                 TextButton(
@@ -140,9 +147,9 @@ fun LanguageSettingsScreen(
                             englishName = item.language.englishName,
                             nativeName = item.language.nativeName,
                             isSelected = item.isSelected,
-                            isUnsupportedInLocalMode = item.isUnsupportedInLocalMode,
+                            localModeReason = item.localModeReason,
                             onClick = {
-                                if (item.isUnsupportedInLocalMode) {
+                                if (item.localModeReason != LocalModeReason.Available) {
                                     pendingCloudLanguage = item
                                 } else {
                                     viewModel.toggleLanguage(item.language.code)
@@ -162,14 +169,15 @@ private fun LanguageRow(
     englishName: String,
     nativeName: String,
     isSelected: Boolean,
-    isUnsupportedInLocalMode: Boolean,
+    localModeReason: LocalModeReason,
     onClick: () -> Unit
 ) {
+    val switchesToCloud = localModeReason != LocalModeReason.Available
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .alpha(if (isUnsupportedInLocalMode && !isSelected) 0.55f else 1f)
+            .alpha(if (switchesToCloud && !isSelected) 0.72f else 1f)
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -190,6 +198,17 @@ private fun LanguageRow(
                         text = nativeName,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (switchesToCloud && !isSelected) {
+                    Text(
+                        text = if (localModeReason == LocalModeReason.CloudRecommended) {
+                            "Cloud recommended"
+                        } else {
+                            "Cloud only"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }

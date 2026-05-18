@@ -560,28 +560,29 @@ object TranscriptionClient {
     suspend fun transcribeForLanguages(
         audioFile: File,
         languages: List<String>,
-        prompt: String? = null
+        prompt: String? = null,
+        sttPrompt: String? = null,
+        postProcessingPrompt: String? = null
     ): Map<String, String> = coroutineScope {
         Log.d(TAG, "=== Parallel transcription for languages: $languages ===")
         val deferred = languages.map { lang ->
-            lang to async(Dispatchers.IO) { transcribe(audioFile, prompt, lang) }
+            lang to async(Dispatchers.IO) {
+                transcribe(
+                    audioFile = audioFile,
+                    prompt = prompt,
+                    language = lang,
+                    sttPrompt = sttPrompt,
+                    postProcessingPrompt = postProcessingPrompt
+                )
+            }
         }
         val results = deferred.mapNotNull { (lang, job) ->
             job.await().getOrNull()?.let { lang to it }
         }.toMap()
         Log.d(TAG, "Parallel results: ${results.entries.joinToString { (lang, text) -> "$lang → \"$text\"" }}")
 
-        // If all forced-language calls returned empty, fall back to auto-detect.
-        // Forcing a language makes Whisper conservative — it may return empty rather
-        // than transcribe audio that doesn't clearly match the forced language.
         if (results.values.all { it.isBlank() }) {
-            Log.d(TAG, "All forced-language results empty, trying auto-detect fallback")
-            val fallback = transcribe(audioFile, prompt, null).getOrNull()
-            if (!fallback.isNullOrBlank()) {
-                Log.d(TAG, "Auto-detect fallback result: $fallback")
-                return@coroutineScope mapOf(languages.first() to fallback)
-            }
-            Log.d(TAG, "Auto-detect fallback also empty — audio may be silence")
+            Log.d(TAG, "All forced-language results empty")
         }
 
         results

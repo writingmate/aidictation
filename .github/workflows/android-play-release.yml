@@ -4,6 +4,20 @@ on:
   push:
     tags:
       - 'android-v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Android release tag to publish, for example android-v0.0.18'
+        required: true
+        type: string
+      play_track:
+        description: 'Google Play track'
+        required: true
+        default: alpha
+        type: choice
+        options:
+          - internal
+          - alpha
 
 permissions:
   contents: read
@@ -28,7 +42,7 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      PLAY_TRACK: internal
+      PLAY_TRACK: ${{ inputs.play_track || 'internal' }}
       PLAY_RELEASE_NAME: ''
       PARAKEET_RUNTIME: onnx
 
@@ -67,13 +81,23 @@ jobs:
         with:
           fetch-depth: 0
           lfs: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: Resolve release metadata
         id: release_meta
         shell: bash
         run: |
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "Play releases must be created by pushing an android-v<versionName> tag." >&2
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            release_tag="${{ inputs.release_tag }}"
+          else
+            if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+              echo "Play releases must be created by pushing an android-v<versionName> tag." >&2
+              exit 1
+            fi
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "$release_tag" ]; then
+            echo "release_tag is required." >&2
             exit 1
           fi
 
@@ -85,15 +109,15 @@ jobs:
           fi
 
           expected_tag="android-v${version_name}"
-          if [ "$GITHUB_REF_NAME" != "$expected_tag" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match Android versionName $version_name; expected $expected_tag." >&2
+          if [ "$release_tag" != "$expected_tag" ]; then
+            echo "Tag $release_tag does not match Android versionName $version_name; expected $expected_tag." >&2
             exit 1
           fi
 
-          tag_sha=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          tag_sha=$(git rev-list -n 1 "$release_tag")
           git fetch origin main --prune
           if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
-            echo "Release tag $GITHUB_REF_NAME points to $tag_sha, which is not on origin/main." >&2
+            echo "Release tag $release_tag points to $tag_sha, which is not on origin/main." >&2
             echo "Merge to main first, then tag the main commit." >&2
             exit 1
           fi

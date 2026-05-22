@@ -38,16 +38,23 @@ class TranscriptionRepository @Inject constructor(
         val multilingual = appPreferences.multilingualEnabled.first()
         val postProcess = appPreferences.postProcessingEnabled.first()
         val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
+        val requiresCloud = languages.any { WhisperLanguages.requiresCloudTranscription(it) }
+        if (requiresCloud) {
+            appPreferences.setOnDeviceTranscriptionEnabled(false)
+            ApiConfigManager.instance?.switchTranscriptionToCloud()
+        }
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
         val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
 
-        if (onDeviceTranscription || provider == ApiProvider.PARAKEET) {
+        if (!requiresCloud && (onDeviceTranscription || provider == ApiProvider.PARAKEET)) {
             val raw = parakeetTranscriber.transcribe(audioFile)
                 .getOrElse { return Result.failure(it) }
             return if (postProcess) {
-                val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
+                val languageNames = languages
+                    .filter { WhisperLanguages.isReliableOffline(it) }
+                    .mapNotNull { WhisperLanguages.getName(it) }
                     .takeIf { it.isNotEmpty() }
-                    ?: listOf("auto")
+                    ?: listOf("English")
                 Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), languageNames, contextRules))
             } else {
                 Result.success(raw)
@@ -55,7 +62,24 @@ class TranscriptionRepository @Inject constructor(
         }
 
         val language = apiLanguageFor(multilingual, languages)
+        val forcedLanguages = apiLanguagesFor(multilingual, languages)
         if (provider == ApiProvider.WRITINGMATE) {
+            if (forcedLanguages.size > 1) {
+                val candidates = TranscriptionClient.transcribeForLanguages(
+                    audioFile = audioFile,
+                    languages = forcedLanguages,
+                    prompt = prompt,
+                    sttPrompt = prompt,
+                    postProcessingPrompt = if (postProcess) {
+                        buildPostProcessingPrompt(prompt, contextRules)
+                    } else {
+                        null
+                    }
+                )
+                val namedCandidates = candidates.withLanguageNames()
+                val languageNames = forcedLanguages.mapNotNull { WhisperLanguages.getName(it) }
+                return Result.success(LanguagePostProcessClient.postProcess(namedCandidates, languageNames, contextRules))
+            }
             return TranscriptionClient.transcribe(
                 audioFile = audioFile,
                 prompt = prompt,
@@ -69,7 +93,12 @@ class TranscriptionRepository @Inject constructor(
             )
         }
 
-        return if (postProcess) {
+        return if (forcedLanguages.size > 1) {
+            val candidates = TranscriptionClient.transcribeForLanguages(audioFile, forcedLanguages, prompt)
+            val namedCandidates = candidates.withLanguageNames()
+            val languageNames = forcedLanguages.mapNotNull { WhisperLanguages.getName(it) }
+            Result.success(LanguagePostProcessClient.postProcess(namedCandidates, languageNames, contextRules))
+        } else if (postProcess) {
             val raw = TranscriptionClient.transcribe(audioFile, prompt, language)
                 .getOrElse { return Result.failure(it) }
             val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
@@ -86,6 +115,14 @@ class TranscriptionRepository @Inject constructor(
         val validLanguages = languages.filter { WhisperLanguages.getLanguage(it) != null }
         return validLanguages.singleOrNull()
     }
+
+    private fun apiLanguagesFor(multilingual: Boolean, languages: List<String>): List<String> {
+        if (!multilingual) return emptyList()
+        return languages.filter { WhisperLanguages.getLanguage(it) != null }.distinct()
+    }
+
+    private fun Map<String, String>.withLanguageNames(): Map<String, String> =
+        mapKeys { (code, _) -> WhisperLanguages.getName(code) ?: code }
 
     suspend fun buildPrompt(): String {
         val dictionary = appPreferences.dictionaryEntries.first()

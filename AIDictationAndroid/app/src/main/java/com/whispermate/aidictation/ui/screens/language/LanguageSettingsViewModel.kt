@@ -2,6 +2,8 @@ package com.whispermate.aidictation.ui.screens.language
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.whispermate.aidictation.data.preferences.ApiConfigManager
+import com.whispermate.aidictation.data.preferences.ApiProvider
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
@@ -17,8 +19,15 @@ import javax.inject.Inject
 
 data class LanguageItem(
     val language: WhisperLanguage,
-    val isSelected: Boolean
+    val isSelected: Boolean,
+    val localModeReason: LocalModeReason
 )
+
+enum class LocalModeReason {
+    Available,
+    CloudRecommended,
+    CloudOnly
+}
 
 @HiltViewModel
 class LanguageSettingsViewModel @Inject constructor(
@@ -28,10 +37,12 @@ class LanguageSettingsViewModel @Inject constructor(
     val searchQuery = MutableStateFlow("")
 
     private val initialOrdering = MutableStateFlow<Set<String>?>(null)
-
+    private val isParakeetMode: Boolean
+        get() = ApiConfigManager.instance?.getTranscriptionConfig()?.provider == ApiProvider.PARAKEET
     init {
         viewModelScope.launch {
-            initialOrdering.value = appPreferences.selectedLanguages.first().toSet()
+            val selected = appPreferences.selectedLanguages.first()
+            initialOrdering.value = selected.toSet()
         }
     }
 
@@ -49,11 +60,29 @@ class LanguageSettingsViewModel @Inject constructor(
                     lang.nativeName.contains(query, ignoreCase = true)
             }
             .sortedWith(compareByDescending { it.code in orderingSet })
-            .map { lang -> LanguageItem(lang, lang.code in selectedSet) }
+            .map { lang ->
+                LanguageItem(
+                    language = lang,
+                    isSelected = lang.code in selectedSet,
+                    localModeReason = if (!isParakeetMode) {
+                        LocalModeReason.Available
+                    } else if (!lang.supportsParakeet) {
+                        LocalModeReason.CloudOnly
+                    } else if (WhisperLanguages.requiresCloudTranscription(lang.code)) {
+                        LocalModeReason.CloudRecommended
+                    } else {
+                        LocalModeReason.Available
+                    }
+                )
+            }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     fun toggleLanguage(code: String) {
         viewModelScope.launch {
+            if (isParakeetMode && !WhisperLanguages.isReliableOffline(code)) {
+                appPreferences.setOnDeviceTranscriptionEnabled(false)
+                ApiConfigManager.instance?.switchTranscriptionToCloud()
+            }
             val current = appPreferences.selectedLanguages.first().toMutableList()
             if (current.contains(code)) {
                 current.remove(code)

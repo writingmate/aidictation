@@ -233,6 +233,7 @@ class TranscriptionProviderManager: ObservableObject {
         switch mode {
         case .local:
             selectedProvider = .parakeet
+            LanguageManager.shared.restrictToParakeetSupported()
             AppDefaults.shared.set(TranscriptionProvider.parakeet.rawValue, forKey: Keys.selectedProvider)
         case .cloud, .auto:
             if selectedProvider == .parakeet {
@@ -241,6 +242,10 @@ class TranscriptionProviderManager: ObservableObject {
             }
         }
         DebugLog.info("Set mode: \(mode.displayName), provider: \(selectedProvider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    func selectCloudModeForLanguageSelection() {
+        setTranscriptionMode(.cloud)
     }
 
     @discardableResult

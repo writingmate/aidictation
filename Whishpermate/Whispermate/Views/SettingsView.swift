@@ -111,6 +111,7 @@ struct SettingsView: View {
     @State private var isCheckingPayment = false
     @State private var paymentCheckTask: Task<Void, Never>?
     @State private var pendingTranscriptionMode: TranscriptionMode?
+    @State private var pendingCloudLanguage: Language?
     @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
     @Environment(\.dismiss) var dismiss
 
@@ -140,6 +141,16 @@ struct SettingsView: View {
         }
         .onDisappear {
             stopPaymentConfirmationCheck()
+        }
+        .alert("Switch to cloud transcription?", isPresented: cloudLanguageConfirmationBinding) {
+            Button("Cancel", role: .cancel) {
+                pendingCloudLanguage = nil
+            }
+            Button("Switch to Cloud") {
+                confirmCloudLanguageSelection()
+            }
+        } message: {
+            Text(cloudLanguageConfirmationMessage)
         }
     }
 
@@ -1445,7 +1456,7 @@ struct SettingsView: View {
                             Text("Transcription Language")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text("Select languages for transcription. Auto-detect works for all languages.")
+                            Text(transcriptionProviderManager.transcriptionMode == .local ? "Languages unavailable offline are shown muted; selecting one switches transcription to cloud." : "Select languages for transcription. Auto-detect works for all languages.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1457,8 +1468,9 @@ struct SettingsView: View {
                         GridItem(.adaptive(minimum: 140)),
                     ], spacing: 8) {
                         ForEach(Language.allCases) { language in
+                            let isUnsupportedInLocalMode = transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet
                             Button(action: {
-                                languageManager.toggleLanguage(language)
+                                selectLanguage(language)
                             }) {
                                 HStack(spacing: 8) {
                                     Text(language.flag)
@@ -1466,7 +1478,7 @@ struct SettingsView: View {
 
                                     Text(language.displayName)
                                         .dsFont(.body)
-                                        .foregroundStyle(languageManager.isSelected(language) ? .white : Color.dsForeground)
+                                        .foregroundStyle(languageManager.isSelected(language) ? .white : (isUnsupportedInLocalMode ? Color.dsMutedForeground : Color.dsForeground))
                                         .lineLimit(1)
 
                                     Spacer()
@@ -1486,15 +1498,54 @@ struct SettingsView: View {
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: DSCornerRadius.small)
-                                        .stroke(Color.dsBorder, lineWidth: languageManager.isSelected(language) ? 0 : 1)
+                                        .stroke(isUnsupportedInLocalMode ? Color.dsBorder.opacity(0.5) : Color.dsBorder, lineWidth: languageManager.isSelected(language) ? 0 : 1)
                                 )
                             }
                             .buttonStyle(.plain)
+                            .opacity(isUnsupportedInLocalMode && !languageManager.isSelected(language) ? 0.55 : 1)
+                            .help(isUnsupportedInLocalMode ? "Switches to cloud transcription when selected" : "")
                         }
                     }
                 }
             }
         }
+    }
+
+    private func selectLanguage(_ language: Language) {
+        if transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet {
+            DispatchQueue.main.async {
+                pendingCloudLanguage = language
+            }
+            return
+        }
+        languageManager.toggleLanguage(language)
+    }
+
+    private var cloudLanguageConfirmationMessage: String {
+        guard let language = pendingCloudLanguage else {
+            return "This language is not available in offline mode. To use it, AIDictation will switch transcription to cloud mode."
+        }
+        return "\(language.displayName) is not available in offline mode. To use it, AIDictation will switch transcription to cloud mode and then select \(language.displayName)."
+    }
+
+    private func confirmCloudLanguageSelection() {
+        guard let language = pendingCloudLanguage else { return }
+        pendingCloudLanguage = nil
+        DispatchQueue.main.async {
+            transcriptionProviderManager.selectCloudModeForLanguageSelection()
+            languageManager.toggleLanguage(language)
+        }
+    }
+
+    private var cloudLanguageConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { pendingCloudLanguage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingCloudLanguage = nil
+                }
+            }
+        )
     }
 
     // MARK: - Text Rules Section

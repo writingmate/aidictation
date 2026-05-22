@@ -282,9 +282,10 @@ struct RecordingSheetView: View {
                 let config = OpenAIClient.Configuration(
                     transcriptionEndpoint: endpoint,
                     transcriptionModel: model,
-                    chatCompletionEndpoint: "",
-                    chatCompletionModel: "",
-                    apiKey: apiKey
+                    chatCompletionEndpoint: SecretsLoader.aidictationPostProcessingEndpoint() ?? "https://writingmate.ai/api/openai/v1/chat/completions",
+                    chatCompletionModel: "openai/gpt-oss-20b",
+                    apiKey: apiKey,
+                    chatCompletionApiKey: SecretsLoader.aidictationPostProcessingKey() ?? apiKey
                 )
 
                 let openAIClient = OpenAIClient(config: config)

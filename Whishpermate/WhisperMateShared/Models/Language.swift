@@ -7,10 +7,12 @@ import Carbon
 public enum Language: String, CaseIterable, Identifiable {
     case auto
     case english = "en"
+    case britishEnglish = "en-GB"
     case russian = "ru"
     case spanish = "es"
     case french = "fr"
     case german = "de"
+    case greek = "el"
     case italian = "it"
     case portuguese = "pt"
     case polish = "pl"
@@ -19,8 +21,10 @@ public enum Language: String, CaseIterable, Identifiable {
     case japanese = "ja"
     case korean = "ko"
     case chinese = "zh"
+    case cantonese = "yue"
     case arabic = "ar"
     case hindi = "hi"
+    case hinglish = "hi-Latn"
     case ukrainian = "uk"
     case czech = "cs"
     case swedish = "sv"
@@ -28,14 +32,51 @@ public enum Language: String, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
+    public var supportsParakeet: Bool {
+        switch self {
+        case .auto,
+             .english,
+             .britishEnglish,
+             .russian,
+             .spanish,
+             .french,
+             .german,
+             .greek,
+             .italian,
+             .portuguese,
+             .polish,
+             .dutch,
+             .ukrainian,
+             .czech,
+             .swedish,
+             .finnish:
+            return true
+        case .turkish,
+             .japanese,
+             .korean,
+             .chinese,
+             .cantonese,
+             .arabic,
+             .hindi,
+             .hinglish:
+            return false
+        }
+    }
+
+    public static var parakeetSupportedCases: [Language] {
+        allCases.filter(\.supportsParakeet)
+    }
+
     public var displayName: String {
         switch self {
         case .auto: return "Auto-detect"
         case .english: return "English"
+        case .britishEnglish: return "English - British"
         case .russian: return "Russian"
         case .spanish: return "Spanish"
         case .french: return "French"
         case .german: return "German"
+        case .greek: return "Greek"
         case .italian: return "Italian"
         case .portuguese: return "Portuguese"
         case .polish: return "Polish"
@@ -44,8 +85,10 @@ public enum Language: String, CaseIterable, Identifiable {
         case .japanese: return "Japanese"
         case .korean: return "Korean"
         case .chinese: return "Chinese"
+        case .cantonese: return "Cantonese"
         case .arabic: return "Arabic"
         case .hindi: return "Hindi"
+        case .hinglish: return "Hinglish"
         case .ukrainian: return "Ukrainian"
         case .czech: return "Czech"
         case .swedish: return "Swedish"
@@ -57,10 +100,12 @@ public enum Language: String, CaseIterable, Identifiable {
         switch self {
         case .auto: return "🌐"
         case .english: return "🇬🇧"
+        case .britishEnglish: return "🇬🇧"
         case .russian: return "🇷🇺"
         case .spanish: return "🇪🇸"
         case .french: return "🇫🇷"
         case .german: return "🇩🇪"
+        case .greek: return "🇬🇷"
         case .italian: return "🇮🇹"
         case .portuguese: return "🇵🇹"
         case .polish: return "🇵🇱"
@@ -69,8 +114,10 @@ public enum Language: String, CaseIterable, Identifiable {
         case .japanese: return "🇯🇵"
         case .korean: return "🇰🇷"
         case .chinese: return "🇨🇳"
+        case .cantonese: return "🇭🇰"
         case .arabic: return "🇸🇦"
         case .hindi: return "🇮🇳"
+        case .hinglish: return "🇮🇳"
         case .ukrainian: return "🇺🇦"
         case .czech: return "🇨🇿"
         case .swedish: return "🇸🇪"
@@ -141,6 +188,12 @@ public class LanguageManager: ObservableObject {
 
     public func isSelected(_ language: Language) -> Bool {
         selectedLanguages.contains(language)
+    }
+
+    public func restrictToParakeetSupported() {
+        let supported = selectedLanguages.filter(\.supportsParakeet)
+        selectedLanguages = supported.isEmpty ? [.english] : supported
+        saveLanguages()
     }
 
     /// Get the language code to send to the API

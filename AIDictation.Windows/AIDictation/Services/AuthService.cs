@@ -8,7 +8,7 @@ using AIDictation.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Supabase;
 using Supabase.Gotrue;
-using UserProfile = UserProfile;
+using UserProfile = AIDictation.Models.User;
 using Supabase.Gotrue.Interfaces;
 using static Supabase.Gotrue.Constants;
 

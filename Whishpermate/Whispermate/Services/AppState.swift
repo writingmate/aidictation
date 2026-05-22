@@ -697,7 +697,7 @@ class AppState: ObservableObject {
 
     private func singleAPILanguageCode() -> String? {
         guard let languageCode = languageManager.apiLanguageCode,
-              languageCode.count == 2
+              !languageCode.contains(",")
         else {
             return nil
         }
@@ -776,12 +776,26 @@ class AppState: ObservableObject {
                 throw NSError(domain: "AppState", code: -1, userInfo: [NSLocalizedDescriptionKey: "Please set your \(provider.displayName) API key"])
             }
 
+            let chatCompletionEndpoint: String
+            let chatCompletionModel: String
+            let chatCompletionApiKey: String?
+            if provider == .custom {
+                chatCompletionEndpoint = SecretsLoader.aidictationPostProcessingEndpoint() ?? ""
+                chatCompletionModel = PostProcessingProvider.aidictationModel
+                chatCompletionApiKey = SecretsLoader.aidictationPostProcessingKey() ?? transcriptionApiKey
+            } else {
+                chatCompletionEndpoint = llmProviderManager.effectiveEndpoint
+                chatCompletionModel = llmProviderManager.effectiveModel
+                chatCompletionApiKey = nil
+            }
+
             let config = OpenAIClient.Configuration(
                 transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
                 transcriptionModel: transcriptionProviderManager.effectiveModel,
-                chatCompletionEndpoint: llmProviderManager.effectiveEndpoint,
-                chatCompletionModel: llmProviderManager.effectiveModel,
-                apiKey: transcriptionApiKey
+                chatCompletionEndpoint: chatCompletionEndpoint,
+                chatCompletionModel: chatCompletionModel,
+                apiKey: transcriptionApiKey,
+                chatCompletionApiKey: chatCompletionApiKey
             )
 
             if openAIClient == nil {

@@ -56,7 +56,7 @@ class ApiConfigManager @Inject constructor() {
         fun defaultPostProcessingModel(): String = "openai/gpt-oss-20b"
     }
 
-    private val transcriptionConfig = buildDefaultTranscriptionConfig()
+    private var transcriptionConfig = buildDefaultTranscriptionConfig()
     private val postProcessingConfig = buildDefaultPostProcessingConfig()
 
     init {
@@ -64,6 +64,10 @@ class ApiConfigManager @Inject constructor() {
     }
 
     fun getTranscriptionConfig(): ApiConfig = transcriptionConfig
+
+    fun switchTranscriptionToCloud() {
+        transcriptionConfig = buildCloudTranscriptionConfig()
+    }
 
     fun getPostProcessingConfig(): ApiConfig = postProcessingConfig
 
@@ -107,6 +111,20 @@ class ApiConfigManager @Inject constructor() {
             } else {
                 BuildConfig.TRANSCRIPTION_ENDPOINT.ifEmpty { provider.transcriptionEndpoint() }
             }
+        )
+    }
+
+    private fun buildCloudTranscriptionConfig(): ApiConfig {
+        val provider = when {
+            BuildConfig.TRANSCRIPTION_ENDPOINT.contains("groq", ignoreCase = true) -> ApiProvider.GROQ
+            BuildConfig.TRANSCRIPTION_ENDPOINT.contains("openai", ignoreCase = true) -> ApiProvider.OPENAI
+            else -> ApiProvider.WRITINGMATE
+        }
+        return ApiConfig(
+            provider = provider,
+            apiKey = BuildConfig.TRANSCRIPTION_API_KEY,
+            model = BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) },
+            endpoint = BuildConfig.TRANSCRIPTION_ENDPOINT.ifEmpty { provider.transcriptionEndpoint() }
         )
     }
 

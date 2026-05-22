@@ -18,6 +18,22 @@ on:
         options:
           - internal
           - alpha
+      publish_mode:
+        description: 'Upload a new bundle, or promote an existing version code between tracks'
+        required: true
+        default: promote
+        type: choice
+        options:
+          - upload
+          - promote
+      promote_from_track:
+        description: 'Source track when publish_mode is promote'
+        required: true
+        default: internal
+        type: choice
+        options:
+          - internal
+          - alpha
 
 permissions:
   contents: read
@@ -43,6 +59,8 @@ jobs:
 
     env:
       PLAY_TRACK: ${{ inputs.play_track || 'internal' }}
+      PLAY_PUBLISH_MODE: ${{ inputs.publish_mode || 'upload' }}
+      PLAY_PROMOTE_FROM_TRACK: ${{ inputs.promote_from_track || 'internal' }}
       PLAY_RELEASE_NAME: ''
       PARAKEET_RUNTIME: onnx
 
@@ -293,6 +311,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Validate release bundle
+        if: env.PLAY_PUBLISH_MODE != 'promote'
         run: |
           ./gradlew :app:bundleRelease -PPARAKEET_RUNTIME="${PARAKEET_RUNTIME}" --stacktrace
 
@@ -304,7 +323,24 @@ jobs:
             -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}" \
             --stacktrace
 
+      - name: Promote Google Play release
+        if: env.PLAY_PUBLISH_MODE == 'promote'
+        run: |
+          args=(
+            :app:promoteReleaseArtifact
+            --from-track="${PLAY_PROMOTE_FROM_TRACK}"
+            --promote-track="${PLAY_TRACK}"
+            --version-code="${VERSION_CODE}"
+            -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}"
+            --stacktrace
+          )
+          if [ -n "${PLAY_RELEASE_NAME}" ]; then
+            args+=(--release-name="${PLAY_RELEASE_NAME}")
+          fi
+          ./gradlew "${args[@]}"
+
       - name: Publish to Google Play
+        if: env.PLAY_PUBLISH_MODE != 'promote'
         run: |
           args=(
             :app:publishReleaseBundle

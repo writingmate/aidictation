@@ -8,6 +8,7 @@ import com.whispermate.aidictation.data.local.ParakeetModelAssets
 import com.whispermate.aidictation.data.local.ParakeetRuntime
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
+import com.whispermate.aidictation.domain.model.WhisperLanguages
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +46,9 @@ class OnboardingViewModel @Inject constructor(
     val onDeviceTranscriptionEnabled: StateFlow<Boolean> = appPreferences.onDeviceTranscriptionEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val selectedLanguages: StateFlow<List<String>> = appPreferences.selectedLanguages
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     private val _onDeviceModelState = MutableStateFlow(OnboardingOnDeviceModelState())
     val onDeviceModelState: StateFlow<OnboardingOnDeviceModelState> = _onDeviceModelState.asStateFlow()
 
@@ -65,6 +69,20 @@ class OnboardingViewModel @Inject constructor(
                 rule.copy(isEnabled = enabledStates.getOrElse(index) { false })
             }
             appPreferences.saveContextRules(updatedRules)
+        }
+    }
+
+    fun toggleLanguage(code: String) {
+        if (WhisperLanguages.getLanguage(code) == null) return
+
+        viewModelScope.launch {
+            val current = appPreferences.selectedLanguages.first().toMutableList()
+            if (current.contains(code)) {
+                current.remove(code)
+            } else {
+                current.add(code)
+            }
+            appPreferences.saveSelectedLanguages(current)
         }
     }
 

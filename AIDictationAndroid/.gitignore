@@ -6,6 +6,8 @@ build/
 
 # Local configuration
 local.properties
+secrets/
+google-play-service-account*.json
 
 # Android Studio
 *.iml

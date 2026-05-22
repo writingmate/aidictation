@@ -1,8 +1,10 @@
 package com.whispermate.aidictation.ui.screens.onboarding
 
 import android.Manifest
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
@@ -20,6 +22,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,7 +42,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.FindInPage
+import androidx.compose.material.icons.filled.KeyboardVoice
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Translate
@@ -50,6 +59,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,43 +79,89 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
+import com.whispermate.aidictation.domain.model.WhisperLanguage
+import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 
 private val BrandOrange = Color(0xFFFF6300)
-private val BrandBlack = Color(0xFF120B00)
-private val BrandMuted = Color(0xFF645B55)
-private val BrandLightGrey = Color(0xFFF2F2F2)
-private val BrandBorder = Color(0xFFD1CFCC)
-private val BrandCard = Color.White
+private val OnboardingSupportedLanguageCodes = listOf(
+    // Mirrors the macOS app's Language enum. Empty selection means auto-detect.
+    "en",
+    "ru",
+    "es",
+    "fr",
+    "de",
+    "it",
+    "pt",
+    "pl",
+    "tr",
+    "nl",
+    "ja",
+    "ko",
+    "zh",
+    "ar",
+    "hi",
+    "uk",
+    "cs",
+    "sv",
+    "fi"
+)
+
+private data class OnboardingColors(
+    val primary: Color,
+    val onPrimary: Color,
+    val background: Color,
+    val surface: Color,
+    val surfaceVariant: Color,
+    val onSurface: Color,
+    val onSurfaceVariant: Color,
+    val outline: Color
+)
+
+@Composable
+private fun onboardingColors() = OnboardingColors(
+    primary = BrandOrange,
+    onPrimary = Color.White,
+    background = MaterialTheme.colorScheme.background,
+    surface = MaterialTheme.colorScheme.surface,
+    surfaceVariant = MaterialTheme.colorScheme.surfaceVariant,
+    onSurface = MaterialTheme.colorScheme.onSurface,
+    onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant,
+    outline = MaterialTheme.colorScheme.outlineVariant
+)
 
 @Composable
 private fun OnboardingHeroIcon(
     icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
+    val colors = onboardingColors()
+
     Box(
         modifier = modifier
             .size(72.dp)
             .clip(CircleShape)
-            .background(BrandCard)
-            .border(1.dp, BrandBorder, CircleShape),
+            .background(colors.surface)
+            .border(1.dp, colors.outline, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(36.dp),
-            tint = BrandOrange
+            tint = colors.primary
         )
     }
 }
@@ -115,19 +171,21 @@ private fun OnboardingSmallIcon(
     icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
+    val colors = onboardingColors()
+
     Box(
         modifier = modifier
             .size(32.dp)
             .clip(CircleShape)
-            .background(BrandCard)
-            .border(1.dp, BrandBorder, CircleShape),
+            .background(colors.surface)
+            .border(1.dp, colors.outline, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(16.dp),
-            tint = BrandOrange
+            tint = colors.primary
         )
     }
 }
@@ -135,6 +193,7 @@ private fun OnboardingSmallIcon(
 private enum class OnboardingStep {
     Welcome,
     Microphone,
+    Languages,
     AccessibilityDisclosure,
     Overlay,
     OnDeviceTranscription,
@@ -145,6 +204,8 @@ private enum class OnboardingStep {
 fun OnboardingScreen(
     onComplete: () -> Unit,
     onSaveContextRules: (List<Boolean>) -> Unit = {},
+    selectedLanguageCodes: List<String> = emptyList(),
+    onToggleLanguage: (String) -> Unit = {},
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnboardingOnDeviceModelState = OnboardingOnDeviceModelState(),
     onSetOnDeviceTranscriptionEnabled: (Boolean) -> Unit = {}
@@ -159,11 +220,15 @@ fun OnboardingScreen(
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var hasAcceptedAccessibilityDisclosure by remember { mutableStateOf(false) }
     val hasTestedDictation = testInputText.isNotBlank()
+    val colors = onboardingColors()
+
+    OnboardingSystemBars()
 
     val onboardingSteps = remember {
         buildList {
             add(OnboardingStep.Welcome)
             add(OnboardingStep.Microphone)
+            add(OnboardingStep.Languages)
             add(OnboardingStep.AccessibilityDisclosure)
             add(OnboardingStep.Overlay)
             add(OnboardingStep.OnDeviceTranscription)
@@ -211,6 +276,7 @@ fun OnboardingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(colors.background)
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
@@ -228,7 +294,7 @@ fun OnboardingScreen(
                         .size(8.dp)
                         .clip(CircleShape)
                         .background(
-                            if (index <= currentStep) MaterialTheme.colorScheme.primary
+                            if (index <= currentStep) colors.primary
                             else MaterialTheme.colorScheme.outlineVariant
                         )
                 )
@@ -253,6 +319,10 @@ fun OnboardingScreen(
                 when (step) {
                     OnboardingStep.Welcome -> WelcomeStep()
                     OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
+                    OnboardingStep.Languages -> LanguageSelectionStep(
+                        selectedLanguageCodes = selectedLanguageCodes,
+                        onToggleLanguage = onToggleLanguage
+                    )
                     OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep(
                         hasAccepted = hasAcceptedAccessibilityDisclosure,
                         onAcceptedChanged = { hasAcceptedAccessibilityDisclosure = it }
@@ -289,6 +359,7 @@ fun OnboardingScreen(
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     }
+                    OnboardingStep.Languages -> goToNextStep()
                     OnboardingStep.AccessibilityDisclosure -> goToNextStep()
                     OnboardingStep.Overlay -> {
                         if (!isOverlayServiceEnabled) {
@@ -315,7 +386,8 @@ fun OnboardingScreen(
                 else -> true
             },
             colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary
+                containerColor = colors.primary,
+                contentColor = colors.onPrimary
             )
         ) {
             Text(
@@ -329,6 +401,7 @@ fun OnboardingScreen(
                     OnboardingStep.AccessibilityDisclosure -> {
                         stringResource(R.string.onboarding_accessibility_disclosure_continue)
                     }
+                    OnboardingStep.Languages -> stringResource(R.string.onboarding_continue)
                     OnboardingStep.Overlay -> when {
                         !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
                         hasTestedDictation -> stringResource(R.string.onboarding_continue)
@@ -344,22 +417,241 @@ fun OnboardingScreen(
 }
 
 @Composable
+private fun OnboardingSystemBars() {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val systemInDarkTheme = isSystemInDarkTheme()
+    val useDarkSystemBarIcons = !systemInDarkTheme
+
+    DisposableEffect(context, view, useDarkSystemBarIcons) {
+        val window = context.findActivity()?.window
+        if (window == null) {
+            onDispose {}
+        } else {
+            val controller = WindowCompat.getInsetsController(window, view)
+
+            controller.isAppearanceLightStatusBars = useDarkSystemBarIcons
+            controller.isAppearanceLightNavigationBars = useDarkSystemBarIcons
+
+            onDispose {
+                controller.isAppearanceLightStatusBars = !systemInDarkTheme
+                controller.isAppearanceLightNavigationBars = !systemInDarkTheme
+            }
+        }
+    }
+}
+
+@Composable
+private fun LanguageSelectionStep(
+    selectedLanguageCodes: List<String>,
+    onToggleLanguage: (String) -> Unit
+) {
+    val colors = onboardingColors()
+    var searchQuery by remember { mutableStateOf("") }
+    val selectedSet = selectedLanguageCodes.toSet()
+    val supportedLanguageCodeSet = OnboardingSupportedLanguageCodes.toSet()
+    val selectedCount = selectedLanguageCodes.count { it in supportedLanguageCodeSet }
+    val visibleLanguages = remember(searchQuery, selectedLanguageCodes) {
+        val query = searchQuery.trim()
+        val supportedLanguages = OnboardingSupportedLanguageCodes.mapNotNull { WhisperLanguages.getLanguage(it) }
+        if (query.isBlank()) {
+            val selected = selectedLanguageCodes
+                .mapNotNull { WhisperLanguages.getLanguage(it) }
+                .filter { it.code in supportedLanguageCodeSet }
+            (selected + supportedLanguages).distinctBy { it.code }
+        } else {
+            supportedLanguages
+                .filter { language ->
+                    language.englishName.contains(query, ignoreCase = true) ||
+                        language.nativeName.contains(query, ignoreCase = true)
+                }
+                .sortedWith(
+                    compareByDescending<WhisperLanguage> { it.code in selectedSet }
+                        .thenBy { it.englishName }
+                )
+        }
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        OnboardingHeroIcon(icon = Icons.Default.Language)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_languages_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_languages_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text(stringResource(R.string.onboarding_languages_search_hint)) },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                    tint = colors.onSurfaceVariant
+                )
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = if (selectedCount == 0) {
+                stringResource(R.string.onboarding_languages_auto_detect_hint)
+            } else {
+                stringResource(R.string.onboarding_languages_selected_hint, selectedCount)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (visibleLanguages.isEmpty()) {
+            Text(
+                text = stringResource(R.string.language_no_results),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(vertical = 16.dp)
+            )
+        } else {
+            visibleLanguages.forEach { language ->
+                OnboardingLanguageRow(
+                    language = language,
+                    isSelected = language.code in selectedSet,
+                    onClick = { onToggleLanguage(language.code) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+
+        Text(
+            text = stringResource(R.string.onboarding_languages_change_later),
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun OnboardingLanguageRow(
+    language: WhisperLanguage,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = onboardingColors()
+    val shape = MaterialTheme.shapes.small
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (isSelected) colors.primary.copy(alpha = 0.12f) else colors.surface)
+            .border(
+                width = 1.dp,
+                color = if (isSelected) colors.primary else colors.outline,
+                shape = shape
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (isSelected) colors.primary.copy(alpha = 0.18f) else colors.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = language.code.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.primary,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = language.englishName,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface
+            )
+            if (language.nativeName != language.englishName) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = language.nativeName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onSurfaceVariant
+                )
+            }
+        }
+
+        if (isSelected) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(colors.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = colors.onPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AccessibilityDisclosureStep(
     hasAccepted: Boolean,
     onAcceptedChanged: (Boolean) -> Unit
 ) {
+    val colors = onboardingColors()
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        OnboardingHeroIcon(icon = Icons.Default.Security)
+        AccessibilityDisclosureHero()
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
         Text(
             text = stringResource(R.string.onboarding_accessibility_disclosure_title),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            color = BrandBlack,
+            color = colors.onSurface,
             textAlign = TextAlign.Center
         )
 
@@ -368,32 +660,32 @@ private fun AccessibilityDisclosureStep(
         Text(
             text = stringResource(R.string.onboarding_accessibility_disclosure_intro),
             style = MaterialTheme.typography.bodySmall,
-            color = BrandMuted,
+            color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         DisclosureVisualCard(
-            icon = Icons.Default.Tune,
+            icon = Icons.Default.FindInPage,
             title = stringResource(R.string.onboarding_accessibility_visual_find_title),
             body = stringResource(R.string.onboarding_accessibility_visual_find_body)
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         DisclosureVisualCard(
-            icon = Icons.Default.Mic,
+            icon = Icons.Default.KeyboardVoice,
             title = stringResource(R.string.onboarding_accessibility_visual_insert_title),
             body = stringResource(R.string.onboarding_accessibility_visual_insert_body)
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         DisclosureVisualCard(
-            icon = Icons.Default.Security,
+            icon = Icons.Default.PrivacyTip,
             title = stringResource(R.string.onboarding_accessibility_visual_private_title),
             body = stringResource(R.string.onboarding_accessibility_visual_private_body)
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         DisclosureVisualCard(
-            icon = Icons.Default.Translate,
+            icon = Icons.Default.CloudDone,
             title = stringResource(R.string.onboarding_accessibility_visual_processing_title),
             body = stringResource(R.string.onboarding_accessibility_visual_processing_body)
         )
@@ -403,7 +695,7 @@ private fun AccessibilityDisclosureStep(
         Text(
             text = stringResource(R.string.onboarding_accessibility_next),
             style = MaterialTheme.typography.labelSmall,
-            color = BrandOrange,
+            color = colors.primary,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center
         )
@@ -415,8 +707,8 @@ private fun AccessibilityDisclosureStep(
                 .fillMaxWidth()
                 .clip(MaterialTheme.shapes.small)
                 .clickable { onAcceptedChanged(!hasAccepted) }
-                .background(BrandLightGrey)
-                .border(1.dp, BrandOrange.copy(alpha = 0.35f), MaterialTheme.shapes.small)
+                .background(colors.surfaceVariant)
+                .border(1.dp, colors.primary.copy(alpha = 0.42f), MaterialTheme.shapes.small)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -424,17 +716,94 @@ private fun AccessibilityDisclosureStep(
                 checked = hasAccepted,
                 onCheckedChange = onAcceptedChanged,
                 colors = androidx.compose.material3.CheckboxDefaults.colors(
-                    checkedColor = BrandOrange,
-                    uncheckedColor = BrandMuted,
-                    checkmarkColor = Color.White
+                    checkedColor = colors.primary,
+                    uncheckedColor = colors.onSurfaceVariant,
+                    checkmarkColor = colors.onPrimary
                 )
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = stringResource(R.string.onboarding_accessibility_disclosure_consent),
                 style = MaterialTheme.typography.bodySmall,
-                color = BrandBlack,
+                color = colors.onSurface,
                 modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AccessibilityDisclosureHero() {
+    val colors = onboardingColors()
+
+    Box(
+        modifier = Modifier.size(width = 176.dp, height = 92.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(22.dp))
+                .background(colors.surface)
+                .border(1.dp, colors.outline, RoundedCornerShape(22.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.68f)
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(100.dp))
+                    .background(colors.outline.copy(alpha = 0.7f))
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .height(20.dp)
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(colors.primary)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.78f)
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(colors.primary.copy(alpha = 0.16f))
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(colors.surfaceVariant)
+                .border(1.dp, colors.outline, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.PrivacyTip,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = colors.onSurfaceVariant
+            )
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(colors.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = colors.onPrimary
             )
         }
     }
@@ -446,51 +815,44 @@ private fun DisclosureVisualCard(
     title: String,
     body: String
 ) {
+    val colors = onboardingColors()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .background(BrandCard)
-            .border(1.dp, BrandBorder, MaterialTheme.shapes.small)
-            .padding(12.dp),
+            .background(colors.surface)
+            .border(1.dp, colors.outline, MaterialTheme.shapes.small)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .width(4.dp)
-                .height(42.dp)
-                .clip(RoundedCornerShape(100.dp))
-                .background(BrandOrange)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Box(
-            modifier = Modifier
-                .size(38.dp)
+                .size(40.dp)
                 .clip(CircleShape)
-                .background(BrandCard)
-                .border(1.dp, BrandBorder, CircleShape),
+                .background(colors.primary.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = BrandOrange
+                modifier = Modifier.size(21.dp),
+                tint = colors.primary
             )
         }
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,
-                color = BrandBlack
+                color = colors.onSurface
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = body,
                 style = MaterialTheme.typography.labelSmall,
-                color = BrandMuted
+                color = colors.onSurfaceVariant
             )
         }
     }
@@ -589,14 +951,16 @@ private fun TranscriptionModeChoice(
     enabled: Boolean,
     onClick: () -> Unit
 ) {
+    val colors = onboardingColors()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) Color.White else MaterialTheme.colorScheme.surfaceVariant)
+            .background(if (selected) colors.surface else colors.surfaceVariant)
             .border(
                 width = 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                color = if (selected) colors.primary else colors.outline,
                 shape = RoundedCornerShape(12.dp)
             )
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
@@ -609,7 +973,7 @@ private fun TranscriptionModeChoice(
                 .clip(CircleShape)
                 .border(
                     width = 2.dp,
-                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    color = if (selected) colors.primary else MaterialTheme.colorScheme.outline,
                     shape = CircleShape
                 ),
             contentAlignment = Alignment.Center
@@ -619,7 +983,7 @@ private fun TranscriptionModeChoice(
                     modifier = Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
+                        .background(colors.primary)
                 )
             }
         }
@@ -631,13 +995,13 @@ private fun TranscriptionModeChoice(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = colors.onSurface
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = body,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = colors.onSurfaceVariant
             )
         }
     }
@@ -1007,13 +1371,15 @@ private fun SetupStepItem(
     isCompleted: Boolean = false,
     onClick: (() -> Unit)? = null
 ) {
+    val colors = onboardingColors()
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                if (isCompleted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surfaceVariant,
+                if (isCompleted) colors.primary.copy(alpha = 0.16f)
+                else colors.surfaceVariant,
                 shape = MaterialTheme.shapes.small
             )
             .then(
@@ -1027,7 +1393,7 @@ private fun SetupStepItem(
                 .size(24.dp)
                 .clip(CircleShape)
                 .background(
-                    if (isCompleted) MaterialTheme.colorScheme.primary
+                    if (isCompleted) colors.primary
                     else MaterialTheme.colorScheme.outline
                 ),
             contentAlignment = Alignment.Center
@@ -1037,13 +1403,13 @@ private fun SetupStepItem(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary
+                    tint = colors.onPrimary
                 )
             } else {
                 Text(
                     text = number,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.surface
+                    color = colors.surface
                 )
             }
         }
@@ -1051,8 +1417,7 @@ private fun SetupStepItem(
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
-            color = if (isCompleted) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurface,
+            color = if (isCompleted) colors.primary else colors.onSurface,
             modifier = Modifier.weight(1f)
         )
     }
@@ -1105,4 +1470,12 @@ private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {
         .edit()
         .putBoolean(VOLUME_SHORTCUT_ENABLED_KEY, enabled)
         .apply()
+}
+
+private tailrec fun Context.findActivity(): Activity? {
+    return when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 }

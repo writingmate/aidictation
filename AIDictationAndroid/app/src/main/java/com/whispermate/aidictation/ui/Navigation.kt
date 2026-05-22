@@ -1,10 +1,14 @@
 package com.whispermate.aidictation.ui
 
 import android.util.Log
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -39,6 +43,7 @@ fun AIDictationNavHost(
     val hasCompletedOnboarding by onboardingViewModel.hasCompletedOnboarding.collectAsState()
     val onboardingOnDeviceTranscriptionEnabled by onboardingViewModel.onDeviceTranscriptionEnabled.collectAsState()
     val onboardingOnDeviceModelState by onboardingViewModel.onDeviceModelState.collectAsState()
+    val onboardingSelectedLanguages by onboardingViewModel.selectedLanguages.collectAsState()
 
     val startDestination = if (hasCompletedOnboarding) Screen.Main.route else Screen.Onboarding.route
 
@@ -55,20 +60,28 @@ fun AIDictationNavHost(
         startDestination = startDestination
     ) {
         composable(Screen.Onboarding.route) {
-            OnboardingScreen(
-                onComplete = {
-                    onboardingViewModel.completeOnboarding()
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(Screen.Onboarding.route) { inclusive = true }
-                    }
-                },
-                onSaveContextRules = { enabledStates ->
-                    onboardingViewModel.saveContextRulesFromOnboarding(enabledStates)
-                },
-                onDeviceTranscriptionEnabled = onboardingOnDeviceTranscriptionEnabled,
-                onDeviceModelState = onboardingOnDeviceModelState,
-                onSetOnDeviceTranscriptionEnabled = onboardingViewModel::setOnDeviceTranscriptionEnabled
-            )
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.background,
+                contentColor = MaterialTheme.colorScheme.onBackground
+            ) {
+                OnboardingScreen(
+                    onComplete = {
+                        onboardingViewModel.completeOnboarding()
+                        navController.navigate(Screen.Main.route) {
+                            popUpTo(Screen.Onboarding.route) { inclusive = true }
+                        }
+                    },
+                    onSaveContextRules = { enabledStates ->
+                        onboardingViewModel.saveContextRulesFromOnboarding(enabledStates)
+                    },
+                    selectedLanguageCodes = onboardingSelectedLanguages,
+                    onToggleLanguage = onboardingViewModel::toggleLanguage,
+                    onDeviceTranscriptionEnabled = onboardingOnDeviceTranscriptionEnabled,
+                    onDeviceModelState = onboardingOnDeviceModelState,
+                    onSetOnDeviceTranscriptionEnabled = onboardingViewModel::setOnDeviceTranscriptionEnabled
+                )
+            }
         }
 
         composable(Screen.Main.route) {

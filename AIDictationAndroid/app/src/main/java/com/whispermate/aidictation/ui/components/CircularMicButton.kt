@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +39,7 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 private val activeColor = Color(0xFFFF6300) // Brand orange
+private val idleColor = activeColor
 private const val minActiveBars = 3
 private const val waveformLevelGain = 1.7f
 private const val waveformLevelMix = 0.28f
@@ -99,9 +99,6 @@ fun CircularMicButton(
         ),
         label = "phase"
     )
-
-    // Get idle color from theme
-    val idleColor = MaterialTheme.colorScheme.primary
 
     // Animated color transition
     val backgroundColor by animateColorAsState(

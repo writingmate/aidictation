@@ -18,13 +18,13 @@ import kotlin.math.sqrt
 import kotlin.math.sin
 
 /**
- * Custom View version of CircularMicButton for use in XML layouts.
+ * Custom View version of the logo-style mic button for overlay layouts.
  * Displays a circular button with animated audio bars inside.
  *
  * States:
- * - Idle: black background, frozen sine wave pattern
- * - Recording: brand orange background, bars respond to audio/frequency bands
- * - Processing: brand orange background, animated sine wave
+ * - Idle: brand background, frozen sine wave pattern
+ * - Recording: brand background, bars respond to audio/frequency bands
+ * - Processing: brand background, animated sine wave
  */
 class CircularMicButtonView @JvmOverloads constructor(
     context: Context,
@@ -35,8 +35,8 @@ class CircularMicButtonView @JvmOverloads constructor(
     enum class State { Idle, Recording, Processing }
 
     // Configuration
-    private var idleColor: Int = 0xFF120B00.toInt()
-    private var activeColor: Int = 0xFFFF6300.toInt() // Brand orange
+    private var idleColor: Int = 0xFFFF6300.toInt()
+    private var activeColor: Int = 0xFFFF6300.toInt()
 
     // State
     private var state: State = State.Idle
@@ -54,11 +54,9 @@ class CircularMicButtonView @JvmOverloads constructor(
     private var processingAnimator: ValueAnimator? = null
 
     // Paint objects
-    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.BLACK
-    }
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val buttonRect = RectF()
     private val barRect = RectF()
 
     // Click handling
@@ -68,13 +66,15 @@ class CircularMicButtonView @JvmOverloads constructor(
     private val springInterpolator = OvershootInterpolator(1.5f)
 
     companion object {
-        private const val TOTAL_BARS = 6
+        private const val TOTAL_BARS = 5
         private const val MIN_ACTIVE_BARS = 3
-        private const val WAVEFORM_LEVEL_GAIN = 1.65f
-        private const val WAVEFORM_LEVEL_MIX = 0.3f
+        private const val WAVEFORM_LEVEL_GAIN = 1.35f
+        private const val WAVEFORM_LEVEL_MIX = 0.08f
+        private const val WAVEFORM_CONTRAST = 0.8f
         private const val WAVEFORM_FLOOR_THRESHOLD = 0.045f
         private const val WAVEFORM_ACTIVE_FLOOR = 0.16f
-        private val FROZEN_HEIGHTS = floatArrayOf(0.51f, 0.86f, 0.99f, 0.99f, 0.86f, 0.51f)
+        private val FROZEN_HEIGHTS = floatArrayOf(0.56f, 1f, 0.56f, 1f, 0.56f)
+        private val CIRCLE_ENVELOPE_HEIGHTS = floatArrayOf(0.72f, 0.94f, 1f, 0.94f, 0.72f)
     }
 
     init {
@@ -187,13 +187,13 @@ class CircularMicButtonView @JvmOverloads constructor(
                     if (!isActive) {
                         0f // Dot size (will be scaled in onDraw)
                     } else {
-                        val bandValue = frequencyBands?.getOrNull(i)?.coerceIn(0f, 1f) ?: audioLevel
-                        boostWaveformLevel(bandValue, audioLevel) * FROZEN_HEIGHTS[i]
+                        val bandValue = recordingBandValue(i)
+                        boostWaveformLevel(bandValue, audioLevel) * CIRCLE_ENVELOPE_HEIGHTS[i]
                     }
                 }
                 State.Processing -> {
                     // Calculated in onDraw based on processingPhase
-                    FROZEN_HEIGHTS[i]
+                    CIRCLE_ENVELOPE_HEIGHTS[i]
                 }
             }
 
@@ -201,6 +201,27 @@ class CircularMicButtonView @JvmOverloads constructor(
                 animateBarTo(i, targetHeight)
             }
         }
+    }
+
+    private fun recordingBandValue(index: Int): Float {
+        val bands = frequencyBands
+        if (bands == null || bands.isEmpty()) return audioLevel
+
+        val sourcePosition = if (TOTAL_BARS == 1) {
+            0f
+        } else {
+            index * (bands.lastIndex.toFloat() / (TOTAL_BARS - 1))
+        }
+        val lowerIndex = sourcePosition.toInt().coerceIn(0, bands.lastIndex)
+        val upperIndex = (lowerIndex + 1).coerceAtMost(bands.lastIndex)
+        val fraction = sourcePosition - lowerIndex
+        val lower = bands[lowerIndex].coerceIn(0f, 1f)
+        val upper = bands[upperIndex].coerceIn(0f, 1f)
+        val interpolated = lower + ((upper - lower) * fraction)
+        val average = bands.map { it.coerceIn(0f, 1f) }.average().toFloat()
+        val contrasted = interpolated + ((interpolated - average) * WAVEFORM_CONTRAST)
+        val floor = if (audioLevel > WAVEFORM_FLOOR_THRESHOLD) audioLevel * 0.18f else 0f
+        return max(contrasted, floor).coerceIn(0f, 1f)
     }
 
     private fun boostWaveformLevel(level: Float, overallLevel: Float = level): Float {
@@ -256,25 +277,25 @@ class CircularMicButtonView @JvmOverloads constructor(
         val size = min(width, height).toFloat()
         val centerX = width / 2f
         val centerY = height / 2f
-        val radius = size / 2f
+        val inset = size * 0.06f
+        val buttonSize = size - (inset * 2f)
+        val radius = buttonSize / 2f
+        buttonRect.set(
+            centerX - buttonSize / 2f,
+            centerY - buttonSize / 2f,
+            centerX + buttonSize / 2f,
+            centerY + buttonSize / 2f
+        )
 
-        // Draw a subtle shadow under the button for better depth on all backgrounds.
-        shadowPaint.alpha = if (state == State.Idle) 58 else 72
-        canvas.drawCircle(centerX, centerY + (radius * 0.08f), radius * 1.03f, shadowPaint)
-
-        // Draw circular background
         backgroundPaint.color = currentBackgroundColor
         canvas.drawCircle(centerX, centerY, radius, backgroundPaint)
 
-        // Calculate bar dimensions (scaled from 100dp design)
-        val scale = size / (100 * resources.displayMetrics.density)
-        val barWidth = 8 * resources.displayMetrics.density * scale
-        val barSpacing = 2 * resources.displayMetrics.density * scale
-        val maxBarHeight = 58 * resources.displayMetrics.density * scale
-        val dotSize = 8 * resources.displayMetrics.density * scale
+        val barWidth = buttonSize * 0.092f
+        val barSpacing = buttonSize * 0.044f
+        val maxBarHeight = buttonSize * 0.496f
+        val dotSize = barWidth
         val barCornerRadius = barWidth / 2
 
-        // Calculate total width of all bars
         val totalBarsWidth = (barWidth * TOTAL_BARS) + (barSpacing * (TOTAL_BARS - 1))
         val startX = centerX - (totalBarsWidth / 2) + (barWidth / 2)
 
@@ -287,7 +308,7 @@ class CircularMicButtonView @JvmOverloads constructor(
                 val normalizedIndex = i.toFloat() / (TOTAL_BARS - 1)
                 val wavePosition = normalizedIndex * 2f * PI.toFloat() - processingPhase
                 val sineValue = (sin(wavePosition) + 1f) / 2f
-                sineValue * FROZEN_HEIGHTS[i]
+                sineValue * CIRCLE_ENVELOPE_HEIGHTS[i]
             } else {
                 barHeights[i]
             }

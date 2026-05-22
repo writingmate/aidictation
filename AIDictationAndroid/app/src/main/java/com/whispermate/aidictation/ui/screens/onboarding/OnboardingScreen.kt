@@ -48,7 +48,6 @@ import androidx.compose.material.icons.filled.KeyboardVoice
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PrivacyTip
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Translate
@@ -59,7 +58,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -447,29 +445,14 @@ private fun LanguageSelectionStep(
     onToggleLanguage: (String) -> Unit
 ) {
     val colors = onboardingColors()
-    var searchQuery by remember { mutableStateOf("") }
     val selectedSet = selectedLanguageCodes.toSet()
     val supportedLanguageCodeSet = OnboardingSupportedLanguageCodes.toSet()
-    val selectedCount = selectedLanguageCodes.count { it in supportedLanguageCodeSet }
-    val visibleLanguages = remember(searchQuery, selectedLanguageCodes) {
-        val query = searchQuery.trim()
+    val visibleLanguages = remember(selectedLanguageCodes) {
         val supportedLanguages = OnboardingSupportedLanguageCodes.mapNotNull { WhisperLanguages.getLanguage(it) }
-        if (query.isBlank()) {
-            val selected = selectedLanguageCodes
-                .mapNotNull { WhisperLanguages.getLanguage(it) }
-                .filter { it.code in supportedLanguageCodeSet }
-            (selected + supportedLanguages).distinctBy { it.code }
-        } else {
-            supportedLanguages
-                .filter { language ->
-                    language.englishName.contains(query, ignoreCase = true) ||
-                        language.nativeName.contains(query, ignoreCase = true)
-                }
-                .sortedWith(
-                    compareByDescending<WhisperLanguage> { it.code in selectedSet }
-                        .thenBy { it.englishName }
-                )
-        }
+        val selected = selectedLanguageCodes
+            .mapNotNull { WhisperLanguages.getLanguage(it) }
+            .filter { it.code in supportedLanguageCodeSet }
+        (selected + supportedLanguages).distinctBy { it.code }
     }
 
     Column(
@@ -495,55 +478,15 @@ private fun LanguageSelectionStep(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text(stringResource(R.string.onboarding_languages_search_hint)) },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = null,
-                    tint = colors.onSurfaceVariant
-                )
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Text(
-            text = if (selectedCount == 0) {
-                stringResource(R.string.onboarding_languages_auto_detect_hint)
-            } else {
-                stringResource(R.string.onboarding_languages_selected_hint, selectedCount)
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (visibleLanguages.isEmpty()) {
-            Text(
-                text = stringResource(R.string.language_no_results),
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(vertical = 16.dp)
+        visibleLanguages.forEach { language ->
+            OnboardingLanguageRow(
+                language = language,
+                isSelected = language.code in selectedSet,
+                onClick = { onToggleLanguage(language.code) }
             )
-        } else {
-            visibleLanguages.forEach { language ->
-                OnboardingLanguageRow(
-                    language = language,
-                    isSelected = language.code in selectedSet,
-                    onClick = { onToggleLanguage(language.code) }
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
         Text(

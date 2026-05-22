@@ -13,10 +13,7 @@
     <string name="onboarding_mic_subtitle">We need microphone access to transcribe your voice</string>
     <string name="onboarding_mic_enable">Enable Microphone</string>
     <string name="onboarding_languages_title">Choose your languages</string>
-    <string name="onboarding_languages_subtitle">Select languages you speak to improve transcription. Leave none selected for automatic detection.</string>
-    <string name="onboarding_languages_search_hint">Search languages</string>
-    <string name="onboarding_languages_auto_detect_hint">No languages selected. AIDictation will auto-detect your speech.</string>
-    <string name="onboarding_languages_selected_hint">%1$d selected</string>
+    <string name="onboarding_languages_subtitle">Select the languages you speak to improve transcription.</string>
     <string name="onboarding_languages_change_later">You can change this later in Settings.</string>
     <string name="onboarding_overlay_title">Turn on the floating mic</string>
     <string name="onboarding_overlay_subtitle">A small mic appears when you tap into a place where you can type.</string>
@@ -90,6 +87,15 @@
     <string name="settings_overlay_access">Overlay Accessibility</string>
     <string name="settings_volume_button_shortcut">Triple-press Volume Down</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_bubble_color">Floating bubble color</string>
+    <string name="settings_bubble_color_system">System</string>
+    <string name="settings_bubble_color_default">Default</string>
+    <string name="settings_bubble_color_red">Red</string>
+    <string name="settings_bubble_color_purple">Purple</string>
+    <string name="settings_bubble_color_blue">Blue</string>
+    <string name="settings_bubble_color_teal">Teal</string>
+    <string name="settings_bubble_color_black">Black</string>
     <string name="settings_account">Account</string>
     <string name="account_sign_in">Sign in</string>
     <string name="account_sign_out">Sign out</string>

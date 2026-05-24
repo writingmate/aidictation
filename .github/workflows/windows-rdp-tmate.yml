@@ -1,0 +1,76 @@
+name: Windows RDP via tmate
+
+on:
+  workflow_dispatch:
+    inputs:
+      hold_minutes:
+        description: 'How long to keep the Windows runner alive'
+        required: true
+        default: '60'
+        type: choice
+        options:
+          - '30'
+          - '60'
+          - '120'
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish Windows app
+        run: >
+          dotnet publish ${{ env.PROJECT_PATH }}
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --output ${{ env.PUBLISH_DIR }}
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+
+      - name: Enable RDP user
+        shell: pwsh
+        run: |
+          $password = "AIDictation!${{ github.run_id }}"
+          net user aidictation "$password" /add /Y
+          net localgroup administrators aidictation /add
+          net localgroup "Remote Desktop Users" aidictation /add
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          echo "RDP_USER=aidictation" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+      - name: Print RDP details
+        shell: pwsh
+        run: |
+          Write-Host "RDP user: $env:RDP_USER"
+          Write-Host "RDP password: $env:RDP_PASSWORD"
+          Write-Host "After the tmate SSH connection appears, run this locally:"
+          Write-Host "ssh -L 13389:localhost:3389 <tmate-ssh-command>"
+          Write-Host "Then open Microsoft Remote Desktop and connect to: localhost:13389"
+          Write-Host "Published app path on runner: $env:GITHUB_WORKSPACE\$env:PUBLISH_DIR\AIDictation.exe"
+
+      - name: Start tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+
+      - name: Keep runner alive
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds ([int]"${{ inputs.hold_minutes }}" * 60)

@@ -18,6 +18,10 @@ on:
           - '60'
           - '120'
 
+permissions:
+  contents: read
+  pull-requests: write
+
 env:
   DOTNET_VERSION: '8.0.x'
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
@@ -69,9 +73,12 @@ jobs:
 
       - name: Start public RDP TCP tunnel
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $stdoutLog = "$env:RUNNER_TEMP\pinggy-rdp.out.log"
           $stderrLog = "$env:RUNNER_TEMP\pinggy-rdp.err.log"
+          $detailsFile = "$env:RUNNER_TEMP\rdp-details.md"
           $args = @(
             "-o", "StrictHostKeyChecking=no",
             "-o", "ServerAliveInterval=30",
@@ -84,10 +91,30 @@ jobs:
           Start-Sleep -Seconds 20
           if (Test-Path $stdoutLog) { Get-Content $stdoutLog }
           if (Test-Path $stderrLog) { Get-Content $stderrLog }
+          $stdout = if (Test-Path $stdoutLog) { Get-Content $stdoutLog -Raw } else { "" }
+          $stderr = if (Test-Path $stderrLog) { Get-Content $stderrLog -Raw } else { "" }
           Write-Host ""
           Write-Host "Use the printed Pinggy TCP address above in Microsoft Remote Desktop."
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASSWORD"
+          @"
+          Windows RDP runner is ready.
+
+          Use the Pinggy TCP address below in Microsoft Remote Desktop.
+
+          Username: $env:RDP_USER
+          Password: $env:RDP_PASSWORD
+
+          Published app path:
+          `$env:GITHUB_WORKSPACE\$env:PUBLISH_DIR\AIDictation.exe`
+
+          Tunnel output:
+          ```text
+          $stdout
+          $stderr
+          ```
+          "@ | Set-Content -Path $detailsFile
+          gh pr comment 28 --repo writingmate/aidictation --body-file $detailsFile
 
       - name: Keep runner alive
         shell: pwsh

@@ -15,6 +15,7 @@ on:
 env:
   DOTNET_VERSION: '8.0.x'
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
 
 jobs:
   build:
@@ -35,18 +36,42 @@ jobs:
     - name: Build
       run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
 
-    - name: Test
-      run: dotnet test ${{ env.PROJECT_PATH }} --no-build --verbosity normal
-      continue-on-error: true
-
     - name: Publish
-      run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ./publish --self-contained true -r win-x64 -p:PublishSingleFile=true
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration Release
+        --runtime win-x64
+        --self-contained true
+        --output ${{ env.PUBLISH_DIR }}
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
+
+    - name: Smoke test published app
+      shell: pwsh
+      run: |
+        $exe = Join-Path "${{ env.PUBLISH_DIR }}" "AIDictation.exe"
+        if (-not (Test-Path $exe)) {
+          throw "Published executable missing: $exe"
+        }
+        $file = Get-Item $exe
+        if ($file.Length -lt 10MB) {
+          throw "Published executable is unexpectedly small: $($file.Length) bytes"
+        }
+        $process = Start-Process -FilePath $exe -PassThru
+        Start-Sleep -Seconds 5
+        if ($process.HasExited -and $process.ExitCode -ne 0) {
+          throw "AIDictation exited during smoke test with code $($process.ExitCode)"
+        }
+        if (-not $process.HasExited) {
+          Stop-Process -Id $process.Id -Force
+        }
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: AIDictation-Windows-x64
-        path: ./publish/
+        path: ${{ env.PUBLISH_DIR }}/
         retention-days: 30
 
   release:
@@ -73,8 +98,15 @@ jobs:
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
     - name: Publish Release Build
-      run: |
-        dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ./release --self-contained true -r win-x64 -p:PublishSingleFile=true -p:PublishReadyToRun=true
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration Release
+        --runtime win-x64
+        --self-contained true
+        --output ./release
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
 
     - name: Create ZIP
       shell: pwsh

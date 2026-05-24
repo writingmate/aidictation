@@ -3,6 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
@@ -27,8 +28,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="..\Assets\*.ico" />
-    <Resource Include="..\Assets\*.png" />
+    <Resource Include="..\Assets\*.ico" Link="Assets\%(Filename)%(Extension)" />
+    <Resource Include="..\Assets\*.png" Link="Assets\%(Filename)%(Extension)" />
     <Resource Include="Resources\Onboarding\*.png" />
   </ItemGroup>
 

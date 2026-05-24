@@ -53,7 +53,7 @@
             
             <!-- System Tray Icon -->
             <tb:TaskbarIcon x:Key="TrayIcon"
-                            IconSource="/Resources/Icons/app.ico"
+                            IconSource="/Assets/app.ico"
                             ToolTipText="AIDictation">
                 <tb:TaskbarIcon.ContextMenu>
                     <ContextMenu>

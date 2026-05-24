@@ -80,16 +80,17 @@ jobs:
           $stderrLog = "$env:RUNNER_TEMP\pinggy-rdp.err.log"
           $detailsFile = "$env:RUNNER_TEMP\rdp-details.md"
           $args = @(
-            "-tt",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ServerAliveInterval=30",
+            "-y",
+            "pinggy",
             "-p", "443",
             "-R0:127.0.0.1:3389",
-            "tcp@a.pinggy.io"
+            "tcp@free.pinggy.io",
+            "--loglevel", "INFO",
+            "--v"
           )
-          $process = Start-Process -FilePath "ssh" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+          $process = Start-Process -FilePath "npx.cmd" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
           echo "PINGGY_PID=$($process.Id)" >> $env:GITHUB_ENV
-          Start-Sleep -Seconds 45
+          Start-Sleep -Seconds 30
           if (Test-Path $stdoutLog) { Get-Content $stdoutLog }
           if (Test-Path $stderrLog) { Get-Content $stderrLog }
           $stdout = if (Test-Path $stdoutLog) { Get-Content $stdoutLog -Raw } else { "" }

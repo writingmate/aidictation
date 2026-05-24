@@ -101,16 +101,16 @@ jobs:
           $errorWriter = [System.IO.StreamWriter]::new($stderrLog, $false)
           $process.add_OutputDataReceived({
             if ($EventArgs.Data) {
-              $Event.MessageData.WriteLine($EventArgs.Data)
-              $Event.MessageData.Flush()
+              $script:outputWriter.WriteLine($EventArgs.Data)
+              $script:outputWriter.Flush()
             }
-          }, $outputWriter)
+          })
           $process.add_ErrorDataReceived({
             if ($EventArgs.Data) {
-              $Event.MessageData.WriteLine($EventArgs.Data)
-              $Event.MessageData.Flush()
+              $script:errorWriter.WriteLine($EventArgs.Data)
+              $script:errorWriter.Flush()
             }
-          }, $errorWriter)
+          })
           [void]$process.Start()
           $process.BeginOutputReadLine()
           $process.BeginErrorReadLine()

@@ -51,7 +51,7 @@ jobs:
       - name: Enable RDP user
         shell: pwsh
         run: |
-          $password = "AIDictation!${{ github.run_id }}"
+          $password = "RdpTest#${{ github.run_id }}aZ9"
           net user aidictation "$password" /add /Y
           net localgroup administrators aidictation /add
           net localgroup "Remote Desktop Users" aidictation /add

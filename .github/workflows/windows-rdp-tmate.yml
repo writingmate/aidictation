@@ -88,7 +88,32 @@ jobs:
             "--loglevel", "INFO",
             "--v"
           )
-          $process = Start-Process -FilePath "npx.cmd" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo.FileName = "npx.cmd"
+          foreach ($arg in $args) {
+            [void]$process.StartInfo.ArgumentList.Add($arg)
+          }
+          $process.StartInfo.UseShellExecute = $false
+          $process.StartInfo.RedirectStandardOutput = $true
+          $process.StartInfo.RedirectStandardError = $true
+          $process.EnableRaisingEvents = $true
+          $outputWriter = [System.IO.StreamWriter]::new($stdoutLog, $false)
+          $errorWriter = [System.IO.StreamWriter]::new($stderrLog, $false)
+          $process.add_OutputDataReceived({
+            if ($EventArgs.Data) {
+              $Event.MessageData.WriteLine($EventArgs.Data)
+              $Event.MessageData.Flush()
+            }
+          }, $outputWriter)
+          $process.add_ErrorDataReceived({
+            if ($EventArgs.Data) {
+              $Event.MessageData.WriteLine($EventArgs.Data)
+              $Event.MessageData.Flush()
+            }
+          }, $errorWriter)
+          [void]$process.Start()
+          $process.BeginOutputReadLine()
+          $process.BeginErrorReadLine()
           echo "PINGGY_PID=$($process.Id)" >> $env:GITHUB_ENV
           Start-Sleep -Seconds 30
           if (Test-Path $stdoutLog) { Get-Content $stdoutLog }

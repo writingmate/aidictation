@@ -1,4 +1,4 @@
-name: Windows RDP via tunnel
+name: Windows RDP via tmate
 
 on:
   push:
@@ -17,10 +17,6 @@ on:
           - '30'
           - '60'
           - '120'
-
-permissions:
-  contents: read
-  pull-requests: write
 
 env:
   DOTNET_VERSION: '8.0.x'
@@ -71,42 +67,16 @@ jobs:
           Write-Host "RDP password: $env:RDP_PASSWORD"
           Write-Host "Published app path on runner: $env:GITHUB_WORKSPACE\$env:PUBLISH_DIR\AIDictation.exe"
 
-      - name: Start public RDP TCP tunnel
+      - name: Start tmate session for SSH tunnel
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+
+      - name: Keep runner alive
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $detailsFile = "$env:RUNNER_TEMP\rdp-details.md"
-          $job = Start-Job -ScriptBlock {
-            npx.cmd -y pinggy -p 443 -R0:127.0.0.1:3389 tcp@free.pinggy.io --loglevel INFO --v 2>&1
-          }
-          Start-Sleep -Seconds 30
-          $tunnelOutput = (Receive-Job -Job $job -Keep | Out-String)
-          Write-Host $tunnelOutput
-          Write-Host ""
-          Write-Host "Use the printed Pinggy TCP address above in Microsoft Remote Desktop."
-          Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASSWORD"
-          @"
-          Windows RDP runner is ready.
-
-          Use the Pinggy TCP address below in Microsoft Remote Desktop.
-
-          Username: $env:RDP_USER
-          Password: $env:RDP_PASSWORD
-
-          Published app path:
-          `$env:GITHUB_WORKSPACE\$env:PUBLISH_DIR\AIDictation.exe`
-
-          Tunnel output:
-          ```text
-          $tunnelOutput
-          ```
-          "@ | Set-Content -Path $detailsFile
-          gh pr comment 28 --repo writingmate/aidictation --body-file $detailsFile
           $holdMinutes = "${{ inputs.hold_minutes }}"
           if ([string]::IsNullOrWhiteSpace($holdMinutes)) {
             $holdMinutes = "60"
           }
           Start-Sleep -Seconds ([int]$holdMinutes * 60)
-          Stop-Job -Job $job -ErrorAction SilentlyContinue

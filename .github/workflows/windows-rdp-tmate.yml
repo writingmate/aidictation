@@ -1,6 +1,11 @@
 name: Windows RDP via tmate
 
 on:
+  push:
+    branches:
+      - codex/windows-actions-smoke
+    paths:
+      - '.github/workflows/windows-rdp-tmate.yml'
   workflow_dispatch:
     inputs:
       hold_minutes:

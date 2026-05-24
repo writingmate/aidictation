@@ -76,50 +76,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $stdoutLog = "$env:RUNNER_TEMP\pinggy-rdp.out.log"
-          $stderrLog = "$env:RUNNER_TEMP\pinggy-rdp.err.log"
           $detailsFile = "$env:RUNNER_TEMP\rdp-details.md"
-          $args = @(
-            "-y",
-            "pinggy",
-            "-p", "443",
-            "-R0:127.0.0.1:3389",
-            "tcp@free.pinggy.io",
-            "--loglevel", "INFO",
-            "--v"
-          )
-          $process = [System.Diagnostics.Process]::new()
-          $process.StartInfo.FileName = "npx.cmd"
-          foreach ($arg in $args) {
-            [void]$process.StartInfo.ArgumentList.Add($arg)
+          $job = Start-Job -ScriptBlock {
+            npx.cmd -y pinggy -p 443 -R0:127.0.0.1:3389 tcp@free.pinggy.io --loglevel INFO --v 2>&1
           }
-          $process.StartInfo.UseShellExecute = $false
-          $process.StartInfo.RedirectStandardOutput = $true
-          $process.StartInfo.RedirectStandardError = $true
-          $process.EnableRaisingEvents = $true
-          $outputWriter = [System.IO.StreamWriter]::new($stdoutLog, $false)
-          $errorWriter = [System.IO.StreamWriter]::new($stderrLog, $false)
-          $process.add_OutputDataReceived({
-            if ($EventArgs.Data) {
-              $script:outputWriter.WriteLine($EventArgs.Data)
-              $script:outputWriter.Flush()
-            }
-          })
-          $process.add_ErrorDataReceived({
-            if ($EventArgs.Data) {
-              $script:errorWriter.WriteLine($EventArgs.Data)
-              $script:errorWriter.Flush()
-            }
-          })
-          [void]$process.Start()
-          $process.BeginOutputReadLine()
-          $process.BeginErrorReadLine()
-          echo "PINGGY_PID=$($process.Id)" >> $env:GITHUB_ENV
           Start-Sleep -Seconds 30
-          if (Test-Path $stdoutLog) { Get-Content $stdoutLog }
-          if (Test-Path $stderrLog) { Get-Content $stderrLog }
-          $stdout = if (Test-Path $stdoutLog) { Get-Content $stdoutLog -Raw } else { "" }
-          $stderr = if (Test-Path $stderrLog) { Get-Content $stderrLog -Raw } else { "" }
+          $tunnelOutput = (Receive-Job -Job $job -Keep | Out-String)
+          Write-Host $tunnelOutput
           Write-Host ""
           Write-Host "Use the printed Pinggy TCP address above in Microsoft Remote Desktop."
           Write-Host "Username: $env:RDP_USER"
@@ -137,20 +100,13 @@ jobs:
 
           Tunnel output:
           ```text
-          $stdout
-          $stderr
+          $tunnelOutput
           ```
           "@ | Set-Content -Path $detailsFile
           gh pr comment 28 --repo writingmate/aidictation --body-file $detailsFile
-
-      - name: Keep runner alive
-        shell: pwsh
-        run: |
           $holdMinutes = "${{ inputs.hold_minutes }}"
           if ([string]::IsNullOrWhiteSpace($holdMinutes)) {
             $holdMinutes = "60"
           }
           Start-Sleep -Seconds ([int]$holdMinutes * 60)
-          if ($env:PINGGY_PID) {
-            Stop-Process -Id ([int]$env:PINGGY_PID) -Force -ErrorAction SilentlyContinue
-          }
+          Stop-Job -Job $job -ErrorAction SilentlyContinue

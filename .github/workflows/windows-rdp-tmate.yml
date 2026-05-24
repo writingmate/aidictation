@@ -1,4 +1,4 @@
-name: Windows RDP via tmate
+name: Windows RDP via tunnel
 
 on:
   push:
@@ -65,18 +65,36 @@ jobs:
         run: |
           Write-Host "RDP user: $env:RDP_USER"
           Write-Host "RDP password: $env:RDP_PASSWORD"
-          Write-Host "After the tmate SSH connection appears, run this locally:"
-          Write-Host "ssh -L 13389:localhost:3389 <tmate-ssh-command>"
-          Write-Host "Then open Microsoft Remote Desktop and connect to: localhost:13389"
           Write-Host "Published app path on runner: $env:GITHUB_WORKSPACE\$env:PUBLISH_DIR\AIDictation.exe"
 
-      - name: Start tmate session
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: true
-          detached: true
+      - name: Start public RDP TCP tunnel
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP\pinggy-rdp.log"
+          $args = @(
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ServerAliveInterval=30",
+            "-p", "443",
+            "-R0:localhost:3389",
+            "tcp@a.pinggy.io"
+          )
+          $process = Start-Process -FilePath "ssh" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError $log
+          echo "PINGGY_PID=$($process.Id)" >> $env:GITHUB_ENV
+          Start-Sleep -Seconds 20
+          Get-Content $log
+          Write-Host ""
+          Write-Host "Use the printed Pinggy TCP address above in Microsoft Remote Desktop."
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASSWORD"
 
       - name: Keep runner alive
         shell: pwsh
         run: |
-          Start-Sleep -Seconds ([int]"${{ inputs.hold_minutes }}" * 60)
+          $holdMinutes = "${{ inputs.hold_minutes }}"
+          if ([string]::IsNullOrWhiteSpace($holdMinutes)) {
+            $holdMinutes = "60"
+          }
+          Start-Sleep -Seconds ([int]$holdMinutes * 60)
+          if ($env:PINGGY_PID) {
+            Stop-Process -Id ([int]$env:PINGGY_PID) -Force -ErrorAction SilentlyContinue
+          }

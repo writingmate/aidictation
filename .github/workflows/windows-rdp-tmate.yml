@@ -70,7 +70,8 @@ jobs:
       - name: Start public RDP TCP tunnel
         shell: pwsh
         run: |
-          $log = "$env:RUNNER_TEMP\pinggy-rdp.log"
+          $stdoutLog = "$env:RUNNER_TEMP\pinggy-rdp.out.log"
+          $stderrLog = "$env:RUNNER_TEMP\pinggy-rdp.err.log"
           $args = @(
             "-o", "StrictHostKeyChecking=no",
             "-o", "ServerAliveInterval=30",
@@ -78,10 +79,11 @@ jobs:
             "-R0:localhost:3389",
             "tcp@a.pinggy.io"
           )
-          $process = Start-Process -FilePath "ssh" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError $log
+          $process = Start-Process -FilePath "ssh" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
           echo "PINGGY_PID=$($process.Id)" >> $env:GITHUB_ENV
           Start-Sleep -Seconds 20
-          Get-Content $log
+          if (Test-Path $stdoutLog) { Get-Content $stdoutLog }
+          if (Test-Path $stderrLog) { Get-Content $stderrLog }
           Write-Host ""
           Write-Host "Use the printed Pinggy TCP address above in Microsoft Remote Desktop."
           Write-Host "Username: $env:RDP_USER"

@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="AIDictation Overlay"
-        Width="280" Height="64"
+        Width="220" Height="54"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -16,11 +16,11 @@
     
     <Window.Resources>
         <!-- Colors -->
-        <SolidColorBrush x:Key="BackgroundBrush" Color="#E6333333"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#0078D4"/>
-        <SolidColorBrush x:Key="RecordingBrush" Color="#FF4444"/>
+        <SolidColorBrush x:Key="BackgroundBrush" Color="#F2272727"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF8A1F"/>
+        <SolidColorBrush x:Key="RecordingBrush" Color="#FF4D4D"/>
         <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#B0B0B0"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#C9C9C9"/>
         
         <!-- Spinner Animation -->
         <Storyboard x:Key="SpinnerAnimation" RepeatBehavior="Forever">
@@ -31,7 +31,7 @@
         
         <!-- Recording Pulse Animation -->
         <Storyboard x:Key="RecordingPulseAnimation" RepeatBehavior="Forever">
-            <DoubleAnimation Storyboard.TargetName="RecordingIndicator"
+            <DoubleAnimation Storyboard.TargetName="StopButton"
                            Storyboard.TargetProperty="Opacity"
                            From="1" To="0.4" Duration="0:0:0.6"
                            AutoReverse="True"/>
@@ -51,12 +51,16 @@
     </Window.Resources>
     
     <!-- Main container -->
-    <Border CornerRadius="8" Background="{StaticResource BackgroundBrush}" Margin="8">
+    <Border x:Name="OverlayRoot"
+            CornerRadius="19"
+            Background="{StaticResource BackgroundBrush}"
+            Margin="8"
+            MouseLeftButtonUp="OverlayRoot_MouseLeftButtonUp">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.4" Color="Black"/>
+            <DropShadowEffect BlurRadius="18" ShadowDepth="3" Opacity="0.38" Color="Black"/>
         </Border.Effect>
         
-        <Grid Margin="12,8">
+        <Grid Margin="14,8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -71,18 +75,24 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
-                <!-- Recording indicator dot -->
-                <Ellipse x:Name="RecordingIndicator"
+                <Button x:Name="StopButton"
                         Grid.Column="0"
-                        Width="12" Height="12"
-                        Fill="{StaticResource RecordingBrush}"
-                        VerticalAlignment="Center"
-                        Margin="0,0,10,0"/>
+                        Width="24"
+                        Height="24"
+                        Padding="0"
+                        BorderThickness="0"
+                        Background="#22FFFFFF"
+                        Foreground="{StaticResource TextPrimaryBrush}"
+                        Cursor="Hand"
+                        Click="StopButton_Click"
+                        ToolTip="Stop">
+                    <TextBlock Text="■" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Button>
                 
                 <!-- Waveform visualization -->
                 <Canvas x:Name="WaveformCanvas" 
                         Grid.Column="1"
-                        Height="32"
+                        Height="26"
                         VerticalAlignment="Center"
                         ClipToBounds="True"/>
                 
@@ -91,10 +101,10 @@
                           Grid.Column="2"
                           Text="0:00"
                           FontFamily="Segoe UI"
-                          FontSize="13"
+                          FontSize="12"
                           Foreground="{StaticResource TextSecondaryBrush}"
                           VerticalAlignment="Center"
-                          Margin="10,0,0,0"/>
+                          Margin="8,0,0,0"/>
             </Grid>
             
             <!-- Processing State -->
@@ -104,13 +114,12 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 
-                <!-- Spinner -->
-                <Viewbox Grid.Column="0" Width="24" Height="24" Margin="0,0,10,0">
+                <Viewbox Grid.Column="0" Width="22" Height="22" Margin="0,0,10,0">
                     <Canvas Width="24" Height="24">
                         <Ellipse Width="22" Height="22" 
                                Canvas.Left="1" Canvas.Top="1"
                                Stroke="{StaticResource AccentBrush}" 
-                               StrokeThickness="2.5"
+                               StrokeThickness="2.4"
                                StrokeDashArray="3,2"
                                RenderTransformOrigin="0.5,0.5">
                             <Ellipse.RenderTransform>
@@ -121,9 +130,9 @@
                 </Viewbox>
                 
                 <TextBlock Grid.Column="1"
-                          Text="Transcribing..."
+                          Text="Transcribing"
                           FontFamily="Segoe UI"
-                          FontSize="13"
+                          FontSize="12"
                           Foreground="{StaticResource TextSecondaryBrush}"
                           VerticalAlignment="Center"/>
             </Grid>
@@ -136,7 +145,7 @@
                 </Grid.ColumnDefinitions>
                 
                 <TextBlock Grid.Column="0"
-                          Text="✓"
+                          Text="Done"
                           FontSize="16"
                           Foreground="#4CAF50"
                           VerticalAlignment="Center"
@@ -146,11 +155,11 @@
                           Grid.Column="1"
                           Text=""
                           FontFamily="Segoe UI"
-                          FontSize="13"
+                          FontSize="12"
                           Foreground="{StaticResource TextPrimaryBrush}"
                           VerticalAlignment="Center"
                           TextTrimming="CharacterEllipsis"
-                          MaxWidth="210"/>
+                          MaxWidth="145"/>
             </Grid>
             
             <!-- Error State -->
@@ -161,7 +170,7 @@
                 </Grid.ColumnDefinitions>
                 
                 <TextBlock Grid.Column="0"
-                          Text="⚠️"
+                          Text="!"
                           FontSize="16"
                           VerticalAlignment="Center"
                           Margin="0,0,8,0"/>
@@ -170,7 +179,7 @@
                           Grid.Column="1"
                           Text="Error"
                           FontFamily="Segoe UI"
-                          FontSize="13"
+                          FontSize="12"
                           Foreground="#FF6B6B"
                           VerticalAlignment="Center"
                           TextTrimming="CharacterEllipsis"/>
@@ -183,16 +192,17 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 
-                <TextBlock Grid.Column="0"
-                          Text="🎤"
-                          FontSize="16"
-                          VerticalAlignment="Center"
-                          Margin="0,0,8,0"/>
+                <Canvas x:Name="IdleWaveCanvas"
+                        Grid.Column="0"
+                        Width="72"
+                        Height="22"
+                        VerticalAlignment="Center"
+                        Margin="0,0,10,0"/>
                 
                 <TextBlock Grid.Column="1"
                           Text="Ready"
                           FontFamily="Segoe UI"
-                          FontSize="13"
+                          FontSize="12"
                           Foreground="{StaticResource TextSecondaryBrush}"
                           VerticalAlignment="Center"/>
             </Grid>

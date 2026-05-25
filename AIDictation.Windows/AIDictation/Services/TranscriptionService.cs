@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AIDictation.Helpers;
+using AIDictation.Models;
 using CredentialManagement;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -16,7 +17,7 @@ using Newtonsoft.Json.Linq;
 namespace AIDictation.Services;
 
 /// <summary>
-/// Handles audio transcription via multiple providers (Groq, custom endpoint, AIDictation).
+/// Handles audio transcription via AIDictation cloud, with legacy provider code retained for compatibility.
 /// Supports retry logic, dictionary replacements, shortcut expansion, and optional LLM post-processing.
 /// </summary>
 public sealed class TranscriptionService
@@ -77,7 +78,7 @@ public sealed class TranscriptionService
             return TranscriptionResult.Failure("Audio file not found");
         }
 
-        var provider = _settings.Settings.TranscriptionProvider;
+        var provider = GetTranscriptionProvider();
         var language = GetPrimaryLanguage();
 
         // Attempt transcription with retry logic
@@ -93,7 +94,7 @@ public sealed class TranscriptionService
                     "groq" => await TranscribeWithGroqAsync(audioFilePath, language, cancellationToken),
                     "custom" => await TranscribeWithCustomAsync(audioFilePath, language, cancellationToken),
                     "aidictation" => await TranscribeWithAIDictationAsync(audioFilePath, language, cancellationToken),
-                    _ => await TranscribeWithCustomAsync(audioFilePath, language, cancellationToken)
+                    _ => await TranscribeWithAIDictationAsync(audioFilePath, language, cancellationToken)
                 };
 
                 if (rawText != null) break;
@@ -194,6 +195,8 @@ public sealed class TranscriptionService
     /// </summary>
     public bool IsProviderConfigured(string provider)
     {
+        provider = NormalizeTranscriptionProvider(provider);
+
         return provider switch
         {
             "groq" => !string.IsNullOrEmpty(GetApiKey("groq")),
@@ -403,6 +406,20 @@ public sealed class TranscriptionService
         }
         return languages[0];
     }
+
+    private string GetTranscriptionProvider()
+    {
+        var provider = NormalizeTranscriptionProvider(_settings.Settings.TranscriptionProvider);
+        if (_settings.Settings.TranscriptionProvider != provider)
+        {
+            _settings.Settings.TranscriptionProvider = provider;
+            _settings.SaveSettings();
+        }
+
+        return provider;
+    }
+
+    private static string NormalizeTranscriptionProvider(string? _) => AppSettings.CloudTranscriptionProvider;
 
     private static void SaveCredential(string target, string secret)
     {

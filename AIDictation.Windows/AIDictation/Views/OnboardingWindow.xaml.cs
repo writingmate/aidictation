@@ -28,13 +28,11 @@ public partial class OnboardingWindow : Window
 
     private void OnOnboardingCompleted(object? sender, System.EventArgs e)
     {
-        DialogResult = true;
         Close();
     }
 
     private void OnOnboardingSkipped(object? sender, System.EventArgs e)
     {
-        DialogResult = false;
         Close();
     }
 

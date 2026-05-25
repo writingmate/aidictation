@@ -6,6 +6,8 @@ namespace AIDictation.Models;
 
 public class AppSettings
 {
+    public const string CloudTranscriptionProvider = "aidictation";
+
     [JsonProperty("hotkey")]
     public Hotkey? Hotkey { get; set; } = new(Key.F8);
 
@@ -21,6 +23,9 @@ public class AppSettings
     [JsonProperty("hideIdleOverlay")]
     public bool HideIdleOverlay { get; set; } = false;
 
+    [JsonProperty("overlayColorTheme")]
+    public OverlayColorTheme OverlayColorTheme { get; set; } = OverlayColorTheme.Orange;
+
     [JsonProperty("launchAtStartup")]
     public bool LaunchAtStartup { get; set; } = false;
 
@@ -34,7 +39,7 @@ public class AppSettings
     public List<string> SelectedLanguages { get; set; } = new() { "auto" };
 
     [JsonProperty("transcriptionProvider")]
-    public string TranscriptionProvider { get; set; } = "custom";
+    public string TranscriptionProvider { get; set; } = CloudTranscriptionProvider;
 
     [JsonProperty("enableLLMPostProcessing")]
     public bool EnableLLMPostProcessing { get; set; } = true;
@@ -53,6 +58,16 @@ public enum OverlayPosition
 {
     Top,
     Bottom
+}
+
+public enum OverlayColorTheme
+{
+    Orange,
+    Blue,
+    Green,
+    Purple,
+    Pink,
+    Graphite
 }
 
 public class DictionaryEntry

@@ -23,6 +23,7 @@ public partial class OnboardingViewModel : ObservableObject
         public const int TotalSteps = 4;
         public const Key DefaultHotkey = Key.F8;
         public const ModifierKeys DefaultModifiers = ModifierKeys.None;
+        public const TranscriptionModel CurrentTranscriptionModel = TranscriptionModel.AIDictationCloud;
     }
 
     // MARK: - Published Properties
@@ -135,6 +136,7 @@ public partial class OnboardingViewModel : ObservableObject
     private void SelectLanguage(LanguageItem? item)
     {
         if (item == null) return;
+        if (!item.IsSelectable) return;
 
         foreach (var lang in Languages)
         {
@@ -182,6 +184,8 @@ public partial class OnboardingViewModel : ObservableObject
                 Language = language,
                 DisplayName = language.GetDisplayName(),
                 Flag = language.GetFlag(),
+                IsSelectable = language.SupportsModel(Constants.CurrentTranscriptionModel),
+                SupportText = GetLanguageSupportText(language),
                 IsSelected = language == Language.Auto
             });
         }
@@ -191,6 +195,7 @@ public partial class OnboardingViewModel : ObservableObject
     {
         var settings = SettingsService.Instance;
         settings.Load();
+        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
 
         // Load saved language if any
         if (settings.Settings.SelectedLanguages.Count > 0)
@@ -219,6 +224,7 @@ public partial class OnboardingViewModel : ObservableObject
     private void SaveSettings()
     {
         var settings = SettingsService.Instance;
+        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
         settings.Settings.SelectedLanguages = new List<string> { SelectedLanguage.GetCode() };
         settings.Settings.Hotkey = new Hotkey(SelectedHotkey, SelectedModifiers);
         settings.Settings.OnboardingCompleted = true;
@@ -268,6 +274,18 @@ public partial class OnboardingViewModel : ObservableObject
             _ => key.ToString()
         };
     }
+
+    private static string GetLanguageSupportText(Language language)
+    {
+        if (language.SupportsModel(Constants.CurrentTranscriptionModel))
+        {
+            return "Available in cloud mode";
+        }
+
+        return language.SupportsModel(TranscriptionModel.Parakeet)
+            ? "Available in offline mode"
+            : "Not available for this mode";
+    }
 }
 
 /// <summary>
@@ -278,6 +296,8 @@ public partial class LanguageItem : ObservableObject
     public Language Language { get; set; }
     public string DisplayName { get; set; } = string.Empty;
     public string Flag { get; set; } = string.Empty;
+    public bool IsSelectable { get; set; } = true;
+    public string SupportText { get; set; } = string.Empty;
 
     [ObservableProperty]
     private bool _isSelected;

@@ -1,10 +1,14 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
+using AIDictation.Models;
 using AIDictation.Services;
+using AIDictation.Views;
 using H.NotifyIcon;
 using Microsoft.Win32;
 
@@ -29,6 +33,9 @@ public partial class App : Application
 
     private static Mutex? _singleInstanceMutex;
     private TaskbarIcon? _trayIcon;
+    private readonly DispatcherTimer _recordingTimer = new();
+    private DateTime _recordingStartedAt;
+    private bool _isStoppingRecording;
 
     // MARK: - Application Lifecycle
 
@@ -60,10 +67,15 @@ public partial class App : Application
 
         // Check onboarding and show appropriate window
         await ShowStartupWindowAsync();
+
+        SubscribeRuntimeEvents();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
+        UnsubscribeRuntimeEvents();
+
         // Cleanup system tray
         _trayIcon?.Dispose();
 
@@ -215,6 +227,7 @@ public partial class App : Application
     {
         // Load settings first
         SettingsService.Instance.Load();
+        HistoryService.Instance.Load();
 
         // Initialize authentication
         await AuthService.Instance.InitializeAsync();
@@ -222,6 +235,39 @@ public partial class App : Application
         // Register hotkeys based on settings
         var settings = SettingsService.Instance.Settings;
         HotkeyService.Instance.RegisterHotkeys(settings.Hotkey, settings.CommandHotkey);
+        OverlayService.Shared.ApplySettings(settings);
+        OverlayService.Shared.Initialize();
+    }
+
+    private void SubscribeRuntimeEvents()
+    {
+        HotkeyService.Instance.DictationHotkeyPressed += OnDictationHotkeyPressed;
+        HotkeyService.Instance.DictationHotkeyReleased += OnDictationHotkeyReleased;
+        HotkeyService.Instance.CommandHotkeyPressed += OnCommandHotkeyPressed;
+        HotkeyService.Instance.CommandHotkeyReleased += OnCommandHotkeyReleased;
+        AudioRecorderService.Instance.AudioLevelChanged += OnAudioLevelChanged;
+        AudioRecorderService.Instance.RecordingCompleted += OnRecordingCompleted;
+        AudioRecorderService.Instance.RecordingError += OnRecordingError;
+        OverlayService.Shared.RecordingStartRequested += OnOverlayRecordingStartRequested;
+        OverlayService.Shared.RecordingStopRequested += OnOverlayRecordingStopRequested;
+
+        _recordingTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _recordingTimer.Tick += OnRecordingTimerTick;
+    }
+
+    private void UnsubscribeRuntimeEvents()
+    {
+        HotkeyService.Instance.DictationHotkeyPressed -= OnDictationHotkeyPressed;
+        HotkeyService.Instance.DictationHotkeyReleased -= OnDictationHotkeyReleased;
+        HotkeyService.Instance.CommandHotkeyPressed -= OnCommandHotkeyPressed;
+        HotkeyService.Instance.CommandHotkeyReleased -= OnCommandHotkeyReleased;
+        AudioRecorderService.Instance.AudioLevelChanged -= OnAudioLevelChanged;
+        AudioRecorderService.Instance.RecordingCompleted -= OnRecordingCompleted;
+        AudioRecorderService.Instance.RecordingError -= OnRecordingError;
+        OverlayService.Shared.RecordingStartRequested -= OnOverlayRecordingStartRequested;
+        OverlayService.Shared.RecordingStopRequested -= OnOverlayRecordingStopRequested;
+        _recordingTimer.Tick -= OnRecordingTimerTick;
+        _recordingTimer.Stop();
     }
 
     private static void CleanupServices()
@@ -235,6 +281,9 @@ public partial class App : Application
         // Cleanup hotkey service
         HotkeyService.Instance.UnregisterAllHotkeys();
 
+        // Cleanup overlay
+        OverlayService.Shared.Shutdown();
+
         // Save settings
         SettingsService.Instance.SaveAll();
     }
@@ -245,6 +294,7 @@ public partial class App : Application
     {
         _trayIcon = (TaskbarIcon)FindResource("TrayIcon");
         _trayIcon.TrayMouseDoubleClick += (s, e) => ShowSettingsWindow();
+        SettingsService.Instance.SettingsChanged += OnSettingsChanged;
     }
 
     private void TraySettings_Click(object sender, RoutedEventArgs e)
@@ -252,14 +302,168 @@ public partial class App : Application
         ShowSettingsWindow();
     }
 
+    private void TrayHistory_Click(object sender, RoutedEventArgs e)
+    {
+        ShowHistoryWindow();
+    }
+
     private void TrayExit_Click(object sender, RoutedEventArgs e)
     {
         Shutdown();
     }
 
+    private void OnSettingsChanged(object? sender, EventArgs e)
+    {
+        var settings = SettingsService.Instance.Settings;
+        HotkeyService.Instance.RegisterHotkeys(settings.Hotkey, settings.CommandHotkey);
+        OverlayService.Shared.ApplySettings(settings);
+    }
+
+    // MARK: - Recording Lifecycle
+
+    private void OnDictationHotkeyPressed(object? sender, EventArgs e)
+    {
+        StartRecording(false);
+    }
+
+    private void OnDictationHotkeyReleased(object? sender, EventArgs e)
+    {
+        StopRecording();
+    }
+
+    private void OnCommandHotkeyPressed(object? sender, EventArgs e)
+    {
+        StartRecording(true);
+    }
+
+    private void OnCommandHotkeyReleased(object? sender, EventArgs e)
+    {
+        StopRecording();
+    }
+
+    private void OnOverlayRecordingStartRequested(object? sender, bool isCommandMode)
+    {
+        StartRecording(isCommandMode);
+    }
+
+    private void OnOverlayRecordingStopRequested(object? sender, EventArgs e)
+    {
+        StopRecording();
+    }
+
+    private void StartRecording(bool isCommandMode)
+    {
+        if (!AppState.Shared.StartRecording(isCommandMode)) return;
+
+        AudioRecorderService.Instance.SelectedDeviceId = SettingsService.Instance.Settings.SelectedAudioDeviceId;
+        _recordingStartedAt = DateTime.Now;
+        _isStoppingRecording = false;
+        _recordingTimer.Start();
+
+        if (!AudioRecorderService.Instance.StartRecording())
+        {
+            _recordingTimer.Stop();
+            AppState.Shared.SetError("Unable to start recording");
+        }
+    }
+
+    private void StopRecording()
+    {
+        if (!AppState.Shared.IsRecording || _isStoppingRecording) return;
+
+        _isStoppingRecording = true;
+        _recordingTimer.Stop();
+        AppState.Shared.StartProcessing();
+        AudioRecorderService.Instance.StopRecording();
+    }
+
+    private void OnRecordingTimerTick(object? sender, EventArgs e)
+    {
+        if (AppState.Shared.IsRecording)
+        {
+            AppState.Shared.UpdateRecordingDuration(DateTime.Now - _recordingStartedAt);
+        }
+    }
+
+    private void OnAudioLevelChanged(object? sender, float level)
+    {
+        Dispatcher.Invoke(() => AppState.Shared.UpdateAudioLevel(level));
+    }
+
+    private void OnRecordingError(object? sender, string message)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _recordingTimer.Stop();
+            _isStoppingRecording = false;
+            AppState.Shared.SetError(message);
+            HistoryService.Instance.Add(new Recording
+            {
+                Timestamp = DateTime.Now,
+                Status = TranscriptionStatus.Failed,
+                ErrorMessage = message,
+                Duration = AppState.Shared.RecordingDuration.TotalSeconds
+            });
+        });
+    }
+
+    private void OnRecordingCompleted(object? sender, string filePath)
+    {
+        _ = Dispatcher.InvokeAsync(async () => await CompleteRecordingAsync(filePath));
+    }
+
+    private async Task CompleteRecordingAsync(string filePath)
+    {
+        try
+        {
+            var result = await TranscriptionService.Instance.TranscribeAsync(filePath);
+            if (!result.IsSuccess || string.IsNullOrWhiteSpace(result.Text))
+            {
+                var message = result.ErrorMessage ?? "Transcription failed";
+                AppState.Shared.SetError(message);
+                HistoryService.Instance.Add(CreateRecording(filePath, null, TranscriptionStatus.Failed, message));
+                return;
+            }
+
+            AppState.Shared.SetResult(result.Text);
+            HistoryService.Instance.Add(CreateRecording(filePath, result.Text, TranscriptionStatus.Success, null));
+            await ClipboardService.Instance.PasteTextAsync(result.Text);
+        }
+        catch (Exception ex)
+        {
+            LogException("CompleteRecordingAsync", ex);
+            AppState.Shared.SetError(ex.Message);
+            HistoryService.Instance.Add(CreateRecording(filePath, null, TranscriptionStatus.Failed, ex.Message));
+        }
+        finally
+        {
+            _isStoppingRecording = false;
+        }
+    }
+
+    private static Recording CreateRecording(
+        string filePath,
+        string? transcription,
+        TranscriptionStatus status,
+        string? errorMessage)
+    {
+        return new Recording
+        {
+            Timestamp = DateTime.Now,
+            AudioFilePath = filePath,
+            Transcription = transcription,
+            Status = status,
+            ErrorMessage = errorMessage,
+            Duration = AppState.Shared.RecordingDuration.TotalSeconds,
+            WordCount = string.IsNullOrWhiteSpace(transcription)
+                ? 0
+                : transcription.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length
+        };
+    }
+
     // MARK: - Window Management
 
-    private async Task ShowStartupWindowAsync()
+    private Task ShowStartupWindowAsync()
     {
         var settings = SettingsService.Instance.Settings;
 
@@ -272,34 +476,68 @@ public partial class App : Application
             ShowLoginWindow();
         }
         // If authenticated and onboarded, app runs in tray only
+
+        return Task.CompletedTask;
     }
 
     private void ShowOnboardingWindow()
     {
-        // TODO: Create and show OnboardingWindow
-        // var onboarding = new Views.OnboardingWindow();
-        // onboarding.Show();
+        var onboarding = ShowOrActivateWindow<OnboardingWindow>();
+        onboarding.Closed -= OnOnboardingClosed;
+        onboarding.Closed += OnOnboardingClosed;
     }
 
     private void ShowLoginWindow()
     {
-        // TODO: Create and show LoginWindow
-        // var login = new Views.LoginWindow();
-        // login.Show();
+        ShowSettingsWindow();
     }
 
     private void ShowSettingsWindow()
     {
-        // TODO: Create and show SettingsWindow
-        // Check if already open
-        // var existing = Windows.OfType<Views.SettingsWindow>().FirstOrDefault();
-        // if (existing != null)
-        // {
-        //     existing.Activate();
-        //     return;
-        // }
-        // var settings = new Views.SettingsWindow();
-        // settings.Show();
+        ShowOrActivateWindow<SettingsWindow>();
+    }
+
+    private void ShowHistoryWindow()
+    {
+        ShowOrActivateWindow<HistoryWindow>();
+    }
+
+    private void OnOnboardingClosed(object? sender, EventArgs e)
+    {
+        if (sender is OnboardingWindow onboarding)
+        {
+            onboarding.Closed -= OnOnboardingClosed;
+        }
+
+        if (SettingsService.Instance.Settings.OnboardingCompleted && !AuthService.Instance.IsAuthenticated)
+        {
+            ShowLoginWindow();
+        }
+    }
+
+    private TWindow ShowOrActivateWindow<TWindow>() where TWindow : Window, new()
+    {
+        var existing = Windows.OfType<TWindow>().FirstOrDefault();
+        if (existing != null)
+        {
+            RestoreAndActivate(existing);
+            return existing;
+        }
+
+        var window = new TWindow();
+        RestoreAndActivate(window);
+        return window;
+    }
+
+    private static void RestoreAndActivate(Window window)
+    {
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
+
+        window.Show();
+        window.Activate();
     }
 
     // MARK: - Native Methods

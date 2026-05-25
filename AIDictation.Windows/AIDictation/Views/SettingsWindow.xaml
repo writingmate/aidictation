@@ -249,6 +249,16 @@
                         <TextBlock Text="Hotkeys"/>
                     </StackPanel>
                 </RadioButton>
+                <RadioButton Style="{StaticResource SidebarButtonStyle}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=3, Mode=OneWay}"
+                           Command="{Binding SelectSectionCommand}"
+                           CommandParameter="3"
+                           GroupName="Sections">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="●" Margin="0,0,10,0"/>
+                        <TextBlock Text="Overlay"/>
+                    </StackPanel>
+                </RadioButton>
             </StackPanel>
         </Border>
 
@@ -285,6 +295,8 @@
                                 <Button Style="{StaticResource LanguageButtonStyle}"
                                       Command="{Binding DataContext.SelectLanguageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                       CommandParameter="{Binding}"
+                                      IsEnabled="{Binding IsSelectable}"
+                                      ToolTip="{Binding SupportText}"
                                       Margin="0,0,8,8">
                                     <Button.Background>
                                         <Binding Path="IsSelected">
@@ -585,6 +597,41 @@
                             <TextBlock Text="✕"/>
                         </Button>
                     </Grid>
+                </StackPanel>
+
+                <!-- Overlay Section -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=3}">
+                    <TextBlock Text="Overlay" Style="{StaticResource SectionHeaderStyle}"/>
+
+                    <TextBlock Text="Show Overlay When Idle" Style="{StaticResource SubsectionHeaderStyle}"/>
+                    <TextBlock Text="Keep the floating overlay visible when you are not recording" Style="{StaticResource DescriptionStyle}"/>
+                    <CheckBox IsChecked="{Binding ShowOverlayWhenIdle, Mode=TwoWay}"
+                              Content="Show overlay when idle"
+                              Foreground="{StaticResource TextPrimaryBrush}"
+                              Margin="0,0,0,24"/>
+
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,24"/>
+
+                    <TextBlock Text="Overlay Position" Style="{StaticResource SubsectionHeaderStyle}"/>
+                    <TextBlock Text="Choose where the floating overlay appears" Style="{StaticResource DescriptionStyle}"/>
+                    <ComboBox Style="{StaticResource SettingsComboBoxStyle}"
+                              ItemsSource="{Binding OverlayPositions}"
+                              SelectedItem="{Binding SelectedOverlayPosition, Mode=TwoWay}"
+                              DisplayMemberPath="DisplayName"
+                              Width="220"
+                              HorizontalAlignment="Left"
+                              Margin="0,0,0,24"/>
+
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,24"/>
+
+                    <TextBlock Text="Overlay Color" Style="{StaticResource SubsectionHeaderStyle}"/>
+                    <TextBlock Text="Choose the accent color for the floating overlay" Style="{StaticResource DescriptionStyle}"/>
+                    <ComboBox Style="{StaticResource SettingsComboBoxStyle}"
+                              ItemsSource="{Binding OverlayColorThemes}"
+                              SelectedItem="{Binding SelectedOverlayColorTheme, Mode=TwoWay}"
+                              DisplayMemberPath="DisplayName"
+                              Width="220"
+                              HorizontalAlignment="Left"/>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

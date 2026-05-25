@@ -13,11 +13,20 @@ $WindowsDir = Split-Path -Parent $PSScriptRoot
 if (-not $ProjectPath) {
     $ProjectPath = Join-Path $WindowsDir "AIDictation/AIDictation.csproj"
 }
+if (-not [System.IO.Path]::IsPathRooted($ProjectPath)) {
+    $ProjectPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $ProjectPath))
+}
 if (-not $PublishDir) {
     $PublishDir = Join-Path $WindowsDir "artifacts/$Runtime"
 }
+if (-not [System.IO.Path]::IsPathRooted($PublishDir)) {
+    $PublishDir = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $PublishDir))
+}
 if (-not $InstallerDir) {
     $InstallerDir = Join-Path $WindowsDir "artifacts/installer"
+}
+if (-not [System.IO.Path]::IsPathRooted($InstallerDir)) {
+    $InstallerDir = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $InstallerDir))
 }
 if (-not $Version) {
     [xml]$project = Get-Content $ProjectPath

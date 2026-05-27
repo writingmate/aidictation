@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIDictation Overlay Components</title>
+  <style>
+    :root {
+      --brand: #ff6300;
+      --brand-strong: rgba(255, 99, 0, 0.9);
+      --brand-soft: rgba(255, 99, 0, 0.34);
+      --brand-faint: rgba(255, 99, 0, 0.2);
+      --ink: #24211f;
+      --muted: rgba(36, 33, 31, 0.58);
+      --surface: rgba(255, 255, 255, 0.58);
+      --shadow: 0 10px 28px rgba(45, 32, 22, 0.18);
+      --size: 58px;
+      --loading-cycle: 860ms;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 72% 16%, rgba(255, 99, 0, 0.12), transparent 28%),
+        linear-gradient(135deg, rgba(92, 141, 255, 0.16), rgba(255, 99, 0, 0.08)),
+        #f8f6f2;
+      color: var(--ink);
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 40px;
+    }
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      display: grid;
+      gap: 28px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .card,
+    .sequence {
+      min-height: 160px;
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: inset 0 0 0 1px rgba(36, 33, 31, 0.06);
+      padding: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 18px;
+    }
+
+    .title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .preview {
+      display: grid;
+      place-items: center;
+      min-height: 86px;
+    }
+
+    .button {
+      width: var(--size);
+      height: var(--size);
+      border: 0;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: var(--brand-strong);
+      box-shadow: var(--shadow);
+      outline: none;
+    }
+
+    .button.soft {
+      background: var(--brand-soft);
+    }
+
+    .pill {
+      width: 142px;
+      height: var(--size);
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: var(--brand-soft);
+      box-shadow: var(--shadow);
+    }
+
+    .bars {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .bar {
+      width: 5px;
+      min-height: 5px;
+      border-radius: 999px;
+      background: white;
+    }
+
+    .bar:nth-child(1) { height: 12px; }
+    .bar:nth-child(2) { height: 22px; }
+    .bar:nth-child(3) { height: 28px; }
+    .bar:nth-child(4) { height: 20px; }
+    .bar:nth-child(5) { height: 14px; }
+
+    .idle-bars {
+      gap: 3.4px;
+    }
+
+    .idle-bars .bar {
+      width: 4.45px;
+      min-height: 4.45px;
+      animation: none;
+      opacity: 1;
+    }
+
+    .idle-bars .bar:nth-child(1),
+    .idle-bars .bar:nth-child(3),
+    .idle-bars .bar:nth-child(5) {
+      height: 15.4px;
+    }
+
+    .idle-bars .bar:nth-child(2),
+    .idle-bars .bar:nth-child(4) {
+      height: 24px;
+    }
+
+    .pill .bars {
+      gap: 5.2px;
+    }
+
+    .pill .bar {
+      width: 4.45px;
+      min-height: 4.45px;
+    }
+
+    .live .bar { animation: sound 480ms ease-in-out infinite alternate; }
+    .live .bar:nth-child(1) { animation-duration: 540ms; }
+    .live .bar:nth-child(2) { animation-duration: 410ms; }
+    .live .bar:nth-child(3) { animation-duration: 620ms; }
+    .live .bar:nth-child(4) { animation-duration: 450ms; }
+    .live .bar:nth-child(5) { animation-duration: 570ms; }
+
+    .processing-bars .bar {
+      height: 5px;
+      opacity: 0.42;
+      animation: pulse var(--loading-cycle) cubic-bezier(.42, 0, .18, 1) infinite;
+    }
+
+    .processing-bars .bar:nth-child(1) { animation-delay: 0ms; }
+    .processing-bars .bar:nth-child(2) { animation-delay: 70ms; }
+    .processing-bars .bar:nth-child(3) { animation-delay: 140ms; }
+    .processing-bars .bar:nth-child(4) { animation-delay: 210ms; }
+    .processing-bars .bar:nth-child(5) { animation-delay: 280ms; }
+
+    svg {
+      width: 17px;
+      height: 17px;
+      stroke: white;
+      stroke-width: 2.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    .spinner {
+      width: 26px;
+      height: 26px;
+      border: 3px solid rgba(255, 255, 255, 0.34);
+      border-top-color: #fff;
+      border-radius: 999px;
+      animation: spin-bounce var(--loading-cycle) cubic-bezier(.42, 0, .18, 1) infinite;
+    }
+
+    .sequence {
+      min-height: 210px;
+    }
+
+    .sequence-preview {
+      display: grid;
+      gap: 18px;
+      align-content: center;
+    }
+
+    .lane {
+      min-height: 76px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.46);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 9px 0 9px 18px;
+      overflow: hidden;
+    }
+
+    .composed {
+      position: relative;
+      width: 286px;
+      height: var(--size);
+    }
+
+    .primary-demo {
+      position: absolute;
+      right: 0;
+      top: 0;
+    }
+
+    .composed .pill {
+      position: absolute;
+      right: 70px;
+      top: 0;
+    }
+
+    .composed .cancel {
+      position: absolute;
+      right: 224px;
+      top: 0;
+    }
+
+    .composed.idle .cancel,
+    .composed.idle .pill {
+      opacity: 0;
+    }
+
+    .composed.recording .cancel,
+    .composed.recording .pill,
+    .composed.processing .pill {
+      opacity: 1;
+    }
+
+    .composed.processing .cancel {
+      opacity: 0;
+    }
+
+    .composed .cancel,
+    .composed .pill {
+      transition: opacity 180ms ease;
+    }
+
+    .primary-demo .idle-bars,
+    .primary-demo svg,
+    .primary-demo .spinner {
+      grid-area: 1 / 1;
+      transition: opacity 180ms ease;
+    }
+
+    .primary-demo.recording .idle-bars,
+    .primary-demo.processing .idle-bars,
+    .primary-demo.idle svg,
+    .primary-demo.idle .spinner,
+    .primary-demo.recording .spinner,
+    .primary-demo.processing svg {
+      opacity: 0;
+    }
+
+    .primary-demo.idle .idle-bars,
+    .primary-demo.recording svg,
+    .primary-demo.processing .spinner {
+      opacity: 1;
+    }
+
+    .composed.processing .button.done {
+      background: var(--brand-strong);
+    }
+
+    @keyframes sound {
+      0% { transform: scaleY(0.34); opacity: 0.76; }
+      45% { transform: scaleY(1); opacity: 1; }
+      100% { transform: scaleY(0.56); opacity: 0.94; }
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 0.34; }
+      62% { transform: scale(1.22); opacity: 1; }
+      78% { transform: scale(0.96); opacity: 0.58; }
+      100% { transform: scale(0.9); opacity: 0.34; }
+    }
+
+    @keyframes spin-bounce {
+      0% { transform: rotate(0deg); }
+      62% { transform: rotate(410deg); }
+      78% { transform: rotate(350deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 780px) {
+      body { padding: 22px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Overlay Components</h1>
+
+    <section class="grid" aria-label="Component states">
+      <div class="card">
+        <div class="title">Primary Button: Idle</div>
+        <div class="preview">
+          <div class="button done">
+            <div class="bars idle-bars">
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">Primary Button: Check</div>
+        <div class="preview">
+          <div class="button done">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 13l4 4L19 7"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">Primary Button: Loading</div>
+        <div class="preview">
+          <div class="button done">
+            <span class="spinner" aria-hidden="true"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">Cancel Button</div>
+        <div class="preview">
+          <div class="button soft cancel">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">Pill: Recording</div>
+        <div class="preview">
+          <div class="pill">
+            <div class="bars live">
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">Pill: Processing</div>
+        <div class="preview">
+          <div class="pill">
+            <div class="bars processing-bars">
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sequence">
+      <div class="title">Composed States</div>
+      <div class="sequence-preview">
+        <div class="lane">
+          <div class="composed idle">
+            <div class="button done primary-demo idle">
+              <div class="bars idle-bars">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+              </div>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span class="spinner" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="lane">
+          <div class="composed recording">
+            <div class="button soft cancel">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18"></path>
+              </svg>
+            </div>
+            <div class="pill">
+              <div class="bars live">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+              </div>
+            </div>
+            <div class="button done primary-demo recording">
+              <div class="bars idle-bars">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+              </div>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span class="spinner" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="lane">
+          <div class="composed processing">
+            <div class="pill">
+              <div class="bars processing-bars">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+              </div>
+            </div>
+            <div class="button done primary-demo processing">
+              <div class="bars idle-bars">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+              </div>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 13l4 4L19 7"></path>
+              </svg>
+              <span class="spinner" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

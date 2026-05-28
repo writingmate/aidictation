@@ -10,10 +10,12 @@
 		1FB33087FF396340CC97677A /* ParakeetRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */; };
 		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		BDFC47F6E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C12A3A102ED4CFAA002D97E6 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A0F2ED4CFAA002D97E6 /* Supabase */; };
 		C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A132ED4D0AA002D97E6 /* Auth */; };
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
+		C1CE64422ED8417000D24235 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
 		C3E1A9012F8A000000000001 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = C3E1A9022F8A000000000002 /* Sentry */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
@@ -75,6 +77,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
+				C1CE64422ED8417000D24235 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -85,6 +88,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				BDFC47F6E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;

@@ -13,7 +13,7 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>92</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.0.45</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -15,6 +15,8 @@ on:
 env:
   DOTNET_VERSION: '8.0.x'
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
+  INSTALLER_DIR: 'AIDictation.Windows/artifacts/installer'
 
 jobs:
   build:
@@ -35,18 +37,73 @@ jobs:
     - name: Build
       run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
 
-    - name: Test
-      run: dotnet test ${{ env.PROJECT_PATH }} --no-build --verbosity normal
-      continue-on-error: true
-
     - name: Publish
-      run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ./publish --self-contained true -r win-x64 -p:PublishSingleFile=true
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration Release
+        --runtime win-x64
+        --self-contained true
+        --output ${{ env.PUBLISH_DIR }}
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
+
+    - name: Smoke test published app
+      shell: pwsh
+      run: |
+        $exe = Join-Path "${{ env.PUBLISH_DIR }}" "AIDictation.exe"
+        if (-not (Test-Path $exe)) {
+          throw "Published executable missing: $exe"
+        }
+        $file = Get-Item $exe
+        if ($file.Length -lt 10MB) {
+          throw "Published executable is unexpectedly small: $($file.Length) bytes"
+        }
+        $process = Start-Process -FilePath $exe -PassThru
+        Start-Sleep -Seconds 5
+        if ($process.HasExited -and $process.ExitCode -ne 0) {
+          throw "AIDictation exited during smoke test with code $($process.ExitCode)"
+        }
+        if (-not $process.HasExited) {
+          Stop-Process -Id $process.Id -Force
+        }
+
+    - name: Install Inno Setup
+      shell: pwsh
+      run: choco install innosetup --no-progress --yes
+
+    - name: Build classic Windows installer
+      shell: pwsh
+      run: >
+        AIDictation.Windows/scripts/build-installer.ps1
+        -ProjectPath ${{ env.PROJECT_PATH }}
+        -PublishDir ${{ env.PUBLISH_DIR }}
+        -InstallerDir ${{ env.INSTALLER_DIR }}
+
+    - name: Smoke test installer metadata
+      shell: pwsh
+      run: |
+        $installer = Get-ChildItem "${{ env.INSTALLER_DIR }}" -Filter "AIDictation-Windows-Setup-v*.exe" | Select-Object -First 1
+        if (-not $installer) {
+          throw "Installer artifact missing"
+        }
+        if ($installer.Length -lt 10MB) {
+          throw "Installer is unexpectedly small: $($installer.Length) bytes"
+        }
+        Write-Host "Installer: $($installer.FullName)"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: AIDictation-Windows-x64
-        path: ./publish/
+        path: ${{ env.PUBLISH_DIR }}/
+        retention-days: 30
+
+    - name: Upload installer artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AIDictation-Windows-Installer
+        path: ${{ env.INSTALLER_DIR }}/*.exe
         retention-days: 30
 
   release:
@@ -72,9 +129,18 @@ jobs:
         if (-not $version) { $version = "0.0.1" }
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
+    - name: Install Inno Setup
+      shell: pwsh
+      run: choco install innosetup --no-progress --yes
+
     - name: Publish Release Build
-      run: |
-        dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ./release --self-contained true -r win-x64 -p:PublishSingleFile=true -p:PublishReadyToRun=true
+      shell: pwsh
+      run: >
+        AIDictation.Windows/scripts/build-installer.ps1
+        -ProjectPath ${{ env.PROJECT_PATH }}
+        -PublishDir ./release
+        -InstallerDir ./installer
+        -Version ${{ steps.version.outputs.VERSION }}
 
     - name: Create ZIP
       shell: pwsh
@@ -86,4 +152,11 @@ jobs:
       with:
         name: AIDictation-Windows-Release-v${{ steps.version.outputs.VERSION }}
         path: ./AIDictation-Windows-v${{ steps.version.outputs.VERSION }}.zip
+        retention-days: 90
+
+    - name: Upload Release Installer Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AIDictation-Windows-Setup-v${{ steps.version.outputs.VERSION }}
+        path: ./installer/AIDictation-Windows-Setup-v${{ steps.version.outputs.VERSION }}.exe
         retention-days: 90

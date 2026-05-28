@@ -22,6 +22,9 @@ DerivedData/
 
 # Build
 build/
+bin/
+obj/
+artifacts/
 *.app
 *.dSYM.zip
 *.dSYM
@@ -49,3 +52,6 @@ Whishpermate/WhisperMateIOS/Secrets.plist
 
 # Claude Code
 .claude/
+
+# Local agent/runtime state
+.omx/

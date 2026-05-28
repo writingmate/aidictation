@@ -243,7 +243,9 @@
                                         <DataTemplate>
                                             <Button Style="{StaticResource LanguageButton}"
                                                     Command="{Binding DataContext.SelectLanguageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}">
+                                                    CommandParameter="{Binding}"
+                                                    IsEnabled="{Binding IsSelectable}"
+                                                    ToolTip="{Binding SupportText}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="{Binding Flag}" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                                     <TextBlock Text="{Binding DisplayName}" FontSize="13" VerticalAlignment="Center"/>

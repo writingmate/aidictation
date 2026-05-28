@@ -23,6 +23,7 @@ public partial class SettingsViewModel : ObservableObject
         public const Key DefaultCommandHotkey = Key.F9;
         public const ModifierKeys DefaultDictationModifiers = ModifierKeys.None;
         public const ModifierKeys DefaultCommandModifiers = ModifierKeys.Control;
+        public const TranscriptionModel CurrentTranscriptionModel = TranscriptionModel.AIDictationCloud;
     }
 
     // MARK: - Published Properties
@@ -87,6 +88,19 @@ public partial class SettingsViewModel : ObservableObject
     public string DictationHotkeyText => FormatHotkey(DictationModifiers, DictationHotkey);
     public string CommandHotkeyText => FormatHotkey(CommandModifiers, CommandHotkey);
 
+    // Overlay
+    public ObservableCollection<OverlayPositionItem> OverlayPositions { get; } = new();
+    public ObservableCollection<OverlayColorThemeItem> OverlayColorThemes { get; } = new();
+
+    [ObservableProperty]
+    private bool _showOverlayWhenIdle = true;
+
+    [ObservableProperty]
+    private OverlayPositionItem? _selectedOverlayPosition;
+
+    [ObservableProperty]
+    private OverlayColorThemeItem? _selectedOverlayColorTheme;
+
     // MARK: - Events
 
     public event EventHandler? CloseRequested;
@@ -98,6 +112,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         LoadAudioDevices();
         LoadLanguages();
+        LoadOverlayOptions();
         LoadSettings();
         LoadTextRules();
     }
@@ -114,6 +129,7 @@ public partial class SettingsViewModel : ObservableObject
     private void SelectLanguage(LanguageItem? item)
     {
         if (item == null) return;
+        if (!item.IsSelectable) return;
 
         foreach (var lang in Languages)
         {
@@ -295,6 +311,34 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    partial void OnShowOverlayWhenIdleChanged(bool value)
+    {
+        var settings = SettingsService.Instance;
+        settings.Settings.HideIdleOverlay = !value;
+        settings.SaveSettings();
+        OverlayService.Shared.ApplySettings(settings.Settings);
+    }
+
+    partial void OnSelectedOverlayPositionChanged(OverlayPositionItem? value)
+    {
+        if (value == null) return;
+
+        var settings = SettingsService.Instance;
+        settings.Settings.OverlayPosition = value.Position;
+        settings.SaveSettings();
+        OverlayService.Shared.ApplySettings(settings.Settings);
+    }
+
+    partial void OnSelectedOverlayColorThemeChanged(OverlayColorThemeItem? value)
+    {
+        if (value == null) return;
+
+        var settings = SettingsService.Instance;
+        settings.Settings.OverlayColorTheme = value.ColorTheme;
+        settings.SaveSettings();
+        OverlayService.Shared.ApplySettings(settings.Settings);
+    }
+
     private void LoadAudioDevices()
     {
         AudioDevices.Clear();
@@ -334,15 +378,33 @@ public partial class SettingsViewModel : ObservableObject
                 Language = language,
                 DisplayName = language.GetDisplayName(),
                 Flag = language.GetFlag(),
+                IsSelectable = language.SupportsModel(Constants.CurrentTranscriptionModel),
+                SupportText = GetLanguageSupportText(language),
                 IsSelected = language == Language.Auto
             });
         }
+    }
+
+    private void LoadOverlayOptions()
+    {
+        OverlayPositions.Clear();
+        OverlayPositions.Add(new OverlayPositionItem(OverlayPosition.Bottom, "Bottom"));
+        OverlayPositions.Add(new OverlayPositionItem(OverlayPosition.Top, "Top"));
+
+        OverlayColorThemes.Clear();
+        OverlayColorThemes.Add(new OverlayColorThemeItem(OverlayColorTheme.Orange, "Orange"));
+        OverlayColorThemes.Add(new OverlayColorThemeItem(OverlayColorTheme.Blue, "Blue"));
+        OverlayColorThemes.Add(new OverlayColorThemeItem(OverlayColorTheme.Green, "Green"));
+        OverlayColorThemes.Add(new OverlayColorThemeItem(OverlayColorTheme.Purple, "Purple"));
+        OverlayColorThemes.Add(new OverlayColorThemeItem(OverlayColorTheme.Pink, "Pink"));
+        OverlayColorThemes.Add(new OverlayColorThemeItem(OverlayColorTheme.Graphite, "Graphite"));
     }
 
     private void LoadSettings()
     {
         var settings = SettingsService.Instance;
         settings.Load();
+        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
 
         // Load selected audio device
         var deviceId = settings.Settings.SelectedAudioDeviceId;
@@ -390,6 +452,11 @@ public partial class SettingsViewModel : ObservableObject
             CommandModifiers = settings.Settings.CommandHotkey.Modifiers;
         }
 
+        ShowOverlayWhenIdle = !settings.Settings.HideIdleOverlay;
+        SelectedOverlayPosition = FindOverlayPosition(settings.Settings.OverlayPosition);
+        SelectedOverlayColorTheme = FindOverlayColorTheme(settings.Settings.OverlayColorTheme);
+        OverlayService.Shared.ApplySettings(settings.Settings);
+
         OnPropertyChanged(nameof(DictationHotkeyText));
         OnPropertyChanged(nameof(CommandHotkeyText));
     }
@@ -420,8 +487,21 @@ public partial class SettingsViewModel : ObservableObject
     private void SaveLanguageSelection()
     {
         var settings = SettingsService.Instance;
+        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
         settings.Settings.SelectedLanguages = new List<string> { SelectedLanguage.GetCode() };
         settings.SaveSettings();
+    }
+
+    private static string GetLanguageSupportText(Language language)
+    {
+        if (language.SupportsModel(Constants.CurrentTranscriptionModel))
+        {
+            return "Available in cloud mode";
+        }
+
+        return language.SupportsModel(TranscriptionModel.Parakeet)
+            ? "Available in offline mode"
+            : "Not available for this mode";
     }
 
     private void SaveHotkeys()
@@ -469,6 +549,26 @@ public partial class SettingsViewModel : ObservableObject
             _ => key.ToString()
         };
     }
+
+    private OverlayPositionItem? FindOverlayPosition(OverlayPosition position)
+    {
+        foreach (var item in OverlayPositions)
+        {
+            if (item.Position == position) return item;
+        }
+
+        return OverlayPositions.Count > 0 ? OverlayPositions[0] : null;
+    }
+
+    private OverlayColorThemeItem? FindOverlayColorTheme(OverlayColorTheme colorTheme)
+    {
+        foreach (var item in OverlayColorThemes)
+        {
+            if (item.ColorTheme == colorTheme) return item;
+        }
+
+        return OverlayColorThemes.Count > 0 ? OverlayColorThemes[0] : null;
+    }
 }
 
 // MARK: - Supporting Types
@@ -477,6 +577,30 @@ public class AudioDeviceItem
 {
     public string? DeviceId { get; set; }
     public string DisplayName { get; set; } = string.Empty;
+}
+
+public class OverlayPositionItem
+{
+    public OverlayPosition Position { get; }
+    public string DisplayName { get; }
+
+    public OverlayPositionItem(OverlayPosition position, string displayName)
+    {
+        Position = position;
+        DisplayName = displayName;
+    }
+}
+
+public class OverlayColorThemeItem
+{
+    public OverlayColorTheme ColorTheme { get; }
+    public string DisplayName { get; }
+
+    public OverlayColorThemeItem(OverlayColorTheme colorTheme, string displayName)
+    {
+        ColorTheme = colorTheme;
+        DisplayName = displayName;
+    }
 }
 
 public partial class DictionaryEntryItem : ObservableObject

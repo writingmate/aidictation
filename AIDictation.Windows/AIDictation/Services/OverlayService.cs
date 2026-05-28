@@ -19,8 +19,12 @@ public class OverlayService
     
     private OverlayWindow? _overlayWindow;
     private OverlayPosition _position = OverlayPosition.Bottom;
+    private OverlayColorTheme _colorTheme = OverlayColorTheme.Orange;
     private bool _hideWhenIdle = false;
     private bool _isEnabled = true;
+
+    public event EventHandler<bool>? RecordingStartRequested;
+    public event EventHandler? RecordingStopRequested;
     
     // MARK: - Initialization
     
@@ -40,6 +44,7 @@ public class OverlayService
             _overlayWindow = new OverlayWindow();
             _overlayWindow.SetPosition(_position);
             _overlayWindow.SetHideWhenIdle(_hideWhenIdle);
+            _overlayWindow.SetColorTheme(_colorTheme);
             
             if (_isEnabled)
             {
@@ -69,6 +74,18 @@ public class OverlayService
         Application.Current?.Dispatcher.Invoke(() =>
         {
             _overlayWindow?.SetHideWhenIdle(hide);
+        });
+    }
+
+    /// <summary>
+    /// Updates the overlay color theme.
+    /// </summary>
+    public void SetColorTheme(OverlayColorTheme colorTheme)
+    {
+        _colorTheme = colorTheme;
+        Application.Current?.Dispatcher.Invoke(() =>
+        {
+            _overlayWindow?.SetColorTheme(colorTheme);
         });
     }
     
@@ -136,5 +153,16 @@ public class OverlayService
     {
         SetPosition(settings.OverlayPosition);
         SetHideWhenIdle(settings.HideIdleOverlay);
+        SetColorTheme(settings.OverlayColorTheme);
+    }
+
+    public void RequestRecordingStart(bool isCommandMode = false)
+    {
+        RecordingStartRequested?.Invoke(this, isCommandMode);
+    }
+
+    public void RequestRecordingStop()
+    {
+        RecordingStopRequested?.Invoke(this, EventArgs.Empty);
     }
 }

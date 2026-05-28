@@ -53,11 +53,12 @@
             
             <!-- System Tray Icon -->
             <tb:TaskbarIcon x:Key="TrayIcon"
-                            IconSource="/Resources/Icons/app.ico"
+                            IconSource="/Assets/app.ico"
                             ToolTipText="AIDictation">
                 <tb:TaskbarIcon.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Open Settings" Click="TraySettings_Click"/>
+                        <MenuItem Header="Open History" Click="TrayHistory_Click"/>
                         <Separator/>
                         <MenuItem Header="Exit" Click="TrayExit_Click"/>
                     </ContextMenu>

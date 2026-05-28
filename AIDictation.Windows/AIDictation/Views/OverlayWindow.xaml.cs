@@ -1,5 +1,6 @@
 using System;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
@@ -19,11 +20,11 @@ public partial class OverlayWindow : Window
     
     private static class Constants
     {
-        public const int WaveformBarCount = 32;
-        public const double WaveformBarWidth = 4;
-        public const double WaveformBarGap = 2;
-        public const double WaveformMinHeight = 2;
-        public const double WaveformMaxHeight = 28;
+        public const int WaveformBarCount = 10;
+        public const double WaveformBarWidth = 5;
+        public const double WaveformBarGap = 3;
+        public const double WaveformMinHeight = 5;
+        public const double WaveformMaxHeight = 24;
         public const double ResultDisplayDuration = 3.0; // seconds
         public const double ErrorDisplayDuration = 4.0; // seconds
     }
@@ -34,9 +35,11 @@ public partial class OverlayWindow : Window
     private readonly DispatcherTimer _waveformTimer;
     private readonly DispatcherTimer _autoHideTimer;
     private readonly Rectangle[] _waveformBars;
+    private readonly Ellipse[] _idleDots;
     private readonly Random _random = new();
     private readonly double[] _waveformValues;
     private OverlayPosition _position = OverlayPosition.Bottom;
+    private OverlayColorTheme _colorTheme = OverlayColorTheme.Orange;
     private bool _hideWhenIdle = false;
     
     // MARK: - Initialization
@@ -48,6 +51,7 @@ public partial class OverlayWindow : Window
         _appState = AppState.Shared;
         _waveformValues = new double[Constants.WaveformBarCount];
         _waveformBars = new Rectangle[Constants.WaveformBarCount];
+        _idleDots = new Ellipse[Constants.WaveformBarCount];
         
         // Initialize waveform bars
         InitializeWaveform();
@@ -90,6 +94,15 @@ public partial class OverlayWindow : Window
         _hideWhenIdle = hide;
         UpdateVisibilityForState(_appState.CurrentState);
     }
+
+    /// <summary>
+    /// Updates the overlay color theme.
+    /// </summary>
+    public void SetColorTheme(OverlayColorTheme colorTheme)
+    {
+        _colorTheme = colorTheme;
+        ApplyColorTheme();
+    }
     
     /// <summary>
     /// Shows the overlay with fade-in animation
@@ -121,27 +134,33 @@ public partial class OverlayWindow : Window
     
     private void InitializeWaveform()
     {
-        var accentBrush = new SolidColorBrush(Color.FromRgb(0, 120, 212));
-        
         for (int i = 0; i < Constants.WaveformBarCount; i++)
         {
             var bar = new Rectangle
             {
                 Width = Constants.WaveformBarWidth,
                 Height = Constants.WaveformMinHeight,
-                Fill = accentBrush,
-                RadiusX = 2,
-                RadiusY = 2
+                RadiusX = Constants.WaveformBarWidth / 2,
+                RadiusY = Constants.WaveformBarWidth / 2
+            };
+
+            var dot = new Ellipse
+            {
+                Width = Constants.WaveformBarWidth,
+                Height = Constants.WaveformBarWidth
             };
             
             _waveformBars[i] = bar;
+            _idleDots[i] = dot;
             _waveformValues[i] = Constants.WaveformMinHeight;
             
             WaveformCanvas.Children.Add(bar);
+            IdleWaveCanvas.Children.Add(dot);
         }
         
-        // Position bars after canvas is loaded
         WaveformCanvas.Loaded += (s, e) => PositionWaveformBars();
+        IdleWaveCanvas.Loaded += (s, e) => PositionIdleDots();
+        ApplyColorTheme();
     }
     
     private void PositionWaveformBars()
@@ -156,6 +175,55 @@ public partial class OverlayWindow : Window
             System.Windows.Controls.Canvas.SetLeft(bar, startX + i * (Constants.WaveformBarWidth + Constants.WaveformBarGap));
             System.Windows.Controls.Canvas.SetTop(bar, centerY - bar.Height / 2);
         }
+    }
+
+    private void PositionIdleDots()
+    {
+        double totalWidth = Constants.WaveformBarCount * (Constants.WaveformBarWidth + Constants.WaveformBarGap) - Constants.WaveformBarGap;
+        double startX = (IdleWaveCanvas.ActualWidth - totalWidth) / 2;
+        double centerY = IdleWaveCanvas.ActualHeight / 2;
+
+        for (int i = 0; i < Constants.WaveformBarCount; i++)
+        {
+            var dot = _idleDots[i];
+            System.Windows.Controls.Canvas.SetLeft(dot, startX + i * (Constants.WaveformBarWidth + Constants.WaveformBarGap));
+            System.Windows.Controls.Canvas.SetTop(dot, centerY - dot.Height / 2);
+        }
+    }
+
+    private void ApplyColorTheme()
+    {
+        var accent = GetAccentColor(_colorTheme);
+        var accentBrush = new SolidColorBrush(accent);
+        var background = _colorTheme == OverlayColorTheme.Graphite
+            ? Color.FromArgb(246, 42, 42, 42)
+            : Color.FromArgb(246, 31, 31, 31);
+
+        OverlayRoot.Background = new SolidColorBrush(background);
+
+        foreach (var bar in _waveformBars)
+        {
+            bar.Fill = accentBrush;
+        }
+
+        foreach (var dot in _idleDots)
+        {
+            dot.Fill = accentBrush;
+            dot.Opacity = 0.9;
+        }
+    }
+
+    private static Color GetAccentColor(OverlayColorTheme colorTheme)
+    {
+        return colorTheme switch
+        {
+            OverlayColorTheme.Blue => Color.FromRgb(0, 122, 255),
+            OverlayColorTheme.Green => Color.FromRgb(52, 199, 89),
+            OverlayColorTheme.Purple => Color.FromRgb(175, 82, 222),
+            OverlayColorTheme.Pink => Color.FromRgb(255, 45, 146),
+            OverlayColorTheme.Graphite => Color.FromRgb(142, 142, 147),
+            _ => Color.FromRgb(255, 138, 31)
+        };
     }
     
     private void UpdateWaveform(float audioLevel)
@@ -339,6 +407,33 @@ public partial class OverlayWindow : Window
     {
         _autoHideTimer.Stop();
         _appState.Reset();
+    }
+
+    private void OverlayRoot_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_appState.CurrentState == AppState.State.Idle ||
+            _appState.CurrentState == AppState.State.Result ||
+            _appState.CurrentState == AppState.State.Error)
+        {
+            StartRecording();
+        }
+    }
+
+    private void StopButton_Click(object sender, RoutedEventArgs e)
+    {
+        StopRecording();
+        e.Handled = true;
+    }
+
+    private void StartRecording()
+    {
+        OverlayService.Shared.RequestRecordingStart();
+    }
+
+    private void StopRecording()
+    {
+        if (!_appState.IsRecording) return;
+        OverlayService.Shared.RequestRecordingStop();
     }
     
     // MARK: - Cleanup

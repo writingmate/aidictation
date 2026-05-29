@@ -105,7 +105,7 @@ platform :ios do
   #####################################
   desc "Build the app for App Store"
   lane :build do
-    setup_ci(provider: "github_actions") if ENV["CI"].to_s == "true"
+    setup_ci if ENV["CI"].to_s == "true"
 
     # Increment build number
     if !ENV["IOS_BUILD_NUMBER"].to_s.empty?

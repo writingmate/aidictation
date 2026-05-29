@@ -11,8 +11,10 @@
 		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B2D5E0052F9BF00100000005 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B2D5E0032F9BF00100000003 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B2D5E0042F9BF00100000004 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
+		B2D5E0062F9BF00100000006 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C12A3A102ED4CFAA002D97E6 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A0F2ED4CFAA002D97E6 /* Supabase */; };
 		C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A132ED4D0AA002D97E6 /* Auth */; };
@@ -28,6 +30,20 @@
 
 /* Begin PBXContainerItemProxy section */
 		42E01EF2CF78A5915AA93F0E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 75F76DD9E51FB4E901E3F114;
+			remoteInfo = ParakeetRuntime;
+		};
+		42E01EF3CF78A5915AA93F0F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 75F76DD9E51FB4E901E3F114;
+			remoteInfo = ParakeetRuntime;
+		};
+		42E01EF4CF78A5915AA93F10 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
 			proxyType = 1;
@@ -90,6 +106,7 @@
 			dstSubfolderSpec = 10;
 			files = (
 				B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */,
+				B2D5E0052F9BF00100000005 /* ParakeetRuntime.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -100,6 +117,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				B2D5E0062F9BF00100000006 /* ParakeetRuntime.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -428,6 +446,7 @@
 			dependencies = (
 				C1E7D30B2EBA92C900A07338 /* PBXTargetDependency */,
 				C1E7D31A2EBA94A600A07338 /* PBXTargetDependency */,
+				931DC8AE381DB1589850BC93 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C1E7D2EF2EBA92A500A07338 /* WhisperMateIOS */,
@@ -450,6 +469,7 @@
 			);
 			dependencies = (
 				C1E7D31F2EBA94EE00A07338 /* PBXTargetDependency */,
+				931DC8AF381DB1589850BC94 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C1E7D3062EBA92C900A07338 /* WhisperMateKeyboard */,
@@ -639,6 +659,18 @@
 			target = 75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */;
 			targetProxy = 42E01EF2CF78A5915AA93F0E /* PBXContainerItemProxy */;
 		};
+		931DC8AE381DB1589850BC93 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ParakeetRuntime;
+			target = 75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */;
+			targetProxy = 42E01EF3CF78A5915AA93F0F /* PBXContainerItemProxy */;
+		};
+		931DC8AF381DB1589850BC94 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ParakeetRuntime;
+			target = 75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */;
+			targetProxy = 42E01EF4CF78A5915AA93F10 /* PBXContainerItemProxy */;
+		};
 		D1B200012F6500020000000D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = PermissionFlowRuntime;
@@ -686,11 +718,12 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/Frameworks",
 				);
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
-				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
@@ -715,11 +748,12 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/Frameworks",
 				);
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
-				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";

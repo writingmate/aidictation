@@ -12,6 +12,8 @@ public enum SecretsLoader {
 
     public static func transcriptionKey(for provider: TranscriptionProvider) -> String? {
         switch provider {
+        case .onDevice:
+            return nil
         case .groq:
             return sanitizedSecret("GroqTranscriptionKey")
         case .custom:

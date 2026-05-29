@@ -49,6 +49,25 @@ def provisioning_profile_settings(profile)
   profile.match?(uuid_pattern) ? { profile_uuid: profile } : { profile_name: profile }
 end
 
+def app_store_profile(api_key:, team_id:, app_identifier:, filename:, provisioning_name:, cert_id:)
+  get_provisioning_profile(
+    api_key: api_key,
+    team_id: team_id,
+    app_identifier: app_identifier,
+    provisioning_name: provisioning_name,
+    filename: filename,
+    output_path: "./build/signing",
+    cert_id: cert_id,
+    force: true,
+    readonly: false
+  )
+
+  {
+    uuid: lane_context[SharedValues::SIGH_UUID],
+    name: lane_context[SharedValues::SIGH_NAME]
+  }
+end
+
 platform :ios do
   # Variables
   app_identifier = "com.whispermate.ios"
@@ -86,6 +105,8 @@ platform :ios do
   #####################################
   desc "Build the app for App Store"
   lane :build do
+    setup_ci(provider: "github_actions") if ENV["CI"].to_s == "true"
+
     # Increment build number
     if !ENV["IOS_BUILD_NUMBER"].to_s.empty?
       committed_build_number = get_info_plist_value(
@@ -128,8 +149,34 @@ platform :ios do
       if !ENV["APP_STORE_CONNECT_API_KEY_KEY"].to_s.empty?
         auth_args = "-allowProvisioningUpdates -authenticationKeyPath #{File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY"])} -authenticationKeyID #{ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"]} -authenticationKeyIssuerID #{ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"]}"
       end
-      app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]
-      keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s.empty? ? "db6f8085-4d33-4b22-af3e-741fdf9c2c29" : ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"]
+      api_key = app_store_connect_api_key_from_env
+      UI.user_error!("App Store Connect API key is required for CI signing") if api_key.nil?
+
+      get_certificates(
+        api_key: api_key,
+        team_id: team_id,
+        type: "distribution",
+        output_path: "./build/signing",
+        generate_apple_certs: true
+      )
+      distribution_cert_id = lane_context[SharedValues::CERT_CERTIFICATE_ID]
+
+      app_profile = app_store_profile(
+        api_key: api_key,
+        team_id: team_id,
+        app_identifier: app_identifier,
+        filename: "WhisperMateIOS_AppStore.mobileprovision",
+        provisioning_name: "WhisperMate iOS App Store CI",
+        cert_id: distribution_cert_id
+      )
+      keyboard_profile = app_store_profile(
+        api_key: api_key,
+        team_id: team_id,
+        app_identifier: "#{app_identifier}.keyboard",
+        filename: "WhisperMateKeyboard_AppStore.mobileprovision",
+        provisioning_name: "WhisperMate Keyboard App Store CI",
+        cert_id: distribution_cert_id
+      )
 
       update_code_signing_settings(
         use_automatic_signing: false,
@@ -138,7 +185,7 @@ platform :ios do
         targets: ["WhisperMateIOS"],
         build_configurations: ["Release"],
         code_sign_identity: "Apple Distribution",
-        **provisioning_profile_settings(app_profile)
+        profile_uuid: app_profile[:uuid]
       )
 
       update_code_signing_settings(
@@ -148,7 +195,7 @@ platform :ios do
         targets: ["WhisperMateKeyboard"],
         build_configurations: ["Release"],
         code_sign_identity: "Apple Distribution",
-        **provisioning_profile_settings(keyboard_profile)
+        profile_uuid: keyboard_profile[:uuid]
       )
 
       update_code_signing_settings(
@@ -166,8 +213,8 @@ platform :ios do
         signingStyle: "manual",
         signingCertificate: "Apple Distribution",
         provisioningProfiles: {
-          "com.whispermate.ios" => app_profile,
-          "com.whispermate.ios.keyboard" => keyboard_profile
+          "com.whispermate.ios" => app_profile[:name],
+          "com.whispermate.ios.keyboard" => keyboard_profile[:name]
         }
       }
     else

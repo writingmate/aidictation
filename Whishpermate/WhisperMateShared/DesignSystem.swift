@@ -1,14 +1,72 @@
 import SwiftUI
 #if canImport(AppKit)
-    import AppKit
+import AppKit
 #elseif canImport(UIKit)
-    import UIKit
+import UIKit
 #endif
 
 // MARK: - Design System
 
 // Minimal design system using standard macOS colors
 // Primary/Accent color is set via AccentColor.colorset in Assets
+
+private extension Color {
+    static var dsSystemBackground: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .windowBackgroundColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .systemBackground)
+        #endif
+    }
+
+    static var dsSystemForeground: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .labelColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .label)
+        #endif
+    }
+
+    static var dsSystemSecondaryForeground: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .secondaryLabelColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .secondaryLabel)
+        #endif
+    }
+
+    static var dsSystemSeparator: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .separatorColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .separator)
+        #endif
+    }
+
+    static var dsSystemControlBackground: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .controlBackgroundColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .secondarySystemBackground)
+        #endif
+    }
+
+    static var dsSystemMutedBackground: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .tertiarySystemFill)
+        #endif
+    }
+
+    static var dsSystemTextBackground: Color {
+        #if canImport(AppKit)
+        return Color(nsColor: .textBackgroundColor)
+        #elseif canImport(UIKit)
+        return Color(uiColor: .systemBackground)
+        #endif
+    }
+}
 
 // MARK: - Button Styles
 
@@ -38,8 +96,8 @@ public struct DSSecondaryButtonStyle: ButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .dsFont(.bodyMedium)
-            .foregroundStyle(Color.dsSecondary)
-            .background(Capsule().stroke(Color.dsBorder, lineWidth: 1))
+            .foregroundStyle(Color.dsSystemSecondaryForeground)
+            .background(Capsule().stroke(Color.dsSystemSeparator, lineWidth: 1))
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1.0) : 0.5)
             .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
             .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
@@ -213,38 +271,6 @@ public extension View {
 
 // Default SwiftUI colors with orange accent
 
-#if canImport(AppKit)
-private extension Color {
-    static var dsSystemBackground: Color { Color(nsColor: .windowBackgroundColor) }
-    static var dsSystemForeground: Color { Color(nsColor: .labelColor) }
-    static var dsSystemSecondaryForeground: Color { Color(nsColor: .secondaryLabelColor) }
-    static var dsSystemControlBackground: Color { Color(nsColor: .controlBackgroundColor) }
-    static var dsSystemMutedBackground: Color { Color(nsColor: .unemphasizedSelectedContentBackgroundColor) }
-    static var dsSystemSeparator: Color { Color(nsColor: .separatorColor) }
-    static var dsSystemTextBackground: Color { Color(nsColor: .textBackgroundColor) }
-}
-#elseif canImport(UIKit)
-private extension Color {
-    static var dsSystemBackground: Color { Color(uiColor: .systemBackground) }
-    static var dsSystemForeground: Color { Color(uiColor: .label) }
-    static var dsSystemSecondaryForeground: Color { Color(uiColor: .secondaryLabel) }
-    static var dsSystemControlBackground: Color { Color(uiColor: .secondarySystemBackground) }
-    static var dsSystemMutedBackground: Color { Color(uiColor: .tertiarySystemFill) }
-    static var dsSystemSeparator: Color { Color(uiColor: .separator) }
-    static var dsSystemTextBackground: Color { Color(uiColor: .systemBackground) }
-}
-#else
-private extension Color {
-    static var dsSystemBackground: Color { .white }
-    static var dsSystemForeground: Color { .primary }
-    static var dsSystemSecondaryForeground: Color { .secondary }
-    static var dsSystemControlBackground: Color { .white }
-    static var dsSystemMutedBackground: Color { Color.black.opacity(0.08) }
-    static var dsSystemSeparator: Color { Color.black.opacity(0.12) }
-    static var dsSystemTextBackground: Color { .white }
-}
-#endif
-
 public extension Color {
     // Background & Foreground - use system colors
     static var dsBackground: Color { dsSystemBackground }
@@ -326,8 +352,8 @@ public struct DSCardStyle: ViewModifier {
 
     public func body(content: Content) -> some View {
         content
-            .background(RoundedRectangle(cornerRadius: cornerRadius).fill(Color.dsCard))
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.dsBorder, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: cornerRadius).fill(Color.dsSystemControlBackground))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.dsSystemSeparator, lineWidth: 1))
             .shadow(color: hasShadow ? Color.black.opacity(0.05) : .clear, radius: 8, y: 4)
     }
 }

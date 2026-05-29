@@ -4,7 +4,7 @@ import WhisperMateShared
 
 struct OnboardingView: View {
     @ObservedObject var onboardingManager: OnboardingManager
-    @State private var currentStep: OnboardingStep = .welcome
+    @State private var currentStep: OnboardingStep = OnboardingStep.initialStep
     @State private var isCheckingMicrophone = false
     @State private var refreshTrigger = false
 
@@ -12,35 +12,35 @@ struct OnboardingView: View {
         case welcome
         case microphone
         case keyboardSetup
+
+        static var initialStep: OnboardingStep {
+            #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-AIDictationShowKeyboardOnboarding") {
+                    return .keyboardSetup
+                }
+            #endif
+            return .welcome
+        }
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                Spacer()
+                stepContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                switch currentStep {
-                case .welcome:
-                    welcomeStep
-                case .microphone:
-                    microphoneStep
-                case .keyboardSetup:
-                    keyboardSetupStep
-                }
-
-                Spacer()
-
-                // Bottom button
                 bottomButton
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 8)
             }
-            .padding()
-            .navigationTitle("WhisperMate Setup")
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
+            .navigationTitle("AI Dictation Setup")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .navigationViewStyle(.stack)
+        .tint(Color.dsPrimary)
         .onAppear {
-            // Load API key from Secrets.plist into keychain on first launch
             if KeychainHelper.get(key: "custom_transcription_api_key") == nil,
                let apiKey = SecretsLoader.transcriptionKey(for: .custom)
             {
@@ -60,161 +60,199 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Steps
+    @ViewBuilder
+    private var stepContent: some View {
+        switch currentStep {
+        case .welcome:
+            welcomeStep
+        case .microphone:
+            microphoneStep
+        case .keyboardSetup:
+            keyboardSetupStep
+        }
+    }
 
     private var welcomeStep: some View {
         VStack(spacing: 20) {
-            Image(systemName: "waveform.circle.fill")
-                .resizable()
-                .frame(width: 100, height: 100)
-                .foregroundColor(.blue)
+            Spacer(minLength: 20)
 
-            Text("Welcome to WhisperMate")
-                .font(.title)
-                .fontWeight(.bold)
+            OnboardingHeroIcon(systemName: "waveform", iconSize: 44)
 
-            Text("Voice-to-text keyboard for iOS")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+            VStack(spacing: 8) {
+                Text("Welcome to AI Dictation")
+                    .font(.system(size: 28, weight: .bold))
+                    .multilineTextAlignment(.center)
 
-            VStack(alignment: .leading, spacing: 12) {
+                Text("Voice-to-text keyboard for iOS")
+                    .font(.system(size: 16))
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(spacing: 12) {
                 FeatureRow(icon: "mic.fill", text: "Speak naturally")
                 FeatureRow(icon: "bolt.fill", text: "Fast transcription")
-                FeatureRow(icon: "lock.fill", text: "Secure & private")
+                FeatureRow(icon: "lock.fill", text: "Secure and private")
             }
-            .frame(maxWidth: 250)
-            .padding()
+            .padding(.top, 8)
+
+            Spacer(minLength: 20)
         }
     }
 
     private var microphoneStep: some View {
         VStack(spacing: 20) {
-            Image(systemName: "mic.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 80, height: 80)
-                .foregroundColor(.blue)
+            Spacer(minLength: 20)
 
-            Text("Microphone Access")
-                .font(.title2)
-                .fontWeight(.bold)
+            OnboardingHeroIcon(systemName: "mic.fill", iconSize: 40)
 
-            Text("WhisperMate needs microphone access to transcribe your voice.")
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            VStack(spacing: 10) {
+                Text("Microphone Access")
+                    .font(.system(size: 28, weight: .bold))
+                    .multilineTextAlignment(.center)
+
+                Text("AI Dictation needs microphone access to transcribe your voice.")
+                    .font(.system(size: 16))
+                    .lineSpacing(2)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 4)
+            }
 
             if isMicrophoneGranted() {
-                VStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(.green)
-
+                        .font(.system(size: 20, weight: .semibold))
                     Text("Permission granted")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.green)
+                        .font(.system(size: 16, weight: .semibold))
                 }
-                .padding(.vertical, 20)
+                .foregroundColor(.green)
+                .padding(.horizontal, 18)
+                .frame(height: 44)
+                .background(
+                    Capsule()
+                        .fill(Color.green.opacity(0.12))
+                )
+                .padding(.top, 8)
+            } else if isMicrophoneDenied() {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text("Turn it back on in Settings")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundColor(.orange)
+                .padding(.horizontal, 18)
+                .frame(height: 44)
+                .background(
+                    Capsule()
+                        .fill(Color.orange.opacity(0.12))
+                )
+                .padding(.top, 8)
             }
+
+            Spacer(minLength: 20)
         }
     }
 
     private var keyboardSetupStep: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "keyboard")
-                .resizable()
-                .frame(width: 80, height: 80)
-                .foregroundColor(.blue)
+        VStack(spacing: 18) {
+            Spacer(minLength: 12)
 
-            Text("Enable Keyboard")
-                .font(.title2)
-                .fontWeight(.bold)
+            OnboardingHeroIcon(systemName: "keyboard", iconSize: 38)
 
-            Text("To use WhisperMate, you need to enable the keyboard in Settings.")
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            VStack(spacing: 8) {
+                Text("Enable the Keyboard")
+                    .font(.system(size: 27, weight: .bold))
+                    .multilineTextAlignment(.center)
 
-            VStack(alignment: .leading, spacing: 16) {
-                InstructionRow(number: 1, text: "Go to Settings > General > Keyboard > Keyboards")
-                InstructionRow(number: 2, text: "Tap 'Add New Keyboard'")
-                InstructionRow(number: 3, text: "Select 'WhisperMate'")
-                InstructionRow(number: 4, text: "Enable 'Allow Full Access' for voice features")
+                Text("Add AI Dictation in Settings, then allow full access for voice input.")
+                    .font(.system(size: 15))
+                    .lineSpacing(2)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding()
 
-            Button("Open Settings") {
-                openKeyboardSettings()
+            VStack(spacing: 8) {
+                InstructionRow(number: 1, text: "Open Settings > General > Keyboard")
+                InstructionRow(number: 2, text: "Tap Keyboards, then Add New Keyboard")
+                InstructionRow(number: 3, text: "Choose AI Dictation")
+                InstructionRow(number: 4, text: "Turn on Allow Full Access")
             }
-            .buttonStyle(.bordered)
+            .padding(.top, 2)
+
+            Button(action: openKeyboardSettings) {
+                Label("Open Settings", systemImage: "gearshape.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color.dsPrimary)
+                    .padding(.horizontal, 16)
+                    .frame(height: 40)
+                    .background(
+                        Capsule()
+                            .fill(Color(uiColor: .systemBackground))
+                            .shadow(color: Color.black.opacity(0.06), radius: 10, y: 4)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.dsPrimary.opacity(0.28), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 12)
         }
     }
-
-    // MARK: - Bottom Button
 
     @ViewBuilder
     private var bottomButton: some View {
         switch currentStep {
         case .welcome:
-            Button(action: {
-                currentStep = .microphone
-            }) {
-                Text("Continue")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(
-                        Capsule()
-                            .fill(Color.blue)
-                    )
+            Button(action: { currentStep = .microphone }) {
+                PrimaryOnboardingButtonTitle("Continue")
             }
-
         case .microphone:
             Button(action: {
                 if isMicrophoneGranted() {
                     currentStep = .keyboardSetup
+                } else if isMicrophoneDenied() {
+                    openKeyboardSettings()
                 } else {
                     requestMicrophonePermission()
                 }
             }) {
-                Text(isMicrophoneGranted() ? "Continue" : "Enable Microphone")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(
-                        Capsule()
-                            .fill(Color.blue)
-                    )
+                PrimaryOnboardingButtonTitle(microphoneButtonTitle)
             }
-
         case .keyboardSetup:
-            Button(action: {
-                onboardingManager.completeOnboarding()
-            }) {
-                Text("Get Started")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(
-                        Capsule()
-                            .fill(Color.blue)
-                    )
+            Button(action: { onboardingManager.completeOnboarding() }) {
+                PrimaryOnboardingButtonTitle("Get Started")
             }
         }
     }
 
-    // MARK: - Helpers
-
     private func isMicrophoneGranted() -> Bool {
-        return AVAudioSession.sharedInstance().recordPermission == .granted
+        AVAudioSession.sharedInstance().recordPermission == .granted
+    }
+
+    private func isMicrophoneDenied() -> Bool {
+        AVAudioSession.sharedInstance().recordPermission == .denied
+    }
+
+    private var microphoneButtonTitle: String {
+        if isMicrophoneGranted() {
+            return "Continue"
+        }
+
+        if isMicrophoneDenied() {
+            return "Open Settings"
+        }
+
+        return "Enable Microphone"
     }
 
     private func requestMicrophonePermission() {
         AVAudioSession.sharedInstance().requestRecordPermission { _ in
-            // Permission dialog will appear, polling will detect the change
+            // Permission dialog appears; polling detects the change.
         }
     }
 
@@ -230,18 +268,14 @@ struct OnboardingView: View {
     private func checkMicrophonePeriodically() {
         guard isCheckingMicrophone else { return }
 
-        // Check if permission was granted
         if isMicrophoneGranted() {
-            // Auto-advance to next step
             isCheckingMicrophone = false
             currentStep = .keyboardSetup
             return
         }
 
-        // Toggle state to trigger view refresh
         refreshTrigger.toggle()
 
-        // Check again in 0.5 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.checkMicrophonePeriodically()
         }
@@ -254,38 +288,112 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - Supporting Views
+private struct OnboardingHeroIcon: View {
+    let systemName: String
+    let iconSize: CGFloat
 
-struct FeatureRow: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.dsPrimary.opacity(0.18),
+                            Color.dsPrimary.opacity(0.07),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.dsPrimary.opacity(0.22), lineWidth: 1)
+                )
+
+            Image(systemName: systemName)
+                .font(.system(size: iconSize, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundColor(Color.dsPrimary)
+        }
+        .frame(width: 94, height: 94)
+    }
+}
+
+private struct PrimaryOnboardingButtonTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(
+                Capsule()
+                    .fill(Color.dsPrimary)
+                    .shadow(color: Color.dsPrimary.opacity(0.25), radius: 12, y: 6)
+            )
+    }
+}
+
+private struct FeatureRow: View {
     let icon: String
     let text: String
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: icon)
-                .foregroundColor(.blue)
-                .frame(width: 24, height: 24)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(Color.dsPrimary)
+                .frame(width: 26)
+
             Text(text)
+                .font(.system(size: 17, weight: .medium))
                 .foregroundColor(.primary)
+
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: 260)
     }
 }
 
-struct InstructionRow: View {
+private struct InstructionRow: View {
     let number: Int
     let text: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 14) {
             Text("\(number)")
-                .fontWeight(.bold)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
-                .frame(width: 28, height: 28)
-                .background(Color.blue)
-                .clipShape(Circle())
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle()
+                        .fill(Color.dsPrimary)
+                )
+
             Text(text)
+                .font(.system(size: 15, weight: .medium))
                 .foregroundColor(.primary)
-            Spacer()
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 3)
+
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .systemBackground))
+                .shadow(color: Color.black.opacity(0.055), radius: 12, y: 5)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        )
     }
 }

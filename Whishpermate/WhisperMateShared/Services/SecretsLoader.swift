@@ -13,20 +13,20 @@ public enum SecretsLoader {
     public static func transcriptionKey(for provider: TranscriptionProvider) -> String? {
         switch provider {
         case .groq:
-            return secretsDictionary?["GroqTranscriptionKey"] as? String
+            return sanitizedSecret("GroqTranscriptionKey")
         case .custom:
-            return secretsDictionary?["CustomTranscriptionKey"] as? String
+            return sanitizedSecret("CustomTranscriptionKey")
         case .openai:
             return nil
         }
     }
 
     public static func customTranscriptionEndpoint() -> String? {
-        return secretsDictionary?["CustomTranscriptionEndpoint"] as? String
+        return sanitizedSecret("CustomTranscriptionEndpoint")
     }
 
     public static func customTranscriptionModel() -> String? {
-        guard let model = secretsDictionary?["CustomTranscriptionModel"] as? String else {
+        guard let model = sanitizedSecret("CustomTranscriptionModel") else {
             return nil
         }
         return normalizedCustomTranscriptionModel(model)
@@ -35,22 +35,40 @@ public enum SecretsLoader {
     public static func llmKey(for provider: LLMProvider) -> String? {
         switch provider {
         case .groq:
-            return secretsDictionary?["GroqLLMKey"] as? String
+            return sanitizedSecret("GroqLLMKey")
         case .openai, .anthropic, .custom:
             return nil
         }
     }
 
     public static func aidictationPostProcessingEndpoint() -> String? {
-        return secretsDictionary?["AIDictationPostProcessingEndpoint"] as? String
+        return sanitizedSecret("AIDictationPostProcessingEndpoint")
     }
 
     public static func aidictationPostProcessingKey() -> String? {
-        return secretsDictionary?["AIDictationPostProcessingKey"] as? String
+        return sanitizedSecret("AIDictationPostProcessingKey")
     }
 
     public static func getValue(for key: String) -> String? {
-        return secretsDictionary?[key] as? String
+        return sanitizedSecret(key)
+    }
+
+    private static func sanitizedSecret(_ key: String) -> String? {
+        guard let value = secretsDictionary?[key] as? String else {
+            return nil
+        }
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        let uppercased = trimmed.uppercased()
+        if uppercased.hasPrefix("YOUR_") || uppercased.hasPrefix("REPLACE_") || trimmed.contains("api.example.com") {
+            return nil
+        }
+
+        return trimmed
     }
 
     private static func normalizedCustomTranscriptionModel(_ model: String) -> String {

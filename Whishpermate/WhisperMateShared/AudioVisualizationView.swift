@@ -11,73 +11,38 @@ public struct AudioVisualizationView: View {
         self.frequencyBands = frequencyBands
     }
 
-    private let totalBars = 14
-    private let minActiveBars = 4 // Minimum bars that activate in center
-    private let barWidth: CGFloat = 4 // Twice as thick
-    private let barSpacing: CGFloat = 2
-    private let maxBarHeight: CGFloat = 18 // Fit within 24px overlay height with padding
-    private let dotSize: CGFloat = 3 // Perfect circle when inactive
-
-    private var activeBarCount: Int {
-        let audioFactor = CGFloat(audioLevel)
-        let range = CGFloat(totalBars - minActiveBars)
-        let count = minActiveBars + Int(range * audioFactor)
-        return max(minActiveBars, min(totalBars, count))
-    }
-
     private func barHeight(for index: Int) -> CGFloat {
-        // Use frequency bands if available
-        if let bands = frequencyBands, bands.count == totalBars {
-            let magnitude = CGFloat(bands[index])
-            let heightRange = maxBarHeight - dotSize
-            let randomFactor = CGFloat.random(in: 0.8 ... 1.2) // Add organic variation
-            let height = dotSize + (heightRange * magnitude * randomFactor)
-            return max(dotSize, min(maxBarHeight, height))
+        if let bands = frequencyBands, bands.count == AIDictationWaveMetrics.count {
+            let magnitude = max(0, min(1, CGFloat(bands[index])))
+            return AIDictationWaveMetrics.dotSize + ((AIDictationWaveMetrics.maxBarHeight - AIDictationWaveMetrics.dotSize) * magnitude)
         }
 
-        // Fallback to volume-based visualization
-        // Calculate position from center (0.0 = center, 1.0 = edge)
-        let center = Double(totalBars - 1) / 2.0
-        let distanceFromCenter = abs(Double(index) - center) / center
-
-        // Check if this bar should be active
-        let barsFromEdge = (totalBars - activeBarCount) / 2
-        let distanceFromStart = index
-        let distanceFromEnd = totalBars - 1 - index
-        let minDistance = min(distanceFromStart, distanceFromEnd)
-
-        let isActive = minDistance >= barsFromEdge
-
-        // If not active, return dot size (will be rendered as circle)
-        if !isActive {
-            return dotSize
-        }
-
-        // Linear audio factor for better sensitivity
-        let audioFactor = CGFloat(audioLevel)
-
-        // Quadratic falloff from center for dramatic curve
+        let center = CGFloat(AIDictationWaveMetrics.count - 1) / 2
+        let distanceFromCenter = abs(CGFloat(index) - center) / center
         let waveformFactor = 1.0 - (distanceFromCenter * distanceFromCenter)
-
-        // Add organic variation
-        let randomFactor = CGFloat.random(in: 0.8 ... 1.2)
-
-        // Calculate height
-        let heightRange = maxBarHeight - dotSize
-        let baseHeight = dotSize + (heightRange * audioFactor * waveformFactor * randomFactor)
-
-        return max(dotSize, min(maxBarHeight, baseHeight))
+        let level = max(0, min(1, CGFloat(audioLevel)))
+        return AIDictationWaveMetrics.dotSize + ((AIDictationWaveMetrics.maxBarHeight - AIDictationWaveMetrics.dotSize) * level * waveformFactor)
     }
 
     public var body: some View {
-        HStack(spacing: barSpacing) {
-            ForEach(0 ..< totalBars, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(color)
-                    .frame(width: barWidth, height: barHeight(for: index))
+        GeometryReader { proxy in
+            let scale = AIDictationWaveMetrics.scale(for: proxy.size)
+
+            HStack(spacing: AIDictationWaveMetrics.spacing * scale) {
+                ForEach(0 ..< AIDictationWaveMetrics.count, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: AIDictationWaveMetrics.cornerRadius * scale)
+                        .fill(color)
+                        .frame(
+                            width: AIDictationWaveMetrics.dotSize * scale,
+                            height: max(AIDictationWaveMetrics.dotSize, barHeight(for: index)) * scale
+                        )
+                }
             }
+            .frame(width: AIDictationWaveMetrics.rowWidth * scale, height: AIDictationWaveMetrics.maxBarHeight * scale)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .animation(.easeOut(duration: 0.12), value: frequencyBands ?? [audioLevel])
+        .animation(.easeOut(duration: 0.12), value: audioLevel)
+        .animation(.easeOut(duration: 0.12), value: frequencyBands ?? [])
     }
 }
 
@@ -90,38 +55,80 @@ public struct ProcessingWaveView: View {
         self.color = color
     }
 
-    private let totalBars = 14
-    private let barWidth: CGFloat = 4
-    private let barSpacing: CGFloat = 2
-    private let maxBarHeight: CGFloat = 18
-    private let minBarHeight: CGFloat = 4
-    private let cycleDuration: Double = 0.9
-
-    private func barHeight(for index: Int, phase: CGFloat) -> CGFloat {
-        let normalizedIndex = CGFloat(index) / CGFloat(totalBars - 1)
-
-        // Wave moves left to right
-        let wavePosition = normalizedIndex * 2.0 * .pi - phase
-
-        // Pure sine wave, normalized to 0-1
-        let sineValue = (sin(wavePosition) + 1.0) / 2.0
-
-        let heightRange = maxBarHeight - minBarHeight
-        return minBarHeight + (heightRange * sineValue)
-    }
+    private let cycleDuration: TimeInterval = 2.2
 
     public var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycleDuration) / cycleDuration * 2.0 * .pi
+            let progress = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+            let litRange = AIDictationWaveMetrics.litRange(for: progress)
 
-            HStack(spacing: barSpacing) {
-                ForEach(0 ..< totalBars, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(color)
-                        .frame(width: barWidth, height: barHeight(for: index, phase: CGFloat(phase)))
+            GeometryReader { proxy in
+                let scale = AIDictationWaveMetrics.scale(for: proxy.size)
+
+                HStack(spacing: AIDictationWaveMetrics.spacing * scale) {
+                    ForEach(0 ..< AIDictationWaveMetrics.count, id: \.self) { index in
+                        let isLit = litRange.contains(index)
+                        Circle()
+                            .fill(color)
+                            .frame(
+                                width: AIDictationWaveMetrics.dotSize * scale,
+                                height: AIDictationWaveMetrics.dotSize * scale
+                            )
+                            .brightness(isLit ? 0 : -0.34)
+                    }
                 }
+                .frame(width: AIDictationWaveMetrics.rowWidth * scale, height: AIDictationWaveMetrics.maxBarHeight * scale)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+}
+
+private enum AIDictationWaveMetrics {
+    static let count = 10
+    static let dotSize: CGFloat = 4
+    static let spacing: CGFloat = 4.75
+    static let rowWidth: CGFloat = (dotSize * CGFloat(count)) + (spacing * CGFloat(count - 1))
+    static let maxBarHeight: CGFloat = 18 * 0.75
+    static let cornerRadius: CGFloat = dotSize / 2
+
+    static func scale(for size: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0 else {
+            return 1
+        }
+
+        let fittingScale = min(size.width / rowWidth, size.height / maxBarHeight)
+        return max(1, min(3.2, fittingScale * 0.48))
+    }
+
+    static func litRange(for progress: Double) -> ClosedRange<Int> {
+        let lastIndex = count - 1
+
+        if progress < 0.32 {
+            let local = easeInOut(progress / 0.32)
+            return 0 ... Int(round(local * Double(lastIndex)))
+        }
+
+        if progress < 0.5 {
+            let local = easeInOut((progress - 0.32) / 0.18)
+            return Int(round(local * Double(lastIndex))) ... lastIndex
+        }
+
+        if progress < 0.82 {
+            let local = easeInOut((progress - 0.5) / 0.32)
+            return Int(round((1 - local) * Double(lastIndex))) ... lastIndex
+        }
+
+        let local = easeInOut((progress - 0.82) / 0.18)
+        return 0 ... Int(round((1 - local) * Double(lastIndex)))
+    }
+
+    private static func easeInOut(_ value: Double) -> Double {
+        if value < 0.5 {
+            return 2 * value * value
+        }
+        return 1 - pow(-2 * value + 2, 2) / 2
     }
 }
 

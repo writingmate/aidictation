@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UIKit
 import WhisperMateShared
 
 @main
@@ -10,12 +11,42 @@ struct WhisperMateApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if onboardingManager.hasCompletedOnboarding {
-                ContentView()
-            } else {
-                OnboardingView(onboardingManager: onboardingManager)
+            Group {
+                if onboardingManager.hasCompletedOnboarding {
+                    ContentView()
+                } else {
+                    OnboardingView(onboardingManager: onboardingManager)
+                }
+            }
+            .onOpenURL { url in
+                if handleAppURL(url) {
+                    return
+                }
+
+                Task {
+                    await AuthManager.shared.handleAuthCallback(url: url)
+                }
             }
         }
+    }
+
+    private func handleAppURL(_ url: URL) -> Bool {
+        guard url.scheme == "aidictation" else {
+            return false
+        }
+
+        guard url.host == "microphone-settings" else {
+            return false
+        }
+
+        DispatchQueue.main.async {
+            guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
+                return
+            }
+            UIApplication.shared.open(settingsURL)
+        }
+
+        return true
     }
 }
 

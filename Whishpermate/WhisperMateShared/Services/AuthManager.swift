@@ -78,6 +78,24 @@ public class AuthManager: ObservableObject {
 
     // MARK: - Public API
 
+    public func loginURL() -> URL? {
+        guard let authWebURL = SecretsLoader.getValue(for: "AUTH_WEB_URL") else {
+            error = "Missing auth web URL configuration"
+            DebugLog.info("Missing auth web URL configuration", context: "AuthManager")
+            return nil
+        }
+
+        let separator = authWebURL.contains("?") ? "&" : "?"
+        let authURLString = "\(authWebURL)\(separator)redirect_to=\(Constants.authCallbackScheme.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Constants.authCallbackScheme)"
+        guard let authURL = URL(string: authURLString) else {
+            error = "Invalid auth URL configuration"
+            DebugLog.warning("Invalid auth URL configuration: \(authURLString)", context: "AuthManager")
+            return nil
+        }
+
+        return authURL
+    }
+
     public func openSignUp() {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in
@@ -91,19 +109,7 @@ public class AuthManager: ObservableObject {
             return
         }
 
-        guard let authWebURL = SecretsLoader.getValue(for: "AUTH_WEB_URL") else {
-            error = "Missing auth web URL configuration"
-            DebugLog.info("Missing auth web URL configuration", context: "AuthManager")
-            return
-        }
-
-        let authURLString = "\(authWebURL)?redirect_to=\(Constants.authCallbackScheme.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? Constants.authCallbackScheme)"
-        guard let authURL = URL(string: authURLString) else {
-            error = "Invalid auth URL configuration"
-            DebugLog.warning("Invalid auth URL configuration: \(authURLString)", context: "AuthManager")
-            return
-        }
-
+        guard let authURL = loginURL() else { return }
         openAuthenticationURL(authURL)
     }
 

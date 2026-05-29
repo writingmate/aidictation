@@ -9,15 +9,16 @@
 /* Begin PBXBuildFile section */
 		1FB33087FF396340CC97677A /* ParakeetRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */; };
 		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
+		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
+		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B2D5E0032F9BF00100000003 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B2D5E0042F9BF00100000004 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		BDFC47F6E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C12A3A102ED4CFAA002D97E6 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A0F2ED4CFAA002D97E6 /* Supabase */; };
 		C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A132ED4D0AA002D97E6 /* Auth */; };
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
-		C1CE64422ED8417000D24235 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
-		C3E1A9012F8A000000000001 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = C3E1A9022F8A000000000002 /* Sentry */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
 		D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */; };
 		D1B200012F65000200000005 /* PermissionFlowRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -77,7 +78,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				C1CE64422ED8417000D24235 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */,
+				B2D5E0032F9BF00100000003 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -88,7 +89,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				BDFC47F6E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */,
+				B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -150,6 +151,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Secrets.plist,
 			);
 			target = C1E7D2ED2EBA92A500A07338 /* WhisperMateIOS */;
 		};
@@ -203,7 +205,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				C2A100012F2B000000000001 /* Sparkle in Frameworks */,
-				C3E1A9012F8A000000000001 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -230,6 +231,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -237,6 +239,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B2D5E0042F9BF00100000004 /* WhisperMateShared.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -384,10 +387,6 @@
 				C18566D52EA0D31000B46F55 /* Whispermate */,
 			);
 			name = Whispermate;
-			packageProductDependencies = (
-				C2A100032F2B000000000003 /* Sparkle */,
-				C3E1A9022F8A000000000002 /* Sentry */,
-			);
 			productName = Whishpermate;
 			productReference = C1CE643F2ED8417000D24235 /* AIDictation.app */;
 			productType = "com.apple.product-type.application";
@@ -420,6 +419,7 @@
 				C1E7D2EA2EBA92A500A07338 /* Sources */,
 				C1E7D2EB2EBA92A500A07338 /* Frameworks */,
 				C1E7D2EC2EBA92A500A07338 /* Resources */,
+				C1F4D2A82F5E4A9B00A1CDEF /* Copy Secrets.plist */,
 				C1E7D3112EBA92C900A07338 /* Embed Foundation Extensions */,
 				C1E7D31B2EBA94A600A07338 /* Embed Frameworks */,
 			);
@@ -496,7 +496,6 @@
 				C12A3A0D2ED4CF91002D97E6 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				C1FA00012F0B000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
-				C3E1A9002F8A000000000000 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -563,12 +562,14 @@
 /* Begin PBXShellScriptBuildPhase section */
 		C1F4D2A82F5E4A9B00A1CDEF /* Copy Secrets.plist */ = {
 			isa = PBXShellScriptBuildPhase;
+			basedOnDependencyAnalysis = 0;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(PROJECT_DIR)/../ci_scripts/write_secrets_plist.sh",
 				"$(PROJECT_DIR)/Whispermate/Secrets.plist",
 			);
 			name = "Copy Secrets.plist";
@@ -579,7 +580,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "SECRETS_SRC=\"${PROJECT_DIR}/Whispermate/Secrets.plist\"\nSECRETS_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Secrets.plist\"\nif [ -f \"${SECRETS_SRC}\" ]; then\n  mkdir -p \"$(dirname \"${SECRETS_DST}\")\"\n  cp \"${SECRETS_SRC}\" \"${SECRETS_DST}\"\nelse\n  echo \"warning: Secrets.plist not found at ${SECRETS_SRC}\"\nfi\n";
+			shellScript = "SECRETS_SRC=\"${PROJECT_DIR}/Whispermate/Secrets.plist\"\nSECRETS_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Secrets.plist\"\nSECRETS_WRITER=\"${PROJECT_DIR}/../ci_scripts/write_secrets_plist.sh\"\nif [ -x \"${SECRETS_WRITER}\" ]; then\n  \"${SECRETS_WRITER}\" \"${SECRETS_DST}\" \"${SECRETS_SRC}\"\nelse\n  echo \"warning: Secrets writer not found at ${SECRETS_WRITER}\"\nfi\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -672,10 +673,10 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 93;
+				DYLIB_CURRENT_VERSION = 66;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -701,10 +702,10 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 93;
+				DYLIB_CURRENT_VERSION = 66;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -730,10 +731,10 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 93;
+				DYLIB_CURRENT_VERSION = 66;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -759,10 +760,10 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEFINES_MODULE = YES;
 				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 93;
+				DYLIB_CURRENT_VERSION = 66;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -909,7 +910,7 @@
 				CODE_SIGN_ENTITLEMENTS = Whispermate/Whispermate.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -921,13 +922,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Whispermate/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "WhisperMate needs access to your microphone to record audio for transcription.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "AI Dictation needs access to your microphone to record audio for transcription.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.91;
+				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -949,7 +950,7 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -962,13 +963,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Whispermate/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "WhisperMate needs access to your microphone to record audio for transcription.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "AI Dictation needs access to your microphone to record audio for transcription.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.91;
+				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -988,10 +989,10 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 93;
+				DYLIB_CURRENT_VERSION = 66;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				ENABLE_MODULE_VERIFIER = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1004,7 +1005,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.0.91;
+				MARKETING_VERSION = 0.0.83;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -1034,10 +1035,10 @@
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 93;
+				DYLIB_CURRENT_VERSION = 66;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				ENABLE_MODULE_VERIFIER = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1050,7 +1051,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.0.91;
+				MARKETING_VERSION = 0.0.83;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -1080,7 +1081,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = WhisperMateIOS/WhisperMateIOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1095,11 +1096,12 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.65;
+				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1115,9 +1117,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = WhisperMateIOS/WhisperMateIOS.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Distribution";
-				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 93;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1132,12 +1133,12 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.65;
+				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "73de4d13-37e6-49ca-a9f0-35378e49c33d";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1153,11 +1154,11 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WhisperMateKeyboard/WhisperMateKeyboard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WhisperMateKeyboard/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = WhisperMateKeyboard;
+				INFOPLIST_KEY_CFBundleDisplayName = "AI Dictation";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1165,12 +1166,13 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.65;
+				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -1183,13 +1185,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WhisperMateKeyboard/WhisperMateKeyboard.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Distribution";
-				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 93;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 83;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WhisperMateKeyboard/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = WhisperMateKeyboard;
+				INFOPLIST_KEY_CFBundleDisplayName = "AI Dictation";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1197,13 +1198,13 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.65;
+				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "db6f8085-4d33-4b22-af3e-741fdf9c2c29";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -1306,14 +1307,6 @@
 				minimumVersion = 2.6.0;
 			};
 		};
-		C3E1A9002F8A000000000000 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 8.56.2;
-			};
-		};
 		D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/jaywcjlove/PermissionFlow.git";
@@ -1354,11 +1347,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
-		};
-		C3E1A9022F8A000000000002 /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C3E1A9002F8A000000000000 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
 		};
 		D1A1F1002F65000100000002 /* PermissionFlow */ = {
 			isa = XCSwiftPackageProductDependency;

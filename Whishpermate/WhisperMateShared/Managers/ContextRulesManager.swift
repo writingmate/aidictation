@@ -23,6 +23,10 @@ public class ContextRulesManager: ObservableObject {
 
     // MARK: - Public API
 
+    public var styles: [ContextRule] {
+        rules
+    }
+
     public func loadRules() {
         if let data = AppDefaults.shared.data(forKey: Keys.contextRules),
            let decoded = try? JSONDecoder().decode([ContextRule].self, from: data)
@@ -113,26 +117,16 @@ public class ContextRulesManager: ObservableObject {
         }
     }
 
-    // MARK: - ToneStyle Migration Compatibility
-
-    public var styles: [ToneStyle] {
-        rules
+    public func addStyle(name: String, appBundleIds: [String], instructions: String) {
+        addRule(name: name, appBundleIds: appBundleIds, instructions: instructions)
     }
 
-    public func addStyle(name: String, appBundleIds: [String], titlePatterns: [String] = [], instructions: String) {
-        addRule(name: name, appBundleIds: appBundleIds, titlePatterns: titlePatterns, instructions: instructions)
-    }
-
-    public func removeStyle(_ style: ToneStyle) {
+    public func removeStyle(_ style: ContextRule) {
         removeRule(style)
     }
 
-    public func toggleStyle(_ style: ToneStyle) {
+    public func toggleStyle(_ style: ContextRule) {
         toggleRule(style)
-    }
-
-    public func updateStyle(_ style: ToneStyle, name: String, appBundleIds: [String], titlePatterns: [String] = [], instructions: String) {
-        updateRule(style, name: name, appBundleIds: appBundleIds, titlePatterns: titlePatterns, instructions: instructions)
     }
 
     // MARK: - Context Matching

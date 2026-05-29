@@ -1,16 +1,19 @@
 import AVFoundation
+import Combine
 import SwiftUI
 import WhisperMateShared
 
 struct RecordingSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var audioRecorder = AudioRecorder()
+    @StateObject private var recordingViewModel = AIDictationRecordingViewModel()
     @ObservedObject var historyManager: HistoryManager
     @ObservedObject var dictionaryManager: DictionaryManager
     @ObservedObject var toneStyleManager: ToneStyleManager
     @ObservedObject var shortcutManager: ShortcutManager
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
 
-    @State private var sheetState: SheetState = .recording
+    @State private var sheetState: SheetState = .idle
     @State private var transcription = ""
     @State private var errorMessage = ""
     @State private var recordingStartTime: Date?
@@ -18,9 +21,15 @@ struct RecordingSheetView: View {
     @State private var currentRecording: Recording?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlaying = false
+    @State private var didAutoStartRecording = false
+
+    private let minimumRecordingDuration: TimeInterval = 0.35
+    private let minimumAudioFileBytes: Int64 = 1000
 
     enum SheetState {
+        case idle
         case recording
+        case paused
         case processing
         case viewing
     }
@@ -38,93 +47,90 @@ struct RecordingSheetView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
             if sheetState == .viewing {
-                NavigationView {
-                    viewingStateView
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") {
-                                    dismiss()
-                                }
-                            }
-                        }
-                }
+                detailsSheetView
+                    .zIndex(2)
+                    .transition(detailsTransition)
             } else {
-                // Fullscreen for recording and processing states
-                ZStack {
-                    Color.black.opacity(0.01)
-                        .ignoresSafeArea()
-
-                    VStack(spacing: 0) {
-                        // Top bar with cancel button
-                        HStack {
-                            Button(action: handleCancel) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 28))
-                                    .foregroundColor(.white)
-                                    .symbolRenderingMode(.hierarchical)
-                            }
-                            .padding(.top, 16)
-                            .padding(.leading, 20)
-                            Spacer()
-                        }
-
-                        Spacer()
-
-                        // Main content based on state
-                        if sheetState == .recording {
-                            recordingStateView
-                        } else {
-                            processingStateView
-                        }
-
-                        Spacer()
-
-                        // Bottom button (stop button for recording state)
-                        if sheetState == .recording {
-                            Button(action: stopRecording) {
-                                ZStack {
-                                    Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 70, height: 70)
-                                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(Color.white)
-                                        .frame(width: 24, height: 24)
-                                }
-                            }
-                            .padding(.bottom, 50)
-                        }
-                    }
-                }
-                .background(Color.black)
+                recordingControlView
+                    .zIndex(1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
+        .animation(.spring(response: 0.46, dampingFraction: 0.86, blendDuration: 0.08), value: sheetState)
         .onAppear {
-            if sheetState == .recording {
-                startRecording()
-            }
+            updateRecordingSurface(animated: false)
+            guard currentRecording == nil, !didAutoStartRecording else { return }
+            didAutoStartRecording = true
+            startRecording()
+        }
+        .onReceive(audioRecorder.$isRecording.dropFirst()) { isRecording in
+            updateRecordingState(isRecording)
+        }
+        .onReceive(audioRecorder.$audioLevel) { level in
+            updateAudioLevel(level)
+        }
+        .onReceive(audioRecorder.$frequencyBands) { bands in
+            updateFrequencyBands(bands)
         }
     }
 
     // MARK: - State Views
 
-    private var recordingStateView: some View {
-        VStack(spacing: 20) {
-            AudioVisualizationView(audioLevel: audioRecorder.audioLevel, color: .blue)
-                .frame(height: 280)
-                .padding(.horizontal, 40)
+    private var detailsSheetView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(Color.secondary.opacity(0.78), Color(uiColor: .secondarySystemFill))
+                        .symbolRenderingMode(.palette)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+            .background(Color.white)
+
+            viewingStateView
         }
+        .background(Color.white.ignoresSafeArea())
     }
 
-    private var processingStateView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .controlSize(.large)
-                .tint(.white)
+    private var detailsTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .bottom)
+                .combined(with: .opacity)
+                .combined(with: .scale(scale: 0.985, anchor: .bottom)),
+            removal: .opacity
+        )
+    }
+
+    private var recordingControlView: some View {
+        ZStack(alignment: .topLeading) {
+            AIDictationRecordingSurface(
+                model: recordingViewModel,
+                onPrimaryAction: handlePrimaryAction,
+                onPauseAction: togglePauseRecording
+            )
+            .ignoresSafeArea()
+
+            Button(action: handleCancel) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.96), .black.opacity(0.22))
+                    .symbolRenderingMode(.palette)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 18)
+            .padding(.leading, 20)
         }
     }
 
@@ -138,22 +144,21 @@ struct RecordingSheetView: View {
                     }) {
                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 40))
-                            .foregroundColor(.blue)
+                            .foregroundColor(Color.dsPrimary)
                     }
+                    .buttonStyle(.plain)
 
                     if let duration = currentRecording?.duration {
                         Text(formatDuration(duration))
                             .font(.system(size: 15))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.gray)
                     }
 
                     Spacer()
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
-                .background(Color(.systemBackground))
-
-                Divider()
+                .background(Color.white)
             }
 
             // Transcription content
@@ -161,14 +166,14 @@ struct RecordingSheetView: View {
                 VStack(spacing: 0) {
                     Text(transcription)
                         .font(.system(size: 17, weight: .regular))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.black)
                         .lineSpacing(4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 24)
                 }
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color.white)
 
             // Error message
             if !errorMessage.isEmpty {
@@ -182,88 +187,179 @@ struct RecordingSheetView: View {
 
             // Bottom toolbar
             VStack(spacing: 0) {
-                Divider()
-
                 Button(action: copyTranscription) {
                     Label(showCopiedNotification ? "Copied" : "Copy",
                           systemImage: showCopiedNotification ? "checkmark" : "doc.on.doc")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(showCopiedNotification ? .green : .blue)
+                .tint(showCopiedNotification ? Color.green : Color.dsPrimary)
                 .controlSize(.large)
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
                 .padding(.bottom, 20)
             }
-            .background(Color(.systemBackground))
+            .background(Color.white)
         }
+        .background(Color.white)
     }
 
     // MARK: - Actions
 
+    private func handlePrimaryAction() {
+        switch sheetState {
+        case .idle:
+            startRecording()
+        case .recording, .paused:
+            stopRecording()
+        case .processing, .viewing:
+            break
+        }
+    }
+
     private func handleCancel() {
-        if audioRecorder.isRecording {
-            _ = audioRecorder.stopRecording()
+        if sheetState == .recording || sheetState == .paused {
+            let recorder = audioRecorder
+            Task {
+                _ = await recorder.stopRecordingAsync(deactivateAudioSession: true)
+            }
         }
         dismiss()
     }
 
     private func startRecording() {
-        recordingStartTime = Date()
+        let access = subscriptionManager.checkCanTranscribe()
+        guard access.canTranscribe else {
+            errorMessage = access.reason ?? "Log in to continue transcribing."
+            sheetState = .viewing
+            return
+        }
 
-        AVAudioSession.sharedInstance().requestRecordPermission { granted in
-            DispatchQueue.main.async {
-                if granted {
-                    audioRecorder.startRecording()
-                } else {
-                    errorMessage = "Microphone permission denied. Please enable it in Settings."
-                    sheetState = .viewing
+        switch AVAudioSession.sharedInstance().recordPermission {
+        case .granted:
+            beginRecording()
+        case .denied:
+            errorMessage = "Microphone permission denied. Please enable it in Settings."
+            sheetState = .viewing
+        case .undetermined:
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        beginRecording()
+                    } else {
+                        errorMessage = "Microphone permission denied. Please enable it in Settings."
+                        sheetState = .viewing
+                    }
                 }
             }
+        @unknown default:
+            errorMessage = "Unable to check microphone permission."
+            sheetState = .viewing
+        }
+    }
+
+    private func beginRecording() {
+        recordingStartTime = Date()
+        errorMessage = ""
+        sheetState = .recording
+        updateRecordingSurface(animated: true)
+        audioRecorder.startRecording()
+    }
+
+    private func togglePauseRecording() {
+        switch sheetState {
+        case .recording:
+            audioRecorder.pauseRecording()
+            sheetState = .paused
+            updateRecordingSurface(animated: true)
+        case .paused:
+            audioRecorder.resumeRecording()
+            sheetState = .recording
+            updateRecordingSurface(animated: true)
+        case .idle, .processing, .viewing:
+            break
         }
     }
 
     private func stopRecording() {
-        // Check recording duration - skip if too short (< 0.3 seconds)
-        if let startTime = recordingStartTime {
-            let duration = Date().timeIntervalSince(startTime)
+        let recordingStartedAt = recordingStartTime
+        sheetState = .processing
+        updateRecordingSurface(animated: true)
 
-            if duration < 0.3 {
-                DebugLog.info("Recording too short (\(duration)s), skipping transcription", context: "RecordingSheetView")
-                dismiss()
+        Task {
+            guard let audioURL = await audioRecorder.stopRecordingAsync(deactivateAudioSession: false) else {
+                await MainActor.run {
+                    resetRecordingState()
+                }
                 return
             }
-        }
 
-        // Stop recording and get audio file
-        guard let audioURL = audioRecorder.stopRecording() else {
-            errorMessage = "Failed to save recording"
-            sheetState = .viewing
-            return
-        }
-
-        // Check if audio file exists and has content
-        do {
-            let fileAttributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
-            let fileSize = fileAttributes[.size] as? Int64 ?? 0
-
-            if fileSize < 1000 {
-                errorMessage = "No audio detected"
+            guard validateRecordingForTranscription(audioURL, recordingStartTime: recordingStartedAt) else {
                 try? FileManager.default.removeItem(at: audioURL)
-                dismiss()
+                await MainActor.run {
+                    resetRecordingState()
+                }
                 return
             }
+
+            await MainActor.run {
+                transcribeAudio(audioURL: audioURL)
+            }
+        }
+    }
+
+    private func validateRecordingForTranscription(_ audioURL: URL, recordingStartTime: Date?) -> Bool {
+        let elapsed = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+
+        let fileSize: Int64
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
+            fileSize = attributes[.size] as? Int64 ?? 0
         } catch {
-            errorMessage = "Failed to verify recording"
-            sheetState = .viewing
-            return
+            DebugLog.info("Failed to verify sheet recording file: \(error)", context: "RecordingSheetView")
+            return false
         }
 
-        transcribeAudio(audioURL: audioURL)
+        let audioDuration = audioFileDuration(audioURL)
+        DebugLog.info(
+            "Sheet recording ready: elapsed=\(String(format: "%.2f", elapsed))s, audioDuration=\(String(format: "%.2f", audioDuration ?? -1))s, fileSize=\(fileSize) bytes",
+            context: "RecordingSheetView"
+        )
+
+        if elapsed < minimumRecordingDuration || (audioDuration ?? elapsed) < minimumRecordingDuration {
+            DebugLog.info("Sheet recording too short; skipping transcription", context: "RecordingSheetView")
+            return false
+        }
+
+        if fileSize < minimumAudioFileBytes {
+            DebugLog.info("Sheet recording has no audio payload; skipping transcription", context: "RecordingSheetView")
+            return false
+        }
+
+        return true
+    }
+
+    private func audioFileDuration(_ audioURL: URL) -> TimeInterval? {
+        do {
+            let file = try AVAudioFile(forReading: audioURL)
+            let sampleRate = file.processingFormat.sampleRate
+            guard sampleRate > 0 else { return nil }
+            return Double(file.length) / sampleRate
+        } catch {
+            DebugLog.info("Failed to read sheet recording duration: \(error)", context: "RecordingSheetView")
+            return nil
+        }
     }
 
     private func transcribeAudio(audioURL: URL) {
+        let access = subscriptionManager.checkCanTranscribe()
+        guard access.canTranscribe else {
+            errorMessage = access.reason ?? "Log in to continue transcribing."
+            sheetState = .viewing
+            try? FileManager.default.removeItem(at: audioURL)
+            return
+        }
+
         // Get API key from Secrets.plist or keychain
         let apiKey = KeychainHelper.get(key: "custom_transcription_api_key") ?? SecretsLoader.transcriptionKey(for: .custom)
         let endpoint = SecretsLoader.customTranscriptionEndpoint() ?? "https://writingmate.ai/api/openai/v1/audio/transcriptions"
@@ -275,53 +371,76 @@ struct RecordingSheetView: View {
             return
         }
 
-        sheetState = .processing
+        withAnimation(.easeInOut(duration: 0.18)) {
+            sheetState = .processing
+            updateRecordingSurface(animated: false)
+        }
 
         Task {
             do {
                 let config = OpenAIClient.Configuration(
                     transcriptionEndpoint: endpoint,
                     transcriptionModel: model,
-                    chatCompletionEndpoint: SecretsLoader.aidictationPostProcessingEndpoint() ?? "https://writingmate.ai/api/openai/v1/chat/completions",
-                    chatCompletionModel: "openai/gpt-oss-20b",
-                    apiKey: apiKey,
-                    chatCompletionApiKey: SecretsLoader.aidictationPostProcessingKey() ?? apiKey
+                    chatCompletionEndpoint: "",
+                    chatCompletionModel: "",
+                    apiKey: apiKey
                 )
 
                 let openAIClient = OpenAIClient(config: config)
 
-                // Combine prompts from all sources
-                var promptComponents: [String] = []
+                var sttPromptComponents: [String] = []
+                var postProcessingPromptComponents: [String] = []
 
                 // Add dictionary hints for better recognition
                 let dictionaryHints = dictionaryManager.transcriptionHints
                 if !dictionaryHints.isEmpty {
-                    promptComponents.append("Vocabulary: \(dictionaryHints)")
+                    sttPromptComponents.append("Vocabulary: \(dictionaryHints)")
+                    postProcessingPromptComponents.append("Vocabulary: \(dictionaryHints)")
                 }
 
                 // Add shortcut triggers for recognition
                 let shortcutHints = shortcutManager.transcriptionHints
                 if !shortcutHints.isEmpty {
-                    promptComponents.append("Phrases: \(shortcutHints)")
+                    sttPromptComponents.append("Phrases: \(shortcutHints)")
+                    postProcessingPromptComponents.append("Phrases: \(shortcutHints)")
                 }
 
-                // Add tone/style instructions (all enabled styles for iOS)
                 let styleInstructions = toneStyleManager.allInstructions
                 if !styleInstructions.isEmpty {
-                    promptComponents.append(styleInstructions)
+                    postProcessingPromptComponents.append(styleInstructions)
                 }
 
-                let promptText = promptComponents.joined(separator: ". ")
+                let sttPrompt = sttPromptComponents.joined(separator: "\n")
+                let postProcessingPrompt = postProcessingPromptComponents.joined(separator: "\n")
 
                 let result = try await openAIClient.transcribe(
                     audioURL: audioURL,
-                    prompt: promptText.isEmpty ? nil : promptText
+                    prompt: sttPrompt.isEmpty ? nil : sttPrompt,
+                    sttPrompt: sttPrompt.isEmpty ? nil : sttPrompt,
+                    postProcessingPrompt: postProcessingPrompt.isEmpty ? nil : postProcessingPrompt
                 )
 
                 // Apply post-processing: dictionary replacements and shortcut expansion
                 var processedResult = result
                 processedResult = dictionaryManager.applyReplacements(to: processedResult)
                 processedResult = shortcutManager.expandShortcuts(in: processedResult)
+                processedResult = TranscriptionTextSanitizer.cleanedText(processedResult)
+
+                guard !processedResult.isEmpty else {
+                    DebugLog.info("Sheet transcription was empty after sanitization; skipping history item", context: "RecordingSheetView")
+                    try? FileManager.default.removeItem(at: audioURL)
+                    await MainActor.run {
+                        transcription = ""
+                        sheetState = .idle
+                        recordingStartTime = nil
+                        errorMessage = ""
+                        updateRecordingSurface(animated: true)
+                    }
+                    return
+                }
+
+                let wordCount = subscriptionManager.wordCount(for: processedResult)
+                await subscriptionManager.recordWords(wordCount)
 
                 await MainActor.run {
                     transcription = processedResult
@@ -330,6 +449,7 @@ struct RecordingSheetView: View {
 
                     // Calculate duration
                     let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
+                    recordingStartTime = nil
 
                     // Create recording with unique ID
                     let recordingID = UUID()
@@ -340,7 +460,7 @@ struct RecordingSheetView: View {
                     // Save to history with audio file URL
                     let recording = Recording(
                         id: recordingID,
-                        transcription: result,
+                        transcription: processedResult,
                         duration: duration,
                         audioFileURL: permanentAudioURL
                     )
@@ -354,9 +474,71 @@ struct RecordingSheetView: View {
                 await MainActor.run {
                     transcription = ""
                     sheetState = .viewing
+                    recordingStartTime = nil
                     errorMessage = "Transcription failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    private func resetRecordingState() {
+        recordingStartTime = nil
+        sheetState = .idle
+        errorMessage = ""
+        recordingViewModel.audioLevel = 0.0
+        recordingViewModel.frequencyBands = Array(repeating: 0.0, count: 10)
+        updateRecordingSurface(animated: true)
+    }
+
+    private func updateRecordingState(_ isRecording: Bool) {
+        if sheetState == .processing || sheetState == .paused || sheetState == .viewing {
+            return
+        }
+
+        sheetState = isRecording ? .recording : .idle
+        updateRecordingSurface(animated: false)
+    }
+
+    private func updateAudioLevel(_ level: Float) {
+        if sheetState == .recording {
+            recordingViewModel.audioLevel = level
+        }
+    }
+
+    private func updateFrequencyBands(_ bands: [Float]) {
+        if sheetState == .recording {
+            recordingViewModel.frequencyBands = bands
+        }
+    }
+
+    private func updateRecordingSurface(animated: Bool) {
+        let updates = {
+            recordingViewModel.state = recordingSurfaceState
+            if sheetState == .idle {
+                recordingViewModel.audioLevel = 0.0
+                recordingViewModel.frequencyBands = Array(repeating: 0.0, count: 10)
+            }
+        }
+
+        if animated {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82, blendDuration: 0.06), updates)
+        } else {
+            updates()
+        }
+    }
+
+    private var recordingSurfaceState: AIDictationRecordingState {
+        switch sheetState {
+        case .idle:
+            return .idle
+        case .recording:
+            return .recording
+        case .paused:
+            return .paused
+        case .processing:
+            return .processing
+        case .viewing:
+            return .idle
         }
     }
 

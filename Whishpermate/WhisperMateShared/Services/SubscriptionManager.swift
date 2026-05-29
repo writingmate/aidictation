@@ -25,6 +25,7 @@ public class SubscriptionManager: ObservableObject {
 
     @Published public var showUpgradeModal: Bool = false
     @Published public var showSignupModal: Bool = false
+    @Published public private(set) var usageVersion: Int = 0
 
     // MARK: - Private Properties
 
@@ -165,9 +166,18 @@ public class SubscriptionManager: ObservableObject {
     public func recordWords(_ count: Int) async {
         if authManager.isAuthenticated {
             _ = try? await authManager.updateWordCount(wordsToAdd: count)
+            await MainActor.run {
+                self.usageVersion += 1
+            }
         } else {
             addLocalWords(count)
         }
+    }
+
+    public func wordCount(for text: String) -> Int {
+        text.split { character in
+            !(character.isLetter || character.isNumber)
+        }.count
     }
 
     // MARK: - Local Word Limit Methods
@@ -187,6 +197,7 @@ public class SubscriptionManager: ObservableObject {
             localWordCountResetAt = nextMonthStart()
         }
         localWordCount += count
+        usageVersion += 1
         DebugLog.info("Local word count updated: \(localWordCount)/\(UsageLimits.freeMonthlyWordLimit)", context: "SubscriptionManager")
     }
 
@@ -195,6 +206,7 @@ public class SubscriptionManager: ObservableObject {
             DebugLog.info("Resetting local word count (was \(localWordCount))", context: "SubscriptionManager")
             localWordCount = 0
             localWordCountResetAt = nextMonthStart()
+            usageVersion += 1
         }
     }
 

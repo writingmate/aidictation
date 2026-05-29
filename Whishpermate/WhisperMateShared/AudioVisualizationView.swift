@@ -1,5 +1,147 @@
 import SwiftUI
 
+public struct AIDictationMicButtonVisual: View {
+    public let state: AIDictationRecordingState
+    public let audioLevel: Float
+    public let frequencyBands: [Float]?
+    public var size: CGFloat
+
+    public init(
+        state: AIDictationRecordingState,
+        audioLevel: Float = 0,
+        frequencyBands: [Float]? = nil,
+        size: CGFloat = 100
+    ) {
+        self.state = state
+        self.audioLevel = audioLevel
+        self.frequencyBands = frequencyBands
+        self.size = size
+    }
+
+    public var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: MicButtonMetrics.processingDuration)
+                / MicButtonMetrics.processingDuration
+
+            ZStack {
+                Circle()
+                    .fill(Color.dsPrimary)
+                    .frame(width: size, height: size)
+
+                HStack(spacing: MicButtonMetrics.barSpacing * scale) {
+                    ForEach(0 ..< MicButtonMetrics.barCount, id: \.self) { index in
+                        RoundedRectangle(cornerRadius: MicButtonMetrics.barWidth * scale / 2)
+                            .fill(Color.white)
+                            .frame(
+                                width: MicButtonMetrics.barWidth * scale,
+                                height: barHeight(at: index, phase: phase)
+                            )
+                            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: audioLevel)
+                            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: frequencyBands ?? [])
+                    }
+                }
+            }
+            .frame(width: size, height: size)
+        }
+    }
+
+    private var scale: CGFloat {
+        size / MicButtonMetrics.referenceSize
+    }
+
+    private func barHeight(at index: Int, phase: TimeInterval) -> CGFloat {
+        let dotSize = MicButtonMetrics.barWidth * scale
+        let maxHeight = MicButtonMetrics.maxBarHeight * scale
+        let heightRange = maxHeight - dotSize
+        let normalizedHeight: CGFloat
+
+        switch state {
+        case .idle, .paused:
+            normalizedHeight = MicButtonMetrics.frozenHeights[index]
+        case .recording:
+            normalizedHeight = recordingHeight(at: index)
+        case .processing:
+            let progress = CGFloat(phase)
+            let normalizedIndex = CGFloat(index) / CGFloat(MicButtonMetrics.barCount - 1)
+            let wavePosition = (normalizedIndex * 2 * .pi) - (progress * 2 * .pi)
+            let sineValue = (sin(wavePosition) + 1) / 2
+            normalizedHeight = sineValue * MicButtonMetrics.circleEnvelopeHeights[index]
+        }
+
+        return dotSize + (heightRange * normalizedHeight)
+    }
+
+    private func recordingHeight(at index: Int) -> CGFloat {
+        let boostedLevel = boostWaveformLevel(CGFloat(audioLevel))
+        let activeBarCount = min(
+            MicButtonMetrics.barCount,
+            max(MicButtonMetrics.minimumActiveBars, MicButtonMetrics.minimumActiveBars + Int(CGFloat(MicButtonMetrics.barCount - MicButtonMetrics.minimumActiveBars) * boostedLevel * 2.5))
+        )
+        let barsFromEdge = (MicButtonMetrics.barCount - activeBarCount) / 2
+        let minimumDistanceFromEdge = min(index, MicButtonMetrics.barCount - 1 - index)
+
+        guard minimumDistanceFromEdge >= barsFromEdge else {
+            return 0
+        }
+
+        let bandValue = recordingBandValue(at: index)
+        let boostedBand = boostWaveformLevel(bandValue, overallLevel: CGFloat(audioLevel))
+        return boostedBand * MicButtonMetrics.circleEnvelopeHeights[index]
+    }
+
+    private func recordingBandValue(at index: Int) -> CGFloat {
+        guard let frequencyBands, !frequencyBands.isEmpty else {
+            return CGFloat(audioLevel).clamped(to: 0 ... 1)
+        }
+
+        let sourcePosition = CGFloat(index) * CGFloat(frequencyBands.count - 1) / CGFloat(MicButtonMetrics.barCount - 1)
+        let lowerIndex = min(max(Int(sourcePosition), 0), frequencyBands.count - 1)
+        let upperIndex = min(lowerIndex + 1, frequencyBands.count - 1)
+        let fraction = sourcePosition - CGFloat(lowerIndex)
+        let lower = CGFloat(frequencyBands[lowerIndex]).clamped(to: 0 ... 1)
+        let upper = CGFloat(frequencyBands[upperIndex]).clamped(to: 0 ... 1)
+        let interpolated = lower + ((upper - lower) * fraction)
+        let average = frequencyBands
+            .map { CGFloat($0).clamped(to: 0 ... 1) }
+            .reduce(0, +) / CGFloat(frequencyBands.count)
+        let contrasted = interpolated + ((interpolated - average) * MicButtonMetrics.waveformContrast)
+        let floor = audioLevel > Float(MicButtonMetrics.waveformFloorThreshold) ? CGFloat(audioLevel) * 0.18 : 0
+        return max(contrasted, floor).clamped(to: 0 ... 1)
+    }
+
+    private func boostWaveformLevel(_ level: CGFloat, overallLevel: CGFloat? = nil) -> CGFloat {
+        let mixedOverallLevel = overallLevel ?? level
+        let mixed = ((level * MicButtonMetrics.waveformLevelGain) + (mixedOverallLevel * MicButtonMetrics.waveformLevelMix)).clamped(to: 0 ... 1)
+        let eased = sqrt(mixed)
+        let floor = mixedOverallLevel > MicButtonMetrics.waveformFloorThreshold ? MicButtonMetrics.waveformActiveFloor : 0
+        return max(eased, floor).clamped(to: 0 ... 1)
+    }
+}
+
+private enum MicButtonMetrics {
+    static let referenceSize: CGFloat = 100
+    static let barCount = 5
+    static let minimumActiveBars = 3
+    static let barWidth: CGFloat = 9.2
+    static let barSpacing: CGFloat = 4.4
+    static let maxBarHeight: CGFloat = 49.6
+    static let processingDuration: TimeInterval = 0.9
+    static let frozenHeights: [CGFloat] = [0.56, 1, 0.56, 1, 0.56]
+    static let circleEnvelopeHeights: [CGFloat] = [0.72, 0.94, 1, 0.94, 0.72]
+    static let waveformLevelGain: CGFloat = 1.35
+    static let waveformLevelMix: CGFloat = 0.08
+    static let waveformContrast: CGFloat = 0.8
+    static let waveformFloorThreshold: CGFloat = 0.045
+    static let waveformActiveFloor: CGFloat = 0.16
+}
+
+private extension CGFloat {
+    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
 public struct AudioVisualizationView: View {
     public let audioLevel: Float
     public let frequencyBands: [Float]?

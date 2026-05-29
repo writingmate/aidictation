@@ -189,6 +189,10 @@ jobs:
         shell: bash
         run: ./ci_scripts/ci_pre_xcodebuild.sh
 
+      - name: Prepare iOS signing assets
+        shell: bash
+        run: ./ci_scripts/prepare_ios_signing.js
+
       - name: Archive iOS app
         shell: bash
         working-directory: Whishpermate

@@ -188,6 +188,7 @@ async function main() {
     certificatePemPath,
     "-out",
     p12Path,
+    "-legacy",
     "-passout",
     `pass:${p12Password}`
   ]);

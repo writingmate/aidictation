@@ -1,0 +1,177 @@
+name: iOS App Store Connect
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-appstore-connect-main
+  cancel-in-progress: false
+
+jobs:
+  archive-and-upload:
+    name: Archive and upload
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    env:
+      AIDICTATION_FORCE_ENV_SECRETS: "1"
+      AIDICTATION_REQUIRE_SECRETS: "1"
+      FASTLANE_HIDE_CHANGELOG: "1"
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      IOS_BUILD_NUMBER: ${{ github.run_number }}
+
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_KEY_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+
+      IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      IOS_APP_STORE_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROFILE_BASE64 }}
+      IOS_KEYBOARD_APP_STORE_PROFILE_BASE64: ${{ secrets.IOS_KEYBOARD_APP_STORE_PROFILE_BASE64 }}
+
+      AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      CUSTOM_TRANSCRIPTION_ENDPOINT: ${{ secrets.CUSTOM_TRANSCRIPTION_ENDPOINT }}
+      CUSTOM_TRANSCRIPTION_MODEL: ${{ secrets.CUSTOM_TRANSCRIPTION_MODEL }}
+      CUSTOM_TRANSCRIPTION_KEY: ${{ secrets.CUSTOM_TRANSCRIPTION_KEY }}
+      AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+      AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+      GROQ_TRANSCRIPTION_KEY: ${{ secrets.GROQ_TRANSCRIPTION_KEY }}
+      GROQ_LLM_KEY: ${{ secrets.GROQ_LLM_KEY }}
+      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+      STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
+      STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
+      STRIPE_PAYMENT_LINK_LIFETIME: ${{ secrets.STRIPE_PAYMENT_LINK_LIFETIME }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required=(
+            APP_STORE_CONNECT_API_KEY_ISSUER_ID
+            APP_STORE_CONNECT_API_KEY_KEY_ID
+            IOS_DISTRIBUTION_CERTIFICATE_BASE64
+            IOS_DISTRIBUTION_CERTIFICATE_PASSWORD
+            IOS_APP_STORE_PROFILE_BASE64
+            IOS_KEYBOARD_APP_STORE_PROFILE_BASE64
+            AUTH_WEB_URL
+            SUPABASE_URL
+            SUPABASE_ANON_KEY
+            CUSTOM_TRANSCRIPTION_ENDPOINT
+            CUSTOM_TRANSCRIPTION_MODEL
+            CUSTOM_TRANSCRIPTION_KEY
+            AIDICTATION_POST_PROCESSING_ENDPOINT
+            AIDICTATION_POST_PROCESSING_KEY
+          )
+
+          missing=0
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required secret: ${name}"
+              missing=1
+            fi
+          done
+
+          if [ -z "${APP_STORE_CONNECT_API_KEY_P8:-}" ] && [ -z "${APP_STORE_CONNECT_API_KEY_P8_BASE64:-}" ]; then
+            echo "::error::Missing required secret: APP_STORE_CONNECT_API_KEY_P8 or APP_STORE_CONNECT_API_KEY_P8_BASE64"
+            missing=1
+          fi
+
+          exit "${missing}"
+
+      - name: Install App Store Connect API key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          key_dir="${HOME}/.appstoreconnect/private_keys"
+          key_path="${key_dir}/AuthKey_${APP_STORE_CONNECT_API_KEY_KEY_ID}.p8"
+          mkdir -p "${key_dir}"
+
+          if [ -n "${APP_STORE_CONNECT_API_KEY_P8_BASE64:-}" ]; then
+            printf '%s' "${APP_STORE_CONNECT_API_KEY_P8_BASE64}" | base64 --decode > "${key_path}"
+          else
+            printf '%s' "${APP_STORE_CONNECT_API_KEY_P8}" > "${key_path}"
+          fi
+
+          chmod 600 "${key_path}"
+          echo "APP_STORE_CONNECT_API_KEY_KEY=${key_path}" >> "${GITHUB_ENV}"
+
+      - name: Install signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          keychain_path="${RUNNER_TEMP}/ios-signing.keychain-db"
+          certificate_path="${RUNNER_TEMP}/ios-distribution.p12"
+          keychain_password="$(uuidgen)"
+
+          printf '%s' "${IOS_DISTRIBUTION_CERTIFICATE_BASE64}" | base64 --decode > "${certificate_path}"
+
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" -P "${IOS_DISTRIBUTION_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${keychain_path}"
+          security list-keychain -d user -s "${keychain_path}"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${keychain_password}" "${keychain_path}"
+
+      - name: Install provisioning profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          profile_dir="${HOME}/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "${profile_dir}"
+
+          install_profile() {
+            local encoded_profile="$1"
+            local basename="$2"
+            local env_name="$3"
+            local profile_path="${RUNNER_TEMP}/${basename}.mobileprovision"
+            local plist_path="${RUNNER_TEMP}/${basename}.plist"
+
+            printf '%s' "${encoded_profile}" | base64 --decode > "${profile_path}"
+            security cms -D -i "${profile_path}" > "${plist_path}"
+
+            local uuid
+            uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "${plist_path}")"
+
+            local name
+            name="$(/usr/libexec/PlistBuddy -c 'Print Name' "${plist_path}")"
+
+            cp "${profile_path}" "${profile_dir}/${uuid}.mobileprovision"
+            echo "${env_name}=${name}" >> "${GITHUB_ENV}"
+          }
+
+          install_profile "${IOS_APP_STORE_PROFILE_BASE64}" app IOS_APPSTORE_PROFILE_NAME
+          install_profile "${IOS_KEYBOARD_APP_STORE_PROFILE_BASE64}" keyboard IOS_KEYBOARD_APPSTORE_PROFILE_NAME
+
+      - name: Write app secrets
+        shell: bash
+        run: ./ci_scripts/ci_pre_xcodebuild.sh
+
+      - name: Archive and upload to App Store Connect
+        shell: bash
+        working-directory: Whishpermate
+        run: fastlane ios ci_upload
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhisperMate-iOS-${{ github.run_number }}
+          path: Whishpermate/build/WhisperMate.ipa
+          if-no-files-found: ignore

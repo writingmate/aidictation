@@ -14,6 +14,36 @@ default_platform(:ios)
 #   )
 # end
 
+def app_store_connect_api_key_from_env
+  key_id = ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"].to_s
+  issuer_id = ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"].to_s
+  key_filepath = ENV["APP_STORE_CONNECT_API_KEY_KEY"].to_s
+  key_content = ENV["APP_STORE_CONNECT_API_KEY_P8"].to_s
+
+  if key_content.empty? && !ENV["APP_STORE_CONNECT_API_KEY_P8_BASE64"].to_s.empty?
+    require "base64"
+    key_content = Base64.decode64(ENV["APP_STORE_CONNECT_API_KEY_P8_BASE64"])
+  end
+
+  if key_id.empty? || issuer_id.empty? || (key_filepath.empty? && key_content.empty?)
+    return nil
+  end
+
+  params = {
+    key_id: key_id,
+    issuer_id: issuer_id,
+    in_house: false
+  }
+
+  if !key_filepath.empty?
+    params[:key_filepath] = File.expand_path(key_filepath)
+  else
+    params[:key_content] = key_content
+  end
+
+  app_store_connect_api_key(**params)
+end
+
 platform :ios do
   # Variables
   app_identifier = "com.whispermate.ios"
@@ -52,9 +82,19 @@ platform :ios do
   desc "Build the app for App Store"
   lane :build do
     # Increment build number
-    increment_build_number(
-      xcodeproj: "Whispermate.xcodeproj"
-    )
+    if !ENV["IOS_BUILD_NUMBER"].to_s.empty?
+      increment_build_number(
+        xcodeproj: "Whispermate.xcodeproj",
+        build_number: ENV["IOS_BUILD_NUMBER"]
+      )
+    else
+      increment_build_number(
+        xcodeproj: "Whispermate.xcodeproj"
+      )
+    end
+
+    app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]
+    keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s.empty? ? "db6f8085-4d33-4b22-af3e-741fdf9c2c29" : ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"]
 
     # Update provisioning profiles
     # Using manually installed profiles instead
@@ -78,8 +118,8 @@ platform :ios do
         teamID: team_id,
         signingStyle: "manual",
         provisioningProfiles: {
-          "com.whispermate.ios" => "73de4d13-37e6-49ca-a9f0-35378e49c33d",
-          "com.whispermate.ios.keyboard" => "db6f8085-4d33-4b22-af3e-741fdf9c2c29"
+          "com.whispermate.ios" => app_profile,
+          "com.whispermate.ios.keyboard" => keyboard_profile
         }
       }
     )
@@ -203,16 +243,46 @@ platform :ios do
   lane :upload do
     build
 
-    deliver(
+    deliver_options = {
       app_identifier: app_identifier,
       team_id: team_id,
       ipa: "./build/WhisperMate.ipa",
       skip_metadata: true,
       skip_screenshots: true,
       submit_for_review: false
-    )
+    }
+
+    api_key = app_store_connect_api_key_from_env
+    deliver_options[:api_key] = api_key if api_key
+
+    deliver(**deliver_options)
 
     UI.success("✅ Binary uploaded to App Store Connect!")
+  end
+
+  #####################################
+  # Lane: CI Upload
+  #####################################
+  desc "Build and upload binary from GitHub Actions"
+  lane :ci_upload do
+    api_key = app_store_connect_api_key_from_env
+    UI.user_error!("App Store Connect API key environment variables are required") unless api_key
+
+    build
+
+    deliver(
+      app_identifier: app_identifier,
+      team_id: team_id,
+      ipa: "./build/WhisperMate.ipa",
+      skip_metadata: true,
+      skip_screenshots: true,
+      submit_for_review: false,
+      force: true,
+      run_precheck_before_submit: false,
+      api_key: api_key
+    )
+
+    UI.success("✅ CI binary uploaded to App Store Connect!")
   end
 
   #####################################

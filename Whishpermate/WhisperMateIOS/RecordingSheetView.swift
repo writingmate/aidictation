@@ -17,7 +17,7 @@ struct RecordingSheetView: View {
     @State private var transcription = ""
     @State private var errorMessage = ""
     @State private var recordingStartTime: Date?
-    @State private var showCopiedNotification = false
+    @State private var showShareSheet = false
     @State private var currentRecording: Recording?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlaying = false
@@ -187,13 +187,12 @@ struct RecordingSheetView: View {
 
             // Bottom toolbar
             VStack(spacing: 0) {
-                Button(action: copyTranscription) {
-                    Label(showCopiedNotification ? "Copied" : "Copy",
-                          systemImage: showCopiedNotification ? "checkmark" : "doc.on.doc")
+                Button(action: shareTranscription) {
+                    Label("Share", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(showCopiedNotification ? Color.green : Color.dsPrimary)
+                .tint(Color.dsPrimary)
                 .controlSize(.large)
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
@@ -202,6 +201,9 @@ struct RecordingSheetView: View {
             .background(Color.white)
         }
         .background(Color.white)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(activityItems: [transcription])
+        }
     }
 
     // MARK: - Actions
@@ -490,20 +492,9 @@ struct RecordingSheetView: View {
         }
     }
 
-    private func copyTranscription() {
+    private func shareTranscription() {
         guard !transcription.isEmpty else { return }
-
-        UIPasteboard.general.string = transcription
-
-        // Show copied notification
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-            showCopiedNotification = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showCopiedNotification = false
-            }
-        }
+        showShareSheet = true
     }
 
     private func togglePlayback(audioURL: URL) {

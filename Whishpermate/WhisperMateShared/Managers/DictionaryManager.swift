@@ -30,16 +30,13 @@ public class DictionaryManager: ObservableObject {
             entries = decoded
             DebugLog.info("Loaded \(entries.count) dictionary entries", context: "DictionaryManager")
         } else {
-            // Add default entries with real-world examples (all disabled by default)
+            // Add default vocabulary examples (all disabled by default)
             entries = [
-                // Words needing correction (with replacements)
-                DictionaryEntry(trigger: "AI dictation", replacement: "AIDictation", isEnabled: false),
-                DictionaryEntry(trigger: "calendly", replacement: "Calendly", isEnabled: false),
-                DictionaryEntry(trigger: "open AI", replacement: "OpenAI", isEnabled: false),
-                DictionaryEntry(trigger: "chat GPT", replacement: "ChatGPT", isEnabled: false),
-                DictionaryEntry(trigger: "git hub", replacement: "GitHub", isEnabled: false),
-
-                // Technical terms (no replacement - just for recognition)
+                DictionaryEntry(trigger: "AIDictation", replacement: nil, isEnabled: false),
+                DictionaryEntry(trigger: "Calendly", replacement: nil, isEnabled: false),
+                DictionaryEntry(trigger: "OpenAI", replacement: nil, isEnabled: false),
+                DictionaryEntry(trigger: "ChatGPT", replacement: nil, isEnabled: false),
+                DictionaryEntry(trigger: "GitHub", replacement: nil, isEnabled: false),
                 DictionaryEntry(trigger: "API", replacement: nil, isEnabled: false),
                 DictionaryEntry(trigger: "iOS", replacement: nil, isEnabled: false),
                 DictionaryEntry(trigger: "macOS", replacement: nil, isEnabled: false),

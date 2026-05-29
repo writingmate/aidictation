@@ -29,7 +29,6 @@ struct ContentView: View {
     var body: some View {
         // Use iPhone layout for all devices (scales nicely on iPad)
         iPhoneLayout
-            .tint(Color.dsPrimary)
             .alert("Login Unavailable", isPresented: $showLoginConfigurationAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -119,16 +118,13 @@ struct ContentView: View {
             VStack {
                 Spacer()
                 Button(action: handleInlineRecordingTap) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.dsPrimary)
-                            .frame(width: 64, height: 64)
-                            .shadow(color: .black.opacity(inlineRecording.isActive ? 0.28 : 0.2), radius: inlineRecording.isActive ? 10 : 4, x: 0, y: inlineRecording.isActive ? 5 : 2)
-
-                        InlineRecordingPrimaryIcon(isActive: inlineRecording.isActive)
-                            .id(inlineRecording.isActive ? "stop" : "mic")
-                            .transition(.opacity.combined(with: .scale(scale: 0.76)))
-                    }
+                    AIDictationMicButtonVisual(
+                        state: inlineRecording.visualState,
+                        audioLevel: inlineRecording.audioLevel,
+                        frequencyBands: inlineRecording.frequencyBands,
+                        size: 64
+                    )
+                    .shadow(color: .black.opacity(inlineRecording.isActive ? 0.28 : 0.2), radius: inlineRecording.isActive ? 10 : 4, x: 0, y: inlineRecording.isActive ? 5 : 2)
                 }
                 .buttonStyle(.plain)
                 .disabled(inlineRecording.state == .processing || inlineRecording.state == .completing)
@@ -150,16 +146,8 @@ struct ContentView: View {
             openRecordingSheet()
         }) {
             VStack(spacing: 16) {
-                ZStack {
-                    Circle()
-                        .fill(Color.dsPrimary)
-                        .frame(width: 120, height: 120)
-                        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 50, weight: .semibold))
-                        .foregroundColor(.white)
-                }
+                AIDictationMicButtonVisual(state: .idle, size: 120)
+                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
 
                 Text("Tap to Record")
                     .font(.system(size: 20, weight: .medium, design: .default))
@@ -226,7 +214,7 @@ struct ContentView: View {
                     HStack {
                         Text("Manage Settings")
                             .font(.body)
-                            .foregroundColor(Color.dsPrimary)
+                            .foregroundColor(.primary)
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption)
@@ -416,7 +404,6 @@ struct ContentView: View {
                             } label: {
                                 Label("Copy", systemImage: "doc.on.doc")
                             }
-                            .tint(Color.dsPrimary)
 
                             if recording.audioFileURL != nil {
                                 Button {
@@ -509,6 +496,7 @@ struct ContentView: View {
                     } else {
                         Button(action: openLogin) {
                             Label("Log In to Get More", systemImage: "person.crop.circle.badge.plus")
+                                .foregroundColor(.primary)
                         }
                     }
                 }
@@ -518,20 +506,22 @@ struct ContentView: View {
                         HStack {
                             Label("Microphone Access", systemImage: "mic.fill")
                             Spacer()
-                            Image(systemName: checkMicrophonePermission() == .granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                .foregroundColor(checkMicrophonePermission() == .granted ? .green : .orange)
-                        }
-                    }
+	                            Image(systemName: checkMicrophonePermission() == .granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+	                                .foregroundColor(checkMicrophonePermission() == .granted ? .green : .orange)
+	                        }
+	                        .foregroundColor(.primary)
+	                    }
 
-                    Button(action: openKeyboardSettings) {
-                        HStack {
-                            Label("Keyboard Settings", systemImage: "keyboard")
+	                    Button(action: openKeyboardSettings) {
+	                        HStack {
+	                            Label("Keyboard Settings", systemImage: "keyboard")
                             Spacer()
-                            Image(systemName: "arrow.up.forward.square")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
+	                            Image(systemName: "arrow.up.forward.square")
+	                                .foregroundColor(.secondary)
+	                        }
+	                        .foregroundColor(.primary)
+	                    }
+	                }
 
                 Section("Dictation Mode") {
                     Picker("Mode", selection: Binding(
@@ -548,18 +538,19 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
 
                     if transcriptionProviderManager.transcriptionMode != .cloud {
-                        Button(action: prepareOfflineModel) {
-                            HStack {
-                                Label(offlineModelStatusText, systemImage: offlineModelStatusIcon)
-                                Spacer()
+	                        Button(action: prepareOfflineModel) {
+	                            HStack {
+	                                Label(offlineModelStatusText, systemImage: offlineModelStatusIcon)
+	                                Spacer()
                                 if offlineModelIsBusy {
                                     ProgressView()
                                 } else {
-                                    Image(systemName: offlineModelTrailingIcon)
-                                        .foregroundColor(offlineModelStatusColor)
-                                }
-                            }
-                        }
+	                                    Image(systemName: offlineModelTrailingIcon)
+	                                        .foregroundColor(offlineModelStatusColor)
+	                                }
+	                            }
+	                            .foregroundColor(.primary)
+	                        }
                         .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported || offlineModelIsBusy)
                     }
                 }
@@ -573,11 +564,12 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Transcription") {
-                    NavigationLink(destination: TranscriptionSettingsView(dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)) {
-                        Label("Transcription Settings", systemImage: "text.badge.checkmark")
-                    }
-                }
+	                Section("Transcription") {
+	                    NavigationLink(destination: TranscriptionSettingsView(dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)) {
+	                        Label("Transcription Settings", systemImage: "text.badge.checkmark")
+	                            .foregroundColor(.primary)
+	                    }
+	                }
 
                 Section("Data") {
                     Button("Clear All History", role: .destructive) {
@@ -763,13 +755,13 @@ private struct UsageSummaryView: View {
                 Label("Words This Month", systemImage: "text.word.spacing")
                     .font(.body.weight(.medium))
                 Spacer()
-                Text(planLabel)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(Color.dsPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.dsPrimary.opacity(0.12))
-                    .clipShape(Capsule())
+	                Text(planLabel)
+	                    .font(.caption.weight(.semibold))
+	                    .foregroundColor(.secondary)
+	                    .padding(.horizontal, 8)
+	                    .padding(.vertical, 4)
+	                    .background(Color(uiColor: .tertiarySystemFill))
+	                    .clipShape(Capsule())
             }
 
             if let email {
@@ -795,10 +787,10 @@ private struct UsageSummaryView: View {
                     .foregroundColor(.secondary)
             }
 
-            if !usage.isPro {
-                ProgressView(value: min(max(usage.percentage, 0), 1))
-                    .tint(Color.dsPrimary)
-            }
+	            if !usage.isPro {
+	                ProgressView(value: min(max(usage.percentage, 0), 1))
+	                    .tint(.secondary)
+	            }
         }
         .padding(.vertical, 6)
     }
@@ -832,6 +824,19 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
     var isActive: Bool {
         state == .recording || state == .paused || state == .processing
+    }
+
+    var visualState: AIDictationRecordingState {
+        switch state {
+        case .idle:
+            return .idle
+        case .recording:
+            return .recording
+        case .paused:
+            return .paused
+        case .processing, .completing:
+            return .processing
+        }
     }
 
     var isPanelVisible: Bool {
@@ -1201,24 +1206,6 @@ private struct InlineRecordingPanel: View {
             Button("Dismiss", action: dismissErrorAction)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(Color.dsPrimary)
-        }
-    }
-}
-
-private struct InlineRecordingPrimaryIcon: View {
-    let isActive: Bool
-
-    var body: some View {
-        ZStack {
-            if isActive {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.white)
-                    .frame(width: 22, height: 22)
-            } else {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundColor(.white)
-            }
         }
     }
 }

@@ -53,8 +53,6 @@ public struct AIDictationRecordingSurface: View {
     private let primaryButtonSize: CGFloat = 80
     private let secondaryButtonSize: CGFloat = 54
     private let buttonGap: CGFloat = 14
-    private let stopIconSize: CGFloat = 23
-    private let recordColor = Color(red: 1.0, green: 0.20, blue: 0.24)
     private let visualColor = Color.white
     private let stateAnimation = Animation.spring(response: 0.32, dampingFraction: 0.82, blendDuration: 0.06)
     private let fadeAnimation = Animation.easeInOut(duration: 0.18)
@@ -157,32 +155,16 @@ public struct AIDictationRecordingSurface: View {
 
     private var primaryButton: some View {
         Button(action: onPrimaryAction) {
-            ZStack {
-                Circle()
-                    .fill(recordColor)
-                    .frame(width: primaryButtonSize, height: primaryButtonSize)
-                    .shadow(color: .black.opacity(state.isActive ? 0.45 : 0.18), radius: state.isActive ? 10 : 8, x: 0, y: 5)
-
-                primaryIcon
-                    .id(state == .idle ? "mic" : "stop")
-                    .transition(.opacity.combined(with: .scale(scale: 0.74)))
-            }
+            AIDictationMicButtonVisual(
+                state: state,
+                audioLevel: model.audioLevel,
+                frequencyBands: model.frequencyBands,
+                size: primaryButtonSize
+            )
+            .shadow(color: .black.opacity(state.isActive ? 0.45 : 0.18), radius: state.isActive ? 10 : 8, x: 0, y: 5)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(state == .idle ? "Start recording" : "Stop recording")
-    }
-
-    @ViewBuilder
-    private var primaryIcon: some View {
-        if state == .idle {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 36, weight: .semibold))
-                .foregroundColor(.white)
-        } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.white)
-                .frame(width: stopIconSize, height: stopIconSize)
-        }
     }
 
     private var pauseButton: some View {

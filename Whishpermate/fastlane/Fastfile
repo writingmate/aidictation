@@ -334,6 +334,6 @@ platform :ios do
     # )
 
     # Clean up build artifacts
-    clean_build_artifacts
+    clean_build_artifacts unless ENV["KEEP_FASTLANE_BUILD_ARTIFACTS"].to_s == "1"
   end
 end

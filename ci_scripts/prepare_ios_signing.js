@@ -104,6 +104,31 @@ async function createCertificate(csrContent) {
   };
 }
 
+async function listDistributionCertificates() {
+  const response = await request("GET", "/v1/certificates?filter[certificateType]=IOS_DISTRIBUTION&limit=200");
+  return response.data || [];
+}
+
+async function certificateProfileCount(certificateId) {
+  const response = await request("GET", `/v1/certificates/${certificateId}/profiles?limit=1`);
+  return (response.data || []).length;
+}
+
+async function deleteCertificate(certificateId) {
+  await request("DELETE", `/v1/certificates/${certificateId}`);
+}
+
+async function cleanupOrphanDistributionCertificates() {
+  const certificates = await listDistributionCertificates();
+  for (const certificate of certificates) {
+    const profileCount = await certificateProfileCount(certificate.id);
+    if (profileCount === 0) {
+      console.log(`Deleting orphan iOS distribution certificate ${certificate.id}`);
+      await deleteCertificate(certificate.id);
+    }
+  }
+}
+
 async function createProfile({ name, bundleId, certificateId }) {
   const response = await request("POST", "/v1/profiles", {
     data: {
@@ -176,6 +201,7 @@ async function main() {
   run("openssl", ["genrsa", "-out", privateKeyPath, "2048"]);
   run("openssl", ["req", "-new", "-key", privateKeyPath, "-out", csrPath, "-subj", "/CN=WhisperMate iOS CI"]);
   const csrContent = fs.readFileSync(csrPath, "utf8");
+  await cleanupOrphanDistributionCertificates();
   const certificate = await createCertificate(csrContent);
   fs.writeFileSync(certificateDerPath, Buffer.from(certificate.content, "base64"));
   run("openssl", ["x509", "-inform", "DER", "-in", certificateDerPath, "-out", certificatePemPath]);

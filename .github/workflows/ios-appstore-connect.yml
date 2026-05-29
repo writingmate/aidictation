@@ -102,6 +102,89 @@ jobs:
           chmod 600 "${key_path}"
           echo "APP_STORE_CONNECT_API_KEY_KEY=${key_path}" >> "${GITHUB_ENV}"
 
+      - name: Resolve next App Store build number
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_id="com.whispermate.ios"
+          marketing_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Whishpermate/WhisperMateIOS/Info.plist)"
+          committed_build_number="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Whishpermate/WhisperMateIOS/Info.plist)"
+          export BUNDLE_ID="${bundle_id}"
+          export MARKETING_VERSION="${marketing_version}"
+
+          latest_uploaded_build="$(node <<'NODE'
+          const crypto = require("crypto");
+
+          const keyId = process.env.APP_STORE_CONNECT_API_KEY_KEY_ID;
+          const issuerId = process.env.APP_STORE_CONNECT_API_KEY_ISSUER_ID;
+          const key = require("fs").readFileSync(process.env.APP_STORE_CONNECT_API_KEY_KEY, "utf8");
+          const bundleId = process.env.BUNDLE_ID;
+          const marketingVersion = process.env.MARKETING_VERSION;
+
+          const base64url = (input) => Buffer.from(input)
+            .toString("base64")
+            .replace(/=/g, "")
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_");
+
+          const now = Math.floor(Date.now() / 1000);
+          const header = { alg: "ES256", kid: keyId, typ: "JWT" };
+          const payload = {
+            iss: issuerId,
+            iat: now,
+            exp: now + 20 * 60,
+            aud: "appstoreconnect-v1"
+          };
+
+          const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
+          const signature = crypto.sign("sha256", Buffer.from(signingInput), {
+            key,
+            dsaEncoding: "ieee-p1363"
+          });
+          const token = `${signingInput}.${base64url(signature)}`;
+
+          async function request(path) {
+            const response = await fetch(`https://api.appstoreconnect.apple.com${path}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (!response.ok) {
+              const body = await response.text();
+              throw new Error(`App Store Connect API ${response.status}: ${body}`);
+            }
+
+            return response.json();
+          }
+
+          (async () => {
+            const appResponse = await request(`/v1/apps?filter[bundleId]=${encodeURIComponent(bundleId)}&limit=1`);
+            const app = appResponse.data?.[0];
+            if (!app) {
+              throw new Error(`No App Store Connect app found for ${bundleId}`);
+            }
+
+            const buildResponse = await request(`/v1/builds?filter[app]=${encodeURIComponent(app.id)}&filter[preReleaseVersion.version]=${encodeURIComponent(marketingVersion)}&fields[builds]=version&limit=200`);
+            const versions = (buildResponse.data || [])
+              .map((build) => Number.parseInt(build.attributes?.version, 10))
+              .filter(Number.isFinite);
+
+            console.log(versions.length ? Math.max(...versions) : 0);
+          })().catch((error) => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
+          )"
+
+          next_build_number="$(node -e 'const committed = Number.parseInt(process.argv[1], 10) || 0; const uploaded = Number.parseInt(process.argv[2], 10) || 0; console.log(Math.max(committed, uploaded) + 1);' "${committed_build_number}" "${latest_uploaded_build}")"
+
+          echo "Marketing version: ${marketing_version}"
+          echo "Committed build number: ${committed_build_number}"
+          echo "Latest App Store Connect build number: ${latest_uploaded_build}"
+          echo "Next build number: ${next_build_number}"
+          echo "IOS_BUILD_NUMBER=${next_build_number}" >> "${GITHUB_ENV}"
+
       - name: Write app secrets
         shell: bash
         run: ./ci_scripts/ci_pre_xcodebuild.sh

@@ -106,10 +106,22 @@ jobs:
         shell: bash
         run: ./ci_scripts/ci_pre_xcodebuild.sh
 
-      - name: Archive and upload to App Store Connect
+      - name: Archive iOS app
         shell: bash
         working-directory: Whishpermate
-        run: fastlane ios ci_upload
+        run: fastlane ios build
+
+      - name: Upload IPA to App Store Connect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          xcrun altool \
+            --upload-app \
+            --type ios \
+            --file Whishpermate/build/WhisperMate.ipa \
+            --apiKey "${APP_STORE_CONNECT_API_KEY_KEY_ID}" \
+            --apiIssuer "${APP_STORE_CONNECT_API_KEY_ISSUER_ID}"
 
       - name: Upload IPA artifact
         if: always()

@@ -83,6 +83,13 @@ platform :ios do
   lane :build do
     # Increment build number
     if !ENV["IOS_BUILD_NUMBER"].to_s.empty?
+      committed_build_number = get_info_plist_value(
+        path: "WhisperMateIOS/Info.plist",
+        key: "CFBundleVersion"
+      ).to_i
+      requested_build_number = ENV["IOS_BUILD_NUMBER"].to_i
+      UI.user_error!("IOS_BUILD_NUMBER must be greater than the committed iOS build number") if requested_build_number <= committed_build_number
+
       increment_build_number(
         xcodeproj: "Whispermate.xcodeproj",
         build_number: ENV["IOS_BUILD_NUMBER"]

@@ -118,7 +118,6 @@ platform :ios do
       end
 
       gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Automatic #{auth_args}".strip
-      gym_options[:export_xcargs] = auth_args unless auth_args.empty?
       gym_options[:export_options] = {
         teamID: team_id,
         signingStyle: "automatic"

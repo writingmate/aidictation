@@ -173,7 +173,7 @@ async function main() {
   run("security", ["list-keychains", "-d", "user", "-s", keychainPath, ...existingKeychains]);
   run("security", ["default-keychain", "-s", keychainPath]);
 
-  run("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", privateKeyPath]);
+  run("openssl", ["genrsa", "-out", privateKeyPath, "2048"]);
   run("openssl", ["req", "-new", "-key", privateKeyPath, "-out", csrPath, "-subj", "/CN=WhisperMate iOS CI"]);
   const csrContent = fs.readFileSync(csrPath, "utf8");
   const certificate = await createCertificate(csrContent);

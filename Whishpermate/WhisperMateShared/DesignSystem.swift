@@ -70,7 +70,7 @@ private extension Color {
 
 // MARK: - Button Styles
 
-/// Primary button with orange background
+/// Primary button with brand accent background
 public struct DSPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) var isEnabled
 
@@ -269,23 +269,23 @@ public extension View {
 
 // MARK: - Color Palette
 
-// Default SwiftUI colors with orange accent
+// Default SwiftUI colors with brand accent
 
 public extension Color {
     // Background & Foreground - use system colors
     static var dsBackground: Color { dsSystemBackground }
     static var dsForeground: Color { dsSystemForeground }
 
-    // Primary (Orange accent)
-    static var dsPrimary: Color { .orange }
+    // Primary accent from app assets
+    static var dsPrimary: Color { Color("AccentColor", bundle: .main) }
     static var dsPrimaryForeground: Color { .white }
 
     // Secondary - use system secondary
     static var dsSecondary: Color { dsSystemSecondaryForeground }
     static var dsSecondaryForeground: Color { .white }
 
-    // Accent (Orange)
-    static var dsAccent: Color { .orange }
+    // Accent
+    static var dsAccent: Color { dsPrimary }
     static var dsAccentForeground: Color { dsSystemForeground }
 
     // Card - use system control background
@@ -303,7 +303,7 @@ public extension Color {
     // Border, Input, Ring - use system colors
     static var dsBorder: Color { dsSystemSeparator }
     static var dsInput: Color { dsSystemTextBackground }
-    static var dsRing: Color { .orange }
+    static var dsRing: Color { dsPrimary }
 
     // Destructive
     static var dsDestructive: Color { .red }

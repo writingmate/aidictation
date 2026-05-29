@@ -11,6 +11,7 @@ struct ContentView: View {
     @StateObject private var authManager = AuthManager.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @StateObject private var transcriptionProviderManager = TranscriptionProviderManager()
+    @StateObject private var parakeetService = SharedParakeetTranscriptionService.shared
     @StateObject private var inlineRecording = InlineRecordingCoordinator()
     @State private var showRecordingSheet = false
     @State private var showSettings = false
@@ -19,6 +20,8 @@ struct ContentView: View {
     @State private var showTextRules = false
     @State private var showLoginConfigurationAlert = false
     @State private var loginConfigurationMessage = ""
+    @State private var showOfflineModelAlert = false
+    @State private var offlineModelMessage = ""
     @State private var newlyInsertedRecordingID: UUID?
     @State private var historySearchText = ""
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -31,6 +34,11 @@ struct ContentView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(loginConfigurationMessage)
+            }
+            .alert("Offline Model", isPresented: $showOfflineModelAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(offlineModelMessage)
             }
     }
 
@@ -542,12 +550,17 @@ struct ContentView: View {
                     if transcriptionProviderManager.transcriptionMode != .cloud {
                         Button(action: prepareOfflineModel) {
                             HStack {
-                                Label("Offline Model", systemImage: "square.and.arrow.down")
+                                Label(offlineModelStatusText, systemImage: offlineModelStatusIcon)
                                 Spacer()
-                                Image(systemName: offlineModelStatusIcon)
-                                    .foregroundColor(offlineModelStatusColor)
+                                if offlineModelIsBusy {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: offlineModelTrailingIcon)
+                                        .foregroundColor(offlineModelStatusColor)
+                                }
                             }
                         }
+                        .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported || offlineModelIsBusy)
                     }
                 }
 
@@ -611,19 +624,82 @@ struct ContentView: View {
         guard SharedParakeetTranscriptionService.isRuntimeSupported else {
             return "exclamationmark.triangle.fill"
         }
-        return SharedParakeetTranscriptionService.shared.isModelDownloaded ? "checkmark.circle.fill" : "arrow.down.circle"
+        switch parakeetService.state {
+        case .downloading:
+            return "arrow.down.circle"
+        case .initializing:
+            return "gearshape"
+        case .ready, .transcribing:
+            return "checkmark.circle.fill"
+        case .error:
+            return "exclamationmark.triangle.fill"
+        case .notInitialized:
+            return parakeetService.isModelDownloaded ? "checkmark.circle.fill" : "arrow.down.circle"
+        @unknown default:
+            return "arrow.down.circle"
+        }
+    }
+
+    private var offlineModelTrailingIcon: String {
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            return "exclamationmark.triangle.fill"
+        }
+        return parakeetService.isModelDownloaded ? "checkmark.circle.fill" : "arrow.down.circle"
     }
 
     private var offlineModelStatusColor: Color {
         guard SharedParakeetTranscriptionService.isRuntimeSupported else {
             return .orange
         }
-        return SharedParakeetTranscriptionService.shared.isModelDownloaded ? .green : .secondary
+        switch parakeetService.state {
+        case .ready, .transcribing:
+            return .green
+        case .error:
+            return .orange
+        default:
+            return parakeetService.isModelDownloaded ? .green : .secondary
+        }
+    }
+
+    private var offlineModelStatusText: String {
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            return SharedParakeetTranscriptionService.unavailableMessage
+        }
+        switch parakeetService.state {
+        case .downloading:
+            return "Downloading offline model"
+        case .initializing:
+            return "Preparing offline model"
+        case .ready, .transcribing:
+            return "Offline model ready"
+        case .error(let message):
+            return message.isEmpty ? "Download offline model" : message
+        case .notInitialized:
+            return parakeetService.isModelDownloaded ? "Offline model ready" : "Download offline model"
+        @unknown default:
+            return "Download offline model"
+        }
+    }
+
+    private var offlineModelIsBusy: Bool {
+        switch parakeetService.state {
+        case .downloading, .initializing:
+            return true
+        default:
+            return false
+        }
     }
 
     private func prepareOfflineModel() {
         Task {
-            try? await SharedParakeetTranscriptionService.shared.initialize()
+            do {
+                try await parakeetService.initialize()
+            } catch {
+                await MainActor.run {
+                    offlineModelMessage = error.localizedDescription
+                    showOfflineModelAlert = true
+                }
+            }
         }
     }
 

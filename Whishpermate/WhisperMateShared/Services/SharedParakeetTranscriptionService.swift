@@ -131,9 +131,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             return runtimeBridge
         }
 
-        guard let frameworkURL = Bundle.main.privateFrameworksURL?.appendingPathComponent("ParakeetRuntime.framework"),
-              let bundle = Bundle(url: frameworkURL)
-        else {
+        guard let bundle = runtimeFrameworkBundle() else {
             throw runtimeError("Offline mode is missing from this build.")
         }
 
@@ -154,6 +152,24 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         let bridge = bridgeClass.init()
         runtimeBridge = bridge
         return bridge
+    }
+
+    private func runtimeFrameworkBundle() -> Bundle? {
+        let frameworkName = "ParakeetRuntime.framework"
+        let appFrameworkURL = Bundle.main.privateFrameworksURL?.appendingPathComponent(frameworkName)
+        let containingAppFrameworkURL = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Frameworks")
+            .appendingPathComponent(frameworkName)
+
+        for frameworkURL in [appFrameworkURL, containingAppFrameworkURL].compactMap({ $0 }) {
+            if let bundle = Bundle(url: frameworkURL) {
+                return bundle
+            }
+        }
+
+        return nil
     }
 
     private func initializeRuntimeBridge(_ bridge: NSObject) async throws {

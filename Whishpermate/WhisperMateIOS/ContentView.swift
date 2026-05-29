@@ -10,6 +10,7 @@ struct ContentView: View {
     @StateObject private var shortcutManager = ShortcutManager.shared
     @StateObject private var authManager = AuthManager.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @StateObject private var transcriptionProviderManager = TranscriptionProviderManager()
     @StateObject private var inlineRecording = InlineRecordingCoordinator()
     @State private var showRecordingSheet = false
     @State private var showSettings = false
@@ -524,6 +525,32 @@ struct ContentView: View {
                     }
                 }
 
+                Section("Dictation Mode") {
+                    Picker("Mode", selection: Binding(
+                        get: { transcriptionProviderManager.transcriptionMode },
+                        set: { transcriptionProviderManager.setTranscriptionMode($0) }
+                    )) {
+                        ForEach(TranscriptionMode.availableCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+
+                    Text(transcriptionProviderManager.transcriptionMode.description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if transcriptionProviderManager.transcriptionMode != .cloud {
+                        Button(action: prepareOfflineModel) {
+                            HStack {
+                                Label("Offline Model", systemImage: "square.and.arrow.down")
+                                Spacer()
+                                Image(systemName: offlineModelStatusIcon)
+                                    .foregroundColor(offlineModelStatusColor)
+                            }
+                        }
+                    }
+                }
+
                 Section("About") {
                     HStack {
                         Text("Version")
@@ -578,6 +605,26 @@ struct ContentView: View {
         }
         // Fallback to general settings if keyboard shortcut doesn't work
         openAppSettings()
+    }
+
+    private var offlineModelStatusIcon: String {
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            return "exclamationmark.triangle.fill"
+        }
+        return SharedParakeetTranscriptionService.shared.isModelDownloaded ? "checkmark.circle.fill" : "arrow.down.circle"
+    }
+
+    private var offlineModelStatusColor: Color {
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            return .orange
+        }
+        return SharedParakeetTranscriptionService.shared.isModelDownloaded ? .green : .secondary
+    }
+
+    private func prepareOfflineModel() {
+        Task {
+            try? await SharedParakeetTranscriptionService.shared.initialize()
+        }
     }
 
     private func openLogin() {
@@ -889,59 +936,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
             return
         }
 
-        let apiKey = KeychainHelper.get(key: "custom_transcription_api_key") ?? SecretsLoader.transcriptionKey(for: .custom)
-        let endpoint = SecretsLoader.customTranscriptionEndpoint() ?? "https://writingmate.ai/api/openai/v1/audio/transcriptions"
-        let model = SecretsLoader.customTranscriptionModel() ?? "groq/whisper-large-v3-turbo"
-
-        guard let apiKey else {
-            try? FileManager.default.removeItem(at: audioURL)
-            showError("API key not configured")
-            return
-        }
-
         do {
-            let config = OpenAIClient.Configuration(
-                transcriptionEndpoint: endpoint,
-                transcriptionModel: model,
-                chatCompletionEndpoint: "",
-                chatCompletionModel: "",
-                apiKey: apiKey
-            )
-
-            let openAIClient = OpenAIClient(config: config)
-            var sttPromptComponents: [String] = []
-            var postProcessingPromptComponents: [String] = []
-
-            let dictionaryHints = dictionaryManager.transcriptionHints
-            if !dictionaryHints.isEmpty {
-                sttPromptComponents.append("Vocabulary: \(dictionaryHints)")
-                postProcessingPromptComponents.append("Vocabulary: \(dictionaryHints)")
-            }
-
-            let shortcutHints = shortcutManager.transcriptionHints
-            if !shortcutHints.isEmpty {
-                sttPromptComponents.append("Phrases: \(shortcutHints)")
-                postProcessingPromptComponents.append("Phrases: \(shortcutHints)")
-            }
-
-            let styleInstructions = toneStyleManager.allInstructions
-            if !styleInstructions.isEmpty {
-                postProcessingPromptComponents.append(styleInstructions)
-            }
-
-            let sttPrompt = sttPromptComponents.joined(separator: "\n")
-            let postProcessingPrompt = postProcessingPromptComponents.joined(separator: "\n")
-
-            let result = try await openAIClient.transcribe(
+            let processedResult = try await SharedTranscriptionService.transcribe(
                 audioURL: audioURL,
-                prompt: sttPrompt.isEmpty ? nil : sttPrompt,
-                sttPrompt: sttPrompt.isEmpty ? nil : sttPrompt,
-                postProcessingPrompt: postProcessingPrompt.isEmpty ? nil : postProcessingPrompt
+                dictionaryManager: dictionaryManager,
+                toneStyleManager: toneStyleManager,
+                shortcutManager: shortcutManager
             )
-
-            var processedResult = dictionaryManager.applyReplacements(to: result)
-            processedResult = shortcutManager.expandShortcuts(in: processedResult)
-            processedResult = TranscriptionTextSanitizer.cleanedText(processedResult)
 
             guard !processedResult.isEmpty else {
                 DebugLog.info("Inline transcription was empty after sanitization; skipping history item", context: "ContentView")

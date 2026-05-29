@@ -360,17 +360,6 @@ struct RecordingSheetView: View {
             return
         }
 
-        // Get API key from Secrets.plist or keychain
-        let apiKey = KeychainHelper.get(key: "custom_transcription_api_key") ?? SecretsLoader.transcriptionKey(for: .custom)
-        let endpoint = SecretsLoader.customTranscriptionEndpoint() ?? "https://writingmate.ai/api/openai/v1/audio/transcriptions"
-        let model = SecretsLoader.customTranscriptionModel() ?? "groq/whisper-large-v3-turbo"
-
-        guard let apiKey = apiKey else {
-            errorMessage = "API key not configured"
-            sheetState = .viewing
-            return
-        }
-
         withAnimation(.easeInOut(duration: 0.18)) {
             sheetState = .processing
             updateRecordingSurface(animated: false)
@@ -378,53 +367,12 @@ struct RecordingSheetView: View {
 
         Task {
             do {
-                let config = OpenAIClient.Configuration(
-                    transcriptionEndpoint: endpoint,
-                    transcriptionModel: model,
-                    chatCompletionEndpoint: "",
-                    chatCompletionModel: "",
-                    apiKey: apiKey
-                )
-
-                let openAIClient = OpenAIClient(config: config)
-
-                var sttPromptComponents: [String] = []
-                var postProcessingPromptComponents: [String] = []
-
-                // Add dictionary hints for better recognition
-                let dictionaryHints = dictionaryManager.transcriptionHints
-                if !dictionaryHints.isEmpty {
-                    sttPromptComponents.append("Vocabulary: \(dictionaryHints)")
-                    postProcessingPromptComponents.append("Vocabulary: \(dictionaryHints)")
-                }
-
-                // Add shortcut triggers for recognition
-                let shortcutHints = shortcutManager.transcriptionHints
-                if !shortcutHints.isEmpty {
-                    sttPromptComponents.append("Phrases: \(shortcutHints)")
-                    postProcessingPromptComponents.append("Phrases: \(shortcutHints)")
-                }
-
-                let styleInstructions = toneStyleManager.allInstructions
-                if !styleInstructions.isEmpty {
-                    postProcessingPromptComponents.append(styleInstructions)
-                }
-
-                let sttPrompt = sttPromptComponents.joined(separator: "\n")
-                let postProcessingPrompt = postProcessingPromptComponents.joined(separator: "\n")
-
-                let result = try await openAIClient.transcribe(
+                let processedResult = try await SharedTranscriptionService.transcribe(
                     audioURL: audioURL,
-                    prompt: sttPrompt.isEmpty ? nil : sttPrompt,
-                    sttPrompt: sttPrompt.isEmpty ? nil : sttPrompt,
-                    postProcessingPrompt: postProcessingPrompt.isEmpty ? nil : postProcessingPrompt
+                    dictionaryManager: dictionaryManager,
+                    toneStyleManager: toneStyleManager,
+                    shortcutManager: shortcutManager
                 )
-
-                // Apply post-processing: dictionary replacements and shortcut expansion
-                var processedResult = result
-                processedResult = dictionaryManager.applyReplacements(to: processedResult)
-                processedResult = shortcutManager.expandShortcuts(in: processedResult)
-                processedResult = TranscriptionTextSanitizer.cleanedText(processedResult)
 
                 guard !processedResult.isEmpty else {
                     DebugLog.info("Sheet transcription was empty after sanitization; skipping history item", context: "RecordingSheetView")

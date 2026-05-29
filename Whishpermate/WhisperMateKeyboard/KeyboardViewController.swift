@@ -8,7 +8,6 @@ class KeyboardViewController: UIInputViewController {
     // MARK: - Properties
 
     private var audioRecorder: AudioRecorder?
-    private var openAIClient: OpenAIClient!
     private var hostingController: UIHostingController<KeyboardRecordingView>!
     private var statusLabel: UILabel!
     private let recordingViewModel = KeyboardRecordingViewModel()
@@ -17,6 +16,7 @@ class KeyboardViewController: UIInputViewController {
     private var displayedFrequencyBands: [Float] = Array(repeating: 0.0, count: 10)
     private var recordingStartTime: Date?
     private var isProcessingTranscription = false
+    private var isShifted = false
     private var cancellables = Set<AnyCancellable>()
     private var keyboardHeightConstraint: NSLayoutConstraint?
 
@@ -83,28 +83,6 @@ class KeyboardViewController: UIInputViewController {
         return recorder
     }
 
-    private func makeOpenAIClient() -> OpenAIClient? {
-        // Try keychain first, then fall back to Secrets.plist
-        let apiKey = KeychainHelper.get(key: "custom_transcription_api_key") ?? SecretsLoader.transcriptionKey(for: .custom)
-        let endpoint = SecretsLoader.customTranscriptionEndpoint() ?? "https://writingmate.ai/api/openai/v1/audio/transcriptions"
-        let model = SecretsLoader.customTranscriptionModel() ?? "groq/whisper-large-v3-turbo"
-
-        guard let apiKey = apiKey else {
-            DebugLog.info("No API key found", context: "KeyboardViewController")
-            return nil
-        }
-
-        let config = OpenAIClient.Configuration(
-            transcriptionEndpoint: endpoint,
-            transcriptionModel: model,
-            chatCompletionEndpoint: "",
-            chatCompletionModel: "",
-            apiKey: apiKey
-        )
-
-        return OpenAIClient(config: config)
-    }
-
     private func setupUI() {
         view.backgroundColor = KeyboardPalette.backgroundColor
         view.isOpaque = true
@@ -112,11 +90,30 @@ class KeyboardViewController: UIInputViewController {
         // Create SwiftUI view
         let recordingView = KeyboardRecordingView(
             model: recordingViewModel,
+            isShifted: isShifted,
             onPrimaryAction: { [weak self] in
                 self?.handlePrimaryAction()
             },
             onPauseAction: { [weak self] in
                 self?.togglePauseRecording()
+            },
+            onKeyPress: { [weak self] text in
+                self?.insertKey(text)
+            },
+            onBackspace: { [weak self] in
+                self?.textDocumentProxy.deleteBackward()
+            },
+            onSpace: { [weak self] in
+                self?.textDocumentProxy.insertText(" ")
+            },
+            onReturn: { [weak self] in
+                self?.textDocumentProxy.insertText("\n")
+            },
+            onShift: { [weak self] in
+                self?.toggleShift()
+            },
+            onNextKeyboard: { [weak self] in
+                self?.advanceToNextInputMode()
             }
         )
 
@@ -160,6 +157,34 @@ class KeyboardViewController: UIInputViewController {
             statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
         ])
+    }
+
+    private func insertKey(_ text: String) {
+        textDocumentProxy.insertText(text)
+        if isShifted {
+            isShifted = false
+            refreshKeyboardRootView()
+        }
+    }
+
+    private func toggleShift() {
+        isShifted.toggle()
+        refreshKeyboardRootView()
+    }
+
+    private func refreshKeyboardRootView() {
+        hostingController.rootView = KeyboardRecordingView(
+            model: recordingViewModel,
+            isShifted: isShifted,
+            onPrimaryAction: { [weak self] in self?.handlePrimaryAction() },
+            onPauseAction: { [weak self] in self?.togglePauseRecording() },
+            onKeyPress: { [weak self] text in self?.insertKey(text) },
+            onBackspace: { [weak self] in self?.textDocumentProxy.deleteBackward() },
+            onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
+            onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
+            onShift: { [weak self] in self?.toggleShift() },
+            onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() }
+        )
     }
 
     private func handlePrimaryAction() {
@@ -305,13 +330,7 @@ class KeyboardViewController: UIInputViewController {
                     throw OpenAIError.apiError(access.reason ?? "Open AI Dictation to log in and continue.")
                 }
 
-                guard let openAIClient = self.openAIClient ?? self.makeOpenAIClient() else {
-                    throw OpenAIError.apiError("API key not configured")
-                }
-                self.openAIClient = openAIClient
-
-                let rawTranscription = try await openAIClient.transcribe(audioURL: recordingURL)
-                let transcription = TranscriptionTextSanitizer.cleanedText(rawTranscription)
+                let transcription = try await SharedTranscriptionService.transcribe(audioURL: recordingURL)
 
                 guard !transcription.isEmpty else {
                     DebugLog.info("Keyboard transcription was empty after sanitization; skipping insert", context: "KeyboardViewController")

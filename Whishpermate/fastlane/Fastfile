@@ -93,9 +93,6 @@ platform :ios do
       )
     end
 
-    app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]
-    keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s.empty? ? "db6f8085-4d33-4b22-af3e-741fdf9c2c29" : ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"]
-
     # Update provisioning profiles
     # Using manually installed profiles instead
     # match(
@@ -105,16 +102,33 @@ platform :ios do
     #   readonly: true
     # )
 
-    # Build and sign
-    gym(
+    gym_options = {
       scheme: "WhisperMateIOS",
       export_method: "app-store",
       output_directory: "./build",
       output_name: "WhisperMate.ipa",
       clean: true,
-      xcargs: "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual",
-      export_team_id: team_id,
-      export_options: {
+      export_team_id: team_id
+    }
+
+    if ENV["IOS_USE_AUTOMATIC_SIGNING"].to_s == "1"
+      auth_args = ""
+      if !ENV["APP_STORE_CONNECT_API_KEY_KEY"].to_s.empty?
+        auth_args = "-allowProvisioningUpdates -authenticationKeyPath #{File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY"])} -authenticationKeyID #{ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"]} -authenticationKeyIssuerID #{ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"]}"
+      end
+
+      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Automatic #{auth_args}".strip
+      gym_options[:export_xcargs] = auth_args unless auth_args.empty?
+      gym_options[:export_options] = {
+        teamID: team_id,
+        signingStyle: "automatic"
+      }
+    else
+      app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]
+      keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s.empty? ? "db6f8085-4d33-4b22-af3e-741fdf9c2c29" : ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"]
+
+      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual"
+      gym_options[:export_options] = {
         teamID: team_id,
         signingStyle: "manual",
         provisioningProfiles: {
@@ -122,7 +136,10 @@ platform :ios do
           "com.whispermate.ios.keyboard" => keyboard_profile
         }
       }
-    )
+    end
+
+    # Build and sign
+    gym(**gym_options)
 
     UI.success("✅ Build complete!")
   end

@@ -30,9 +30,5 @@ The `iOS App Store Connect` workflow archives and uploads the iOS app on every p
 - `APP_STORE_CONNECT_API_KEY_ISSUER_ID`
 - `APP_STORE_CONNECT_API_KEY_KEY_ID`
 - `APP_STORE_CONNECT_API_KEY_P8_BASE64` or `APP_STORE_CONNECT_API_KEY_P8`
-- `IOS_DISTRIBUTION_CERTIFICATE_BASE64`
-- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`
-- `IOS_APP_STORE_PROFILE_BASE64`
-- `IOS_KEYBOARD_APP_STORE_PROFILE_BASE64`
 
 Use the same app configuration secrets listed above for Xcode Cloud. The workflow sets the iOS build number from the GitHub Actions run number.

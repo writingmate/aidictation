@@ -25,16 +25,12 @@ jobs:
       FASTLANE_HIDE_CHANGELOG: "1"
       FASTLANE_SKIP_UPDATE_CHECK: "1"
       IOS_BUILD_NUMBER: ${{ github.run_number }}
+      IOS_USE_AUTOMATIC_SIGNING: "1"
 
       APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
       APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_KEY_ID }}
       APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
       APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
-
-      IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
-      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
-      IOS_APP_STORE_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROFILE_BASE64 }}
-      IOS_KEYBOARD_APP_STORE_PROFILE_BASE64: ${{ secrets.IOS_KEYBOARD_APP_STORE_PROFILE_BASE64 }}
 
       AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -63,10 +59,6 @@ jobs:
           required=(
             APP_STORE_CONNECT_API_KEY_ISSUER_ID
             APP_STORE_CONNECT_API_KEY_KEY_ID
-            IOS_DISTRIBUTION_CERTIFICATE_BASE64
-            IOS_DISTRIBUTION_CERTIFICATE_PASSWORD
-            IOS_APP_STORE_PROFILE_BASE64
-            IOS_KEYBOARD_APP_STORE_PROFILE_BASE64
             AUTH_WEB_URL
             SUPABASE_URL
             SUPABASE_ANON_KEY
@@ -109,55 +101,6 @@ jobs:
 
           chmod 600 "${key_path}"
           echo "APP_STORE_CONNECT_API_KEY_KEY=${key_path}" >> "${GITHUB_ENV}"
-
-      - name: Install signing certificate
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          keychain_path="${RUNNER_TEMP}/ios-signing.keychain-db"
-          certificate_path="${RUNNER_TEMP}/ios-distribution.p12"
-          keychain_password="$(uuidgen)"
-
-          printf '%s' "${IOS_DISTRIBUTION_CERTIFICATE_BASE64}" | base64 --decode > "${certificate_path}"
-
-          security create-keychain -p "${keychain_password}" "${keychain_path}"
-          security set-keychain-settings -lut 21600 "${keychain_path}"
-          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
-          security import "${certificate_path}" -P "${IOS_DISTRIBUTION_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${keychain_path}"
-          security list-keychain -d user -s "${keychain_path}"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "${keychain_password}" "${keychain_path}"
-
-      - name: Install provisioning profiles
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          profile_dir="${HOME}/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "${profile_dir}"
-
-          install_profile() {
-            local encoded_profile="$1"
-            local basename="$2"
-            local env_name="$3"
-            local profile_path="${RUNNER_TEMP}/${basename}.mobileprovision"
-            local plist_path="${RUNNER_TEMP}/${basename}.plist"
-
-            printf '%s' "${encoded_profile}" | base64 --decode > "${profile_path}"
-            security cms -D -i "${profile_path}" > "${plist_path}"
-
-            local uuid
-            uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "${plist_path}")"
-
-            local name
-            name="$(/usr/libexec/PlistBuddy -c 'Print Name' "${plist_path}")"
-
-            cp "${profile_path}" "${profile_dir}/${uuid}.mobileprovision"
-            echo "${env_name}=${name}" >> "${GITHUB_ENV}"
-          }
-
-          install_profile "${IOS_APP_STORE_PROFILE_BASE64}" app IOS_APPSTORE_PROFILE_NAME
-          install_profile "${IOS_KEYBOARD_APP_STORE_PROFILE_BASE64}" keyboard IOS_KEYBOARD_APPSTORE_PROFILE_NAME
 
       - name: Write app secrets
         shell: bash

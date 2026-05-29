@@ -44,6 +44,11 @@ def app_store_connect_api_key_from_env
   app_store_connect_api_key(**params)
 end
 
+def provisioning_profile_settings(profile)
+  uuid_pattern = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
+  profile.match?(uuid_pattern) ? { profile_uuid: profile } : { profile_name: profile }
+end
+
 platform :ios do
   # Variables
   app_identifier = "com.whispermate.ios"
@@ -123,12 +128,47 @@ platform :ios do
       if !ENV["APP_STORE_CONNECT_API_KEY_KEY"].to_s.empty?
         auth_args = "-allowProvisioningUpdates -authenticationKeyPath #{File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY"])} -authenticationKeyID #{ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"]} -authenticationKeyIssuerID #{ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"]}"
       end
+      app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]
+      keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s.empty? ? "db6f8085-4d33-4b22-af3e-741fdf9c2c29" : ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"]
 
-      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=\"Apple Distribution\" #{auth_args}".strip
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: "Whispermate.xcodeproj",
+        team_id: team_id,
+        targets: ["WhisperMateIOS"],
+        build_configurations: ["Release"],
+        code_sign_identity: "Apple Distribution",
+        **provisioning_profile_settings(app_profile)
+      )
+
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: "Whispermate.xcodeproj",
+        team_id: team_id,
+        targets: ["WhisperMateKeyboard"],
+        build_configurations: ["Release"],
+        code_sign_identity: "Apple Distribution",
+        **provisioning_profile_settings(keyboard_profile)
+      )
+
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: "Whispermate.xcodeproj",
+        team_id: team_id,
+        targets: ["ParakeetRuntime", "PermissionFlowRuntime"],
+        build_configurations: ["Release"],
+        code_sign_identity: "Apple Distribution"
+      )
+
+      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} #{auth_args}".strip
       gym_options[:export_options] = {
         teamID: team_id,
-        signingStyle: "automatic",
-        signingCertificate: "Apple Distribution"
+        signingStyle: "manual",
+        signingCertificate: "Apple Distribution",
+        provisioningProfiles: {
+          "com.whispermate.ios" => app_profile,
+          "com.whispermate.ios.keyboard" => keyboard_profile
+        }
       }
     else
       app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]

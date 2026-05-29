@@ -16,6 +16,8 @@
 	<string>66</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.0.65</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AI Dictation keyboard needs microphone access to transcribe your voice to text.</string>
 	<key>NSExtension</key>

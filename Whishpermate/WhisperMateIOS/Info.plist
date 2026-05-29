@@ -33,6 +33,8 @@
     <string>66</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>NSMicrophoneUsageDescription</key>
     <string>AI Dictation needs microphone access to transcribe your voice into text.</string>
     <key>UIApplicationSceneManifest</key>

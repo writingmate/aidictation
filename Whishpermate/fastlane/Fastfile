@@ -124,10 +124,11 @@ platform :ios do
         auth_args = "-allowProvisioningUpdates -authenticationKeyPath #{File.expand_path(ENV["APP_STORE_CONNECT_API_KEY_KEY"])} -authenticationKeyID #{ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"]} -authenticationKeyIssuerID #{ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"]}"
       end
 
-      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Automatic #{auth_args}".strip
+      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=\"Apple Distribution\" #{auth_args}".strip
       gym_options[:export_options] = {
         teamID: team_id,
-        signingStyle: "automatic"
+        signingStyle: "automatic",
+        signingCertificate: "Apple Distribution"
       }
     else
       app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]

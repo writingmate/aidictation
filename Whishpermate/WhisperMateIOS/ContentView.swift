@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var offlineModelMessage = ""
     @State private var newlyInsertedRecordingID: UUID?
     @State private var historySearchText = ""
+    @State private var recordingToShare: Recording?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
@@ -83,6 +84,9 @@ struct ContentView: View {
             }
             .sheet(item: $selectedRecording) { recording in
                 RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, recording: recording)
+            }
+            .sheet(item: $recordingToShare) { recording in
+                ShareSheet(activityItems: [recording.transcription])
             }
         }
         .navigationViewStyle(.stack)
@@ -265,12 +269,12 @@ struct ContentView: View {
                             .background(Color(uiColor: .secondarySystemGroupedBackground))
                             .cornerRadius(10)
                         }
-                        .contextMenu {
-                            Button(action: {
-                                UIPasteboard.general.string = recording.transcription
-                            }) {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
+	                        .contextMenu {
+	                            Button(action: {
+	                                recordingToShare = recording
+	                            }) {
+	                                Label("Share", systemImage: "square.and.arrow.up")
+	                            }
 
                             Button(role: .destructive, action: {
                                 historyManager.deleteRecording(recording)
@@ -313,20 +317,6 @@ struct ContentView: View {
                 Divider()
                     .padding(.vertical, 8)
 
-                // App Info
-                HStack {
-                    Text("Version")
-                        .font(.body)
-                    Spacer()
-                    Text("0.0.20")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color(uiColor: .secondarySystemGroupedBackground))
-                .cornerRadius(10)
-
                 // Clear History
                 Button(action: {
                     historyManager.clearAll()
@@ -342,6 +332,20 @@ struct ContentView: View {
                     .cornerRadius(10)
                 }
                 .disabled(historyManager.recordings.isEmpty)
+
+                // App Info
+                HStack {
+                    Text("Version")
+                        .font(.body)
+                    Spacer()
+                    Text(appVersionText)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(uiColor: .secondarySystemGroupedBackground))
+                .cornerRadius(10)
             }
         }
     }
@@ -400,9 +404,9 @@ struct ContentView: View {
                             }
 
                             Button {
-                                UIPasteboard.general.string = recording.transcription
+                                recordingToShare = recording
                             } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
+                                Label("Share", systemImage: "square.and.arrow.up")
                             }
 
                             if recording.audioFileURL != nil {
@@ -437,6 +441,9 @@ struct ContentView: View {
             }
             .sheet(item: $selectedRecording) { recording in
                 RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, recording: recording)
+            }
+            .sheet(item: $recordingToShare) { recording in
+                ShareSheet(activityItems: [recording.transcription])
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
@@ -524,64 +531,70 @@ struct ContentView: View {
 	                }
 
                 Section("Dictation Mode") {
-                    Picker("Mode", selection: Binding(
-                        get: { transcriptionProviderManager.transcriptionMode },
-                        set: { transcriptionProviderManager.setTranscriptionMode($0) }
-                    )) {
-                        ForEach(TranscriptionMode.availableCases) { mode in
-                            Text(mode.displayName).tag(mode)
+                    NavigationLink {
+                        TranscriptionModeSelectionView(
+                            transcriptionProviderManager: transcriptionProviderManager,
+                            parakeetService: parakeetService,
+                            offlineModelStatusText: offlineModelStatusText,
+                            offlineModelStatusIcon: offlineModelStatusIcon,
+                            offlineModelTrailingIcon: offlineModelTrailingIcon,
+                            offlineModelStatusColor: offlineModelStatusColor,
+                            offlineModelIsBusy: offlineModelIsBusy,
+                            prepareOfflineModel: prepareOfflineModel
+                        )
+                    } label: {
+                        HStack {
+                            Label("Model", systemImage: "waveform.badge.magnifyingglass")
+                            Spacer()
+                            Text(transcriptionProviderManager.transcriptionMode.displayName)
+                                .foregroundColor(.secondary)
                         }
                     }
+                }
 
-                    Text(transcriptionProviderManager.transcriptionMode.description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if transcriptionProviderManager.transcriptionMode != .cloud {
-                        Button(action: prepareOfflineModel) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Label(offlineModelStatusText, systemImage: offlineModelStatusIcon)
-                                    Spacer()
-                                    if !offlineModelIsBusy {
-                                        Image(systemName: offlineModelTrailingIcon)
-                                            .foregroundColor(offlineModelStatusColor)
-                                    }
-                                }
-
-                                if offlineModelIsBusy {
-                                    ProgressView()
-                                        .progressViewStyle(.linear)
-                                        .tint(.secondary)
-                                }
-                            }
+                Section("Transcription") {
+                    NavigationLink {
+                        DictionaryView(manager: dictionaryManager)
+                            .navigationTitle("Dictionary")
+                            .navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        Label("Dictionary", systemImage: "text.badge.checkmark")
                             .foregroundColor(.primary)
-                        }
-                        .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported || offlineModelIsBusy)
+                    }
+
+                    NavigationLink {
+                        ToneStyleView(manager: toneStyleManager)
+                            .navigationTitle("Tone & Style")
+                            .navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        Label("Tone & Style", systemImage: "wand.and.stars")
+                            .foregroundColor(.primary)
+                    }
+
+                    NavigationLink {
+                        ShortcutsView(manager: shortcutManager)
+                            .navigationTitle("Shortcuts")
+                            .navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        Label("Shortcuts", systemImage: "text.append")
+                            .foregroundColor(.primary)
                     }
                 }
-
-                Section("About") {
-                    HStack {
-                        Text("Version")
-                        Spacer()
-                        Text("0.0.20")
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-	                Section("Transcription") {
-	                    NavigationLink(destination: TranscriptionSettingsView(dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager)) {
-	                        Label("Transcription Settings", systemImage: "text.badge.checkmark")
-	                            .foregroundColor(.primary)
-	                    }
-	                }
 
                 Section("Data") {
                     Button("Clear All History", role: .destructive) {
                         historyManager.clearAll()
                     }
                     .disabled(historyManager.recordings.isEmpty)
+                }
+
+                Section {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(appVersionText)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -618,15 +631,31 @@ struct ContentView: View {
         openAppSettings()
     }
 
+    private var appVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (version?.isEmpty == false ? version : nil, build?.isEmpty == false ? build : nil) {
+        case let (.some(version), .some(build)):
+            return "\(version) (\(build))"
+        case let (.some(version), .none):
+            return version
+        case let (.none, .some(build)):
+            return build
+        case (.none, .none):
+            return "Unknown"
+        }
+    }
+
     private var offlineModelStatusIcon: String {
         guard SharedParakeetTranscriptionService.isRuntimeSupported else {
             return "exclamationmark.triangle.fill"
         }
-        switch parakeetService.state {
-        case .downloading:
-            return "arrow.down.circle"
-        case .initializing:
-            return "gearshape"
+	        switch parakeetService.state {
+	        case .downloading:
+	            return "arrow.down.circle"
+	        case .initializing:
+	            return "arrow.down.circle"
         case .ready, .transcribing:
             return "checkmark.circle.fill"
         case .error:
@@ -799,6 +828,130 @@ private struct UsageSummaryView: View {
 	            }
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct TranscriptionModeSelectionView: View {
+    @ObservedObject var transcriptionProviderManager: TranscriptionProviderManager
+    @ObservedObject var parakeetService: SharedParakeetTranscriptionService
+    let offlineModelStatusText: String
+    let offlineModelStatusIcon: String
+    let offlineModelTrailingIcon: String
+    let offlineModelStatusColor: Color
+    let offlineModelIsBusy: Bool
+    let prepareOfflineModel: () -> Void
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(TranscriptionMode.availableCases) { mode in
+                    modeButton(for: mode)
+                }
+            } footer: {
+                Text("Choose cloud for best accuracy, offline for private on-device speed, or automatic to let AIDictation choose.")
+            }
+
+            if transcriptionProviderManager.transcriptionMode != .cloud {
+                Section("Offline Model") {
+                    Button(action: prepareOfflineModel) {
+                        VStack(alignment: .leading, spacing: 8) {
+	                            HStack {
+	                                Label {
+	                                    HStack(spacing: 8) {
+	                                        Text(offlineModelStatusText)
+	                                        if offlineModelIsBusy {
+	                                            ProgressView()
+	                                                .controlSize(.small)
+	                                        }
+	                                    }
+	                                } icon: {
+	                                    Image(systemName: offlineModelStatusIcon)
+	                                }
+	                                Spacer()
+                                if !offlineModelIsBusy {
+                                    Image(systemName: offlineModelTrailingIcon)
+                                        .foregroundColor(offlineModelStatusColor)
+                                }
+                            }
+
+                            if offlineModelIsBusy {
+                                ProgressView()
+                                    .progressViewStyle(.linear)
+                                    .tint(.secondary)
+                            }
+                        }
+                        .foregroundColor(.primary)
+                    }
+                    .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported || offlineModelIsBusy)
+                }
+            }
+        }
+        .navigationTitle("Model")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func modeButton(for mode: TranscriptionMode) -> some View {
+        let isSelected = transcriptionProviderManager.transcriptionMode == mode
+        let rating = modeRating(for: mode)
+
+        return Button {
+            transcriptionProviderManager.setTranscriptionMode(mode)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundColor(isSelected ? .primary : .secondary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(mode.displayName)
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.primary)
+
+                    Text(mode.description)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                modeStars(speed: rating.speed, accuracy: rating.accuracy)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func modeStars(speed: Int, accuracy: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ratingRow(title: "Speed", value: speed)
+            ratingRow(title: "Accuracy", value: accuracy)
+        }
+    }
+
+    private func ratingRow(title: String, value: Int) -> some View {
+        HStack(spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(width: 50, alignment: .leading)
+
+            ForEach(0 ..< 4, id: \.self) { index in
+                Image(systemName: index < value ? "star.fill" : "star")
+                    .font(.caption2)
+                    .foregroundColor(index < value ? .primary : .secondary.opacity(0.45))
+            }
+        }
+    }
+
+    private func modeRating(for mode: TranscriptionMode) -> (speed: Int, accuracy: Int) {
+        switch mode {
+        case .cloud: return (speed: 3, accuracy: 4)
+        case .offline: return (speed: 4, accuracy: 3)
+        case .automatic: return (speed: 4, accuracy: 4)
+        @unknown default: return (speed: 3, accuracy: 3)
+        }
     }
 }
 

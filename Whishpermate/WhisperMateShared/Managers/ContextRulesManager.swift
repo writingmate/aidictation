@@ -129,6 +129,10 @@ public class ContextRulesManager: ObservableObject {
         toggleRule(style)
     }
 
+    public func updateStyle(_ style: ContextRule, name: String, appBundleIds: [String], instructions: String) {
+        updateRule(style, name: name, appBundleIds: appBundleIds, instructions: instructions)
+    }
+
     // MARK: - Context Matching
 
     /// Get instructions for a specific app bundle ID and window title

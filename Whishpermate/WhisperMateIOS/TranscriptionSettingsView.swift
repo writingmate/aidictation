@@ -40,7 +40,6 @@ struct TranscriptionSettingsView: View {
 struct DictionaryView: View {
     @ObservedObject var manager: DictionaryManager
     @State private var newTrigger = ""
-    @State private var newReplacement = ""
     @State private var editingEntry: DictionaryEntry?
 
     var body: some View {
@@ -51,9 +50,6 @@ struct DictionaryView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(entry.trigger)
                                 .font(.body)
-                            Text("→ \(entry.replacement)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
                         }
 
                         Spacer()
@@ -62,6 +58,10 @@ struct DictionaryView: View {
                             get: { entry.isEnabled },
                             set: { _ in manager.toggleEntry(entry) }
                         ))
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        editingEntry = entry
                     }
                 }
                 .onDelete { indexSet in
@@ -74,10 +74,9 @@ struct DictionaryView: View {
 
             Section(header: Text("Add New Entry"), footer: Text("Dictionary entries help recognize and format specific words correctly")) {
                 VStack(spacing: 12) {
-                    TextField("Trigger word", text: $newTrigger)
-                    TextField("Replacement", text: $newReplacement)
+                    TextField("Word or phrase", text: $newTrigger)
 
-                    if !newTrigger.isEmpty && !newReplacement.isEmpty {
+                    if !newTrigger.isEmpty {
                         Button(action: addEntry) {
                             Label("Add Entry", systemImage: "plus.circle.fill")
                                 .frame(maxWidth: .infinity)
@@ -87,13 +86,57 @@ struct DictionaryView: View {
                 }
             }
         }
+        .sheet(item: $editingEntry) { entry in
+            EditDictionaryEntrySheet(manager: manager, entry: entry)
+        }
     }
 
     private func addEntry() {
-        guard !newTrigger.isEmpty, !newReplacement.isEmpty else { return }
-        manager.addEntry(trigger: newTrigger, replacement: newReplacement)
+        guard !newTrigger.isEmpty else { return }
+        manager.addEntry(trigger: newTrigger, replacement: nil)
         newTrigger = ""
-        newReplacement = ""
+    }
+}
+
+struct EditDictionaryEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var manager: DictionaryManager
+    let entry: DictionaryEntry
+
+    @State private var trigger: String
+
+    init(manager: DictionaryManager, entry: DictionaryEntry) {
+        self.manager = manager
+        self.entry = entry
+        _trigger = State(initialValue: entry.trigger)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Entry") {
+                    TextField("Word or phrase", text: $trigger)
+                }
+            }
+            .navigationTitle("Edit Dictionary")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        manager.updateEntry(
+                            entry,
+                            trigger: trigger,
+                            replacement: nil
+                        )
+                        dismiss()
+                    }
+                    .disabled(trigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 }
 
@@ -102,6 +145,7 @@ struct DictionaryView: View {
 struct ToneStyleView: View {
     @ObservedObject var manager: ToneStyleManager
     @State private var showingAddSheet = false
+    @State private var editingStyle: ContextRule?
 
     var body: some View {
         List {
@@ -131,6 +175,10 @@ struct ToneStyleView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        editingStyle = style
+                    }
                 }
                 .onDelete { indexSet in
                     for index in indexSet {
@@ -148,6 +196,9 @@ struct ToneStyleView: View {
         }
         .sheet(isPresented: $showingAddSheet) {
             AddToneStyleSheet(manager: manager, isPresented: $showingAddSheet)
+        }
+        .sheet(item: $editingStyle) { style in
+            EditToneStyleSheet(manager: manager, style: style)
         }
     }
 }
@@ -206,12 +257,69 @@ struct AddToneStyleSheet: View {
     }
 }
 
+struct EditToneStyleSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var manager: ToneStyleManager
+    let style: ContextRule
+
+    @State private var name: String
+    @State private var appBundleIds: String
+    @State private var instructions: String
+
+    init(manager: ToneStyleManager, style: ContextRule) {
+        self.manager = manager
+        self.style = style
+        _name = State(initialValue: style.name)
+        _appBundleIds = State(initialValue: style.appBundleIds.joined(separator: ", "))
+        _instructions = State(initialValue: style.instructions)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Name") {
+                    TextField("e.g., Slack - Professional", text: $name)
+                }
+
+                Section(header: Text("App Bundle IDs"), footer: Text("Comma-separated list of app bundle IDs. Leave empty to apply to all apps.")) {
+                    TextField("e.g., com.tinyspeck.chatlyio", text: $appBundleIds)
+                }
+
+                Section(header: Text("Instructions"), footer: Text("Describe the tone, style, and formatting for this app")) {
+                    TextEditor(text: $instructions)
+                        .frame(minHeight: 100)
+                }
+            }
+            .navigationTitle("Edit Tone/Style")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let bundleIds = appBundleIds
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+
+                        manager.updateStyle(style, name: name, appBundleIds: bundleIds, instructions: instructions)
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Shortcuts View
 
 struct ShortcutsView: View {
     @ObservedObject var manager: ShortcutManager
     @State private var newTrigger = ""
     @State private var newExpansion = ""
+    @State private var editingShortcut: Shortcut?
 
     var body: some View {
         List {
@@ -233,6 +341,10 @@ struct ShortcutsView: View {
                             get: { shortcut.isEnabled },
                             set: { _ in manager.toggleShortcut(shortcut) }
                         ))
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        editingShortcut = shortcut
                     }
                 }
                 .onDelete { indexSet in
@@ -258,6 +370,9 @@ struct ShortcutsView: View {
                 }
             }
         }
+        .sheet(item: $editingShortcut) { shortcut in
+            EditShortcutSheet(manager: manager, shortcut: shortcut)
+        }
     }
 
     private func addShortcut() {
@@ -265,5 +380,46 @@ struct ShortcutsView: View {
         manager.addShortcut(voiceTrigger: newTrigger, expansion: newExpansion)
         newTrigger = ""
         newExpansion = ""
+    }
+}
+
+struct EditShortcutSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var manager: ShortcutManager
+    let shortcut: Shortcut
+
+    @State private var voiceTrigger: String
+    @State private var expansion: String
+
+    init(manager: ShortcutManager, shortcut: Shortcut) {
+        self.manager = manager
+        self.shortcut = shortcut
+        _voiceTrigger = State(initialValue: shortcut.voiceTrigger)
+        _expansion = State(initialValue: shortcut.expansion)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Shortcut") {
+                    TextField("Voice trigger", text: $voiceTrigger)
+                    TextField("Expansion text", text: $expansion)
+                }
+            }
+            .navigationTitle("Edit Shortcut")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        manager.updateShortcut(shortcut, voiceTrigger: voiceTrigger, expansion: expansion)
+                        dismiss()
+                    }
+                    .disabled(voiceTrigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || expansion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
     }
 }

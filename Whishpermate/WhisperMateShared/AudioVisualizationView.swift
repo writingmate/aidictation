@@ -29,20 +29,29 @@ public struct AIDictationMicButtonVisual: View {
                     .fill(Color.dsPrimary)
                     .frame(width: size, height: size)
 
-                HStack(spacing: MicButtonMetrics.barSpacing * scale) {
-                    ForEach(0 ..< MicButtonMetrics.barCount, id: \.self) { index in
-                        RoundedRectangle(cornerRadius: MicButtonMetrics.barWidth * scale / 2)
-                            .fill(Color.white)
-                            .frame(
-                                width: MicButtonMetrics.barWidth * scale,
-                                height: barHeight(at: index, phase: phase)
-                            )
-                            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: audioLevel)
-                            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: frequencyBands ?? [])
+                if state == .recording {
+                    RoundedRectangle(cornerRadius: MicButtonMetrics.stopCornerRadius * scale, style: .continuous)
+                        .fill(Color.white)
+                        .frame(width: MicButtonMetrics.stopSize * scale, height: MicButtonMetrics.stopSize * scale)
+                        .transition(.opacity.combined(with: .scale(scale: 0.76)))
+                } else {
+                    HStack(spacing: MicButtonMetrics.barSpacing * scale) {
+                        ForEach(0 ..< MicButtonMetrics.barCount, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: MicButtonMetrics.barWidth * scale / 2)
+                                .fill(Color.white)
+                                .frame(
+                                    width: MicButtonMetrics.barWidth * scale,
+                                    height: barHeight(at: index, phase: phase)
+                                )
+                                .animation(.spring(response: 0.32, dampingFraction: 0.72), value: audioLevel)
+                                .animation(.spring(response: 0.32, dampingFraction: 0.72), value: frequencyBands ?? [])
+                        }
                     }
+                    .transition(.opacity.combined(with: .scale(scale: 0.84)))
                 }
             }
             .frame(width: size, height: size)
+            .animation(.spring(response: 0.28, dampingFraction: 0.82), value: state)
         }
     }
 
@@ -126,6 +135,8 @@ private enum MicButtonMetrics {
     static let barWidth: CGFloat = 9.2
     static let barSpacing: CGFloat = 4.4
     static let maxBarHeight: CGFloat = 49.6
+    static let stopSize: CGFloat = 34
+    static let stopCornerRadius: CGFloat = 6
     static let processingDuration: TimeInterval = 0.9
     static let frozenHeights: [CGFloat] = [0.56, 1, 0.56, 1, 0.56]
     static let circleEnvelopeHeights: [CGFloat] = [0.72, 0.94, 1, 0.94, 0.72]

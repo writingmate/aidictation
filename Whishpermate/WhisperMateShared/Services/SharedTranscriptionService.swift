@@ -43,8 +43,7 @@ public enum SharedTranscriptionService {
             )
         }
 
-        var processedResult = dictionaryManager.applyReplacements(to: rawResult)
-        processedResult = shortcutManager.expandShortcuts(in: processedResult)
+        let processedResult = shortcutManager.expandShortcuts(in: rawResult)
         return TranscriptionTextSanitizer.cleanedText(processedResult)
     }
 

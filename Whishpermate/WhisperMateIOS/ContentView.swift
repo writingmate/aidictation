@@ -538,19 +538,25 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
 
                     if transcriptionProviderManager.transcriptionMode != .cloud {
-	                        Button(action: prepareOfflineModel) {
-	                            HStack {
-	                                Label(offlineModelStatusText, systemImage: offlineModelStatusIcon)
-	                                Spacer()
+                        Button(action: prepareOfflineModel) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Label(offlineModelStatusText, systemImage: offlineModelStatusIcon)
+                                    Spacer()
+                                    if !offlineModelIsBusy {
+                                        Image(systemName: offlineModelTrailingIcon)
+                                            .foregroundColor(offlineModelStatusColor)
+                                    }
+                                }
+
                                 if offlineModelIsBusy {
                                     ProgressView()
-                                } else {
-	                                    Image(systemName: offlineModelTrailingIcon)
-	                                        .foregroundColor(offlineModelStatusColor)
-	                                }
-	                            }
-	                            .foregroundColor(.primary)
-	                        }
+                                        .progressViewStyle(.linear)
+                                        .tint(.secondary)
+                                }
+                            }
+                            .foregroundColor(.primary)
+                        }
                         .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported || offlineModelIsBusy)
                     }
                 }

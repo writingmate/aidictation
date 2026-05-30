@@ -951,7 +951,8 @@ struct ContentView: View {
             dictionaryManager: dictionaryManager,
             toneStyleManager: toneStyleManager,
             shortcutManager: shortcutManager,
-            selectedPreset: recordingPreset(for: selectedRecordingMode, manager: toneStyleManager)
+            selectedPreset: recordingPreset(for: selectedRecordingMode, manager: toneStyleManager),
+            keepAudioBridgeAliveAfterStop: activeKeyboardDictationSessionID != nil
         ) { recording in
             if let activeKeyboardDictationSessionID {
                 DebugLog.info("publishing keyboard text sessionID=\(activeKeyboardDictationSessionID) length=\(recording.transcription.count)", context: "KEYBOARD_DIAG")
@@ -1531,6 +1532,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
         selectedPreset: ContextRule?,
+        keepAudioBridgeAliveAfterStop: Bool = false,
         onCompleted: @escaping (Recording) -> Void
     ) {
         switch state {
@@ -1543,6 +1545,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 toneStyleManager: toneStyleManager,
                 shortcutManager: shortcutManager,
                 selectedPreset: selectedPreset,
+                keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
                 onCompleted: onCompleted
             )
         case .processing:
@@ -1665,12 +1668,15 @@ private final class InlineRecordingCoordinator: ObservableObject {
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
         selectedPreset: ContextRule?,
+        keepAudioBridgeAliveAfterStop: Bool,
         onCompleted: @escaping (Recording) -> Void
     ) {
         let recordingStartedAt = recordingStartTime
 
         DebugLog.info("inline stopRecording state=\(state) preset=\(selectedPreset?.name ?? "dictation")", context: "KEYBOARD_DIAG")
-        recordingStatus.stop()
+        if !keepAudioBridgeAliveAfterStop {
+            recordingStatus.stop()
+        }
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             state = .processing
             audioLevel = 0
@@ -1680,14 +1686,19 @@ private final class InlineRecordingCoordinator: ObservableObject {
         Task {
             guard let audioURL = await audioRecorder.stopRecordingAsync(deactivateAudioSession: false) else {
                 DebugLog.info("inline stop returned nil audioURL", context: "KEYBOARD_DIAG")
-                reset()
+                reset(keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop)
                 return
+            }
+
+            if keepAudioBridgeAliveAfterStop {
+                audioRecorder.startMonitoring()
+                recordingStatus.start()
             }
 
             DebugLog.info("inline stop returned url=\(audioURL.path)", context: "KEYBOARD_DIAG")
             guard validateRecordingForTranscription(audioURL, recordingStartTime: recordingStartedAt) else {
                 try? FileManager.default.removeItem(at: audioURL)
-                reset()
+                reset(keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop)
                 return
             }
 
@@ -1698,6 +1709,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 toneStyleManager: toneStyleManager,
                 shortcutManager: shortcutManager,
                 selectedPreset: selectedPreset,
+                keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop,
                 onCompleted: onCompleted
             )
         }
@@ -1710,6 +1722,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
         selectedPreset: ContextRule?,
+        keepAudioBridgeAlive: Bool = false,
         onCompleted: @escaping (Recording) -> Void
     ) async {
         let access = subscriptionManager.checkCanTranscribe()
@@ -1735,7 +1748,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             guard !processedResult.isEmpty else {
                 DebugLog.info("Inline transcription was empty after sanitization; skipping history item", context: "ContentView")
                 try? FileManager.default.removeItem(at: audioURL)
-                reset()
+                reset(keepAudioBridgeAlive: keepAudioBridgeAlive)
                 return
             }
 
@@ -1758,7 +1771,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
             withAnimation(.spring(response: 0.42, dampingFraction: 0.92)) {
                 historyManager.addRecording(recording)
-                reset()
+                reset(keepAudioBridgeAlive: keepAudioBridgeAlive)
             }
 
             onCompleted(recording)
@@ -1835,8 +1848,15 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    private func reset() {
-        recordingStatus.stop()
+    private func reset(keepAudioBridgeAlive: Bool = false) {
+        if keepAudioBridgeAlive {
+            recordingStatus.start()
+        } else {
+            recordingStatus.stop()
+            #if os(iOS)
+                audioRecorder.stopMonitoring()
+            #endif
+        }
         recordingStartTime = nil
         recorderHasStarted = false
         state = .idle

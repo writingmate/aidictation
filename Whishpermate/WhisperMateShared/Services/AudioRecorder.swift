@@ -20,6 +20,7 @@ public class AudioRecorder: NSObject, ObservableObject {
     private var audioFile: AVAudioFile?
     private var outputFormat: AVAudioFormat?
     private var recordingURL: URL?
+    private var isMonitoringOnly = false
     private var levelTimer: Timer?
     private lazy var frequencyAnalyzer = SharedFrequencyAnalyzer()
     private let recordingQueue = DispatchQueue(label: "com.whispermate.audio-recorder", qos: .userInitiated)
@@ -75,8 +76,9 @@ public class AudioRecorder: NSObject, ObservableObject {
         // Guard against multiple recording sessions
         if audioRecorder != nil || audioEngine != nil || audioFile != nil {
             DebugLog.info("⚠️ Already recording - stopping previous session first", context: "AudioRecorder LOG")
-            _ = stopRecordingOnQueue()
+            _ = stopRecordingOnQueue(deactivateAudioSession: false)
         }
+        isMonitoringOnly = false
 
         let fileManager = FileManager.default
 
@@ -125,6 +127,81 @@ public class AudioRecorder: NSObject, ObservableObject {
     }
 
     #if os(iOS)
+        public func startMonitoring() {
+            recordingQueue.async { [weak self] in
+                self?.startMonitoringOnQueue()
+            }
+        }
+
+        public func stopMonitoring(deactivateAudioSession: Bool = true) {
+            recordingQueue.async { [weak self] in
+                self?.stopMonitoringOnQueue(deactivateAudioSession: deactivateAudioSession)
+            }
+        }
+
+        private func startMonitoringOnQueue() {
+            guard audioRecorder == nil, audioEngine == nil, audioFile == nil else {
+                return
+            }
+
+            guard configureAudioSession() else {
+                publishStopped()
+                return
+            }
+
+            let engine = AVAudioEngine()
+            let inputNode = engine.inputNode
+            _ = frequencyAnalyzer
+
+            inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
+                guard let self else { return }
+
+                let bands = self.frequencyAnalyzer.analyze(buffer: buffer)
+                let level = self.calculateAudioLevel(from: buffer)
+
+                DispatchQueue.main.async {
+                    self.frequencyBands = bands
+                    self.audioLevel = level
+                }
+            }
+
+            do {
+                audioEngine = engine
+                isMonitoringOnly = true
+                try engine.start()
+
+                DispatchQueue.main.async {
+                    self.isRecording = false
+                }
+
+                DebugLog.info("startMonitoring success - engine listening", context: "AudioRecorder LOG")
+            } catch {
+                inputNode.removeTap(onBus: 0)
+                audioEngine = nil
+                isMonitoringOnly = false
+                publishStopped()
+                DebugLog.info("Failed to start monitoring: \(error)", context: "AudioRecorder LOG")
+            }
+        }
+
+        private func stopMonitoringOnQueue(deactivateAudioSession: Bool = true) {
+            guard isMonitoringOnly else { return }
+
+            if let engine = audioEngine {
+                engine.inputNode.removeTap(onBus: 0)
+                engine.stop()
+            }
+            audioEngine = nil
+            isMonitoringOnly = false
+
+            if deactivateAudioSession {
+                deactivateSession()
+            }
+
+            publishStopped()
+            DebugLog.info("stopMonitoring completed", context: "AudioRecorder LOG")
+        }
+
         private func startEngineRecording() {
             guard let recordingURL else {
                 publishStopped()
@@ -377,6 +454,8 @@ public class AudioRecorder: NSObject, ObservableObject {
         DebugLog.info("stopRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
         let completedRecordingURL = recordingURL
         recordingURL = nil
+        let wasMonitoringOnly = isMonitoringOnly
+        isMonitoringOnly = false
 
         // Stop timer
         levelTimer?.invalidate()
@@ -402,7 +481,7 @@ public class AudioRecorder: NSObject, ObservableObject {
         publishStopped()
 
         DebugLog.info("stopRecording completed, recordingURL: \(String(describing: completedRecordingURL))", context: "AudioRecorder LOG")
-        return completedRecordingURL
+        return wasMonitoringOnly ? nil : completedRecordingURL
     }
 
     deinit {

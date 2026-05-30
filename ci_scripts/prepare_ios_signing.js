@@ -105,41 +105,6 @@ async function bundleIdFor(identifier, name) {
   return createResponse.data.id;
 }
 
-async function appGroupsCapabilityFor(bundleId) {
-  const response = await request("GET", `/v1/bundleIds/${bundleId}/bundleIdCapabilities?fields[bundleIdCapabilities]=capabilityType,settings`);
-  return (response.data || []).find((capability) => capability.attributes && capability.attributes.capabilityType === "APP_GROUPS");
-}
-
-function appGroupsCapabilityPayload(bundleId) {
-  return {
-    data: {
-      type: "bundleIdCapabilities",
-      attributes: {
-        capabilityType: "APP_GROUPS"
-      },
-      relationships: {
-        bundleId: {
-          data: {
-            type: "bundleIds",
-            id: bundleId
-          }
-        }
-      }
-    }
-  };
-}
-
-async function ensureAppGroupsCapability(bundleId, identifier) {
-  const existingCapability = await appGroupsCapabilityFor(bundleId);
-  if (existingCapability) {
-    console.log(`App Groups capability already enabled for ${identifier}`);
-    return;
-  }
-
-  await request("POST", "/v1/bundleIdCapabilities", appGroupsCapabilityPayload(bundleId));
-  console.log(`Enabled App Groups capability for ${identifier}`);
-}
-
 async function createCertificate(csrContent) {
   const response = await request("POST", "/v1/certificates", {
     data: {
@@ -301,7 +266,6 @@ async function main() {
     certificateId: certificate.id
   });
   const liveActivityBundle = await bundleIdFor(liveActivityBundleId, "WhisperMate Live Activity");
-  await ensureAppGroupsCapability(liveActivityBundle, liveActivityBundleId);
   const liveActivityProfile = await createProfile({
     name: `WhisperMate Live Activity App Store CI ${runId}`,
     bundleId: liveActivityBundle,

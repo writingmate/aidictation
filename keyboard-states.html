@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Dictation Keyboard States</title>
+  <style>
+    :root {
+      --brand: hsl(23.3 100% 50%);
+      --active: #111827;
+      --bg: #f2f2f7;
+      --key: #ffffff;
+      --utility: #d1d5db;
+      --text: #111827;
+      --muted: #6b7280;
+      --shadow: rgba(0, 0, 0, 0.2);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: #ffffff;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }
+
+    main {
+      width: min(1180px, 100%);
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .states {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(280px, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .state {
+      display: grid;
+      gap: 10px;
+    }
+
+    .state-title {
+      font-size: 14px;
+      font-weight: 650;
+      color: var(--muted);
+      padding-left: 4px;
+    }
+
+    .keyboard {
+      position: relative;
+      height: 260px;
+      border-radius: 0;
+      background: var(--bg);
+      padding: 7px 6px 6px;
+      overflow: hidden;
+      box-shadow: inset 0 1px rgba(255, 255, 255, 0.7);
+    }
+
+    .top-space {
+      height: 42px;
+    }
+
+    .record-button {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      width: 36px;
+      height: 36px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--brand);
+      color: #fff;
+      display: grid;
+      place-items: center;
+    }
+
+    .brand-mark {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+
+    .brand-mark span {
+      width: 3px;
+      border-radius: 999px;
+      background: #fff;
+    }
+
+    .brand-mark span:nth-child(1) { height: 8px; }
+    .brand-mark span:nth-child(2) { height: 15px; }
+    .brand-mark span:nth-child(3) { height: 20px; }
+    .brand-mark span:nth-child(4) { height: 12px; }
+
+    .stop-button {
+      background: var(--active);
+    }
+
+    .check-icon {
+      color: #fff;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", sans-serif;
+    }
+
+    .loading-icon {
+      width: 18px;
+      height: 18px;
+      border: 2.5px solid rgba(255, 255, 255, 0.4);
+      border-top-color: #fff;
+      border-radius: 999px;
+      animation: spin 820ms linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .rows {
+      display: grid;
+      gap: 7px;
+    }
+
+    .row {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .key {
+      height: 42px;
+      min-width: 0;
+      flex: 1;
+      border-radius: 7px;
+      background: var(--key);
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .row.second {
+      padding-inline: 18px;
+    }
+
+    .utility {
+      flex: 0 0 42px;
+      background: var(--utility);
+      font-size: 15px;
+      font-weight: 550;
+    }
+
+    .space {
+      font-size: 15px;
+      flex: 1 1 auto;
+    }
+
+    .return {
+      flex: 0 0 76px;
+      font-size: 15px;
+    }
+
+    .globe {
+      flex: 0 0 44px;
+      font-size: 18px;
+    }
+
+    .recording-panel {
+      height: 100%;
+      display: grid;
+      grid-template-rows: 42px 1fr;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      font-size: 15px;
+      font-weight: 650;
+      color: var(--muted);
+      padding-left: 2px;
+    }
+
+    .wave-wrap {
+      display: grid;
+      place-items: center;
+      padding-bottom: 12px;
+    }
+
+    .bars {
+      width: 240px;
+      height: 105px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .bar {
+      width: 12px;
+      min-height: 18px;
+      border-radius: 999px;
+      background: var(--active);
+      transform-origin: center;
+      animation: meter 760ms ease-in-out infinite;
+      opacity: 0.95;
+    }
+
+    .bar:nth-child(1) { height: 34px; animation-delay: -80ms; }
+    .bar:nth-child(2) { height: 58px; animation-delay: -220ms; }
+    .bar:nth-child(3) { height: 84px; animation-delay: -360ms; }
+    .bar:nth-child(4) { height: 50px; animation-delay: -120ms; }
+    .bar:nth-child(5) { height: 96px; animation-delay: -460ms; }
+    .bar:nth-child(6) { height: 72px; animation-delay: -280ms; }
+    .bar:nth-child(7) { height: 42px; animation-delay: -40ms; }
+    .bar:nth-child(8) { height: 66px; animation-delay: -340ms; }
+    .bar:nth-child(9) { height: 38px; animation-delay: -180ms; }
+    .bar:nth-child(10) { height: 54px; animation-delay: -420ms; }
+
+    @keyframes meter {
+      0%, 100% { transform: scaleY(0.55); opacity: 0.62; }
+      50% { transform: scaleY(1); opacity: 1; }
+    }
+
+    .processing .bar {
+      animation: loading 900ms ease-in-out infinite;
+    }
+
+    .processing .bar:nth-child(odd) {
+      opacity: 0.45;
+    }
+
+    @keyframes loading {
+      0%, 100% { transform: scaleY(0.34); opacity: 0.38; }
+      50% { transform: scaleY(0.82); opacity: 0.85; }
+    }
+
+    .disabled {
+      opacity: 1;
+      cursor: default;
+    }
+
+    .muted-button {
+      background: #8e8e93;
+    }
+
+    @media (max-width: 960px) {
+      .states {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Keyboard States</h1>
+    <section class="states" aria-label="Keyboard state mockups">
+      <div class="state">
+        <div class="state-title">Idle: full keyboard plus record</div>
+        <div class="keyboard">
+          <button class="record-button" aria-label="Start recording">
+            <span class="brand-mark" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+            </span>
+          </button>
+          <div class="top-space"></div>
+          <div class="rows">
+            <div class="row">
+              <div class="key">q</div><div class="key">w</div><div class="key">e</div><div class="key">r</div><div class="key">t</div><div class="key">y</div><div class="key">u</div><div class="key">i</div><div class="key">o</div><div class="key">p</div>
+            </div>
+            <div class="row second">
+              <div class="key">a</div><div class="key">s</div><div class="key">d</div><div class="key">f</div><div class="key">g</div><div class="key">h</div><div class="key">j</div><div class="key">k</div><div class="key">l</div>
+            </div>
+            <div class="row">
+              <div class="key utility">shift</div><div class="key">z</div><div class="key">x</div><div class="key">c</div><div class="key">v</div><div class="key">b</div><div class="key">n</div><div class="key">m</div><div class="key utility">⌫</div>
+            </div>
+            <div class="row">
+              <div class="key utility globe">◎</div><div class="key space">space</div><div class="key utility return">return</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="state">
+        <div class="state-title">Recording: keys replaced by vertical bars, button becomes checkmark</div>
+        <div class="keyboard">
+          <button class="record-button stop-button" aria-label="Finish recording">
+            <span class="check-icon" aria-hidden="true">✓</span>
+          </button>
+          <div class="recording-panel">
+            <div class="panel-title" aria-hidden="true"></div>
+            <div class="wave-wrap">
+              <div class="bars" aria-hidden="true">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="state">
+        <div class="state-title">Transcribing: stop disabled while text is being prepared</div>
+        <div class="keyboard">
+          <button class="record-button stop-button muted-button disabled" aria-label="Transcribing" disabled>
+            <span class="loading-icon" aria-hidden="true"></span>
+          </button>
+          <div class="recording-panel processing">
+            <div class="panel-title" aria-hidden="true"></div>
+            <div class="wave-wrap">
+              <div class="bars" aria-hidden="true">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -4,9 +4,11 @@ import WhisperMateShared
 
 struct OnboardingView: View {
     @ObservedObject var onboardingManager: OnboardingManager
-    @State private var currentStep: OnboardingStep = OnboardingStep.initialStep
+    @State private var currentStep: OnboardingStep
     @State private var isCheckingMicrophone = false
     @State private var refreshTrigger = false
+    @State private var lastStep: OnboardingStep
+    @State private var errorDialog: OnboardingErrorDialog?
 
     enum OnboardingStep {
         case welcome
@@ -21,25 +23,69 @@ struct OnboardingView: View {
             #endif
             return .welcome
         }
+
+        var heroIconName: String {
+            switch self {
+            case .welcome: return "waveform"
+            case .microphone: return "mic.fill"
+            case .keyboardSetup: return "keyboard"
+            }
+        }
+
+        var heroIconSize: CGFloat {
+            switch self {
+            case .welcome: return 44
+            case .microphone: return 40
+            case .keyboardSetup: return 38
+            }
+        }
+
+        var order: Int {
+            switch self {
+            case .welcome: return 0
+            case .microphone: return 1
+            case .keyboardSetup: return 2
+            }
+        }
+    }
+
+    init(onboardingManager: OnboardingManager, initialStep: OnboardingStep = OnboardingStep.initialStep) {
+        self.onboardingManager = onboardingManager
+        _currentStep = State(initialValue: initialStep)
+        _lastStep = State(initialValue: initialStep)
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                stepContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                OnboardingHeroIcon(systemName: currentStep.heroIconName, iconSize: currentStep.heroIconSize)
+                    .id(currentStep.heroIconName)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+                    .frame(height: 118)
+                    .padding(.top, 18)
+
+                ZStack {
+                    stepContent
+                        .id(currentStep)
+                        .transition(stepTransition)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
                 bottomButton
+                    .frame(height: 54)
                     .padding(.bottom, 8)
             }
             .padding(.horizontal, 24)
-            .padding(.top, 12)
             .padding(.bottom, 24)
             .navigationTitle("AI Dictation Setup")
             .navigationBarTitleDisplayMode(.inline)
         }
         .navigationViewStyle(.stack)
         .tint(Color.dsPrimary)
+        .alert(item: $errorDialog) { dialog in
+            errorAlert(for: dialog)
+        }
         .onAppear {
             if KeychainHelper.get(key: "custom_transcription_api_key") == nil,
                let apiKey = SecretsLoader.transcriptionKey(for: .custom)
@@ -52,12 +98,28 @@ struct OnboardingView: View {
             }
         }
         .onChange(of: currentStep) { newStep in
+            defer { lastStep = newStep }
+
             if newStep == .microphone {
                 startMicrophoneCheck()
             } else {
                 stopMicrophoneCheck()
             }
         }
+    }
+
+    private var isMovingForward: Bool {
+        currentStep.order >= lastStep.order
+    }
+
+    private var stepTransition: AnyTransition {
+        let insertionEdge: Edge = isMovingForward ? .trailing : .leading
+        let removalEdge: Edge = isMovingForward ? .leading : .trailing
+
+        return .asymmetric(
+            insertion: .move(edge: insertionEdge).combined(with: .opacity),
+            removal: .move(edge: removalEdge).combined(with: .opacity)
+        )
     }
 
     @ViewBuilder
@@ -74,10 +136,6 @@ struct OnboardingView: View {
 
     private var welcomeStep: some View {
         VStack(spacing: 20) {
-            Spacer(minLength: 20)
-
-            OnboardingHeroIcon(systemName: "waveform", iconSize: 44)
-
             VStack(spacing: 8) {
                 Text("Welcome to AI Dictation")
                     .font(.system(size: 28, weight: .bold))
@@ -95,16 +153,13 @@ struct OnboardingView: View {
             }
             .padding(.top, 8)
 
-            Spacer(minLength: 20)
+            Spacer(minLength: 0)
         }
+        .padding(.top, 10)
     }
 
     private var microphoneStep: some View {
         VStack(spacing: 20) {
-            Spacer(minLength: 20)
-
-            OnboardingHeroIcon(systemName: "mic.fill", iconSize: 40)
-
             VStack(spacing: 10) {
                 Text("Microphone Access")
                     .font(.system(size: 28, weight: .bold))
@@ -150,16 +205,13 @@ struct OnboardingView: View {
                 .padding(.top, 8)
             }
 
-            Spacer(minLength: 20)
+            Spacer(minLength: 0)
         }
+        .padding(.top, 10)
     }
 
     private var keyboardSetupStep: some View {
         VStack(spacing: 18) {
-            Spacer(minLength: 12)
-
-            OnboardingHeroIcon(systemName: "keyboard", iconSize: 38)
-
             VStack(spacing: 8) {
                 Text("Enable the Keyboard")
                     .font(.system(size: 27, weight: .bold))
@@ -200,33 +252,57 @@ struct OnboardingView: View {
             }
             .buttonStyle(.plain)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 0)
         }
+        .padding(.top, 8)
     }
 
     @ViewBuilder
     private var bottomButton: some View {
+        Button(action: handleBottomButtonTap) {
+            PrimaryOnboardingButtonTitle {
+                Text(bottomButtonTitle)
+                    .id(bottomButtonTitle)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+        }
+    }
+
+    private var bottomButtonTitle: String {
         switch currentStep {
         case .welcome:
-            Button(action: { currentStep = .microphone }) {
-                PrimaryOnboardingButtonTitle("Continue")
-            }
+            return "Continue"
         case .microphone:
-            Button(action: {
-                if isMicrophoneGranted() {
-                    currentStep = .keyboardSetup
-                } else if isMicrophoneDenied() {
-                    openKeyboardSettings()
-                } else {
-                    requestMicrophonePermission()
-                }
-            }) {
-                PrimaryOnboardingButtonTitle(microphoneButtonTitle)
+            return microphoneButtonTitle
+        case .keyboardSetup:
+            return "Get Started"
+        }
+    }
+
+    private func handleBottomButtonTap() {
+        switch currentStep {
+        case .welcome:
+            advance(to: .microphone)
+        case .microphone:
+            if isMicrophoneGranted() {
+                advance(to: .keyboardSetup)
+            } else if isMicrophoneDenied() {
+                showErrorDialog(
+                    title: "Microphone Access Needed",
+                    message: "Turn microphone access back on in Settings to use voice dictation.",
+                    opensSettings: true
+                )
+            } else {
+                requestMicrophonePermission()
             }
         case .keyboardSetup:
-            Button(action: { onboardingManager.completeOnboarding() }) {
-                PrimaryOnboardingButtonTitle("Get Started")
-            }
+            onboardingManager.completeOnboarding()
+        }
+    }
+
+    private func advance(to step: OnboardingStep) {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.88, blendDuration: 0.08)) {
+            currentStep = step
         }
     }
 
@@ -251,8 +327,18 @@ struct OnboardingView: View {
     }
 
     private func requestMicrophonePermission() {
-        AVAudioSession.sharedInstance().requestRecordPermission { _ in
-            // Permission dialog appears; polling detects the change.
+        AVAudioSession.sharedInstance().requestRecordPermission { granted in
+            DispatchQueue.main.async {
+                if granted {
+                    advance(to: .keyboardSetup)
+                } else {
+                    showErrorDialog(
+                        title: "Microphone Access Needed",
+                        message: "AI Dictation needs microphone access to transcribe your voice.",
+                        opensSettings: true
+                    )
+                }
+            }
         }
     }
 
@@ -270,7 +356,7 @@ struct OnboardingView: View {
 
         if isMicrophoneGranted() {
             isCheckingMicrophone = false
-            currentStep = .keyboardSetup
+            advance(to: .keyboardSetup)
             return
         }
 
@@ -282,10 +368,56 @@ struct OnboardingView: View {
     }
 
     private func openKeyboardSettings() {
+        openAppSettings()
+    }
+
+    private func openAppSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(url)
+            UIApplication.shared.open(url) { opened in
+                if !opened {
+                    showErrorDialog(
+                        title: "Settings Could Not Open",
+                        message: "Open the Settings app manually and enable AI Dictation permissions.",
+                        opensSettings: false
+                    )
+                }
+            }
+        } else {
+            showErrorDialog(
+                title: "Settings Could Not Open",
+                message: "Open the Settings app manually and enable AI Dictation permissions.",
+                opensSettings: false
+            )
         }
     }
+
+    private func showErrorDialog(title: String, message: String, opensSettings: Bool) {
+        errorDialog = OnboardingErrorDialog(title: title, message: message, opensSettings: opensSettings)
+    }
+
+    private func errorAlert(for dialog: OnboardingErrorDialog) -> Alert {
+        if dialog.opensSettings {
+            return Alert(
+                title: Text(dialog.title),
+                message: Text(dialog.message),
+                primaryButton: .default(Text("Open Settings"), action: openAppSettings),
+                secondaryButton: .cancel()
+            )
+        }
+
+        return Alert(
+            title: Text(dialog.title),
+            message: Text(dialog.message),
+            dismissButton: .default(Text("OK"))
+        )
+    }
+}
+
+private struct OnboardingErrorDialog: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let opensSettings: Bool
 }
 
 private struct OnboardingHeroIcon: View {
@@ -319,17 +451,19 @@ private struct OnboardingHeroIcon: View {
     }
 }
 
-private struct PrimaryOnboardingButtonTitle: View {
-    let title: String
+private struct PrimaryOnboardingButtonTitle<Content: View>: View {
+    @ViewBuilder let content: Content
 
-    init(_ title: String) {
-        self.title = title
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
     }
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundColor(.white)
+        ZStack {
+            content
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.white)
+        }
             .frame(maxWidth: .infinity)
             .frame(height: 54)
             .background(
@@ -385,15 +519,6 @@ private struct InstructionRow: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(uiColor: .systemBackground))
-                .shadow(color: Color.black.opacity(0.055), radius: 12, y: 5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-        )
+        .padding(.vertical, 7)
     }
 }

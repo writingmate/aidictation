@@ -1,4 +1,5 @@
 import Combine
+import AVFoundation
 import SwiftUI
 import UIKit
 import WhisperMateShared
@@ -6,6 +7,7 @@ import WhisperMateShared
 @main
 struct WhisperMateApp: App {
     @StateObject private var onboardingManager = OnboardingManager()
+    @State private var showKeyboardAudioSetup = false
 
     init() {}
 
@@ -27,6 +29,12 @@ struct WhisperMateApp: App {
                     await AuthManager.shared.handleAuthCallback(url: url)
                 }
             }
+            .sheet(isPresented: $showKeyboardAudioSetup) {
+                OnboardingView(
+                    onboardingManager: onboardingManager,
+                    initialStep: AVAudioSession.sharedInstance().recordPermission == .granted ? .keyboardSetup : .microphone
+                )
+            }
         }
     }
 
@@ -35,15 +43,32 @@ struct WhisperMateApp: App {
             return false
         }
 
-        guard url.host == "microphone-settings" else {
+        if url.host == "keyboard-dictation" {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: KeyboardDictationHandoff.openAppNotification,
+                    object: KeyboardDictationHandoff.sessionID(from: url)
+                )
+            }
+            return true
+        }
+
+        if url.host == "keyboard-dictation-stop" {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: KeyboardDictationHandoff.stopAppNotification,
+                    object: KeyboardDictationHandoff.sessionID(from: url)
+                )
+            }
+            return true
+        }
+
+        guard url.host == "microphone-settings" || url.host == "keyboard-audio-access" else {
             return false
         }
 
         DispatchQueue.main.async {
-            guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
-                return
-            }
-            UIApplication.shared.open(settingsURL)
+            showKeyboardAudioSetup = true
         }
 
         return true

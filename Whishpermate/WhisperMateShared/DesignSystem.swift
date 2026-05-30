@@ -276,8 +276,8 @@ public extension Color {
     static var dsBackground: Color { dsSystemBackground }
     static var dsForeground: Color { dsSystemForeground }
 
-    // Primary accent from app assets
-    static var dsPrimary: Color { Color("AccentColor", bundle: .main) }
+    // Primary brand accent. Keep code-defined so app extensions do not depend on host asset lookup.
+    static var dsPrimary: Color { Color(red: 1.0, green: 0.3882352941, blue: 0.0) }
     static var dsPrimaryForeground: Color { .white }
 
     // Secondary - use system secondary

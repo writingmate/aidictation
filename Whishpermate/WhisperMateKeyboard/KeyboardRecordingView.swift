@@ -24,8 +24,33 @@ struct KeyboardRecordingView: View {
     ]
 
     var body: some View {
+        ZStack(alignment: .topTrailing) {
+            if model.state == .idle {
+                keyRows
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else {
+                recordingStateView
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+
+            recordButton
+                .padding(.top, 3)
+                .padding(.trailing, 8)
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 7)
+        .padding(.bottom, 6)
+        .background(Color.clear)
+        .animation(.spring(response: 0.32, dampingFraction: 0.84, blendDuration: 0.06), value: model.state)
+    }
+
+    private var keyRows: some View {
         VStack(spacing: 7) {
-            recordBar
+            HStack {
+                Spacer()
+            }
+            .frame(height: 42)
+
             letterRow(rows[0])
             letterRow(rows[1])
                 .padding(.horizontal, 18)
@@ -46,42 +71,46 @@ struct KeyboardRecordingView: View {
                     .frame(width: 76)
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 7)
-        .padding(.bottom, 6)
-        .background(Color(uiColor: KeyboardPalette.backgroundColor))
     }
 
-    private var recordBar: some View {
-        HStack(spacing: 8) {
-            Button(action: onPrimaryAction) {
-                HStack(spacing: 8) {
-                    Image(systemName: recordIcon)
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(recordTitle)
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 38)
-                .foregroundColor(.white)
-                .background(recordColor)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    private var recordingStateView: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .disabled(model.state == .processing)
+            .frame(height: 42)
 
-            if model.state == .recording || model.state == .paused {
-                Button(action: onPauseAction) {
-                    Image(systemName: model.state == .paused ? "play.fill" : "pause.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 38, height: 38)
-                        .foregroundColor(.primary)
-                        .background(Color(uiColor: KeyboardPalette.utilityKeyColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
+            Spacer(minLength: 0)
+
+            AIDictationActiveRecordingVisual(
+                state: model.state,
+                audioLevel: model.audioLevel,
+                frequencyBands: model.frequencyBands,
+                color: .primary
+            )
+            .frame(width: 190, height: 82)
+            .padding(.horizontal, 28)
+
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var recordButton: some View {
+        Button(action: onPrimaryAction) {
+            AIDictationMicButtonVisual(
+                state: model.state,
+                audioLevel: model.audioLevel,
+                frequencyBands: model.frequencyBands,
+                size: 34,
+                style: .keyboard
+            )
+            .frame(width: 44, height: 44, alignment: .topTrailing)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.state == .processing)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private func letterRow(_ keys: [String]) -> some View {
@@ -99,33 +128,27 @@ struct KeyboardRecordingView: View {
 
     private var recordTitle: String {
         switch model.state {
-        case .idle: return "Record"
-        case .recording: return "Stop"
-        case .paused: return "Resume"
+        case .idle: return "AI Dictation"
+        case .recording: return "Recording"
+        case .paused: return "Paused"
         case .processing: return "Transcribing"
-        @unknown default: return "Record"
+        @unknown default: return "AI Dictation"
         }
     }
 
-    private var recordIcon: String {
+    private var accessibilityLabel: String {
         switch model.state {
-        case .idle: return "mic.fill"
-        case .recording: return "stop.fill"
-        case .paused: return "play.fill"
-        case .processing: return "waveform"
-        @unknown default: return "mic.fill"
+        case .idle:
+            return "Start recording"
+        case .recording, .paused:
+            return "Finish recording"
+        case .processing:
+            return "Transcribing"
+        @unknown default:
+            return "Start recording"
         }
     }
 
-    private var recordColor: Color {
-        switch model.state {
-        case .recording: return .red
-        case .paused: return .orange
-        case .processing: return .gray
-        case .idle: return Color(uiColor: .systemOrange)
-        @unknown default: return Color(uiColor: .systemOrange)
-        }
-    }
 }
 
 private struct KeyboardKey: View {

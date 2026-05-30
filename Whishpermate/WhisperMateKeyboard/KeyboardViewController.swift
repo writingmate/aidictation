@@ -1,5 +1,3 @@
-import AVFoundation
-import Combine
 import SwiftUI
 import UIKit
 import WhisperMateShared
@@ -7,30 +5,27 @@ import WhisperMateShared
 class KeyboardViewController: UIInputViewController {
     // MARK: - Properties
 
-    private var audioRecorder: AudioRecorder?
     private var hostingController: UIHostingController<KeyboardRecordingView>!
     private var statusLabel: UILabel!
     private let recordingViewModel = KeyboardRecordingViewModel()
     private var keyboardState: KeyboardRecordingState = .idle
     private var displayedAudioLevel: Float = 0.0
     private var displayedFrequencyBands: [Float] = Array(repeating: 0.0, count: 10)
-    private var recordingStartTime: Date?
-    private var isProcessingTranscription = false
     private var isShifted = false
-    private var cancellables = Set<AnyCancellable>()
+    private var pendingTextTimer: Timer?
+    private var recordingMeterTimer: Timer?
+    private var activeHandoffSessionID: String?
     private var keyboardHeightConstraint: NSLayoutConstraint?
 
-    private let minimumRecordingDuration: TimeInterval = 0.35
-    private let minimumAudioFileBytes: Int64 = 1000
     private let keyboardHeight: CGFloat = 260
-    private let microphoneSettingsURL = URL(string: "aidictation://microphone-settings")
 
     // MARK: - Lifecycle
 
     override func loadView() {
         let inputView = UIInputView(frame: .zero, inputViewStyle: .keyboard)
         inputView.allowsSelfSizing = true
-        inputView.backgroundColor = KeyboardPalette.backgroundColor
+        inputView.backgroundColor = .clear
+        inputView.isOpaque = false
         view = inputView
     }
 
@@ -39,6 +34,19 @@ class KeyboardViewController: UIInputViewController {
 
         setupUI()
         checkInitialPermissions()
+        checkForPendingDictationText()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        checkForPendingDictationText()
+        startPendingTextTimer()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopPendingTextTimer()
+        stopRecordingMeter()
     }
 
     private func checkInitialPermissions() {
@@ -48,44 +56,9 @@ class KeyboardViewController: UIInputViewController {
 
     // MARK: - Setup
 
-    private func ensureAudioRecorder() -> AudioRecorder {
-        if let audioRecorder {
-            return audioRecorder
-        }
-
-        let recorder = AudioRecorder()
-        audioRecorder = recorder
-
-        // Observe recording state
-        recorder.$isRecording
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] isRecording in
-                self?.updateRecordingState(isRecording)
-            }
-            .store(in: &cancellables)
-
-        // Observe audio levels for visualization
-        recorder.$audioLevel
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] level in
-                self?.updateAudioLevel(level)
-            }
-            .store(in: &cancellables)
-
-        recorder.$frequencyBands
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] bands in
-                self?.updateFrequencyBands(bands)
-            }
-            .store(in: &cancellables)
-
-        return recorder
-    }
-
     private func setupUI() {
-        view.backgroundColor = KeyboardPalette.backgroundColor
-        view.isOpaque = true
+        view.backgroundColor = .clear
+        view.isOpaque = false
 
         // Create SwiftUI view
         let recordingView = KeyboardRecordingView(
@@ -119,8 +92,8 @@ class KeyboardViewController: UIInputViewController {
 
         // Host it in a UIHostingController
         hostingController = UIHostingController(rootView: recordingView)
-        hostingController.view.backgroundColor = KeyboardPalette.backgroundColor
-        hostingController.view.isOpaque = true
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.isOpaque = false
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
 
         addChild(hostingController)
@@ -203,270 +176,83 @@ class KeyboardViewController: UIInputViewController {
     // MARK: - Actions
 
     private func startRecording() {
-        isProcessingTranscription = false
-
-        let access = SubscriptionManager.shared.checkCanTranscribe()
-        guard access.canTranscribe else {
-            showError(access.reason ?? "Open AI Dictation to log in and continue.")
-            return
-        }
-
-        // Check current permission status
-        let permission = AVAudioSession.sharedInstance().recordPermission
-
-        switch permission {
-        case .granted:
-            beginRecording()
-
-        case .denied:
-            showError("Enable microphone access in AI Dictation settings.")
-            openContainingAppForMicrophoneSettings()
-
-        case .undetermined:
-            // Request permission for the first time
-            AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
-                DispatchQueue.main.async {
-                    if granted {
-                        self?.beginRecording()
-                    } else {
-                        self?.showError("Enable microphone access in AI Dictation settings.")
-                        self?.openContainingAppForMicrophoneSettings()
-                    }
-                }
-            }
-
-        @unknown default:
-            showError("Unable to check microphone permission.")
-        }
-    }
-
-    private func openContainingAppForMicrophoneSettings() {
-        guard let microphoneSettingsURL else {
-            return
-        }
-
-        extensionContext?.open(microphoneSettingsURL) { success in
-            DebugLog.info(
-                "Open microphone settings deep link success=\(success)",
-                context: "KeyboardViewController"
-            )
-        }
-    }
-
-    private func beginRecording() {
-        recordingStartTime = Date()
-        displayedAudioLevel = 0.0
-        displayedFrequencyBands = Array(repeating: 0.0, count: 10)
+        let sessionID = KeyboardDictationHandoff.beginSession()
+        activeHandoffSessionID = sessionID
         keyboardState = .recording
+        displayedAudioLevel = 0
+        displayedFrequencyBands = Array(repeating: 0.0, count: 10)
+        updateKeyboardView(animated: true)
+        startRecordingMeter()
         statusLabel.text = ""
         statusLabel.isHidden = true
-        updateKeyboardView(animated: true)
-        ensureAudioRecorder().startRecording()
+
+        guard let url = KeyboardDictationHandoff.makeDictationURL(sessionID: sessionID) else {
+            stopRecordingMeter()
+            keyboardState = .idle
+            updateKeyboardView(animated: true)
+            showError("Could not open AI Dictation.")
+            return
+        }
+
+        guard openContainingApp(url) else {
+            stopRecordingMeter()
+            keyboardState = .idle
+            updateKeyboardView(animated: true)
+            showError("Could not open AI Dictation.")
+            return
+        }
+    }
+
+    @discardableResult
+    private func openContainingApp(_ url: URL) -> Bool {
+        var responder: UIResponder? = self
+        let selector = sel_registerName("openURL:")
+
+        while let currentResponder = responder {
+            if currentResponder.responds(to: selector) {
+                currentResponder.perform(selector, with: url)
+                DebugLog.info("Open keyboard dictation deep link via responder chain", context: "KeyboardViewController")
+                return true
+            }
+
+            responder = currentResponder.next
+        }
+
+        DebugLog.info("Failed to find responder for keyboard dictation deep link", context: "KeyboardViewController")
+        return false
     }
 
     private func togglePauseRecording() {
-        guard let audioRecorder else { return }
-
-        switch keyboardState {
-        case .recording:
-            displayedAudioLevel = audioRecorder.audioLevel
-            displayedFrequencyBands = audioRecorder.frequencyBands
-            audioRecorder.pauseRecording()
-            keyboardState = .paused
-            updateKeyboardView(animated: true)
-        case .paused:
-            audioRecorder.resumeRecording()
-            keyboardState = .recording
-            updateKeyboardView(animated: true)
-        case .idle, .processing:
-            break
-        @unknown default:
-            break
-        }
+        // The keyboard mirrors the app recorder's primary button: record, then stop.
     }
 
     private func stopRecordingAndTranscribe() {
-        guard let audioRecorder else {
+        guard let sessionID = activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID(),
+              let url = KeyboardDictationHandoff.makeStopDictationURL(sessionID: sessionID)
+        else {
             keyboardState = .idle
+            stopRecordingMeter()
             updateKeyboardView(animated: true)
+            showError("Could not stop recording.")
             return
         }
 
-        isProcessingTranscription = true
         keyboardState = .processing
-        statusLabel.text = ""
-        statusLabel.isHidden = true
+        stopRecordingMeter()
+        displayedAudioLevel = 0
+        displayedFrequencyBands = Array(repeating: 0.0, count: 10)
         updateKeyboardView(animated: true)
 
-        let recordingStartedAt = recordingStartTime
-
-        Task {
-            guard let recordingURL = await audioRecorder.stopRecordingAsync(deactivateAudioSession: false) else {
-                await MainActor.run {
-                    self.isProcessingTranscription = false
-                    self.keyboardState = .idle
-                    self.updateKeyboardView(animated: true)
-                    DebugLog.info("Keyboard recording stopped without an audio URL", context: "KeyboardViewController")
-                }
-                return
-            }
-
-            guard validateRecordingForTranscription(recordingURL, recordingStartTime: recordingStartedAt) else {
-                await MainActor.run {
-                    self.isProcessingTranscription = false
-                    self.keyboardState = .idle
-                    self.displayedAudioLevel = 0.0
-                    self.displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-                    self.recordingStartTime = nil
-                    self.updateKeyboardView(animated: true)
-                }
-                try? FileManager.default.removeItem(at: recordingURL)
-                return
-            }
-
-            do {
-                let access = SubscriptionManager.shared.checkCanTranscribe()
-                guard access.canTranscribe else {
-                    throw OpenAIError.apiError(access.reason ?? "Open AI Dictation to log in and continue.")
-                }
-
-                let transcription = try await SharedTranscriptionService.transcribe(audioURL: recordingURL)
-
-                guard !transcription.isEmpty else {
-                    DebugLog.info("Keyboard transcription was empty after sanitization; skipping insert", context: "KeyboardViewController")
-                    await MainActor.run {
-                        self.isProcessingTranscription = false
-                        self.keyboardState = .idle
-                        self.displayedAudioLevel = 0.0
-                        self.displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-                        self.recordingStartTime = nil
-                        self.updateKeyboardView(animated: true)
-                        self.statusLabel.text = ""
-                        self.statusLabel.isHidden = true
-                    }
-                    try? FileManager.default.removeItem(at: recordingURL)
-                    return
-                }
-
-                let wordCount = SubscriptionManager.shared.wordCount(for: transcription)
-                await SubscriptionManager.shared.recordWords(wordCount)
-
-                // Insert transcription into text field
-                await MainActor.run {
-                    self.textDocumentProxy.insertText(transcription)
-                    self.isProcessingTranscription = false
-                    self.keyboardState = .idle
-                    self.displayedAudioLevel = 0.0
-                    self.displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-                    self.recordingStartTime = nil
-                    self.updateKeyboardView(animated: true)
-                    self.statusLabel.text = ""
-                    self.statusLabel.isHidden = true
-
-                    // Save to history
-                    let historyManager = HistoryManager()
-                    let recording = Recording(transcription: transcription)
-                    historyManager.addRecording(recording)
-
-                    // Clear status after delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        self.statusLabel.text = ""
-                        self.statusLabel.isHidden = true
-                        self.statusLabel.textColor = UIColor.label
-                    }
-                }
-
-                // Delete audio file after successful transcription
-                try? FileManager.default.removeItem(at: recordingURL)
-            } catch {
-                await MainActor.run {
-                    self.isProcessingTranscription = false
-                    self.keyboardState = .idle
-                    self.displayedAudioLevel = 0.0
-                    self.displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-                    self.recordingStartTime = nil
-                    self.updateKeyboardView(animated: true)
-                    self.showError("Transcription failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    private func validateRecordingForTranscription(_ audioURL: URL, recordingStartTime: Date?) -> Bool {
-        let elapsed = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-
-        let fileSize: Int64
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
-            fileSize = attributes[.size] as? Int64 ?? 0
-        } catch {
-            DebugLog.info("Failed to verify keyboard recording file: \(error)", context: "KeyboardViewController")
-            return false
-        }
-
-        let audioDuration = audioFileDuration(audioURL)
-        DebugLog.info(
-            "Keyboard recording ready: elapsed=\(String(format: "%.2f", elapsed))s, audioDuration=\(String(format: "%.2f", audioDuration ?? -1))s, fileSize=\(fileSize) bytes",
-            context: "KeyboardViewController"
-        )
-
-        if elapsed < minimumRecordingDuration || (audioDuration ?? elapsed) < minimumRecordingDuration {
-            DebugLog.info("Keyboard recording too short; skipping transcription", context: "KeyboardViewController")
-            return false
-        }
-
-        if fileSize < minimumAudioFileBytes {
-            DebugLog.info("Keyboard recording has no audio payload; skipping transcription", context: "KeyboardViewController")
-            return false
-        }
-
-        return true
-    }
-
-    private func audioFileDuration(_ audioURL: URL) -> TimeInterval? {
-        do {
-            let file = try AVAudioFile(forReading: audioURL)
-            let sampleRate = file.processingFormat.sampleRate
-            guard sampleRate > 0 else { return nil }
-            return Double(file.length) / sampleRate
-        } catch {
-            DebugLog.info("Failed to read keyboard recording duration: \(error)", context: "KeyboardViewController")
-            return nil
+        guard openContainingApp(url) else {
+            keyboardState = .recording
+            startRecordingMeter()
+            updateKeyboardView(animated: true)
+            showError("Could not stop recording.")
+            return
         }
     }
 
     // MARK: - UI Updates
-
-    private func updateRecordingState(_ isRecording: Bool) {
-        if isProcessingTranscription || keyboardState == .paused {
-            return
-        }
-
-        // Update SwiftUI view
-        keyboardState = isRecording ? .recording : .idle
-        updateKeyboardView(animated: false)
-
-        // Update status label
-        if isRecording {
-            statusLabel.text = ""
-            statusLabel.isHidden = true
-        }
-    }
-
-    private func updateAudioLevel(_ level: Float) {
-        // Update SwiftUI view with new audio level
-        if keyboardState == .recording {
-            displayedAudioLevel = level
-            recordingViewModel.audioLevel = level
-        }
-    }
-
-    private func updateFrequencyBands(_ bands: [Float]) {
-        if keyboardState == .recording {
-            displayedFrequencyBands = bands
-            recordingViewModel.frequencyBands = bands
-        }
-    }
 
     private func updateKeyboardView(animated: Bool = false) {
         let updates = {
@@ -483,7 +269,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func showError(_ message: String) {
-        statusLabel.text = "❌ \(message)"
+        statusLabel.text = message
         statusLabel.textColor = UIColor.systemRed
         statusLabel.isHidden = false
 
@@ -492,6 +278,65 @@ class KeyboardViewController: UIInputViewController {
             self.statusLabel.isHidden = true
             self.statusLabel.textColor = UIColor.label
         }
+    }
+
+    private func checkForPendingDictationText() {
+        let sessionID = activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID()
+        guard let text = KeyboardDictationHandoff.consumePendingText(for: sessionID) else {
+            return
+        }
+
+        textDocumentProxy.insertText(textForInsertion(text))
+        activeHandoffSessionID = nil
+        keyboardState = .idle
+        stopRecordingMeter()
+        displayedAudioLevel = 0
+        displayedFrequencyBands = Array(repeating: 0.0, count: 10)
+        statusLabel.text = ""
+        statusLabel.isHidden = true
+        updateKeyboardView(animated: true)
+    }
+
+    private func textForInsertion(_ text: String) -> String {
+        guard let previousCharacter = textDocumentProxy.documentContextBeforeInput?.last else {
+            return text
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needsSpace = (previousCharacter.isLetter || previousCharacter.isNumber)
+            && (trimmed.first?.isLetter == true || trimmed.first?.isNumber == true)
+        return needsSpace ? " \(text)" : text
+    }
+
+    private func startPendingTextTimer() {
+        stopPendingTextTimer()
+        pendingTextTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.checkForPendingDictationText()
+        }
+    }
+
+    private func stopPendingTextTimer() {
+        pendingTextTimer?.invalidate()
+        pendingTextTimer = nil
+    }
+
+    private func startRecordingMeter() {
+        stopRecordingMeter()
+        recordingMeterTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+            guard let self, self.keyboardState == .recording else { return }
+            let sessionID = self.activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID()
+            guard let meter = KeyboardDictationHandoff.consumeMeter(for: sessionID) else {
+                return
+            }
+            self.displayedFrequencyBands = meter.frequencyBands
+            self.displayedAudioLevel = meter.audioLevel
+            self.updateKeyboardView(animated: false)
+        }
+    }
+
+    private func stopRecordingMeter() {
+        recordingMeterTimer?.invalidate()
+        recordingMeterTimer = nil
     }
 
     // MARK: - Memory Management

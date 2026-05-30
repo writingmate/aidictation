@@ -25,11 +25,23 @@ struct ContentView: View {
     @State private var newlyInsertedRecordingID: UUID?
     @State private var historySearchText = ""
     @State private var recordingToShare: Recording?
+    @State private var activeKeyboardDictationSessionID: String?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         // Use iPhone layout for all devices (scales nicely on iPad)
         iPhoneLayout
+            .onAppear {
+                resumePendingKeyboardDictationIfNeeded()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.openAppNotification)) { notification in
+                let sessionID = notification.object as? String ?? KeyboardDictationHandoff.activeSessionID()
+                startKeyboardDictation(sessionID: sessionID)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.stopAppNotification)) { notification in
+                let sessionID = notification.object as? String ?? KeyboardDictationHandoff.activeSessionID()
+                stopKeyboardDictation(sessionID: sessionID)
+            }
             .alert("Login Unavailable", isPresented: $showLoginConfigurationAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -746,7 +758,43 @@ struct ContentView: View {
             toneStyleManager: toneStyleManager,
             shortcutManager: shortcutManager
         ) { recording in
+            if let activeKeyboardDictationSessionID {
+                KeyboardDictationHandoff.publish(
+                    text: recording.transcription,
+                    sessionID: activeKeyboardDictationSessionID
+                )
+                self.activeKeyboardDictationSessionID = nil
+            }
             markRecordingAsNew(recording)
+        }
+    }
+
+    private func startKeyboardDictation(sessionID: String?) {
+        activeKeyboardDictationSessionID = sessionID ?? KeyboardDictationHandoff.beginSession()
+        if inlineRecording.state == .idle {
+            handleInlineRecordingTap()
+        }
+    }
+
+    private func stopKeyboardDictation(sessionID: String?) {
+        activeKeyboardDictationSessionID = sessionID ?? activeKeyboardDictationSessionID ?? KeyboardDictationHandoff.activeSessionID()
+        if inlineRecording.state == .recording || inlineRecording.state == .paused {
+            handleInlineRecordingTap()
+        }
+    }
+
+    private func resumePendingKeyboardDictationIfNeeded() {
+        guard activeKeyboardDictationSessionID == nil,
+              let sessionID = KeyboardDictationHandoff.activeSessionID()
+        else { return }
+
+        startKeyboardDictation(sessionID: sessionID)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard activeKeyboardDictationSessionID == sessionID,
+                  inlineRecording.state == .idle
+            else { return }
+            startKeyboardDictation(sessionID: sessionID)
         }
     }
 
@@ -1017,6 +1065,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard self?.state == .recording else { return }
                     self?.audioLevel = level
+                    self?.publishKeyboardMeter()
                 }
             }
             .store(in: &cancellables)
@@ -1026,6 +1075,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard self?.state == .recording else { return }
                     self?.frequencyBands = bands
+                    self?.publishKeyboardMeter()
                 }
             }
             .store(in: &cancellables)
@@ -1073,6 +1123,15 @@ private final class InlineRecordingCoordinator: ObservableObject {
         case .idle, .processing, .completing:
             break
         }
+    }
+
+    private func publishKeyboardMeter() {
+        guard let sessionID = KeyboardDictationHandoff.activeSessionID() else { return }
+        KeyboardDictationHandoff.publishMeter(
+            audioLevel: audioLevel,
+            frequencyBands: frequencyBands,
+            sessionID: sessionID
+        )
     }
 
     func dismissError() {
@@ -1319,17 +1378,12 @@ private struct InlineRecordingPanel: View {
     }
 
     private var activeContent: some View {
-        ZStack {
-            AudioVisualizationView(
-                audioLevel: recorder.audioLevel,
-                color: .white,
-                frequencyBands: recorder.frequencyBands
-            )
-            .opacity(recorder.state == .recording || recorder.state == .paused ? 1 : 0)
-
-            ProcessingWaveView(color: .white)
-                .opacity(recorder.state == .processing ? 1 : 0)
-        }
+        AIDictationActiveRecordingVisual(
+            state: recorder.visualState,
+            audioLevel: recorder.audioLevel,
+            frequencyBands: recorder.frequencyBands,
+            color: .white
+        )
         .frame(width: 190, height: 82)
         .padding(.horizontal, 28)
     }

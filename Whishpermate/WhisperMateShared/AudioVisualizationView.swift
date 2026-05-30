@@ -1,21 +1,29 @@
 import SwiftUI
 
+public enum AIDictationMicButtonStyle {
+    case app
+    case keyboard
+}
+
 public struct AIDictationMicButtonVisual: View {
     public let state: AIDictationRecordingState
     public let audioLevel: Float
     public let frequencyBands: [Float]?
     public var size: CGFloat
+    public var style: AIDictationMicButtonStyle
 
     public init(
         state: AIDictationRecordingState,
         audioLevel: Float = 0,
         frequencyBands: [Float]? = nil,
-        size: CGFloat = 100
+        size: CGFloat = 100,
+        style: AIDictationMicButtonStyle = .app
     ) {
         self.state = state
         self.audioLevel = audioLevel
         self.frequencyBands = frequencyBands
         self.size = size
+        self.style = style
     }
 
     public var body: some View {
@@ -26,19 +34,24 @@ public struct AIDictationMicButtonVisual: View {
 
             ZStack {
                 Circle()
-                    .fill(Color.dsPrimary)
+                    .fill(backgroundColor)
                     .frame(width: size, height: size)
 
-                if state == .recording {
+                if style == .keyboard, state == .recording {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 23 * scale, weight: .bold))
+                        .foregroundColor(iconColor)
+                        .transition(.opacity.combined(with: .scale(scale: 0.76)))
+                } else if state == .recording {
                     RoundedRectangle(cornerRadius: MicButtonMetrics.stopCornerRadius * scale, style: .continuous)
-                        .fill(Color.white)
+                        .fill(iconColor)
                         .frame(width: MicButtonMetrics.stopSize * scale, height: MicButtonMetrics.stopSize * scale)
                         .transition(.opacity.combined(with: .scale(scale: 0.76)))
                 } else {
                     HStack(spacing: MicButtonMetrics.barSpacing * scale) {
                         ForEach(0 ..< MicButtonMetrics.barCount, id: \.self) { index in
                             RoundedRectangle(cornerRadius: MicButtonMetrics.barWidth * scale / 2)
-                                .fill(Color.white)
+                                .fill(iconColor)
                                 .frame(
                                     width: MicButtonMetrics.barWidth * scale,
                                     height: barHeight(at: index, phase: phase)
@@ -52,6 +65,26 @@ public struct AIDictationMicButtonVisual: View {
             }
             .frame(width: size, height: size)
             .animation(.spring(response: 0.28, dampingFraction: 0.82), value: state)
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch (style, state) {
+        case (.keyboard, .recording):
+            return .primary
+        case (.keyboard, .processing):
+            return .secondary
+        default:
+            return Color.dsPrimary
+        }
+    }
+
+    private var iconColor: Color {
+        switch (style, state) {
+        case (.keyboard, .recording), (.keyboard, .processing):
+            return Color(uiColor: .systemBackground)
+        default:
+            return .white
         }
     }
 
@@ -199,6 +232,40 @@ public struct AudioVisualizationView: View {
     }
 }
 
+public struct AIDictationActiveRecordingVisual: View {
+    public let state: AIDictationRecordingState
+    public let audioLevel: Float
+    public let frequencyBands: [Float]
+    public var color: Color
+
+    public init(
+        state: AIDictationRecordingState,
+        audioLevel: Float,
+        frequencyBands: [Float],
+        color: Color = .white
+    ) {
+        self.state = state
+        self.audioLevel = audioLevel
+        self.frequencyBands = frequencyBands
+        self.color = color
+    }
+
+    public var body: some View {
+        ZStack {
+            AudioVisualizationView(
+                audioLevel: audioLevel,
+                color: color,
+                frequencyBands: frequencyBands
+            )
+            .opacity(state.showsWave ? 1 : 0)
+
+            ProcessingWaveView(color: color)
+                .opacity(state == .processing ? 1 : 0)
+        }
+        .animation(.easeInOut(duration: 0.18), value: state)
+    }
+}
+
 // MARK: - Processing Wave Animation
 
 public struct ProcessingWaveView: View {
@@ -208,27 +275,27 @@ public struct ProcessingWaveView: View {
         self.color = color
     }
 
-    private let cycleDuration: TimeInterval = 2.2
+    private let cycleDuration: TimeInterval = 1.45
 
     public var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             let progress = timeline.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
-            let litRange = AIDictationWaveMetrics.litRange(for: progress)
 
             GeometryReader { proxy in
                 let scale = AIDictationWaveMetrics.scale(for: proxy.size)
 
                 HStack(spacing: AIDictationWaveMetrics.spacing * scale) {
                     ForEach(0 ..< AIDictationWaveMetrics.count, id: \.self) { index in
-                        let isLit = litRange.contains(index)
+                        let highlight = AIDictationWaveMetrics.processingHighlight(for: index, progress: progress)
                         Circle()
                             .fill(color)
                             .frame(
                                 width: AIDictationWaveMetrics.dotSize * scale,
                                 height: AIDictationWaveMetrics.dotSize * scale
                             )
-                            .brightness(isLit ? 0 : -0.34)
+                            .opacity(0.28 + (highlight * 0.72))
+                            .scaleEffect(0.86 + (highlight * 0.18))
                     }
                 }
                 .frame(width: AIDictationWaveMetrics.rowWidth * scale, height: AIDictationWaveMetrics.maxBarHeight * scale)
@@ -253,6 +320,16 @@ private enum AIDictationWaveMetrics {
 
         let fittingScale = min(size.width / rowWidth, size.height / maxBarHeight)
         return max(1, min(3.2, fittingScale * 0.48))
+    }
+
+    static func processingHighlight(for index: Int, progress: Double) -> Double {
+        let lastIndex = count - 1
+        let travelProgress = progress < 0.5
+            ? easeInOut(progress * 2)
+            : easeInOut((1 - progress) * 2)
+        let center = travelProgress * Double(lastIndex)
+        let distance = abs(Double(index) - center)
+        return max(0, 1 - (distance / 2.2))
     }
 
     static func litRange(for progress: Double) -> ClosedRange<Int> {

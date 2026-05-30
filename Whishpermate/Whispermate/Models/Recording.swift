@@ -1,4 +1,5 @@
 import Foundation
+import WhisperMateShared
 
 enum TranscriptionStatus: String, Codable {
     case success
@@ -16,11 +17,13 @@ struct Recording: Identifiable, Codable, Hashable {
     var retryCount: Int
     let duration: TimeInterval?
     var wordCount: Int?
+    var outputMode: TranscriptionOutputMode
+    var transcriptionOptions: TranscriptionOptions
 
     // MARK: - Codable
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, audioFilePath, transcription, status, errorMessage, retryCount, duration, wordCount
+        case id, timestamp, audioFilePath, transcription, status, errorMessage, retryCount, duration, wordCount, outputMode, transcriptionOptions
     }
 
     init(from decoder: Decoder) throws {
@@ -35,6 +38,8 @@ struct Recording: Identifiable, Codable, Hashable {
         retryCount = try container.decode(Int.self, forKey: .retryCount)
         duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration)
         wordCount = try container.decodeIfPresent(Int.self, forKey: .wordCount)
+        outputMode = try container.decodeIfPresent(TranscriptionOutputMode.self, forKey: .outputMode) ?? .dictation
+        transcriptionOptions = try container.decodeIfPresent(TranscriptionOptions.self, forKey: .transcriptionOptions) ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -48,6 +53,8 @@ struct Recording: Identifiable, Codable, Hashable {
         try container.encode(retryCount, forKey: .retryCount)
         try container.encodeIfPresent(duration, forKey: .duration)
         try container.encodeIfPresent(wordCount, forKey: .wordCount)
+        try container.encode(outputMode, forKey: .outputMode)
+        try container.encode(transcriptionOptions, forKey: .transcriptionOptions)
     }
 
     // MARK: - Hashable
@@ -71,7 +78,9 @@ struct Recording: Identifiable, Codable, Hashable {
         errorMessage: String? = nil,
         retryCount: Int = 0,
         duration: TimeInterval? = nil,
-        wordCount: Int? = nil
+        wordCount: Int? = nil,
+        outputMode: TranscriptionOutputMode = .dictation,
+        transcriptionOptions: TranscriptionOptions = .default
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -82,6 +91,8 @@ struct Recording: Identifiable, Codable, Hashable {
         self.retryCount = retryCount
         self.duration = duration
         self.wordCount = wordCount
+        self.outputMode = outputMode
+        self.transcriptionOptions = transcriptionOptions
     }
 
     var formattedDate: String {
@@ -108,5 +119,9 @@ struct Recording: Identifiable, Codable, Hashable {
 
     var isFailed: Bool {
         return status == .failed
+    }
+
+    var isNotes: Bool {
+        outputMode == .notes
     }
 }

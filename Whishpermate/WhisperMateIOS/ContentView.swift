@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var historySearchText = ""
     @State private var recordingToShare: Recording?
     @State private var activeKeyboardDictationSessionID: String?
+    @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -55,6 +56,16 @@ struct ContentView: View {
                 Text(loginConfigurationMessage)
             }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
+                if canDownloadOfflineModelFromAlert {
+                    Button("Download") {
+                        prepareOfflineModel()
+                    }
+                }
+                if canSwitchToCloudFromOfflineModelAlert {
+                    Button("Use Cloud") {
+                        switchToCloudTranscription()
+                    }
+                }
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(offlineModelMessage)
@@ -126,6 +137,8 @@ struct ContentView: View {
                         Spacer()
                         InlineRecordingPanel(
                             recorder: inlineRecording,
+                            toneStyleManager: toneStyleManager,
+                            selectedMode: $selectedRecordingMode,
                             dismissErrorAction: inlineRecording.dismissError
                         )
                         .frame(height: isCompleting ? 92 : sheetBaseHeight * 0.9)
@@ -205,9 +218,9 @@ struct ContentView: View {
 
                 HStack {
                     VStack(alignment: .leading) {
-                        Text("Tone & Style")
+                        Text("Mode")
                             .font(.body.weight(.medium))
-                        Text("\(toneStyleManager.styles.filter { $0.isEnabled }.count) styles")
+                        Text("\(toneStyleManager.styles.filter { $0.isEnabled }.count) active")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -275,6 +288,11 @@ struct ContentView: View {
                             selectedRecording = recording
                         }) {
                             VStack(alignment: .leading, spacing: 8) {
+                                if recording.outputMode == .notes {
+                                    Label("Notes", systemImage: "note.text")
+                                        .font(.caption.weight(.medium))
+                                        .foregroundColor(.secondary)
+                                }
                                 Text(recording.transcription)
                                     .font(.body)
                                     .foregroundColor(.primary)
@@ -372,109 +390,122 @@ struct ContentView: View {
     // MARK: - History View
 
     private var historyView: some View {
-        NavigationView {
-            VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
                 historySearchField
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
 
-                List {
-                    if displayedHistoryRecordings.isEmpty {
-                        Text(historySearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No recordings yet" : "No matching recordings")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 32)
-                            .listRowSeparator(.hidden)
-                    }
-
-                    ForEach(displayedHistoryRecordings) { recording in
-                        let isNewRecording = newlyInsertedRecordingID == recording.id
-
-                        Button(action: {
-                            selectedRecording = recording
-                        }) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(recording.transcription)
-                                    .font(.body)
-                                    .foregroundColor(.primary)
-                                Text(recording.formattedDate)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.dsPrimary.opacity(isNewRecording ? 0.14 : 0))
-                            )
-                            .scaleEffect(isNewRecording ? 1.025 : 1, anchor: .center)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
-                        .animation(.spring(response: 0.34, dampingFraction: 0.72, blendDuration: 0.04), value: isNewRecording)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) {
-                                historyManager.deleteRecording(recording)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-
-                            Button {
-                                recordingToShare = recording
-                            } label: {
-                                Label("Share", systemImage: "square.and.arrow.up")
-                            }
-
-                            if recording.audioFileURL != nil {
-                                Button {
-                                    selectedRecording = recording
-                                } label: {
-                                    Label("Play", systemImage: "play.fill")
-                                }
-                                .tint(.green)
-                            }
-                        }
-                    }
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            Circle()
+                                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                        )
                 }
-                .listStyle(.insetGrouped)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+
+            if displayedHistoryRecordings.isEmpty {
+                Text(historySearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No recordings yet" : "No matching recordings")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .padding(.bottom, 96)
+            } else {
+                List {
+                    historyRows
+                }
+                .listStyle(.plain)
                 .animation(.spring(response: 0.38, dampingFraction: 0.82, blendDuration: 0.06), value: displayedHistoryRecordings.map(\.id))
             }
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-            .navigationTitle("History")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .sheet(isPresented: $showSettings) {
+            settingsView
+        }
+        .sheet(item: $selectedRecording) { recording in
+            RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, recording: recording)
+        }
+        .sheet(item: $recordingToShare) { recording in
+            ShareSheet(activityItems: [recording.transcription])
+        }
+    }
+
+    @ViewBuilder
+    private var historyRows: some View {
+        ForEach(displayedHistoryRecordings) { recording in
+            let isNewRecording = newlyInsertedRecordingID == recording.id
+
+            Button(action: {
+                selectedRecording = recording
+            }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if recording.outputMode == .notes {
+                        Label("Notes", systemImage: "note.text")
+                            .font(.caption.weight(.medium))
+                            .foregroundColor(.secondary)
                     }
-                    .accessibilityLabel("Settings")
+                    Text(recording.transcription)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                    Text(recording.formattedDate)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.dsPrimary.opacity(isNewRecording ? 0.14 : 0))
+                )
+                .scaleEffect(isNewRecording ? 1.025 : 1, anchor: .center)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .listRowBackground(Color.clear)
+            .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+            .animation(.spring(response: 0.34, dampingFraction: 0.72, blendDuration: 0.04), value: isNewRecording)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    historyManager.deleteRecording(recording)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+
+                Button {
+                    recordingToShare = recording
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+
+                if recording.audioFileURL != nil {
+                    Button {
+                        selectedRecording = recording
+                    } label: {
+                        Label("Play", systemImage: "play.fill")
+                    }
+                    .tint(.green)
                 }
             }
-            .sheet(isPresented: $showSettings) {
-                settingsView
-            }
-            .sheet(item: $selectedRecording) { recording in
-                RecordingSheetView(historyManager: historyManager, dictionaryManager: dictionaryManager, toneStyleManager: toneStyleManager, shortcutManager: shortcutManager, recording: recording)
-            }
-            .sheet(item: $recordingToShare) { recording in
-                ShareSheet(activityItems: [recording.transcription])
-            }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
     }
 
     private var historySearchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundColor(.secondary)
 
             TextField("Search history", text: $historySearchText)
+                .font(.system(size: 16))
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
 
@@ -490,10 +521,11 @@ struct ContentView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
+        .padding(.horizontal, 13)
+        .frame(height: 44)
+        .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemGroupedBackground))
         )
     }
@@ -583,10 +615,10 @@ struct ContentView: View {
 
                     NavigationLink {
                         ToneStyleView(manager: toneStyleManager)
-                            .navigationTitle("Tone & Style")
+                            .navigationTitle("Mode")
                             .navigationBarTitleDisplayMode(.inline)
                     } label: {
-                        Label("Tone & Style", systemImage: "wand.and.stars")
+                        Label("Mode", systemImage: "wand.and.stars")
                             .foregroundColor(.primary)
                     }
 
@@ -736,6 +768,18 @@ struct ContentView: View {
         }
     }
 
+    private var canDownloadOfflineModelFromAlert: Bool {
+        SharedParakeetTranscriptionService.isRuntimeSupported && !offlineModelIsBusy && !parakeetService.isModelDownloaded
+    }
+
+    private var canSwitchToCloudFromOfflineModelAlert: Bool {
+        transcriptionProviderManager.transcriptionMode != .cloud
+    }
+
+    private func switchToCloudTranscription() {
+        transcriptionProviderManager.setTranscriptionMode(.cloud)
+    }
+
     private func prepareOfflineModel() {
         Task {
             do {
@@ -749,6 +793,30 @@ struct ContentView: View {
         }
     }
 
+    private func ensureOfflineModelReadyForRecording() -> Bool {
+        guard transcriptionProviderManager.shouldUseOnDeviceTranscription else {
+            return true
+        }
+
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            offlineModelMessage = SharedParakeetTranscriptionService.unavailableMessage
+            showOfflineModelAlert = true
+            return false
+        }
+
+        guard !parakeetService.isModelDownloaded else {
+            return true
+        }
+
+        if offlineModelIsBusy {
+            offlineModelMessage = "The offline model is still downloading. Please wait until it is ready before recording."
+        } else {
+            offlineModelMessage = "Download the offline model before recording in offline mode."
+        }
+        showOfflineModelAlert = true
+        return false
+    }
+
     private func openLogin() {
         guard let url = authManager.loginURL() else {
             loginConfigurationMessage = authManager.error ?? "Login is not configured in this build."
@@ -759,11 +827,16 @@ struct ContentView: View {
     }
 
     private func handleInlineRecordingTap() {
+        if inlineRecording.state == .idle {
+            guard ensureOfflineModelReadyForRecording() else { return }
+        }
+
         inlineRecording.handlePrimaryAction(
             historyManager: historyManager,
             dictionaryManager: dictionaryManager,
             toneStyleManager: toneStyleManager,
-            shortcutManager: shortcutManager
+            shortcutManager: shortcutManager,
+            selectedPreset: recordingPreset(for: selectedRecordingMode, manager: toneStyleManager)
         ) { recording in
             if let activeKeyboardDictationSessionID {
                 KeyboardDictationHandoff.publish(
@@ -923,34 +996,32 @@ private struct TranscriptionModeSelectionView: View {
                 Section("Offline Model") {
                     Button(action: prepareOfflineModel) {
                         VStack(alignment: .leading, spacing: 8) {
-	                            HStack {
-	                                Label {
-	                                    HStack(spacing: 8) {
-	                                        Text(offlineModelStatusText)
-	                                        if offlineModelIsBusy {
-	                                            ProgressView()
-	                                                .controlSize(.small)
-	                                        }
-	                                    }
-	                                } icon: {
-	                                    Image(systemName: offlineModelStatusIcon)
-	                                }
-	                                Spacer()
+                            HStack(spacing: 12) {
+                                if offlineModelIsBusy {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Image(systemName: offlineModelStatusIcon)
+                                        .foregroundColor(offlineModelStatusColor)
+                                }
+
+                                Text(offlineModelStatusText)
+                                    .font(.body.weight(.medium))
+                                    .foregroundColor(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                Spacer(minLength: 12)
+
                                 if !offlineModelIsBusy {
                                     Image(systemName: offlineModelTrailingIcon)
                                         .foregroundColor(offlineModelStatusColor)
                                 }
                             }
-
-                            if offlineModelIsBusy {
-                                ProgressView()
-                                    .progressViewStyle(.linear)
-                                    .tint(.secondary)
-                            }
                         }
-                        .foregroundColor(.primary)
+                        .contentShape(Rectangle())
                     }
-                    .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported || offlineModelIsBusy)
+                    .buttonStyle(.plain)
+                    .disabled(!SharedParakeetTranscriptionService.isRuntimeSupported)
                 }
             }
         }
@@ -1033,6 +1104,79 @@ private enum InlineRecordingState: Equatable {
     case completing
 }
 
+struct RecordingPresetMenu: View {
+    @ObservedObject var manager: ToneStyleManager
+    @Binding var selectedMode: TranscriptionOutputMode
+    var isEnabled = true
+
+    private var title: String {
+        selectedMode.displayName
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(TranscriptionOutputMode.allCases) { mode in
+                Button {
+                    selectedMode = mode
+                } label: {
+                    Label(mode.displayName, systemImage: selectedMode == mode ? "checkmark" : iconName(for: mode))
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: iconName(for: selectedMode))
+                    .foregroundStyle(Color.dsPrimary)
+                Text(title)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.dsPrimary)
+            }
+            .font(.subheadline.weight(.medium))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Capsule().fill(Color(uiColor: .secondarySystemGroupedBackground)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.72)
+    }
+
+    private func iconName(for mode: TranscriptionOutputMode) -> String {
+        switch mode {
+        case .dictation:
+            return "text.cursor"
+        case .notes:
+            return "note.text"
+        case .meetings:
+            return "person.2.fill"
+        }
+    }
+}
+
+func recordingPreset(for mode: TranscriptionOutputMode, manager: ToneStyleManager) -> ContextRule? {
+    switch mode {
+    case .dictation:
+        return nil
+    case .notes:
+        return manager.recordingPresets.first { $0.isNotesModeRule } ?? ContextRule(
+            name: ContextRulesManager.notesRuleName,
+            appBundleIds: [],
+            instructions: TranscriptionOutputMode.notesPostProcessingInstruction,
+            isEnabled: false
+        )
+    case .meetings:
+        return manager.recordingPresets.first { $0.isMeetingsModeRule } ?? ContextRule(
+            name: ContextRulesManager.meetingsRuleName,
+            appBundleIds: [],
+            instructions: ContextRulesManager.meetingsPostProcessingInstruction,
+            isEnabled: false,
+            transcriptionOptions: TranscriptionOptions(diarization: true)
+        )
+    }
+}
+
 @MainActor
 private final class InlineRecordingCoordinator: ObservableObject {
     @Published var state: InlineRecordingState = .idle
@@ -1044,6 +1188,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
     private let audioRecorder = AudioRecorder()
     private let subscriptionManager = SubscriptionManager.shared
     private var recordingStartTime: Date?
+    private var activeRecordingPreset: ContextRule?
     private var recorderHasStarted = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -1108,11 +1253,12 @@ private final class InlineRecordingCoordinator: ObservableObject {
         dictionaryManager: DictionaryManager,
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
+        selectedPreset: ContextRule?,
         onCompleted: @escaping (Recording) -> Void
     ) {
         switch state {
         case .idle:
-            startRecording()
+            startRecording(selectedPreset: selectedPreset)
         case .recording, .paused:
             stopRecording(
                 historyManager: historyManager,
@@ -1162,7 +1308,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    private func startRecording() {
+    private func startRecording(selectedPreset: ContextRule?) {
         dismissError()
 
         let access = subscriptionManager.checkCanTranscribe()
@@ -1173,14 +1319,14 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
         switch AVAudioSession.sharedInstance().recordPermission {
         case .granted:
-            beginRecording()
+            beginRecording(selectedPreset: selectedPreset)
         case .denied:
             showError("Microphone permission denied. Please enable it in Settings.")
         case .undetermined:
             AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
                 DispatchQueue.main.async {
                     if granted {
-                        self?.beginRecording()
+                        self?.beginRecording(selectedPreset: selectedPreset)
                     } else {
                         self?.showError("Microphone permission denied. Please enable it in Settings.")
                     }
@@ -1191,8 +1337,9 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    private func beginRecording() {
+    private func beginRecording(selectedPreset: ContextRule?) {
         recordingStartTime = Date()
+        activeRecordingPreset = selectedPreset
         recorderHasStarted = false
         errorMessage = nil
         audioLevel = 0
@@ -1225,6 +1372,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         onCompleted: @escaping (Recording) -> Void
     ) {
         let recordingStartedAt = recordingStartTime
+        let selectedPreset = activeRecordingPreset
 
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             state = .processing
@@ -1250,6 +1398,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 dictionaryManager: dictionaryManager,
                 toneStyleManager: toneStyleManager,
                 shortcutManager: shortcutManager,
+                selectedPreset: selectedPreset,
                 onCompleted: onCompleted
             )
         }
@@ -1261,6 +1410,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         dictionaryManager: DictionaryManager,
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
+        selectedPreset: ContextRule?,
         onCompleted: @escaping (Recording) -> Void
     ) async {
         let access = subscriptionManager.checkCanTranscribe()
@@ -1271,11 +1421,16 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
 
         do {
+            let outputMode = recordingOutputMode(for: selectedPreset)
+            let transcriptionOptions = selectedPreset?.transcriptionOptions ?? .default
             let processedResult = try await SharedTranscriptionService.transcribe(
                 audioURL: audioURL,
                 dictionaryManager: dictionaryManager,
                 toneStyleManager: toneStyleManager,
-                shortcutManager: shortcutManager
+                shortcutManager: shortcutManager,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions,
+                selectedPreset: selectedPreset
             )
 
             guard !processedResult.isEmpty else {
@@ -1295,7 +1450,9 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 id: recordingID,
                 transcription: processedResult,
                 duration: duration,
-                audioFileURL: permanentAudioURL
+                audioFileURL: permanentAudioURL,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions
             )
 
             try? FileManager.default.removeItem(at: audioURL)
@@ -1338,6 +1495,16 @@ private final class InlineRecordingCoordinator: ObservableObject {
         return true
     }
 
+    private func recordingOutputMode(for preset: ContextRule?) -> TranscriptionOutputMode {
+        if preset?.isMeetingsModeRule == true {
+            return .meetings
+        }
+        if preset?.isNotesModeRule == true {
+            return .notes
+        }
+        return .dictation
+    }
+
     private func audioFileDuration(_ audioURL: URL) -> TimeInterval? {
         do {
             let file = try AVAudioFile(forReading: audioURL)
@@ -1370,6 +1537,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
     private func reset() {
         recordingStartTime = nil
+        activeRecordingPreset = nil
         recorderHasStarted = false
         state = .idle
         audioLevel = 0
@@ -1382,6 +1550,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             state = .idle
             errorMessage = message
             completionText = nil
+            activeRecordingPreset = nil
             recorderHasStarted = false
             audioLevel = 0
             frequencyBands = Array(repeating: 0.0, count: 10)
@@ -1391,6 +1560,8 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
 private struct InlineRecordingPanel: View {
     @ObservedObject var recorder: InlineRecordingCoordinator
+    @ObservedObject var toneStyleManager: ToneStyleManager
+    @Binding var selectedMode: TranscriptionOutputMode
     let dismissErrorAction: () -> Void
     private let sheetColor = Color(red: 0.10, green: 0.10, blue: 0.10)
 
@@ -1423,14 +1594,32 @@ private struct InlineRecordingPanel: View {
     }
 
     private var activeContent: some View {
-        AIDictationActiveRecordingVisual(
-            state: recorder.visualState,
-            audioLevel: recorder.audioLevel,
-            frequencyBands: recorder.frequencyBands,
-            color: .white
-        )
-        .frame(width: 190, height: 82)
-        .padding(.horizontal, 28)
+        GeometryReader { proxy in
+            ZStack {
+                AIDictationActiveRecordingVisual(
+                    state: recorder.visualState,
+                    audioLevel: recorder.audioLevel,
+                    frequencyBands: recorder.frequencyBands,
+                    color: .white
+                )
+                .frame(width: 190, height: 82)
+                .position(
+                    x: proxy.size.width / 2,
+                    y: proxy.size.height / 2
+                )
+
+                RecordingPresetMenu(
+                    manager: toneStyleManager,
+                    selectedMode: $selectedMode
+                )
+                .position(
+                    x: proxy.size.width / 2,
+                    y: 58
+                )
+                .zIndex(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var completionContent: some View {

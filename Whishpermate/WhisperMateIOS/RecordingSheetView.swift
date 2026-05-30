@@ -12,6 +12,8 @@ struct RecordingSheetView: View {
     @ObservedObject var toneStyleManager: ToneStyleManager
     @ObservedObject var shortcutManager: ShortcutManager
     @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @StateObject private var transcriptionProviderManager = TranscriptionProviderManager()
+    @StateObject private var parakeetService = SharedParakeetTranscriptionService.shared
 
     @State private var sheetState: SheetState = .idle
     @State private var transcription = ""
@@ -21,7 +23,12 @@ struct RecordingSheetView: View {
     @State private var currentRecording: Recording?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlaying = false
-    @State private var didAutoStartRecording = false
+    @State private var selectedOutputMode: TranscriptionOutputMode = .dictation
+    @State private var activeOutputMode: TranscriptionOutputMode?
+
+    private var selectedPreset: ContextRule? {
+        recordingPreset(for: selectedOutputMode, manager: toneStyleManager)
+    }
 
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let minimumAudioFileBytes: Int64 = 1000
@@ -61,9 +68,11 @@ struct RecordingSheetView: View {
         .animation(.spring(response: 0.46, dampingFraction: 0.86, blendDuration: 0.08), value: sheetState)
         .onAppear {
             updateRecordingSurface(animated: false)
-            guard currentRecording == nil, !didAutoStartRecording else { return }
-            didAutoStartRecording = true
-            startRecording()
+            prepareSelectedModeIfNeeded()
+        }
+        .onChange(of: selectedOutputMode) { _ in
+            errorMessage = ""
+            prepareSelectedModeIfNeeded()
         }
         .onReceive(audioRecorder.$isRecording.dropFirst()) { isRecording in
             updateRecordingState(isRecording)
@@ -122,6 +131,32 @@ struct RecordingSheetView: View {
             )
             .ignoresSafeArea()
 
+            if currentRecording == nil {
+                VStack(spacing: 8) {
+                    if sheetState == .idle || sheetState == .recording || sheetState == .paused {
+                        RecordingSheetModeSelector(selectedMode: $selectedOutputMode)
+                    } else {
+                        RecordingSheetActiveModePill(mode: activeOutputMode ?? selectedOutputMode)
+                    }
+
+                    if sheetState != .viewing, let modelCueText {
+                        modelStatusBar(text: modelCueText)
+                    }
+
+                    if !errorMessage.isEmpty, sheetState != .processing, sheetState != .viewing {
+                        Text(errorMessage)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.74))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 18)
+                .padding(.horizontal, 56)
+                .zIndex(3)
+            }
+
             Button(action: handleCancel) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 28, weight: .semibold))
@@ -131,6 +166,64 @@ struct RecordingSheetView: View {
             .buttonStyle(.plain)
             .padding(.top, 18)
             .padding(.leading, 20)
+            .zIndex(4)
+        }
+    }
+
+    private func modelStatusBar(text: String) -> some View {
+        HStack(spacing: 7) {
+            if modelCueShowsProgress {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            } else {
+                Image(systemName: modelCueIconName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .foregroundStyle(.white)
+
+            if modelCueShowsProgress {
+                GeometryReader { proxy in
+                    Capsule()
+                        .fill(Color.white.opacity(0.22))
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.white.opacity(0.82))
+                                .frame(width: proxy.size.width * 0.36)
+                                .offset(x: modelStatusProgressOffset(in: proxy.size.width))
+                        }
+                        .clipShape(Capsule())
+                }
+                .frame(height: 4)
+                .frame(maxWidth: 72)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.54))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private func modelStatusProgressOffset(in width: CGFloat) -> CGFloat {
+        let travel = max(0, width * 0.64)
+        switch parakeetService.state {
+        case .downloading:
+            return travel * 0.18
+        case .initializing:
+            return travel * 0.68
+        default:
+            return 0
         }
     }
 
@@ -164,6 +257,15 @@ struct RecordingSheetView: View {
             // Transcription content
             ScrollView {
                 VStack(spacing: 0) {
+                    if currentRecording?.outputMode == .notes {
+                        Label("Notes", systemImage: "note.text")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 18)
+                    }
+
                     Text(transcription)
                         .font(.system(size: 17, weight: .regular))
                         .foregroundColor(.black)
@@ -260,8 +362,108 @@ struct RecordingSheetView: View {
         }
     }
 
+    private var needsOfflineRuntimeForSelectedMode: Bool {
+        transcriptionProviderManager.shouldUseOnDeviceTranscription || selectedOutputMode == .meetings
+    }
+
+    private var modelCueText: String? {
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            guard needsOfflineRuntimeForSelectedMode else { return nil }
+            return SharedParakeetTranscriptionService.unavailableMessage
+        }
+
+        switch parakeetService.state {
+        case .downloading:
+            return selectedOutputMode == .meetings ? "Downloading speaker labels" : "Downloading offline model"
+        case .initializing:
+            return selectedOutputMode == .meetings ? "Preparing speaker labels" : "Preparing offline model"
+        case .error(let message):
+            guard needsOfflineRuntimeForSelectedMode else { return nil }
+            return message
+        case .transcribing:
+            return nil
+        case .ready, .notInitialized:
+            break
+        }
+
+        guard needsOfflineRuntimeForSelectedMode else { return nil }
+
+        if parakeetService.isModelDownloaded {
+            return selectedOutputMode == .meetings ? "Speaker labels ready" : "Offline mode ready"
+        }
+
+        switch parakeetService.state {
+        case .notInitialized:
+            return selectedOutputMode == .meetings ? "Speaker labels need download" : "Offline model needs download"
+        case .ready:
+            return selectedOutputMode == .meetings ? "Speaker labels ready" : "Offline mode ready"
+        case .downloading, .initializing, .error, .transcribing:
+            return nil
+        }
+    }
+
+    private var modelCueShowsProgress: Bool {
+        switch parakeetService.state {
+        case .downloading, .initializing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var modelCueIconName: String {
+        if parakeetService.isModelDownloaded {
+            return "checkmark.circle.fill"
+        }
+        switch parakeetService.state {
+        case .error:
+            return "exclamationmark.triangle.fill"
+        default:
+            return "arrow.down.circle.fill"
+        }
+    }
+
+    private var modelCueIconColor: Color {
+        if parakeetService.isModelDownloaded {
+            return .green
+        }
+        switch parakeetService.state {
+        case .error:
+            return .orange
+        default:
+            return Color.dsPrimary
+        }
+    }
+
+    private func prepareSelectedModeIfNeeded() {
+        guard sheetState != .viewing, needsOfflineRuntimeForSelectedMode else { return }
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else { return }
+        guard !parakeetService.isModelDownloaded else { return }
+
+        switch parakeetService.state {
+        case .downloading, .initializing:
+            return
+        default:
+            Task {
+                do {
+                    try await parakeetService.initialize()
+                    await MainActor.run {
+                        if sheetState != .viewing {
+                            errorMessage = ""
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
     private func beginRecording() {
         recordingStartTime = Date()
+        activeOutputMode = nil
         errorMessage = ""
         sheetState = .recording
         updateRecordingSurface(animated: true)
@@ -285,6 +487,8 @@ struct RecordingSheetView: View {
 
     private func stopRecording() {
         let recordingStartedAt = recordingStartTime
+        let stopOutputMode = selectedOutputMode
+        activeOutputMode = stopOutputMode
         sheetState = .processing
         updateRecordingSurface(animated: true)
 
@@ -305,7 +509,7 @@ struct RecordingSheetView: View {
             }
 
             await MainActor.run {
-                transcribeAudio(audioURL: audioURL)
+                transcribeAudio(audioURL: audioURL, outputMode: stopOutputMode)
             }
         }
     }
@@ -353,7 +557,7 @@ struct RecordingSheetView: View {
         }
     }
 
-    private func transcribeAudio(audioURL: URL) {
+    private func transcribeAudio(audioURL: URL, outputMode: TranscriptionOutputMode) {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             errorMessage = access.reason ?? "Log in to continue transcribing."
@@ -369,11 +573,16 @@ struct RecordingSheetView: View {
 
         Task {
             do {
+                let preset = recordingPreset(for: outputMode, manager: toneStyleManager)
+                let transcriptionOptions = transcriptionOptions(for: outputMode, preset: preset)
                 let processedResult = try await SharedTranscriptionService.transcribe(
                     audioURL: audioURL,
                     dictionaryManager: dictionaryManager,
                     toneStyleManager: toneStyleManager,
-                    shortcutManager: shortcutManager
+                    shortcutManager: shortcutManager,
+                    outputMode: outputMode,
+                    transcriptionOptions: transcriptionOptions,
+                    selectedPreset: preset
                 )
 
                 guard !processedResult.isEmpty else {
@@ -383,6 +592,7 @@ struct RecordingSheetView: View {
                         transcription = ""
                         sheetState = .idle
                         recordingStartTime = nil
+                        activeOutputMode = nil
                         errorMessage = ""
                         updateRecordingSurface(animated: true)
                     }
@@ -400,6 +610,7 @@ struct RecordingSheetView: View {
                     // Calculate duration
                     let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
                     recordingStartTime = nil
+                    activeOutputMode = nil
 
                     // Create recording with unique ID
                     let recordingID = UUID()
@@ -412,7 +623,9 @@ struct RecordingSheetView: View {
                         id: recordingID,
                         transcription: processedResult,
                         duration: duration,
-                        audioFileURL: permanentAudioURL
+                        audioFileURL: permanentAudioURL,
+                        outputMode: outputMode,
+                        transcriptionOptions: transcriptionOptions
                     )
                     historyManager.addRecording(recording)
                     currentRecording = recording
@@ -425,14 +638,33 @@ struct RecordingSheetView: View {
                     transcription = ""
                     sheetState = .viewing
                     recordingStartTime = nil
+                    activeOutputMode = nil
                     errorMessage = "Transcription failed: \(error.localizedDescription)"
                 }
             }
         }
     }
 
+    private func recordingOutputMode(for preset: ContextRule?) -> TranscriptionOutputMode {
+        if preset?.isMeetingsModeRule == true {
+            return .meetings
+        }
+        if preset?.isNotesModeRule == true {
+            return .notes
+        }
+        return .dictation
+    }
+
+    private func transcriptionOptions(for outputMode: TranscriptionOutputMode, preset: ContextRule?) -> TranscriptionOptions {
+        if outputMode == .meetings {
+            return TranscriptionOptions(diarization: true)
+        }
+        return preset?.transcriptionOptions ?? .default
+    }
+
     private func resetRecordingState() {
         recordingStartTime = nil
+        activeOutputMode = nil
         sheetState = .idle
         errorMessage = ""
         recordingViewModel.audioLevel = 0.0
@@ -532,6 +764,96 @@ struct RecordingSheetView: View {
             return String(format: "%d:%02d", minutes, seconds)
         } else {
             return String(format: "0:%02d", seconds)
+        }
+    }
+}
+
+private struct RecordingSheetModeSelector: View {
+    @Binding var selectedMode: TranscriptionOutputMode
+
+    var body: some View {
+        Picker(selection: $selectedMode) {
+            ForEach(TranscriptionOutputMode.allCases) { mode in
+                Label(mode.displayName, systemImage: iconName(for: mode))
+                    .tag(mode)
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: iconName(for: selectedMode))
+                    .font(.system(size: 13, weight: .semibold))
+
+                Text(selectedMode.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .opacity(0.72)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.black.opacity(0.34))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+            )
+        }
+        .pickerStyle(.menu)
+        .buttonStyle(.plain)
+    }
+
+    private func iconName(for mode: TranscriptionOutputMode) -> String {
+        switch mode {
+        case .dictation:
+            return "text.cursor"
+        case .notes:
+            return "note.text"
+        case .meetings:
+            return "person.2.fill"
+        }
+    }
+}
+
+private struct RecordingSheetActiveModePill: View {
+    let mode: TranscriptionOutputMode
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: iconName(for: mode))
+                .font(.system(size: 13, weight: .semibold))
+
+            Text(mode.displayName)
+                .font(.system(size: 13, weight: .semibold))
+
+            Text("locked")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.66))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.34))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+        )
+    }
+
+    private func iconName(for mode: TranscriptionOutputMode) -> String {
+        switch mode {
+        case .dictation:
+            return "text.cursor"
+        case .notes:
+            return "note.text"
+        case .meetings:
+            return "person.2.fill"
         }
     }
 }

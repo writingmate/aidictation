@@ -82,7 +82,13 @@ public struct AIDictationMicButtonVisual: View {
     private var iconColor: Color {
         switch (style, state) {
         case (.keyboard, .recording), (.keyboard, .processing):
+            #if os(iOS)
             return Color(uiColor: .systemBackground)
+            #elseif os(macOS)
+            return Color(nsColor: .windowBackgroundColor)
+            #else
+            return .white
+            #endif
         default:
             return .white
         }

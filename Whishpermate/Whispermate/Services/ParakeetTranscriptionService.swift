@@ -103,6 +103,40 @@ class ParakeetTranscriptionService: ObservableObject {
         }
     }
 
+    func transcribeDiarized(audioURL: URL) async throws -> String {
+        guard Self.isRuntimeSupported else {
+            await setUnavailableState()
+            throw runtimeError(Self.unavailableMessage)
+        }
+
+        if case .notInitialized = state {
+            try await initialize()
+        }
+
+        let bridge = try loadRuntimeBridge()
+
+        await MainActor.run {
+            self.state = .transcribing
+        }
+
+        do {
+            let text = try await transcribeDiarizedWithRuntimeBridge(bridge, audioPath: audioURL.path)
+            await MainActor.run {
+                self.state = .ready
+            }
+            return text
+        } catch {
+            await MainActor.run {
+                self.state = .error(error.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    func transcribeMeeting(audioURL: URL) async throws -> String {
+        try await transcribeDiarized(audioURL: audioURL)
+    }
+
     func cleanup() {
         let bridge = runtimeBridge
         runtimeBridge = nil
@@ -196,6 +230,29 @@ class ParakeetTranscriptionService: ObservableObject {
                     continuation.resume(returning: text as String)
                 } else {
                     continuation.resume(throwing: self.runtimeError((message as String?) ?? "Parakeet transcription failed"))
+                }
+            }
+
+            typealias Function = @convention(c) (AnyObject, Selector, NSString, @escaping @convention(block) (NSString?, NSString?) -> Void) -> Void
+            unsafeBitCast(method, to: Function.self)(bridge, selector, audioPath as NSString, completion)
+        }
+    }
+
+    private func transcribeDiarizedWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let selector = NSSelectorFromString("transcribeDiarizedAudioAtPath:completion:")
+            guard bridge.responds(to: selector),
+                  let method = bridge.method(for: selector)
+            else {
+                continuation.resume(throwing: self.runtimeError("Parakeet runtime does not support meeting transcription"))
+                return
+            }
+
+            let completion: @convention(block) (NSString?, NSString?) -> Void = { text, message in
+                if let text {
+                    continuation.resume(returning: text as String)
+                } else {
+                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Meeting transcription failed"))
                 }
             }
 

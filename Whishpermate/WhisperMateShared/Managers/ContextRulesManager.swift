@@ -4,6 +4,11 @@ public import Combine
 /// Manages app-specific context rules for transcription formatting
 public class ContextRulesManager: ObservableObject {
     public static let shared = ContextRulesManager()
+    public static let notesRuleName = "Notes"
+    public static let meetingsRuleName = "Meetings"
+    public static let meetingsPostProcessingInstruction = """
+    \(TranscriptionOutputMode.meetingsPostProcessingInstruction)
+    """
 
     // MARK: - Published Properties
 
@@ -27,6 +32,15 @@ public class ContextRulesManager: ObservableObject {
         rules
     }
 
+    public var recordingPresets: [ContextRule] {
+        rules.filter { $0.isNotesModeRule || $0.isMeetingsModeRule }
+    }
+
+    public func rule(with id: UUID?) -> ContextRule? {
+        guard let id else { return nil }
+        return rules.first { $0.id == id }
+    }
+
     public func loadRules() {
         if let data = AppDefaults.shared.data(forKey: Keys.contextRules),
            let decoded = try? JSONDecoder().decode([ContextRule].self, from: data)
@@ -36,6 +50,19 @@ public class ContextRulesManager: ObservableObject {
         } else {
             // Add default rule templates (all disabled by default)
             rules = [
+                ContextRule(
+                    name: Self.notesRuleName,
+                    appBundleIds: [],
+                    instructions: TranscriptionOutputMode.notesPostProcessingInstruction,
+                    isEnabled: false
+                ),
+                ContextRule(
+                    name: Self.meetingsRuleName,
+                    appBundleIds: [],
+                    instructions: Self.meetingsPostProcessingInstruction,
+                    isEnabled: false,
+                    transcriptionOptions: TranscriptionOptions(diarization: true)
+                ),
                 ContextRule(
                     name: "Casual Messaging",
                     appBundleIds: ["com.apple.MobileSMS", "com.discord.Discord", "net.whatsapp.WhatsApp"],
@@ -70,6 +97,8 @@ public class ContextRulesManager: ObservableObject {
             saveRules()
             DebugLog.info("Created default context rules", context: "ContextRulesManager")
         }
+
+        ensureBuiltInRecordingPresetsExist()
     }
 
     public func saveRules() {
@@ -153,17 +182,37 @@ public class ContextRulesManager: ObservableObject {
             return nil
         }
 
-        let ruleNames = matchingRules.map { $0.name }.joined(separator: ", ")
-        DebugLog.info("", context: "ContextRulesManager")
-        DebugLog.info("=== Matched \(matchingRules.count) rule(s): \(ruleNames) ===", context: "ContextRulesManager")
+        let formattingRules = matchingRules.filter { !$0.isNotesModeRule && !$0.isMeetingsModeRule }
+        guard !formattingRules.isEmpty else {
+            DebugLog.info("=== Matched mode rule(s) only; no context formatting instructions ===", context: "ContextRulesManager")
+            return nil
+        }
 
-        let instructions = matchingRules.map { $0.instructions }.joined(separator: ". ")
+        let ruleNames = formattingRules.map { $0.name }.joined(separator: ", ")
+        DebugLog.info("", context: "ContextRulesManager")
+        DebugLog.info("=== Matched \(formattingRules.count) formatting rule(s): \(ruleNames) ===", context: "ContextRulesManager")
+
+        let instructions = formattingRules.map { $0.instructions }.joined(separator: ". ")
         DebugLog.info("Combined instructions: \(instructions)", context: "ContextRulesManager")
         return instructions
     }
 
     public func matchingRuleNames(for appBundleId: String?, windowTitle: String? = nil) -> [String] {
         matchingRules(for: appBundleId, windowTitle: windowTitle).map(\.name)
+    }
+
+    public func isNotesModeActive(for appBundleId: String? = nil, windowTitle: String? = nil) -> Bool {
+        matchingRules(for: appBundleId, windowTitle: windowTitle).contains { $0.isNotesModeRule }
+    }
+
+    public func isMeetingsModeActive(for appBundleId: String? = nil, windowTitle: String? = nil) -> Bool {
+        matchingRules(for: appBundleId, windowTitle: windowTitle).contains { $0.isMeetingsModeRule }
+    }
+
+    public func transcriptionOptions(for appBundleId: String? = nil, windowTitle: String? = nil) -> TranscriptionOptions {
+        matchingRules(for: appBundleId, windowTitle: windowTitle).reduce(.default) { options, rule in
+            TranscriptionOptions(diarization: options.diarization || rule.transcriptionOptions.diarization)
+        }
     }
 
     private func matchingRules(for appBundleId: String?, windowTitle: String?) -> [ContextRule] {
@@ -297,6 +346,49 @@ public class ContextRulesManager: ObservableObject {
                 rules[index].appBundleIds = updatedBundleIds
                 DebugLog.info("Removed \(rule.appBundleIds.count - updatedBundleIds.count) app(s) from rule: \(rule.name)", context: "ContextRulesManager")
             }
+        }
+    }
+
+    private func ensureBuiltInRecordingPresetsExist() {
+        var didUpdate = false
+
+        if !rules.contains(where: { $0.isNotesModeRule }) {
+            rules.insert(
+                ContextRule(
+                    name: Self.notesRuleName,
+                    appBundleIds: [],
+                    instructions: TranscriptionOutputMode.notesPostProcessingInstruction,
+                    isEnabled: false
+                ),
+                at: 0
+            )
+            didUpdate = true
+            DebugLog.info("Added default Notes style", context: "ContextRulesManager")
+        }
+
+        if !rules.contains(where: { $0.isMeetingsModeRule }) {
+            let insertionIndex = rules.firstIndex(where: { $0.isNotesModeRule }).map { $0 + 1 } ?? 0
+            rules.insert(
+                ContextRule(
+                    name: Self.meetingsRuleName,
+                    appBundleIds: [],
+                    instructions: Self.meetingsPostProcessingInstruction,
+                    isEnabled: false
+                ),
+                at: insertionIndex
+            )
+            didUpdate = true
+            DebugLog.info("Added default Meetings style", context: "ContextRulesManager")
+        } else if let meetingsIndex = rules.firstIndex(where: { $0.isMeetingsModeRule }),
+                  !rules[meetingsIndex].transcriptionOptions.diarization
+        {
+            rules[meetingsIndex].transcriptionOptions.diarization = true
+            didUpdate = true
+            DebugLog.info("Enabled speaker labels for Meetings style", context: "ContextRulesManager")
+        }
+
+        if didUpdate {
+            saveRules()
         }
     }
 }

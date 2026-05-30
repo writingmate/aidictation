@@ -16,6 +16,7 @@ struct KeyboardRecordingView: View {
     let onReturn: () -> Void
     let onShift: () -> Void
     let onNextKeyboard: () -> Void
+    @ObservedObject private var toneStyleManager = ToneStyleManager.shared
 
     private let rows = [
         ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
@@ -47,6 +48,12 @@ struct KeyboardRecordingView: View {
     private var keyRows: some View {
         VStack(spacing: 7) {
             HStack {
+                if toneStyleManager.isNotesModeActive() {
+                    Label("Notes", systemImage: "note.text")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 8)
+                }
                 Spacer()
             }
             .frame(height: 42)

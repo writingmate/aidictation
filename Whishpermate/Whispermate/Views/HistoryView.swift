@@ -171,9 +171,16 @@ struct RecordingRow: View {
 
             // Transcription or Error
             if let transcription = recording.transcription {
-                Text(transcription)
-                    .dsFont(.label)
-                    .foregroundStyle(Color.dsForeground)
+                VStack(alignment: .leading, spacing: 4) {
+                    if recording.isNotes {
+                        Label("Notes", systemImage: "note.text")
+                            .dsFont(.tiny)
+                            .foregroundStyle(Color.dsMutedForeground)
+                    }
+                    Text(transcription)
+                        .dsFont(.label)
+                        .foregroundStyle(Color.dsForeground)
+                }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             } else if let errorMessage = recording.errorMessage {

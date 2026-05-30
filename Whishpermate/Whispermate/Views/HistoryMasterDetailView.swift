@@ -276,6 +276,16 @@ struct HistorySidebarRow: View {
 
             // Metadata
             HStack(spacing: 4) {
+                if recording.isNotes {
+                    Label("Notes", systemImage: "note.text")
+                        .dsFont(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text("•")
+                        .dsFont(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+
                 Text(recording.formattedDate)
                     .dsFont(.caption)
                     .foregroundStyle(.secondary)
@@ -320,6 +330,12 @@ struct RecordingDetailView: View {
                         }
                         .transition(.opacity)
                     } else if let transcription = recording.transcription {
+                        if recording.isNotes {
+                            Label("Notes", systemImage: "note.text")
+                                .dsFont(.labelMedium)
+                                .foregroundStyle(.secondary)
+                        }
+
                         Text(transcription)
                             .textSelection(.enabled)
                             .dsFont(.body)

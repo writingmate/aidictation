@@ -51,6 +51,8 @@ class AppState: ObservableObject {
     private var shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
     private var realtimeTranscriptionClient: OpenAIRealtimeTranscriptionClient?
     private var realtimeTranscript: String = ""
+    private let diarizationTimeoutSeconds: UInt64 = 75
+    private let llmPostProcessingTimeoutSeconds: UInt64 = 45
 
     // MARK: - Dependencies (singletons)
 
@@ -308,7 +310,12 @@ class AppState: ObservableObject {
         Task {
             do {
                 let result = try await performTranscription(
-                    audioURL: audioURL, appContext: nil, clipboardContent: nil, screenContext: nil
+                    audioURL: audioURL,
+                    appContext: nil,
+                    clipboardContent: nil,
+                    screenContext: nil,
+                    outputMode: recording.outputMode,
+                    transcriptionOptions: recording.transcriptionOptions
                 )
 
                 let wordCount = result.split(separator: " ").count
@@ -391,7 +398,9 @@ class AppState: ObservableObject {
                     return
                 }
 
-                let activeTransport = transcriptionProviderManager.effectiveTransport
+                let requestedOutputMode = self.requestedOutputMode()
+                let transcriptionOptions = self.requestedTranscriptionOptions()
+                let activeTransport = requestedOutputMode != .dictation || transcriptionOptions.diarization ? .batch : transcriptionProviderManager.effectiveTransport
                 let realtimeResult: String?
                 if activeTransport == .realtime {
                     let result = await realtimeClient?.finish(timeout: 1.2)?
@@ -455,7 +464,9 @@ class AppState: ObservableObject {
                         audioURL: audioURL,
                         appContext: capturedAppContext,
                         clipboardContent: clipboardContent,
-                        screenContext: screenContextForTranscription
+                        screenContext: screenContextForTranscription,
+                        outputMode: requestedOutputMode,
+                        transcriptionOptions: transcriptionOptions
                     )
                 }
                 let transcriptionMs = Int((CFAbsoluteTimeGetCurrent() - transcriptionStart) * 1000)
@@ -481,7 +492,9 @@ class AppState: ObservableObject {
                     audioFileURL: persistentURL,
                     transcription: result,
                     status: .success,
-                    duration: duration
+                    duration: duration,
+                    outputMode: requestedOutputMode,
+                    transcriptionOptions: transcriptionOptions
                 )
                 recording.wordCount = wordCount
 
@@ -521,7 +534,9 @@ class AppState: ObservableObject {
                         transcription: nil,
                         status: .failed,
                         errorMessage: error.localizedDescription,
-                        duration: duration
+                        duration: duration,
+                        outputMode: self.requestedOutputMode(),
+                        transcriptionOptions: self.requestedTranscriptionOptions()
                     )
 
                     await MainActor.run {
@@ -571,6 +586,11 @@ class AppState: ObservableObject {
         let mode = transcriptionProviderManager.transcriptionMode
         let provider = transcriptionProviderManager.selectedProvider
         let transport = transcriptionProviderManager.effectiveTransport
+
+        if requestedTranscriptionOptions().diarization {
+            DebugLog.info("Skipping realtime start because speaker labels require batch transcription", context: "AppState")
+            return
+        }
 
         guard mode != .local,
               !provider.isOnDevice,
@@ -656,6 +676,26 @@ class AppState: ObservableObject {
         DebugLog.info("Realtime transcription partial: \(text)", context: "AppState")
     }
 
+    private func requestedOutputMode() -> TranscriptionOutputMode {
+        guard recordingMode != .command else {
+            return .dictation
+        }
+        if contextRulesManager.isMeetingsModeActive(for: capturedAppBundleId, windowTitle: capturedWindowTitle) {
+            return .meetings
+        }
+        if contextRulesManager.isNotesModeActive(for: capturedAppBundleId, windowTitle: capturedWindowTitle) {
+            return .notes
+        }
+        return .dictation
+    }
+
+    private func requestedTranscriptionOptions() -> TranscriptionOptions {
+        guard recordingMode != .command else {
+            return .default
+        }
+        return contextRulesManager.transcriptionOptions(for: capturedAppBundleId, windowTitle: capturedWindowTitle)
+    }
+
     private func buildTranscriptionPromptComponents() -> [String] {
         var promptComponents: [String] = []
 
@@ -709,7 +749,9 @@ class AppState: ObservableObject {
         audioURL: URL,
         appContext: String?,
         clipboardContent: String?,
-        screenContext: String?
+        screenContext: String?,
+        outputMode: TranscriptionOutputMode,
+        transcriptionOptions: TranscriptionOptions = .default
     ) async throws -> String {
         let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
         let promptComponents = buildTranscriptionPromptComponents()
@@ -719,8 +761,21 @@ class AppState: ObservableObject {
         var provider = transcriptionProviderManager.selectedProvider
         DebugLog.info("Transcription mode: \(mode.displayName), provider: \(provider.displayName), transport: \(transcriptionProviderManager.effectiveTransport.rawValue), isOnDevice: \(provider.isOnDevice)", context: "AppState")
 
+        if transcriptionOptions.diarization {
+            guard ParakeetTranscriptionService.isRuntimeSupported else {
+                throw NSError(
+                    domain: "AppState",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Speaker labels require offline transcription on macOS 14 or later"]
+                )
+            }
+            DebugLog.info("Using local diarization model for transcription", context: "AppState")
+            provider = .parakeet
+        }
+
         // Auto mode: use cloud when online, fall back to local when offline
-        if mode == .auto,
+        if !transcriptionOptions.diarization,
+           mode == .auto,
            !provider.isOnDevice,
            !NetworkMonitor.shared.isConnected,
            ParakeetTranscriptionService.isRuntimeSupported
@@ -761,10 +816,29 @@ class AppState: ObservableObject {
 
             DebugLog.info("Using on-device Parakeet transcription", context: "AppState")
 
-            var text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+            var text: String
+            if transcriptionOptions.diarization {
+                do {
+                    text = try await withTimeout(seconds: diarizationTimeoutSeconds) {
+                        try await ParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
+                    }
+                } catch {
+                    DebugLog.warning("Speaker labels unavailable within time limit - using offline transcript without speaker labels", context: "AppState")
+                    text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+                }
+            } else {
+                text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+            }
             text = TranscriptionOutputFilter.filter(text)
             text = dictionaryManager.applyReplacements(to: text)
-            return text
+            return try await applyLLMPassWithFallback(
+                rawText: text,
+                client: openAIClient ?? OpenAIClient(config: .init()),
+                promptComponents: promptComponents,
+                provider: provider,
+                outputMode: outputMode,
+                appContext: appContext
+            )
 
         case .realtime:
             DebugLog.warning("Realtime transport reached batch transcription path; using batch cloud fallback", context: "AppState")
@@ -813,8 +887,19 @@ class AppState: ObservableObject {
                 prompt: sttHintPrompt.isEmpty ? nil : sttHintPrompt,
                 language: singleAPILanguageCode(),
                 sttPrompt: provider == .custom && !sttHintPrompt.isEmpty ? sttHintPrompt : nil,
-                postProcessingPrompt: provider == .custom && !postProcessingPrompt.isEmpty ? postProcessingPrompt : nil
+                postProcessingPrompt: provider == .custom ? providerPostProcessingPrompt(outputMode: outputMode, basePrompt: postProcessingPrompt) : nil
             )
+
+            if outputMode != .dictation {
+                return try await applyLLMPassWithFallback(
+                    rawText: rawText,
+                    client: client,
+                    promptComponents: promptComponents,
+                    provider: provider,
+                    outputMode: outputMode,
+                    appContext: appContext
+                )
+            }
 
             let shouldPostProcess = transcriptionProviderManager.enableLLMPostProcessing &&
                 provider != .custom &&
@@ -860,6 +945,135 @@ class AppState: ObservableObject {
                 }
             }
             return rawText
+        }
+    }
+
+    private func providerPostProcessingPrompt(outputMode: TranscriptionOutputMode, basePrompt: String) -> String? {
+        var components: [String] = []
+        if !basePrompt.isEmpty {
+            components.append(basePrompt)
+        }
+        if outputMode == .notes {
+            components.append(TranscriptionOutputMode.notesPostProcessingInstruction)
+        } else if outputMode == .meetings {
+            components.append(TranscriptionOutputMode.meetingsPostProcessingInstruction)
+        }
+        let prompt = components.joined(separator: "\n\n")
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    private func applyLLMPassWithFallback(
+        rawText: String,
+        client: OpenAIClient,
+        promptComponents: [String],
+        provider: TranscriptionProvider,
+        outputMode: TranscriptionOutputMode,
+        appContext: String?
+    ) async throws -> String {
+        do {
+            return try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
+                try await self.applyLLMPassIfNeeded(
+                    rawText: rawText,
+                    client: client,
+                    promptComponents: promptComponents,
+                    provider: provider,
+                    outputMode: outputMode,
+                    appContext: appContext
+                )
+            }
+        } catch {
+            DebugLog.warning("\(outputMode.displayName) post-processing unavailable within time limit - using transcript", context: "AppState")
+            return rawText
+        }
+    }
+
+    private func applyLLMPassIfNeeded(
+        rawText: String,
+        client: OpenAIClient,
+        promptComponents: [String],
+        provider: TranscriptionProvider,
+        outputMode: TranscriptionOutputMode,
+        appContext: String?
+    ) async throws -> String {
+        if outputMode == .dictation {
+            return rawText
+        }
+
+        if provider == .custom {
+            return rawText
+        }
+
+        let postProcessor = transcriptionProviderManager.postProcessingProvider
+        if postProcessor == .aidictation,
+           let endpoint = SecretsLoader.aidictationPostProcessingEndpoint(),
+           let apiKey = SecretsLoader.aidictationPostProcessingKey()
+        {
+            let llmConfig = OpenAIClient.Configuration(
+                transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
+                transcriptionModel: transcriptionProviderManager.effectiveModel,
+                chatCompletionEndpoint: endpoint,
+                chatCompletionModel: PostProcessingProvider.aidictationModel,
+                apiKey: apiKey
+            )
+            client.updateConfig(llmConfig)
+            return try await applyOutputModeFormatting(
+                client: client,
+                transcription: rawText,
+                outputMode: outputMode,
+                rules: promptComponents,
+                languageCodes: languageManager.apiLanguageCode,
+                appContext: appContext
+            )
+        }
+
+        if postProcessor == .customLLM, let llmApiKey = resolvedLLMApiKey() {
+            let llmConfig = OpenAIClient.Configuration(
+                transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
+                transcriptionModel: transcriptionProviderManager.effectiveModel,
+                chatCompletionEndpoint: llmProviderManager.effectiveEndpoint,
+                chatCompletionModel: llmProviderManager.effectiveModel,
+                apiKey: llmApiKey
+            )
+            client.updateConfig(llmConfig)
+            return try await applyOutputModeFormatting(
+                client: client,
+                transcription: rawText,
+                outputMode: outputMode,
+                rules: promptComponents,
+                languageCodes: languageManager.apiLanguageCode,
+                appContext: appContext
+            )
+        }
+
+        DebugLog.warning("\(outputMode.displayName) mode post-processing unavailable - using cleaned transcript", context: "AppState")
+        return rawText
+    }
+
+    private func applyOutputModeFormatting(
+        client: OpenAIClient,
+        transcription: String,
+        outputMode: TranscriptionOutputMode,
+        rules: [String],
+        languageCodes: String?,
+        appContext: String?
+    ) async throws -> String {
+        switch outputMode {
+        case .dictation:
+            return transcription
+        case .notes:
+            return try await client.applyNotesFormatting(
+                transcription: transcription,
+                rules: rules,
+                languageCodes: languageCodes,
+                appContext: appContext
+            )
+        case .meetings:
+            return try await client.applyMeetingFormatting(
+                transcription: transcription,
+                rules: rules,
+                languageCodes: languageCodes,
+                appContext: appContext
+            )
         }
     }
 
@@ -1010,5 +1224,60 @@ class AppState: ObservableObject {
             self.overlayManager.transition(to: .hidden)
             CommandModeManager.shared.reset()
         }
+    }
+
+    private func withTimeout<T>(
+        seconds: UInt64,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let gate = AppStateTimeoutGate<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                Task {
+                    do {
+                        let result = try await operation()
+                        await gate.resume(.success(result), continuation: continuation)
+                    } catch {
+                        await gate.resume(.failure(error), continuation: continuation)
+                    }
+                }
+
+                Task {
+                    try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                    await gate.resume(
+                        .failure(NSError(
+                            domain: "AppState",
+                            code: -1001,
+                            userInfo: [NSLocalizedDescriptionKey: "The operation took too long."]
+                        )),
+                        continuation: continuation
+                    )
+                }
+            }
+        } onCancel: {
+            Task {
+                await gate.cancel()
+            }
+        }
+    }
+}
+
+private actor AppStateTimeoutGate<T> {
+    private var didResume = false
+
+    func resume(_ result: Result<T, Error>, continuation: CheckedContinuation<T, Error>) {
+        guard !didResume else { return }
+        didResume = true
+
+        switch result {
+        case .success(let value):
+            continuation.resume(returning: value)
+        case .failure(let error):
+            continuation.resume(throwing: error)
+        }
+    }
+
+    func cancel() {
+        didResume = true
     }
 }

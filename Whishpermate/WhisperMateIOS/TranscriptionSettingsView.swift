@@ -12,7 +12,7 @@ struct TranscriptionSettingsView: View {
         VStack(spacing: 0) {
             Picker("Feature", selection: $selectedTab) {
                 Text("Dictionary").tag(0)
-                Text("Tone & Style").tag(1)
+                Text("Mode").tag(1)
                 Text("Shortcuts").tag(2)
             }
             .pickerStyle(.segmented)

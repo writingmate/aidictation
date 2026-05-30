@@ -1,7 +1,11 @@
 import Foundation
+
+#if canImport(Sentry)
 import Sentry
+#endif
 import WhisperMateShared
 
+#if canImport(Sentry)
 enum SentryTelemetry {
     private static var started = false
 
@@ -178,3 +182,29 @@ enum SentryTelemetry {
         #endif
     }
 }
+#else
+enum SentryTelemetry {
+    static func start() {
+        DebugLog.warning("Sentry module unavailable; crash reporting disabled", context: "Sentry")
+    }
+
+    static func addBreadcrumb(
+        _: String,
+        category _: String,
+        data _: [String: Any] = [:]
+    ) {}
+
+    static func captureError(_: String, context _: String?) {}
+
+    static func recordAudioDeviceEvent(
+        _: String,
+        device _: AudioDeviceManager.AudioDevice?,
+        mode _: String? = nil,
+        fallback _: Bool = false
+    ) {}
+
+    static func recordAudioEngineEvent(_: String, reason _: String? = nil) {}
+
+    static func recordOnboardingStep(_: String, step _: String, data _: [String: Any] = [:]) {}
+}
+#endif

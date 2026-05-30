@@ -38,6 +38,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         #endif
     }
 
+    private var initializationTask: Task<Void, Error>?
     private var runtimeBridge: NSObject?
 
     private init() {}
@@ -48,28 +49,49 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             throw runtimeError(Self.unavailableMessage)
         }
 
-        let currentState = await MainActor.run { state }
-        guard case .notInitialized = currentState else {
+        if let initializationTask {
+            try await initializationTask.value
             return
         }
 
-        await MainActor.run {
-            state = .downloading
+        let currentState = await MainActor.run { state }
+        switch currentState {
+        case .notInitialized, .error:
+            break
+        case .downloading, .initializing:
+            return
+        case .ready, .transcribing:
+            return
         }
 
-        let bridge = try loadRuntimeBridge()
+        let task = Task<Void, Error> {
+            await MainActor.run {
+                state = .downloading
+            }
+
+            let bridge = try loadRuntimeBridge()
+
+            do {
+                try await initializeRuntimeBridge(bridge)
+                await MainActor.run {
+                    state = .ready
+                    isModelDownloaded = true
+                }
+            } catch {
+                await MainActor.run {
+                    state = .error(error.localizedDescription)
+                    isModelDownloaded = false
+                }
+                throw error
+            }
+        }
+        initializationTask = task
 
         do {
-            try await initializeRuntimeBridge(bridge)
-            await MainActor.run {
-                state = .ready
-                isModelDownloaded = true
-            }
+            try await task.value
+            initializationTask = nil
         } catch {
-            await MainActor.run {
-                state = .error(error.localizedDescription)
-                isModelDownloaded = false
-            }
+            initializationTask = nil
             throw error
         }
     }
@@ -82,6 +104,10 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
 
         let currentState = await MainActor.run { state }
         if case .notInitialized = currentState {
+            try await initialize()
+        } else if case .downloading = currentState {
+            try await initialize()
+        } else if case .initializing = currentState {
             try await initialize()
         }
 
@@ -103,6 +129,45 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             }
             throw error
         }
+    }
+
+    public func transcribeDiarized(audioURL: URL) async throws -> String {
+        guard Self.isRuntimeSupported else {
+            await setUnavailableState()
+            throw runtimeError(Self.unavailableMessage)
+        }
+
+        let currentState = await MainActor.run { state }
+        if case .notInitialized = currentState {
+            try await initialize()
+        } else if case .downloading = currentState {
+            try await initialize()
+        } else if case .initializing = currentState {
+            try await initialize()
+        }
+
+        let bridge = try loadRuntimeBridge()
+
+        await MainActor.run {
+            state = .transcribing
+        }
+
+        do {
+            let text = try await transcribeDiarizedWithRuntimeBridge(bridge, audioPath: audioURL.path)
+            await MainActor.run {
+                state = .ready
+            }
+            return text
+        } catch {
+            await MainActor.run {
+                state = .error(error.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    public func transcribeMeeting(audioURL: URL) async throws -> String {
+        try await transcribeDiarized(audioURL: audioURL)
     }
 
     public func cleanup() {
@@ -210,6 +275,29 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
                     continuation.resume(returning: text as String)
                 } else {
                     continuation.resume(throwing: self.runtimeError((message as String?) ?? "Offline transcription failed."))
+                }
+            }
+
+            typealias Function = @convention(c) (AnyObject, Selector, NSString, @escaping @convention(block) (NSString?, NSString?) -> Void) -> Void
+            unsafeBitCast(method, to: Function.self)(bridge, selector, audioPath as NSString, completion)
+        }
+    }
+
+    private func transcribeDiarizedWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let selector = NSSelectorFromString("transcribeDiarizedAudioAtPath:completion:")
+            guard bridge.responds(to: selector),
+                  let method = bridge.method(for: selector)
+            else {
+                continuation.resume(throwing: runtimeError("Offline runtime does not support meeting transcription."))
+                return
+            }
+
+            let completion: @convention(block) (NSString?, NSString?) -> Void = { text, message in
+                if let text {
+                    continuation.resume(returning: text as String)
+                } else {
+                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Meeting transcription failed."))
                 }
             }
 

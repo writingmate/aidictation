@@ -35,8 +35,10 @@
     <true/>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>AI Dictation needs microphone access to transcribe your voice into text.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AI Dictation needs microphone access to transcribe your voice into text.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

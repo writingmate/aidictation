@@ -4,6 +4,7 @@ public enum KeyboardDictationHandoff {
     public enum Command: String, Codable {
         case start
         case stop
+        case shutdown
     }
 
     public static let appGroupIdentifier = "group.com.whispermate.shared"

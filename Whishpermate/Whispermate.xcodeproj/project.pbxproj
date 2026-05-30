@@ -11,19 +11,24 @@
 		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		B2D5E0052F9BF00100000005 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B2D5E0032F9BF00100000003 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B2D5E0042F9BF00100000004 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
+		B2D5E0052F9BF00100000005 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		BDFC47F5E1B86E447DC841F2 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C12A3A102ED4CFAA002D97E6 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A0F2ED4CFAA002D97E6 /* Supabase */; };
 		C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A132ED4D0AA002D97E6 /* Auth */; };
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
 		D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */; };
 		D1B200012F65000200000005 /* PermissionFlowRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		D1B200012F65000200000012 /* PermissionFlow_PermissionFlow.bundle in Resources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */; };
+		D7A900012F72000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D7A900012F72000100000002 /* AppIntents.framework */; };
+		D800E78DFFA88DCED50EE9F9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC33D501A203B8AEFB7871DF /* Foundation.framework */; };
+		DA93F0D2F436F9AF6A241959 /* WhisperMateLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DBA987B2CD71DDC4710889EA /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -49,12 +54,26 @@
 			remoteGlobalIDString = 75F76DD9E51FB4E901E3F114;
 			remoteInfo = ParakeetRuntime;
 		};
+		446CE3EEF1BCA2448C732847 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C1E7D2AC2EBA925200A07338;
+			remoteInfo = WhisperMateShared;
+		};
 		8B5D8A882F6500020000000C /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = D1B200012F6500020000000B;
 			remoteInfo = PermissionFlowRuntime;
+		};
+		B313879F2E06796ED059DF43 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10EB843CCBD61B851E66788C;
+			remoteInfo = WhisperMateLiveActivity;
 		};
 		C1E7D30A2EBA92C900A07338 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -94,6 +113,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				B2D5E0032F9BF00100000003 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */,
+				DA93F0D2F436F9AF6A241959 /* WhisperMateLiveActivity.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -106,16 +126,6 @@
 			files = (
 				B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */,
 				B2D5E0052F9BF00100000005 /* ParakeetRuntime.framework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		C1E7D3202EBA94EE00A07338 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -136,15 +146,21 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardDictationLiveActivity.swift; sourceTree = "<group>"; };
 		4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParakeetRuntimeBridge.swift; sourceTree = "<group>"; };
+		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ParakeetRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE643F2ED8417000D24235 /* AIDictation.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIDictation.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64402ED8417000D24235 /* WhisperMateIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperMateIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WhisperMateShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionFlowRuntimeBridge.swift; sourceTree = "<group>"; };
 		D1B200012F65000200000002 /* PermissionFlowRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = PermissionFlowRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PermissionFlow_PermissionFlow.bundle; sourceTree = BUILT_PRODUCTS_DIR; };
+		D7A900012F72000100000002 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks/AppIntents.framework; sourceTree = DEVELOPER_DIR; };
+		DC33D501A203B8AEFB7871DF /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		DD26FE6C4F67FD01DC7E517E /* WhisperMateLiveActivity.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = WhisperMateLiveActivity.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -224,14 +240,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		D1B200012F65000200000009 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		C1E7D2AA2EBA925200A07338 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -259,9 +267,36 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1B200012F65000200000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E6F0098B12ED40FEEDA89B1C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D7A900012F72000100000001 /* AppIntents.framework in Frameworks */,
+				D800E78DFFA88DCED50EE9F9 /* Foundation.framework in Frameworks */,
+				DBA987B2CD71DDC4710889EA /* WhisperMateShared.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		7DA206F35D005C2CFE8F218A /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				D7A900012F72000100000002 /* AppIntents.framework */,
+				DC33D501A203B8AEFB7871DF /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		AE72061A8B5F2469574714D4 /* ParakeetRuntime */ = {
 			isa = PBXGroup;
 			children = (
@@ -281,6 +316,7 @@
 		C12A3A0E2ED4CFAA002D97E6 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				7DA206F35D005C2CFE8F218A /* iOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -302,6 +338,8 @@
 				D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */,
 				AE72061A8B5F2469574714D4 /* ParakeetRuntime */,
 				B55B10012F65000200000006 /* PermissionFlowRuntime */,
+				D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */,
+				F1D579F6CC1A6C2F5518960B /* WhisperMateLiveActivity */,
 			);
 			sourceTree = "<group>";
 		};
@@ -311,6 +349,17 @@
 				C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */,
 			);
 			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		F1D579F6CC1A6C2F5518960B /* WhisperMateLiveActivity */ = {
+			isa = PBXGroup;
+			children = (
+				19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */,
+				5D82849D268DF9E045FAFE3E /* Info.plist */,
+				DD26FE6C4F67FD01DC7E517E /* WhisperMateLiveActivity.entitlements */,
+			);
+			name = WhisperMateLiveActivity;
+			path = WhisperMateLiveActivity;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -340,6 +389,24 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
+		10EB843CCBD61B851E66788C /* WhisperMateLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A76BBEFD447F26D6FA71142D /* Build configuration list for PBXNativeTarget "WhisperMateLiveActivity" */;
+			buildPhases = (
+				3C430E1720FF633739C42B77 /* Sources */,
+				E6F0098B12ED40FEEDA89B1C /* Frameworks */,
+				4374118F75FD5A6D174CFE24 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				981A9FD40B93781E63FF1BB0 /* PBXTargetDependency */,
+			);
+			name = WhisperMateLiveActivity;
+			productName = WhisperMateLiveActivity;
+			productReference = D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = D7237D61A02B83B40C74870F /* Build configuration list for PBXNativeTarget "ParakeetRuntime" */;
@@ -359,27 +426,6 @@
 			);
 			productName = ParakeetRuntime;
 			productReference = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */;
-			productType = "com.apple.product-type.framework";
-		};
-		D1B200012F6500020000000B /* PermissionFlowRuntime */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = D1B200012F65000200000010 /* Build configuration list for PBXNativeTarget "PermissionFlowRuntime" */;
-			buildPhases = (
-				D1B200012F65000200000007 /* Headers */,
-				D1B200012F65000200000008 /* Sources */,
-				D1B200012F65000200000009 /* Frameworks */,
-				D1B200012F6500020000000A /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = PermissionFlowRuntime;
-			packageProductDependencies = (
-				D1A1F1002F65000100000002 /* PermissionFlow */,
-			);
-			productName = PermissionFlowRuntime;
-			productReference = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */;
 			productType = "com.apple.product-type.framework";
 		};
 		C18566D22EA0D31000B46F55 /* Whispermate */ = {
@@ -445,6 +491,7 @@
 				C1E7D30B2EBA92C900A07338 /* PBXTargetDependency */,
 				C1E7D31A2EBA94A600A07338 /* PBXTargetDependency */,
 				931DC8AE381DB1589850BC93 /* PBXTargetDependency */,
+				0A36E0A40F2F7FA074746FAA /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C1E7D2EF2EBA92A500A07338 /* WhisperMateIOS */,
@@ -475,6 +522,27 @@
 			productName = WhisperMateKeyboard;
 			productReference = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		D1B200012F6500020000000B /* PermissionFlowRuntime */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D1B200012F65000200000010 /* Build configuration list for PBXNativeTarget "PermissionFlowRuntime" */;
+			buildPhases = (
+				D1B200012F65000200000007 /* Headers */,
+				D1B200012F65000200000008 /* Sources */,
+				D1B200012F65000200000009 /* Frameworks */,
+				D1B200012F6500020000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PermissionFlowRuntime;
+			packageProductDependencies = (
+				D1A1F1002F65000100000002 /* PermissionFlow */,
+			);
+			productName = PermissionFlowRuntime;
+			productReference = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */;
+			productType = "com.apple.product-type.framework";
 		};
 /* End PBXNativeTarget section */
 
@@ -526,19 +594,20 @@
 				C1E7D3042EBA92C900A07338 /* WhisperMateKeyboard */,
 				75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */,
 				D1B200012F6500020000000B /* PermissionFlowRuntime */,
+				10EB843CCBD61B851E66788C /* WhisperMateLiveActivity */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		9DA5E095511DD639CCB45319 /* Resources */ = {
+		4374118F75FD5A6D174CFE24 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		D1B200012F6500020000000A /* Resources */ = {
+		9DA5E095511DD639CCB45319 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -574,12 +643,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1B200012F6500020000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		C1F4D2A82F5E4A9B00A1CDEF /* Copy Secrets.plist */ = {
 			isa = PBXShellScriptBuildPhase;
-			basedOnDependencyAnalysis = 0;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -611,11 +686,11 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		D1B200012F65000200000008 /* Sources */ = {
+		3C430E1720FF633739C42B77 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */,
+				D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -647,9 +722,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D1B200012F65000200000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		0A36E0A40F2F7FA074746FAA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = WhisperMateLiveActivity;
+			target = 10EB843CCBD61B851E66788C /* WhisperMateLiveActivity */;
+			targetProxy = B313879F2E06796ED059DF43 /* PBXContainerItemProxy */;
+		};
 		931DC8AD381DB1589850BC92 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = ParakeetRuntime;
@@ -668,11 +757,11 @@
 			target = 75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */;
 			targetProxy = 42E01EF4CF78A5915AA93F10 /* PBXContainerItemProxy */;
 		};
-		D1B200012F6500020000000D /* PBXTargetDependency */ = {
+		981A9FD40B93781E63FF1BB0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = PermissionFlowRuntime;
-			target = D1B200012F6500020000000B /* PermissionFlowRuntime */;
-			targetProxy = 8B5D8A882F6500020000000C /* PBXContainerItemProxy */;
+			name = WhisperMateShared;
+			target = C1E7D2AC2EBA925200A07338 /* WhisperMateShared */;
+			targetProxy = 446CE3EEF1BCA2448C732847 /* PBXContainerItemProxy */;
 		};
 		C1E7D30B2EBA92C900A07338 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -694,9 +783,45 @@
 			target = C1E7D2AC2EBA925200A07338 /* WhisperMateShared */;
 			targetProxy = C1E7D3232EBA950800A07338 /* PBXContainerItemProxy */;
 		};
+		D1B200012F6500020000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = PermissionFlowRuntime;
+			target = D1B200012F6500020000000B /* PermissionFlowRuntime */;
+			targetProxy = 8B5D8A882F6500020000000C /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		292F757CF90C3FB4BE00B236 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = WhisperMateLiveActivity/WhisperMateLiveActivity.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 66;
+				DEVELOPMENT_TEAM = G7DJ6P37KU;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WhisperMateLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.0.65;
+				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		33BC32C2C6ED049D17F2A7A0 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -710,12 +835,12 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/Frameworks",
 				);
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
@@ -741,12 +866,12 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/Frameworks",
 				);
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.0.83;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
@@ -759,63 +884,34 @@
 			};
 			name = Release;
 		};
-		D1B200012F6500020000000E /* Debug */ = {
+		36BE6A3641AFD70090546806 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = WhisperMateLiveActivity/WhisperMateLiveActivity.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 83;
-				DEFINES_MODULE = YES;
-				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 66;
-				DYLIB_INSTALL_NAME_BASE = "@rpath";
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				CURRENT_PROJECT_VERSION = 66;
+				DEVELOPMENT_TEAM = G7DJ6P37KU;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WhisperMateLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/Frameworks",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.permissionflow-runtime";
-				PRODUCT_NAME = PermissionFlowRuntime;
-				SDKROOT = macosx;
+				MARKETING_VERSION = 0.0.65;
+				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				VERSIONING_SYSTEM = "apple-generic";
-				VERSION_INFO_PREFIX = "";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
-		};
-		D1B200012F6500020000000F /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 83;
-				DEFINES_MODULE = YES;
-				DYLIB_COMPATIBILITY_VERSION = 1;
-				DYLIB_CURRENT_VERSION = 66;
-				DYLIB_INSTALL_NAME_BASE = "@rpath";
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.permissionflow-runtime";
-				PRODUCT_NAME = PermissionFlowRuntime;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
-				VERSIONING_SYSTEM = "apple-generic";
-				VERSION_INFO_PREFIX = "";
-			};
-			name = Release;
 		};
 		C18566DC2EA0D31100B46F55 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1247,9 +1343,76 @@
 			};
 			name = Release;
 		};
+		D1B200012F6500020000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 83;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 66;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.permissionflow-runtime";
+				PRODUCT_NAME = PermissionFlowRuntime;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		D1B200012F6500020000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 83;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 66;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.permissionflow-runtime";
+				PRODUCT_NAME = PermissionFlowRuntime;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A76BBEFD447F26D6FA71142D /* Build configuration list for PBXNativeTarget "WhisperMateLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				292F757CF90C3FB4BE00B236 /* Release */,
+				36BE6A3641AFD70090546806 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		C18566CE2EA0D31000B46F55 /* Build configuration list for PBXProject "Whispermate" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1295,20 +1458,20 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		D7237D61A02B83B40C74870F /* Build configuration list for PBXNativeTarget "ParakeetRuntime" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				364996A27A1044BAC76152E6 /* Release */,
-				33BC32C2C6ED049D17F2A7A0 /* Debug */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		D1B200012F65000200000010 /* Build configuration list for PBXNativeTarget "PermissionFlowRuntime" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				D1B200012F6500020000000F /* Release */,
 				D1B200012F6500020000000E /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D7237D61A02B83B40C74870F /* Build configuration list for PBXNativeTarget "ParakeetRuntime" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				364996A27A1044BAC76152E6 /* Release */,
+				33BC32C2C6ED049D17F2A7A0 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

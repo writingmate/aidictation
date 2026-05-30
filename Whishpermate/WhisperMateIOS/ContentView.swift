@@ -1,4 +1,7 @@
 import AVFoundation
+#if canImport(ActivityKit)
+    import ActivityKit
+#endif
 import Combine
 import MediaPlayer
 import SwiftUI
@@ -1005,9 +1008,21 @@ struct ContentView: View {
             startKeyboardDictation(sessionID: pending.sessionID)
         case .stop:
             stopKeyboardDictation(sessionID: pending.sessionID)
+        case .shutdown:
+            shutdownKeyboardDictation(sessionID: pending.sessionID)
         @unknown default:
             DebugLog.info("unknown keyboard command=\(pending.command.rawValue)", context: "KEYBOARD_DIAG")
         }
+    }
+
+    private func shutdownKeyboardDictation(sessionID: String?) {
+        DebugLog.info("shutdownKeyboardDictation sessionID=\(sessionID ?? "nil") inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
+        activeKeyboardDictationSessionID = nil
+        showKeyboardReturnScreen = false
+        keyboardBridgeAliveUntil = nil
+        inlineRecording.setKeyboardMeterSessionID(nil)
+        inlineRecording.stopListening()
+        KeyboardDictationHandoff.clearActiveSession()
     }
 
     private var shouldKeepKeyboardCommandPolling: Bool {
@@ -1336,10 +1351,25 @@ private enum InlineRecordingState: Equatable {
 }
 
 private final class RecordingNowPlayingStatus {
+    private enum LiveActivityPhase {
+        case listening
+        case processing
+    }
+
     private var isActive = false
+    private var startedAt = Date()
+    private var liveActivitySessionID: String?
+
+    #if canImport(ActivityKit)
+        @available(iOS 16.2, *)
+        private var liveActivity: Activity<KeyboardDictationActivityAttributes>? {
+            Activity<KeyboardDictationActivityAttributes>.activities.first
+        }
+    #endif
 
     func start() {
         isActive = true
+        startedAt = Date()
 
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: "AI Dictation",
@@ -1355,7 +1385,13 @@ private final class RecordingNowPlayingStatus {
 
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         UIApplication.shared.beginReceivingRemoteControlEvents()
+        startOrUpdateLiveActivity(phase: .listening)
         DebugLog.info("recording now playing status started", context: "KEYBOARD_DIAG")
+    }
+
+    func processing() {
+        guard isActive else { return }
+        startOrUpdateLiveActivity(phase: .processing)
     }
 
     func stop() {
@@ -1366,7 +1402,55 @@ private final class RecordingNowPlayingStatus {
         isActive = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         UIApplication.shared.endReceivingRemoteControlEvents()
+        endLiveActivity()
         DebugLog.info("recording now playing status stopped", context: "KEYBOARD_DIAG")
+    }
+
+    private func startOrUpdateLiveActivity(phase: LiveActivityPhase) {
+        #if canImport(ActivityKit)
+            guard #available(iOS 17.0, *), ActivityAuthorizationInfo().areActivitiesEnabled else {
+                return
+            }
+
+            Task {
+                let sessionID = KeyboardDictationHandoff.activeSessionID() ?? UUID().uuidString
+                let activityPhase: KeyboardDictationActivityAttributes.Phase = phase == .processing ? .processing : .listening
+                let state = KeyboardDictationActivityAttributes.ContentState(phase: activityPhase, startedAt: startedAt)
+
+                if let liveActivity {
+                    await liveActivity.update(ActivityContent(state: state, staleDate: nil))
+                    liveActivitySessionID = liveActivity.attributes.sessionID
+                    return
+                }
+
+                do {
+                    let attributes = KeyboardDictationActivityAttributes(sessionID: sessionID)
+                    let activity = try Activity.request(
+                        attributes: attributes,
+                        content: ActivityContent(state: state, staleDate: nil),
+                        pushType: nil
+                    )
+                    liveActivitySessionID = activity.attributes.sessionID
+                    DebugLog.info("live activity started sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+                } catch {
+                    DebugLog.info("failed to start live activity: \(error)", context: "KEYBOARD_DIAG")
+                }
+            }
+        #endif
+    }
+
+    private func endLiveActivity() {
+        #if canImport(ActivityKit)
+            guard #available(iOS 17.0, *) else { return }
+
+            Task {
+                for activity in Activity<KeyboardDictationActivityAttributes>.activities {
+                    let state = KeyboardDictationActivityAttributes.ContentState(phase: .processing, startedAt: startedAt)
+                    await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .immediate)
+                }
+                liveActivitySessionID = nil
+            }
+        #endif
     }
 }
 
@@ -1600,6 +1684,18 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
+    func stopListening() {
+        _ = audioRecorder.stopRecording(deactivateAudioSession: true)
+        recordingStatus.stop()
+        recordingStartTime = nil
+        recorderHasStarted = false
+        state = .idle
+        audioLevel = 0
+        frequencyBands = Array(repeating: 0.0, count: 10)
+        completionText = nil
+        errorMessage = nil
+    }
+
     private func startRecording() {
         dismissError()
         DebugLog.info("inline startRecording permission=\(AVAudioSession.sharedInstance().recordPermission.rawValue)", context: "KEYBOARD_DIAG")
@@ -1676,6 +1772,8 @@ private final class InlineRecordingCoordinator: ObservableObject {
         DebugLog.info("inline stopRecording state=\(state) preset=\(selectedPreset?.name ?? "dictation")", context: "KEYBOARD_DIAG")
         if !keepAudioBridgeAliveAfterStop {
             recordingStatus.stop()
+        } else {
+            recordingStatus.processing()
         }
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             state = .processing

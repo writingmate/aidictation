@@ -105,8 +105,11 @@ async function createCertificate(csrContent) {
 }
 
 async function listDistributionCertificates() {
-  const response = await request("GET", "/v1/certificates?filter[certificateType]=IOS_DISTRIBUTION&limit=200");
-  return response.data || [];
+  const response = await request("GET", "/v1/certificates?limit=200");
+  return (response.data || []).filter((certificate) => {
+    const type = certificate.attributes && certificate.attributes.certificateType;
+    return typeof type === "string" && type.includes("DISTRIBUTION");
+  });
 }
 
 async function certificateProfileCount(certificateId) {
@@ -120,8 +123,11 @@ async function deleteCertificate(certificateId) {
 
 async function cleanupOrphanDistributionCertificates() {
   const certificates = await listDistributionCertificates();
+  console.log(`Found ${certificates.length} distribution certificate(s) in App Store Connect`);
   for (const certificate of certificates) {
+    const type = certificate.attributes && certificate.attributes.certificateType;
     const profileCount = await certificateProfileCount(certificate.id);
+    console.log(`Distribution certificate ${certificate.id} (${type}) has ${profileCount} profile relationship(s)`);
     if (profileCount === 0) {
       console.log(`Deleting orphan iOS distribution certificate ${certificate.id}`);
       await deleteCertificate(certificate.id);

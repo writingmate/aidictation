@@ -3,6 +3,13 @@ import UIKit
 import WhisperMateShared
 
 class KeyboardViewController: UIInputViewController {
+    private enum PrimaryButtonState: String {
+        case startRequiresApp
+        case finishRecording
+        case processing
+        case startViaReadyApp
+    }
+
     // MARK: - Properties
 
     private var hostingController: UIHostingController<KeyboardRecordingView>!
@@ -175,23 +182,37 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func handlePrimaryAction() {
-        DebugLog.info("primary button pressed state=\(keyboardState)", context: "KEYBOARD_DIAG")
-        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState)")
-        switch keyboardState {
-        case .idle:
-            startRecording()
-        case .recording, .paused:
+        let buttonState = primaryButtonState
+        DebugLog.info("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue)")
+        switch buttonState {
+        case .startRequiresApp:
+            startRecording(openAppIfNeeded: true)
+        case .startViaReadyApp:
+            startRecording(openAppIfNeeded: false)
+        case .finishRecording:
             stopRecordingAndTranscribe()
         case .processing:
-            break
-        @unknown default:
             break
         }
     }
 
     // MARK: - Actions
 
-    private func startRecording() {
+    private var primaryButtonState: PrimaryButtonState {
+        switch keyboardState {
+        case .idle:
+            return KeyboardDictationHandoff.isAppReady() ? .startViaReadyApp : .startRequiresApp
+        case .recording, .paused:
+            return .finishRecording
+        case .processing:
+            return .processing
+        @unknown default:
+            return .processing
+        }
+    }
+
+    private func startRecording(openAppIfNeeded: Bool) {
         let sessionID = KeyboardDictationHandoff.beginSession()
         KeyboardDictationHandoff.publish(command: .start, sessionID: sessionID)
         DebugLog.info("startRecording requested sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
@@ -202,7 +223,7 @@ class KeyboardViewController: UIInputViewController {
         statusLabel.text = ""
         statusLabel.isHidden = true
 
-        if KeyboardDictationHandoff.isAppReady() {
+        if !openAppIfNeeded {
             DebugLog.info("startRecording using ready app bridge sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
             KeyboardDictationHandoff.appendDiagnostic("startRecording using ready app bridge sessionID=\(sessionID)")
             keyboardState = .recording

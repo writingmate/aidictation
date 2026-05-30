@@ -112,9 +112,18 @@ async function listDistributionCertificates() {
   });
 }
 
-async function certificateProfileCount(certificateId) {
-  const response = await request("GET", `/v1/certificates/${certificateId}/profiles?limit=1`);
-  return (response.data || []).length;
+async function profileCertificateIds() {
+  const response = await request("GET", "/v1/profiles?limit=200&fields[profiles]=name,uuid,profileType,certificates");
+  const ids = new Set();
+  for (const profile of response.data || []) {
+    const certificates = profile.relationships &&
+      profile.relationships.certificates &&
+      profile.relationships.certificates.data;
+    for (const certificate of certificates || []) {
+      ids.add(certificate.id);
+    }
+  }
+  return ids;
 }
 
 async function deleteCertificate(certificateId) {
@@ -123,12 +132,13 @@ async function deleteCertificate(certificateId) {
 
 async function cleanupOrphanDistributionCertificates() {
   const certificates = await listDistributionCertificates();
+  const referencedCertificateIds = await profileCertificateIds();
   console.log(`Found ${certificates.length} distribution certificate(s) in App Store Connect`);
   for (const certificate of certificates) {
     const type = certificate.attributes && certificate.attributes.certificateType;
-    const profileCount = await certificateProfileCount(certificate.id);
-    console.log(`Distribution certificate ${certificate.id} (${type}) has ${profileCount} profile relationship(s)`);
-    if (profileCount === 0) {
+    const isReferenced = referencedCertificateIds.has(certificate.id);
+    console.log(`Distribution certificate ${certificate.id} (${type}) referenced by profile: ${isReferenced}`);
+    if (!isReferenced) {
       console.log(`Deleting orphan iOS distribution certificate ${certificate.id}`);
       await deleteCertificate(certificate.id);
     }

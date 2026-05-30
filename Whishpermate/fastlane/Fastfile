@@ -100,8 +100,10 @@ platform :ios do
       end
       app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s
       keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s
+      live_activity_profile = ENV["IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME"].to_s
       UI.user_error!("IOS_APPSTORE_PROFILE_NAME is required for CI signing") if app_profile.empty?
       UI.user_error!("IOS_KEYBOARD_APPSTORE_PROFILE_NAME is required for CI signing") if keyboard_profile.empty?
+      UI.user_error!("IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME is required for CI signing") if live_activity_profile.empty?
 
       update_code_signing_settings(
         use_automatic_signing: false,
@@ -127,6 +129,16 @@ platform :ios do
         use_automatic_signing: false,
         path: "Whispermate.xcodeproj",
         team_id: team_id,
+        targets: ["WhisperMateLiveActivity"],
+        build_configurations: ["Release"],
+        code_sign_identity: "Apple Distribution",
+        **provisioning_profile_settings(live_activity_profile)
+      )
+
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: "Whispermate.xcodeproj",
+        team_id: team_id,
         targets: ["ParakeetRuntime", "PermissionFlowRuntime"],
         build_configurations: ["Release"],
         code_sign_identity: "Apple Distribution"
@@ -139,12 +151,15 @@ platform :ios do
         signingCertificate: "Apple Distribution",
         provisioningProfiles: {
           "com.whispermate.ios" => app_profile,
-          "com.whispermate.ios.keyboard" => keyboard_profile
+          "com.whispermate.ios.keyboard" => keyboard_profile,
+          "com.whispermate.ios.liveactivity" => live_activity_profile
         }
       }
     else
       app_profile = ENV["IOS_APPSTORE_PROFILE_NAME"].to_s.empty? ? "73de4d13-37e6-49ca-a9f0-35378e49c33d" : ENV["IOS_APPSTORE_PROFILE_NAME"]
       keyboard_profile = ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"].to_s.empty? ? "db6f8085-4d33-4b22-af3e-741fdf9c2c29" : ENV["IOS_KEYBOARD_APPSTORE_PROFILE_NAME"]
+      live_activity_profile = ENV["IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME"].to_s
+      UI.user_error!("IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME is required to export the Live Activity extension") if live_activity_profile.empty?
 
       gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual"
       gym_options[:export_options] = {
@@ -152,7 +167,8 @@ platform :ios do
         signingStyle: "manual",
         provisioningProfiles: {
           "com.whispermate.ios" => app_profile,
-          "com.whispermate.ios.keyboard" => keyboard_profile
+          "com.whispermate.ios.keyboard" => keyboard_profile,
+          "com.whispermate.ios.liveactivity" => live_activity_profile
         }
       }
     end

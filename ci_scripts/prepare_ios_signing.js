@@ -8,6 +8,8 @@ const path = require("path");
 
 const appBundleId = "com.whispermate.ios";
 const keyboardBundleId = "com.whispermate.ios.keyboard";
+const liveActivityBundleId = "com.whispermate.ios.liveactivity";
+const sharedAppGroupId = "group.com.whispermate.shared";
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -79,13 +81,75 @@ async function request(method, route, body) {
   return json;
 }
 
-async function bundleIdFor(identifier) {
+async function bundleIdFor(identifier, name) {
   const response = await request("GET", `/v1/bundleIds?filter[identifier]=${encodeURIComponent(identifier)}&limit=1`);
   const bundle = response.data && response.data[0];
-  if (!bundle) {
+  if (bundle) {
+    return bundle.id;
+  }
+
+  if (!name) {
     throw new Error(`No Apple Developer bundle ID found for ${identifier}`);
   }
-  return bundle.id;
+
+  const createResponse = await request("POST", "/v1/bundleIds", {
+    data: {
+      type: "bundleIds",
+      attributes: {
+        identifier,
+        name,
+        platform: "IOS"
+      }
+    }
+  });
+  console.log(`Created Apple Developer bundle ID ${identifier}`);
+  return createResponse.data.id;
+}
+
+async function appGroupsCapabilityFor(bundleId) {
+  const response = await request("GET", `/v1/bundleIds/${bundleId}/bundleIdCapabilities?fields[bundleIdCapabilities]=capabilityType,settings&limit=200`);
+  return (response.data || []).find((capability) => capability.attributes && capability.attributes.capabilityType === "APP_GROUPS");
+}
+
+function appGroupsCapabilityPayload(bundleId) {
+  return {
+    data: {
+      type: "bundleIdCapabilities",
+      attributes: {
+        capabilityType: "APP_GROUPS",
+        settings: [
+          {
+            key: "APP_GROUP_IDS",
+            options: [
+              {
+                key: sharedAppGroupId,
+                enabled: true
+              }
+            ]
+          }
+        ]
+      },
+      relationships: {
+        bundleId: {
+          data: {
+            type: "bundleIds",
+            id: bundleId
+          }
+        }
+      }
+    }
+  };
+}
+
+async function ensureAppGroupsCapability(bundleId, identifier) {
+  const existingCapability = await appGroupsCapabilityFor(bundleId);
+  if (existingCapability) {
+    console.log(`App Groups capability already enabled for ${identifier}`);
+    return;
+  }
+
+  await request("POST", "/v1/bundleIdCapabilities", appGroupsCapabilityPayload(bundleId));
+  console.log(`Enabled App Groups capability for ${identifier}`);
 }
 
 async function createCertificate(csrContent) {
@@ -248,13 +312,22 @@ async function main() {
     bundleId: await bundleIdFor(keyboardBundleId),
     certificateId: certificate.id
   });
+  const liveActivityBundle = await bundleIdFor(liveActivityBundleId, "WhisperMate Live Activity");
+  await ensureAppGroupsCapability(liveActivityBundle, liveActivityBundleId);
+  const liveActivityProfile = await createProfile({
+    name: `WhisperMate Live Activity App Store CI ${runId}`,
+    bundleId: liveActivityBundle,
+    certificateId: certificate.id
+  });
 
   installProfile(appProfile);
   installProfile(keyboardProfile);
+  installProfile(liveActivityProfile);
 
   appendGitHubEnv({
     IOS_APPSTORE_PROFILE_NAME: appProfile.uuid,
-    IOS_KEYBOARD_APPSTORE_PROFILE_NAME: keyboardProfile.uuid
+    IOS_KEYBOARD_APPSTORE_PROFILE_NAME: keyboardProfile.uuid,
+    IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME: liveActivityProfile.uuid
   });
 }
 

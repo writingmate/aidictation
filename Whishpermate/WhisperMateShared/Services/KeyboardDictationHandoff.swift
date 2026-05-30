@@ -23,11 +23,13 @@ public enum KeyboardDictationHandoff {
     private static let meterAudioLevelKey = "keyboardDictation.meterAudioLevel"
     private static let meterFrequencyBandsKey = "keyboardDictation.meterFrequencyBands"
     private static let meterTimestampKey = "keyboardDictation.meterTimestamp"
+    private static let appReadyTimestampKey = "keyboardDictation.appReadyTimestamp"
     private static let diagnosticsKey = "keyboardDictation.diagnostics"
     private static let pendingTextTTL: TimeInterval = 120
     private static let pendingCommandTTL: TimeInterval = 30
     private static let activeSessionTTL: TimeInterval = 180
     private static let meterTTL: TimeInterval = 2
+    private static let appReadyTTL: TimeInterval = 2
     private static let diagnosticsLimit = 120
 
     private struct PendingCommand: Codable {
@@ -194,6 +196,17 @@ public enum KeyboardDictationHandoff {
         }
 
         return (audioLevel, bands)
+    }
+
+    public static func publishAppReady() {
+        let defaults = defaults
+        defaults.set(Date().timeIntervalSince1970, forKey: appReadyTimestampKey)
+        defaults.synchronize()
+    }
+
+    public static func isAppReady() -> Bool {
+        let timestamp = defaults.double(forKey: appReadyTimestampKey)
+        return timestamp > 0 && Date().timeIntervalSince1970 - timestamp <= appReadyTTL
     }
 
     public static func consumePendingText(for sessionID: String?) -> String? {

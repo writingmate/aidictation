@@ -14,6 +14,7 @@ class KeyboardViewController: UIInputViewController {
     private var isShifted = false
     private var pendingTextTimer: Timer?
     private var recordingMeterTimer: Timer?
+    private var startFallbackTimer: Timer?
     private var activeHandoffSessionID: String?
     private var keyboardHeightConstraint: NSLayoutConstraint?
 
@@ -59,6 +60,7 @@ class KeyboardViewController: UIInputViewController {
         super.viewWillDisappear(animated)
         stopPendingTextTimer()
         stopRecordingMeter()
+        stopStartFallbackTimer()
     }
 
     private func checkInitialPermissions() {
@@ -200,6 +202,20 @@ class KeyboardViewController: UIInputViewController {
         statusLabel.text = ""
         statusLabel.isHidden = true
 
+        if KeyboardDictationHandoff.isAppReady() {
+            DebugLog.info("startRecording using ready app bridge sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("startRecording using ready app bridge sessionID=\(sessionID)")
+            keyboardState = .recording
+            updateKeyboardView(animated: true)
+            startRecordingMeter()
+            startAppOpenFallbackTimer(sessionID: sessionID)
+            return
+        }
+
+        openAppForRecording(sessionID: sessionID)
+    }
+
+    private func openAppForRecording(sessionID: String) {
         guard let url = KeyboardDictationHandoff.makeDictationURL(sessionID: sessionID) else {
             DebugLog.info("failed to build dictation URL sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
             KeyboardDictationHandoff.appendDiagnostic("failed to build dictation URL sessionID=\(sessionID)")
@@ -228,6 +244,30 @@ class KeyboardViewController: UIInputViewController {
             self.updateKeyboardView(animated: true)
             self.startRecordingMeter()
         }
+    }
+
+    private func startAppOpenFallbackTimer(sessionID: String) {
+        stopStartFallbackTimer()
+        let timer = Timer(timeInterval: 1.25, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self,
+                      self.keyboardState == .recording,
+                      self.activeHandoffSessionID == sessionID,
+                      KeyboardDictationHandoff.consumeMeter(for: sessionID) == nil
+                else { return }
+
+                DebugLog.info("ready app bridge did not publish meter; opening app sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+                KeyboardDictationHandoff.appendDiagnostic("ready app bridge did not publish meter; opening app sessionID=\(sessionID)")
+                self.openAppForRecording(sessionID: sessionID)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        startFallbackTimer = timer
+    }
+
+    private func stopStartFallbackTimer() {
+        startFallbackTimer?.invalidate()
+        startFallbackTimer = nil
     }
 
     private func openContainingApp(_ url: URL, completion: @escaping (Bool) -> Void) {
@@ -309,10 +349,12 @@ class KeyboardViewController: UIInputViewController {
         }
 
         keyboardState = .processing
+        stopStartFallbackTimer()
         KeyboardDictationHandoff.publish(command: .stop, sessionID: sessionID)
         DebugLog.info("stopRecording requested sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
         KeyboardDictationHandoff.appendDiagnostic("stopRecording requested sessionID=\(sessionID)")
         stopRecordingMeter()
+        stopStartFallbackTimer()
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
         updateKeyboardView(animated: true)
@@ -433,6 +475,7 @@ class KeyboardViewController: UIInputViewController {
         guard let meter = KeyboardDictationHandoff.consumeMeter(for: sessionID) else {
             return
         }
+        stopStartFallbackTimer()
         if meter.audioLevel > 0.02 {
             DebugLog.info("consume meter sessionID=\(sessionID ?? "nil") level=\(String(format: "%.3f", meter.audioLevel)) bands=\(meter.frequencyBands.count)", context: "KEYBOARD_DIAG")
             KeyboardDictationHandoff.appendDiagnostic("consume meter sessionID=\(sessionID ?? "nil") level=\(String(format: "%.3f", meter.audioLevel)) bands=\(meter.frequencyBands.count)")

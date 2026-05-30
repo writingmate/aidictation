@@ -28,6 +28,7 @@ struct ContentView: View {
     @State private var recordingToShare: Recording?
     @State private var activeKeyboardDictationSessionID: String?
     @State private var showKeyboardReturnScreen = false
+    @State private var keyboardBridgeAliveUntil: Date?
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
     @State private var keyboardCommandPollTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
@@ -961,6 +962,7 @@ struct ContentView: View {
                 self.activeKeyboardDictationSessionID = nil
                 self.showKeyboardReturnScreen = false
                 self.inlineRecording.setKeyboardMeterSessionID(nil)
+                self.keepKeyboardBridgeAlive()
             }
             markRecordingAsNew(recording)
         }
@@ -970,6 +972,7 @@ struct ContentView: View {
         let resolvedSessionID = sessionID ?? KeyboardDictationHandoff.beginSession()
         DebugLog.info("startKeyboardDictation sessionID=\(resolvedSessionID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
         activeKeyboardDictationSessionID = resolvedSessionID
+        keepKeyboardBridgeAlive()
         showKeyboardReturnScreen = true
         inlineRecording.setKeyboardMeterSessionID(resolvedSessionID)
         if inlineRecording.state == .idle {
@@ -981,6 +984,7 @@ struct ContentView: View {
         let resolvedSessionID = sessionID ?? activeKeyboardDictationSessionID ?? KeyboardDictationHandoff.activeSessionID()
         DebugLog.info("stopKeyboardDictation sessionID=\(resolvedSessionID ?? "nil") inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
         activeKeyboardDictationSessionID = resolvedSessionID
+        keepKeyboardBridgeAlive()
         showKeyboardReturnScreen = true
         inlineRecording.setKeyboardMeterSessionID(resolvedSessionID)
         if inlineRecording.state == .recording || inlineRecording.state == .paused {
@@ -1006,8 +1010,10 @@ struct ContentView: View {
     }
 
     private var shouldKeepKeyboardCommandPolling: Bool {
-        activeKeyboardDictationSessionID != nil
+        let hasActiveKeyboardRecording = activeKeyboardDictationSessionID != nil
             && (inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing)
+        let hasLiveKeyboardBridge = keyboardBridgeAliveUntil.map { $0 > Date() } ?? false
+        return hasActiveKeyboardRecording || hasLiveKeyboardBridge
     }
 
     private func startKeyboardCommandPolling() {
@@ -1016,11 +1022,22 @@ struct ContentView: View {
         DebugLog.info("start command polling", context: "KEYBOARD_DIAG")
         keyboardCommandPollTask = Task { @MainActor in
             while !Task.isCancelled {
+                KeyboardDictationHandoff.publishAppReady()
                 drainKeyboardDiagnostics()
                 consumePendingKeyboardCommandIfNeeded()
                 try? await Task.sleep(nanoseconds: 250_000_000)
+                if scenePhase != .active, !shouldKeepKeyboardCommandPolling {
+                    keyboardCommandPollTask = nil
+                    break
+                }
             }
         }
+    }
+
+    private func keepKeyboardBridgeAlive() {
+        keyboardBridgeAliveUntil = Date().addingTimeInterval(120)
+        KeyboardDictationHandoff.publishAppReady()
+        startKeyboardCommandPolling()
     }
 
     private func drainKeyboardDiagnostics() {

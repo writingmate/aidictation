@@ -39,7 +39,7 @@ public struct AIDictationMicButtonVisual: View {
 
                 if style == .keyboard, state == .recording {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 23 * scale, weight: .bold))
+                        .font(.system(size: keyboardCheckmarkSize, weight: .bold))
                         .foregroundColor(iconColor)
                         .transition(.opacity.combined(with: .scale(scale: 0.76)))
                 } else if state == .recording {
@@ -96,6 +96,10 @@ public struct AIDictationMicButtonVisual: View {
 
     private var scale: CGFloat {
         size / MicButtonMetrics.referenceSize
+    }
+
+    private var keyboardCheckmarkSize: CGFloat {
+        size * 0.5
     }
 
     private func barHeight(at index: Int, phase: TimeInterval) -> CGFloat {

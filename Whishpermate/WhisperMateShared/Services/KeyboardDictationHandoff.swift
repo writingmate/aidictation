@@ -1,10 +1,18 @@
 import Foundation
 
 public enum KeyboardDictationHandoff {
+    public enum Command: String {
+        case start
+        case stop
+    }
+
     public static let appGroupIdentifier = "group.com.whispermate.shared"
     public static let openAppNotification = Notification.Name("KeyboardDictationHandoffOpenApp")
     public static let stopAppNotification = Notification.Name("KeyboardDictationHandoffStopApp")
 
+    private static let pendingCommandKey = "keyboardDictation.pendingCommand"
+    private static let pendingCommandSessionIDKey = "keyboardDictation.pendingCommandSessionID"
+    private static let pendingCommandTimestampKey = "keyboardDictation.pendingCommandTimestamp"
     private static let pendingTextKey = "keyboardDictation.pendingText"
     private static let pendingTextSessionIDKey = "keyboardDictation.pendingTextSessionID"
     private static let pendingTextTimestampKey = "keyboardDictation.pendingTextTimestamp"
@@ -15,6 +23,7 @@ public enum KeyboardDictationHandoff {
     private static let meterFrequencyBandsKey = "keyboardDictation.meterFrequencyBands"
     private static let meterTimestampKey = "keyboardDictation.meterTimestamp"
     private static let pendingTextTTL: TimeInterval = 120
+    private static let pendingCommandTTL: TimeInterval = 30
     private static let activeSessionTTL: TimeInterval = 180
     private static let meterTTL: TimeInterval = 2
 
@@ -36,7 +45,9 @@ public enum KeyboardDictationHandoff {
         defaults.set(sessionID, forKey: activeSessionIDKey)
         defaults.set(Date().timeIntervalSince1970, forKey: activeSessionTimestampKey)
         clearPendingText()
+        clearPendingCommand()
         clearMeter()
+        defaults.synchronize()
         return sessionID
     }
 
@@ -55,6 +66,39 @@ public enum KeyboardDictationHandoff {
         return sessionID
     }
 
+    public static func publish(command: Command, sessionID: String?) {
+        let defaults = defaults
+        defaults.set(command.rawValue, forKey: pendingCommandKey)
+        defaults.set(Date().timeIntervalSince1970, forKey: pendingCommandTimestampKey)
+        if let sessionID, !sessionID.isEmpty {
+            defaults.set(sessionID, forKey: pendingCommandSessionIDKey)
+            defaults.set(sessionID, forKey: activeSessionIDKey)
+            defaults.set(Date().timeIntervalSince1970, forKey: activeSessionTimestampKey)
+        } else {
+            defaults.removeObject(forKey: pendingCommandSessionIDKey)
+        }
+        defaults.synchronize()
+    }
+
+    public static func consumePendingCommand() -> (command: Command, sessionID: String?)? {
+        let defaults = defaults
+        guard let rawCommand = defaults.string(forKey: pendingCommandKey),
+              let command = Command(rawValue: rawCommand)
+        else {
+            return nil
+        }
+
+        let timestamp = defaults.double(forKey: pendingCommandTimestampKey)
+        if timestamp > 0, Date().timeIntervalSince1970 - timestamp > pendingCommandTTL {
+            clearPendingCommand()
+            return nil
+        }
+
+        let sessionID = defaults.string(forKey: pendingCommandSessionIDKey)
+        clearPendingCommand()
+        return (command, sessionID)
+    }
+
     public static func publish(text: String, sessionID: String?) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -67,6 +111,7 @@ public enum KeyboardDictationHandoff {
         } else {
             defaults.removeObject(forKey: pendingTextSessionIDKey)
         }
+        defaults.synchronize()
     }
 
     public static func publishMeter(audioLevel: Float, frequencyBands: [Float], sessionID: String?) {
@@ -79,6 +124,7 @@ public enum KeyboardDictationHandoff {
         defaults.set(Double(audioLevel), forKey: meterAudioLevelKey)
         defaults.set(frequencyBands.map(Double.init), forKey: meterFrequencyBandsKey)
         defaults.set(Date().timeIntervalSince1970, forKey: meterTimestampKey)
+        defaults.synchronize()
     }
 
     public static func consumeMeter(for sessionID: String?) -> (audioLevel: Float, frequencyBands: [Float])? {
@@ -136,6 +182,13 @@ public enum KeyboardDictationHandoff {
         defaults.removeObject(forKey: pendingTextKey)
         defaults.removeObject(forKey: pendingTextSessionIDKey)
         defaults.removeObject(forKey: pendingTextTimestampKey)
+    }
+
+    public static func clearPendingCommand() {
+        let defaults = defaults
+        defaults.removeObject(forKey: pendingCommandKey)
+        defaults.removeObject(forKey: pendingCommandSessionIDKey)
+        defaults.removeObject(forKey: pendingCommandTimestampKey)
     }
 
     public static func clearActiveSession() {

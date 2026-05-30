@@ -44,20 +44,24 @@ struct WhisperMateApp: App {
         }
 
         if url.host == "keyboard-dictation" {
+            let sessionID = KeyboardDictationHandoff.sessionID(from: url)
+            KeyboardDictationHandoff.publish(command: .start, sessionID: sessionID)
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: KeyboardDictationHandoff.openAppNotification,
-                    object: KeyboardDictationHandoff.sessionID(from: url)
+                    object: sessionID
                 )
             }
             return true
         }
 
         if url.host == "keyboard-dictation-stop" {
+            let sessionID = KeyboardDictationHandoff.sessionID(from: url)
+            KeyboardDictationHandoff.publish(command: .stop, sessionID: sessionID)
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: KeyboardDictationHandoff.stopAppNotification,
-                    object: KeyboardDictationHandoff.sessionID(from: url)
+                    object: sessionID
                 )
             }
             return true

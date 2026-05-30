@@ -98,20 +98,26 @@ public class AudioRecorder: NSObject, ObservableObject {
 
         // Use App Group container on iOS, temp directory on macOS
         #if os(iOS)
-            guard let containerURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AudioRecorder.appGroupIdentifier) else {
-                DebugLog.info("Failed to get app group container", context: "AudioRecorder LOG")
-                publishStopped()
-                return
-            }
             let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
-            recordingURL = containerURL.appendingPathComponent(fileName)
+            if let containerURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AudioRecorder.appGroupIdentifier) {
+                recordingURL = containerURL.appendingPathComponent(fileName)
+            } else {
+                #if targetEnvironment(simulator)
+                    DebugLog.info("App Group container unavailable, using simulator temporary directory", context: "AudioRecorder LOG")
+                    recordingURL = fileManager.temporaryDirectory.appendingPathComponent(fileName)
+                #else
+                    DebugLog.info("Failed to get app group container", context: "AudioRecorder LOG")
+                    publishStopped()
+                    return
+                #endif
+            }
         #else
             let tempDirectory = fileManager.temporaryDirectory
             let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
             recordingURL = tempDirectory.appendingPathComponent(fileName)
         #endif
 
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(simulator)
             startEngineRecording()
         #else
             startMeteredRecorderRecording()
@@ -248,9 +254,15 @@ public class AudioRecorder: NSObject, ObservableObject {
         ]
 
         do {
-            audioRecorder = try AVAudioRecorder(url: recordingURL, settings: settings)
-            audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.record()
+            let recorder = try AVAudioRecorder(url: recordingURL, settings: settings)
+            recorder.isMeteringEnabled = true
+            guard recorder.record() else {
+                DebugLog.info("AVAudioRecorder refused to start recording", context: "AudioRecorder LOG")
+                publishStopped()
+                return
+            }
+
+            audioRecorder = recorder
 
             startMeteringTimer()
 

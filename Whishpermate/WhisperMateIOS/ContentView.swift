@@ -26,12 +26,19 @@ struct ContentView: View {
     @State private var historySearchText = ""
     @State private var recordingToShare: Recording?
     @State private var activeKeyboardDictationSessionID: String?
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         // Use iPhone layout for all devices (scales nicely on iPad)
         iPhoneLayout
             .onAppear {
+                consumePendingKeyboardCommandIfNeeded()
+                resumePendingKeyboardDictationIfNeeded()
+            }
+            .onChange(of: scenePhase) { phase in
+                guard phase == .active else { return }
+                consumePendingKeyboardCommandIfNeeded()
                 resumePendingKeyboardDictationIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.openAppNotification)) { notification in
@@ -783,6 +790,19 @@ struct ContentView: View {
         }
     }
 
+    private func consumePendingKeyboardCommandIfNeeded() {
+        guard let pending = KeyboardDictationHandoff.consumePendingCommand() else {
+            return
+        }
+
+        switch pending.command {
+        case .start:
+            startKeyboardDictation(sessionID: pending.sessionID)
+        case .stop:
+            stopKeyboardDictation(sessionID: pending.sessionID)
+        }
+    }
+
     private func resumePendingKeyboardDictationIfNeeded() {
         guard activeKeyboardDictationSessionID == nil,
               let sessionID = KeyboardDictationHandoff.activeSessionID()
@@ -1024,10 +1044,12 @@ private final class InlineRecordingCoordinator: ObservableObject {
     private let audioRecorder = AudioRecorder()
     private let subscriptionManager = SubscriptionManager.shared
     private var recordingStartTime: Date?
+    private var recorderHasStarted = false
     private var cancellables = Set<AnyCancellable>()
 
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let minimumAudioFileBytes: Int64 = 1000
+    private let recordingStartTimeout: UInt64 = 1_200_000_000
 
     var isActive: Bool {
         state == .recording || state == .paused || state == .processing
@@ -1171,6 +1193,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
     private func beginRecording() {
         recordingStartTime = Date()
+        recorderHasStarted = false
         errorMessage = nil
         audioLevel = 0
         frequencyBands = Array(repeating: 0.0, count: 10)
@@ -1180,6 +1203,18 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
 
         audioRecorder.startRecording()
+        verifyRecordingDidStart()
+    }
+
+    private func verifyRecordingDidStart() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: recordingStartTimeout)
+            guard state == .recording, !recorderHasStarted else {
+                return
+            }
+
+            showError("Recording could not start. Please try again.")
+        }
     }
 
     private func stopRecording(
@@ -1320,13 +1355,22 @@ private final class InlineRecordingCoordinator: ObservableObject {
             return
         }
 
+        if isRecording {
+            recorderHasStarted = true
+            return
+        }
+
         if state == .recording, !isRecording {
+            guard recorderHasStarted else {
+                return
+            }
             reset()
         }
     }
 
     private func reset() {
         recordingStartTime = nil
+        recorderHasStarted = false
         state = .idle
         audioLevel = 0
         frequencyBands = Array(repeating: 0.0, count: 10)
@@ -1338,6 +1382,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             state = .idle
             errorMessage = message
             completionText = nil
+            recorderHasStarted = false
             audioLevel = 0
             frequencyBands = Array(repeating: 0.0, count: 10)
         }

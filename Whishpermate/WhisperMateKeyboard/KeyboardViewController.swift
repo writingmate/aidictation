@@ -35,6 +35,13 @@ class KeyboardViewController: UIInputViewController {
         setupUI()
         checkInitialPermissions()
         checkForPendingDictationText()
+        startPendingTextTimer()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        checkForPendingDictationText()
+        startPendingTextTimer()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -346,6 +353,11 @@ class KeyboardViewController: UIInputViewController {
     private func stopPendingTextTimer() {
         pendingTextTimer?.invalidate()
         pendingTextTimer = nil
+    }
+
+    override func textDidChange(_ textInput: UITextInput?) {
+        super.textDidChange(textInput)
+        checkForPendingDictationText()
     }
 
     private func startRecordingMeter() {

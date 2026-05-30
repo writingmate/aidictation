@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recording Sheet States</title>
+  <style>
+    :root {
+      --brand: hsl(23.3 100% 50%);
+      --ink: #111111;
+      --muted: #6b7280;
+      --glass: rgba(0, 0, 0, 0.32);
+      --surface: #ffffff;
+      --line: rgba(255, 255, 255, 0.18);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      background: #f4f4f6;
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }
+
+    main {
+      width: min(1180px, 100%);
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    .states {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(280px, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .state-title {
+      margin: 0 0 8px 4px;
+      font-size: 14px;
+      font-weight: 650;
+      color: var(--muted);
+    }
+
+    .phone {
+      position: relative;
+      height: 620px;
+      border-radius: 38px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 56%, rgba(255, 99, 0, 0.95) 0 18%, rgba(255, 99, 0, 0.62) 19% 34%, rgba(255, 99, 0, 0.2) 35% 48%, transparent 49%),
+        linear-gradient(180deg, #111 0%, #191919 100%);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+    }
+
+    .sheet {
+      position: absolute;
+      inset: 0;
+      padding: 18px 20px 28px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .close {
+      position: absolute;
+      top: 18px;
+      left: 20px;
+      width: 30px;
+      height: 30px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .top {
+      z-index: 2;
+      display: grid;
+      gap: 8px;
+      padding-inline: 36px;
+    }
+
+    .mode-selector {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      background: var(--glass);
+      border: 1px solid var(--line);
+    }
+
+    .mode {
+      min-height: 36px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .mode.active {
+      background: #fff;
+      color: #111;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 42px;
+      padding: 9px 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.96);
+      border: 1px solid rgba(255, 99, 0, 0.32);
+      color: rgba(0, 0, 0, 0.86);
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1.2;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      border: 2px solid rgba(255, 99, 0, 0.24);
+      border-top-color: var(--brand);
+      animation: spin 820ms linear infinite;
+      flex: 0 0 auto;
+    }
+
+    .check {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: #18a058;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .center {
+      display: grid;
+      place-items: center;
+      padding-top: 42px;
+    }
+
+    .wave {
+      width: 250px;
+      height: 150px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+    }
+
+    .bar {
+      width: 13px;
+      border-radius: 999px;
+      background: #fff;
+      opacity: 0.9;
+      animation: meter 780ms ease-in-out infinite;
+    }
+
+    .bar:nth-child(1) { height: 38px; animation-delay: -80ms; }
+    .bar:nth-child(2) { height: 66px; animation-delay: -220ms; }
+    .bar:nth-child(3) { height: 102px; animation-delay: -360ms; }
+    .bar:nth-child(4) { height: 58px; animation-delay: -120ms; }
+    .bar:nth-child(5) { height: 126px; animation-delay: -460ms; }
+    .bar:nth-child(6) { height: 86px; animation-delay: -280ms; }
+    .bar:nth-child(7) { height: 48px; animation-delay: -40ms; }
+    .bar:nth-child(8) { height: 78px; animation-delay: -340ms; }
+
+    @keyframes meter {
+      0%, 100% { transform: scaleY(0.55); opacity: 0.56; }
+      50% { transform: scaleY(1); opacity: 1; }
+    }
+
+    .idle-wave .bar {
+      animation: none;
+      opacity: 0.18;
+    }
+
+    .processing .bar {
+      animation: processing 900ms ease-in-out infinite;
+    }
+
+    @keyframes processing {
+      0%, 100% { transform: scaleY(0.36); opacity: 0.35; }
+      50% { transform: scaleY(0.82); opacity: 0.82; }
+    }
+
+    .bottom {
+      display: grid;
+      justify-items: center;
+      gap: 10px;
+    }
+
+    .primary {
+      width: 82px;
+      height: 82px;
+      border-radius: 999px;
+      border: 0;
+      background: var(--brand);
+      display: grid;
+      place-items: center;
+    }
+
+    .primary.black {
+      background: #111;
+    }
+
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      width: 34px;
+      height: 34px;
+    }
+
+    .brand-mark span {
+      width: 5px;
+      border-radius: 999px;
+      background: #fff;
+    }
+
+    .brand-mark span:nth-child(1) { height: 13px; }
+    .brand-mark span:nth-child(2) { height: 25px; }
+    .brand-mark span:nth-child(3) { height: 34px; }
+    .brand-mark span:nth-child(4) { height: 20px; }
+
+    .stop {
+      color: #fff;
+      font-size: 36px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .caption {
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 13px;
+      font-weight: 550;
+    }
+
+    @media (max-width: 960px) {
+      .states { grid-template-columns: 1fr; }
+      .phone { height: 560px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Recording Sheet States</h1>
+    <section class="states">
+      <div>
+        <p class="state-title">Meetings selected, model downloading</p>
+        <div class="phone">
+          <div class="sheet">
+            <button class="close">×</button>
+            <div class="top">
+              <div class="mode-selector">
+                <div class="mode">Dictation</div>
+                <div class="mode">Notes</div>
+                <div class="mode active">Meetings</div>
+              </div>
+              <div class="status">
+                <span class="spinner"></span>
+                <span>Preparing speaker labels. You can start recording when it is ready.</span>
+              </div>
+            </div>
+            <div class="center idle-wave">
+              <div class="wave">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              </div>
+            </div>
+            <div class="bottom">
+              <button class="primary">
+                <span class="brand-mark"><span></span><span></span><span></span><span></span></span>
+              </button>
+              <div class="caption">Tap after the model is ready</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="state-title">Recording, mode locked</p>
+        <div class="phone">
+          <div class="sheet">
+            <button class="close">×</button>
+            <div class="top">
+              <div class="mode-selector">
+                <div class="mode active">Meetings locked</div>
+              </div>
+            </div>
+            <div class="center">
+              <div class="wave">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              </div>
+            </div>
+            <div class="bottom">
+              <button class="primary black"><span class="stop">✓</span></button>
+              <div class="caption">Finish recording</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <p class="state-title">Processing, speaker labels ready</p>
+        <div class="phone">
+          <div class="sheet">
+            <button class="close">×</button>
+            <div class="top">
+              <div class="mode-selector">
+                <div class="mode active">Meetings locked</div>
+              </div>
+              <div class="status">
+                <span class="check">✓</span>
+                <span>Speaker labels ready</span>
+              </div>
+            </div>
+            <div class="center processing">
+              <div class="wave">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              </div>
+            </div>
+            <div class="bottom">
+              <button class="primary black"><span class="spinner"></span></button>
+              <div class="caption">Preparing text</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

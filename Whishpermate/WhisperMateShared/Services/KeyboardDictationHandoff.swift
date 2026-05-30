@@ -1,7 +1,7 @@
 import Foundation
 
 public enum KeyboardDictationHandoff {
-    public enum Command: String {
+    public enum Command: String, Codable {
         case start
         case stop
     }
@@ -13,6 +13,7 @@ public enum KeyboardDictationHandoff {
     private static let pendingCommandKey = "keyboardDictation.pendingCommand"
     private static let pendingCommandSessionIDKey = "keyboardDictation.pendingCommandSessionID"
     private static let pendingCommandTimestampKey = "keyboardDictation.pendingCommandTimestamp"
+    private static let pendingCommandQueueKey = "keyboardDictation.pendingCommandQueue"
     private static let pendingTextKey = "keyboardDictation.pendingText"
     private static let pendingTextSessionIDKey = "keyboardDictation.pendingTextSessionID"
     private static let pendingTextTimestampKey = "keyboardDictation.pendingTextTimestamp"
@@ -22,10 +23,18 @@ public enum KeyboardDictationHandoff {
     private static let meterAudioLevelKey = "keyboardDictation.meterAudioLevel"
     private static let meterFrequencyBandsKey = "keyboardDictation.meterFrequencyBands"
     private static let meterTimestampKey = "keyboardDictation.meterTimestamp"
+    private static let diagnosticsKey = "keyboardDictation.diagnostics"
     private static let pendingTextTTL: TimeInterval = 120
     private static let pendingCommandTTL: TimeInterval = 30
     private static let activeSessionTTL: TimeInterval = 180
     private static let meterTTL: TimeInterval = 2
+    private static let diagnosticsLimit = 120
+
+    private struct PendingCommand: Codable {
+        let command: Command
+        let sessionID: String?
+        let timestamp: TimeInterval
+    }
 
     public static var defaults: UserDefaults {
         UserDefaults(suiteName: appGroupIdentifier) ?? .standard
@@ -48,6 +57,7 @@ public enum KeyboardDictationHandoff {
         clearPendingCommand()
         clearMeter()
         defaults.synchronize()
+        DebugLog.info("beginSession sessionID=\(sessionID) appGroup=\(appGroupIdentifier)", context: "KEYBOARD_DIAG")
         return sessionID
     }
 
@@ -68,20 +78,51 @@ public enum KeyboardDictationHandoff {
 
     public static func publish(command: Command, sessionID: String?) {
         let defaults = defaults
-        defaults.set(command.rawValue, forKey: pendingCommandKey)
-        defaults.set(Date().timeIntervalSince1970, forKey: pendingCommandTimestampKey)
-        if let sessionID, !sessionID.isEmpty {
-            defaults.set(sessionID, forKey: pendingCommandSessionIDKey)
-            defaults.set(sessionID, forKey: activeSessionIDKey)
-            defaults.set(Date().timeIntervalSince1970, forKey: activeSessionTimestampKey)
-        } else {
-            defaults.removeObject(forKey: pendingCommandSessionIDKey)
+        let now = Date().timeIntervalSince1970
+        var queue = loadPendingCommandQueue(from: defaults)
+            .filter { now - $0.timestamp <= pendingCommandTTL }
+        if let last = queue.last,
+           last.command == command,
+           last.sessionID == sessionID,
+           now - last.timestamp < 2 {
+            updateLegacyPendingCommand(command: command, sessionID: sessionID, timestamp: now, defaults: defaults)
+            defaults.synchronize()
+            DebugLog.info("dedupe command=\(command.rawValue) sessionID=\(sessionID ?? "nil") queueCount=\(queue.count)", context: "KEYBOARD_DIAG")
+            return
         }
+
+        queue.append(PendingCommand(command: command, sessionID: sessionID, timestamp: now))
+        savePendingCommandQueue(queue, to: defaults)
+
+        updateLegacyPendingCommand(command: command, sessionID: sessionID, timestamp: now, defaults: defaults)
         defaults.synchronize()
+        DebugLog.info("publish command=\(command.rawValue) sessionID=\(sessionID ?? "nil") queueCount=\(queue.count)", context: "KEYBOARD_DIAG")
     }
 
     public static func consumePendingCommand() -> (command: Command, sessionID: String?)? {
         let defaults = defaults
+        let now = Date().timeIntervalSince1970
+        var queue = loadPendingCommandQueue(from: defaults)
+            .filter { now - $0.timestamp <= pendingCommandTTL }
+        if !queue.isEmpty {
+            let pending = queue.removeFirst()
+            savePendingCommandQueue(queue, to: defaults)
+            if queue.isEmpty {
+                clearLegacyPendingCommand(defaults)
+            } else if let newest = queue.last {
+                defaults.set(newest.command.rawValue, forKey: pendingCommandKey)
+                defaults.set(newest.timestamp, forKey: pendingCommandTimestampKey)
+                if let sessionID = newest.sessionID, !sessionID.isEmpty {
+                    defaults.set(sessionID, forKey: pendingCommandSessionIDKey)
+                } else {
+                    defaults.removeObject(forKey: pendingCommandSessionIDKey)
+                }
+                defaults.synchronize()
+            }
+            DebugLog.info("consume queued command=\(pending.command.rawValue) sessionID=\(pending.sessionID ?? "nil") remaining=\(queue.count)", context: "KEYBOARD_DIAG")
+            return (pending.command, pending.sessionID)
+        }
+
         guard let rawCommand = defaults.string(forKey: pendingCommandKey),
               let command = Command(rawValue: rawCommand)
         else {
@@ -96,6 +137,7 @@ public enum KeyboardDictationHandoff {
 
         let sessionID = defaults.string(forKey: pendingCommandSessionIDKey)
         clearPendingCommand()
+        DebugLog.info("consume command=\(command.rawValue) sessionID=\(sessionID ?? "nil")", context: "KEYBOARD_DIAG")
         return (command, sessionID)
     }
 
@@ -116,15 +158,21 @@ public enum KeyboardDictationHandoff {
 
     public static func publishMeter(audioLevel: Float, frequencyBands: [Float], sessionID: String?) {
         let defaults = defaults
+        let now = Date().timeIntervalSince1970
         if let sessionID, !sessionID.isEmpty {
             defaults.set(sessionID, forKey: meterSessionIDKey)
+            defaults.set(sessionID, forKey: activeSessionIDKey)
+            defaults.set(now, forKey: activeSessionTimestampKey)
         } else {
             defaults.removeObject(forKey: meterSessionIDKey)
         }
         defaults.set(Double(audioLevel), forKey: meterAudioLevelKey)
         defaults.set(frequencyBands.map(Double.init), forKey: meterFrequencyBandsKey)
-        defaults.set(Date().timeIntervalSince1970, forKey: meterTimestampKey)
+        defaults.set(now, forKey: meterTimestampKey)
         defaults.synchronize()
+        if audioLevel > 0.02 {
+            DebugLog.info("publish meter sessionID=\(sessionID ?? "nil") level=\(String(format: "%.3f", audioLevel)) bands=\(frequencyBands.count)", context: "KEYBOARD_DIAG")
+        }
     }
 
     public static func consumeMeter(for sessionID: String?) -> (audioLevel: Float, frequencyBands: [Float])? {
@@ -186,9 +234,8 @@ public enum KeyboardDictationHandoff {
 
     public static func clearPendingCommand() {
         let defaults = defaults
-        defaults.removeObject(forKey: pendingCommandKey)
-        defaults.removeObject(forKey: pendingCommandSessionIDKey)
-        defaults.removeObject(forKey: pendingCommandTimestampKey)
+        defaults.removeObject(forKey: pendingCommandQueueKey)
+        clearLegacyPendingCommand(defaults)
     }
 
     public static func clearActiveSession() {
@@ -204,5 +251,61 @@ public enum KeyboardDictationHandoff {
         defaults.removeObject(forKey: meterAudioLevelKey)
         defaults.removeObject(forKey: meterFrequencyBandsKey)
         defaults.removeObject(forKey: meterTimestampKey)
+    }
+
+    public static func appendDiagnostic(_ message: String) {
+        let defaults = defaults
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "\(timestamp) \(message)"
+        var diagnostics = defaults.stringArray(forKey: diagnosticsKey) ?? []
+        diagnostics.append(entry)
+        if diagnostics.count > diagnosticsLimit {
+            diagnostics.removeFirst(diagnostics.count - diagnosticsLimit)
+        }
+        defaults.set(diagnostics, forKey: diagnosticsKey)
+        defaults.synchronize()
+        DebugLog.info(entry, context: "KEYBOARD_DIAG")
+    }
+
+    public static func consumeDiagnostics() -> [String] {
+        let defaults = defaults
+        let diagnostics = defaults.stringArray(forKey: diagnosticsKey) ?? []
+        guard !diagnostics.isEmpty else { return [] }
+        defaults.removeObject(forKey: diagnosticsKey)
+        defaults.synchronize()
+        return diagnostics
+    }
+
+    private static func loadPendingCommandQueue(from defaults: UserDefaults) -> [PendingCommand] {
+        guard let data = defaults.data(forKey: pendingCommandQueueKey),
+              let queue = try? JSONDecoder().decode([PendingCommand].self, from: data)
+        else {
+            return []
+        }
+        return queue
+    }
+
+    private static func savePendingCommandQueue(_ queue: [PendingCommand], to defaults: UserDefaults) {
+        guard let data = try? JSONEncoder().encode(queue) else { return }
+        defaults.set(data, forKey: pendingCommandQueueKey)
+    }
+
+    private static func clearLegacyPendingCommand(_ defaults: UserDefaults) {
+        defaults.removeObject(forKey: pendingCommandKey)
+        defaults.removeObject(forKey: pendingCommandSessionIDKey)
+        defaults.removeObject(forKey: pendingCommandTimestampKey)
+        defaults.synchronize()
+    }
+
+    private static func updateLegacyPendingCommand(command: Command, sessionID: String?, timestamp: TimeInterval, defaults: UserDefaults) {
+        defaults.set(command.rawValue, forKey: pendingCommandKey)
+        defaults.set(timestamp, forKey: pendingCommandTimestampKey)
+        if let sessionID, !sessionID.isEmpty {
+            defaults.set(sessionID, forKey: pendingCommandSessionIDKey)
+            defaults.set(sessionID, forKey: activeSessionIDKey)
+            defaults.set(timestamp, forKey: activeSessionTimestampKey)
+        } else {
+            defaults.removeObject(forKey: pendingCommandSessionIDKey)
+        }
     }
 }

@@ -117,11 +117,11 @@ public struct AIDictationRecordingSurface: View {
     }
 
     private func visualizerCenterY(in size: CGSize) -> CGFloat {
-        max(42, size.height * 0.24)
+        size.height * 0.44
     }
 
     private func controlCenterY(in size: CGSize) -> CGFloat {
-        size.height / 2
+        size.height * 0.74
     }
 
     private var visualizer: some View {

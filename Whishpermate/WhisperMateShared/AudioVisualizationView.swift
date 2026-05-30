@@ -75,7 +75,7 @@ public struct AIDictationMicButtonVisual: View {
         case (.keyboard, .processing):
             return .secondary
         default:
-            return Color.dsPrimary
+            return Color.dsPrimary.opacity(0.92)
         }
     }
 
@@ -171,8 +171,8 @@ private enum MicButtonMetrics {
     static let referenceSize: CGFloat = 100
     static let barCount = 5
     static let minimumActiveBars = 3
-    static let barWidth: CGFloat = 9.2
-    static let barSpacing: CGFloat = 4.4
+    static let barWidth: CGFloat = 8.4
+    static let barSpacing: CGFloat = 5.2
     static let maxBarHeight: CGFloat = 49.6
     static let stopSize: CGFloat = 34
     static let stopCornerRadius: CGFloat = 6

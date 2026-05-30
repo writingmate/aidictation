@@ -32,21 +32,26 @@ class KeyboardViewController: UIInputViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
+        DebugLog.info("viewDidLoad fullAccess=\(hasFullAccess) bundle=\(Bundle.main.bundleIdentifier ?? "nil")", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("keyboard viewDidLoad fullAccess=\(hasFullAccess) bundle=\(Bundle.main.bundleIdentifier ?? "nil")")
         setupUI()
         checkInitialPermissions()
         checkForPendingDictationText()
+        restoreActiveRecordingIfNeeded()
         startPendingTextTimer()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         checkForPendingDictationText()
+        restoreActiveRecordingIfNeeded()
         startPendingTextTimer()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         checkForPendingDictationText()
+        restoreActiveRecordingIfNeeded()
         startPendingTextTimer()
     }
 
@@ -168,6 +173,8 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func handlePrimaryAction() {
+        DebugLog.info("primary button pressed state=\(keyboardState)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState)")
         switch keyboardState {
         case .idle:
             startRecording()
@@ -184,6 +191,9 @@ class KeyboardViewController: UIInputViewController {
 
     private func startRecording() {
         let sessionID = KeyboardDictationHandoff.beginSession()
+        KeyboardDictationHandoff.publish(command: .start, sessionID: sessionID)
+        DebugLog.info("startRecording requested sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("startRecording requested sessionID=\(sessionID)")
         activeHandoffSessionID = sessionID
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
@@ -191,6 +201,8 @@ class KeyboardViewController: UIInputViewController {
         statusLabel.isHidden = true
 
         guard let url = KeyboardDictationHandoff.makeDictationURL(sessionID: sessionID) else {
+            DebugLog.info("failed to build dictation URL sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("failed to build dictation URL sessionID=\(sessionID)")
             keyboardState = .idle
             updateKeyboardView(animated: true)
             showError("Could not open AI Dictation.")
@@ -199,6 +211,8 @@ class KeyboardViewController: UIInputViewController {
 
         openContainingApp(url) { [weak self] didOpen in
             guard let self else { return }
+            DebugLog.info("openContainingApp result didOpen=\(didOpen) sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("openContainingApp result didOpen=\(didOpen) sessionID=\(sessionID)")
 
             guard didOpen else {
                 KeyboardDictationHandoff.clearActiveSession()
@@ -222,35 +236,62 @@ class KeyboardViewController: UIInputViewController {
                 DispatchQueue.main.async {
                     if didOpen {
                         DebugLog.info("Opened keyboard dictation deep link via extension context", context: "KeyboardViewController")
+                        KeyboardDictationHandoff.appendDiagnostic("opened containing app via extension context")
                         completion(true)
                     } else {
-                        self?.openContainingAppViaResponderChain(url, completion: completion)
+                        KeyboardDictationHandoff.appendDiagnostic("extension context open failed; trying application fallback")
+                        self?.openContainingAppViaApplication(url, completion: completion)
                     }
                 }
             }
             return
         }
 
-        openContainingAppViaResponderChain(url, completion: completion)
+        openContainingAppViaApplication(url, completion: completion)
     }
 
-    private func openContainingAppViaResponderChain(_ url: URL, completion: @escaping (Bool) -> Void) {
-        var responder: UIResponder? = self
-        let selector = sel_registerName("openURL:")
-
-        while let currentResponder = responder {
-            if currentResponder.responds(to: selector) {
-                currentResponder.perform(selector, with: url)
-                DebugLog.info("Open keyboard dictation deep link via responder chain", context: "KeyboardViewController")
-                completion(true)
-                return
-            }
-
-            responder = currentResponder.next
+    private func openContainingAppViaApplication(_ url: URL, completion: @escaping (Bool) -> Void) {
+        guard let applicationClass = NSClassFromString("UIApplication") as? NSObjectProtocol,
+              applicationClass.responds(to: sel_registerName("sharedApplication")),
+              let unmanagedApplication = applicationClass.perform(sel_registerName("sharedApplication")),
+              let application = unmanagedApplication.takeUnretainedValue() as? NSObject
+        else {
+            DebugLog.info("Failed to access UIApplication fallback for keyboard deep link", context: "KeyboardViewController")
+            KeyboardDictationHandoff.appendDiagnostic("failed to access UIApplication fallback")
+            completion(false)
+            return
         }
 
-        DebugLog.info("Failed to find responder for keyboard dictation deep link", context: "KeyboardViewController")
-        completion(false)
+        let modernSelector = sel_registerName("openURL:options:completionHandler:")
+        if application.responds(to: modernSelector) {
+            typealias OpenIMP = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, @escaping (Bool) -> Void) -> Void
+            let implementation = application.method(for: modernSelector)
+            let open = unsafeBitCast(implementation, to: OpenIMP.self)
+            open(application, modernSelector, url as NSURL, [:] as NSDictionary) { didOpen in
+                DispatchQueue.main.async {
+                    DebugLog.info("UIApplication fallback open result didOpen=\(didOpen)", context: "KeyboardViewController")
+                    KeyboardDictationHandoff.appendDiagnostic("UIApplication fallback open result didOpen=\(didOpen)")
+                    completion(didOpen)
+                }
+            }
+            return
+        }
+
+        let legacySelector = sel_registerName("openURL:")
+        guard application.responds(to: legacySelector) else {
+            DebugLog.info("UIApplication fallback does not respond to openURL", context: "KeyboardViewController")
+            KeyboardDictationHandoff.appendDiagnostic("UIApplication fallback does not respond to openURL")
+            completion(false)
+            return
+        }
+
+        typealias LegacyOpenIMP = @convention(c) (AnyObject, Selector, NSURL) -> Bool
+        let implementation = application.method(for: legacySelector)
+        let open = unsafeBitCast(implementation, to: LegacyOpenIMP.self)
+        let didOpen = open(application, legacySelector, url as NSURL)
+        DebugLog.info("UIApplication legacy fallback open result didOpen=\(didOpen)", context: "KeyboardViewController")
+        KeyboardDictationHandoff.appendDiagnostic("UIApplication legacy fallback open result didOpen=\(didOpen)")
+        completion(didOpen)
     }
 
     private func togglePauseRecording() {
@@ -269,6 +310,9 @@ class KeyboardViewController: UIInputViewController {
         }
 
         keyboardState = .processing
+        KeyboardDictationHandoff.publish(command: .stop, sessionID: sessionID)
+        DebugLog.info("stopRecording requested sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("stopRecording requested sessionID=\(sessionID)")
         stopRecordingMeter()
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
@@ -276,6 +320,8 @@ class KeyboardViewController: UIInputViewController {
 
         openContainingApp(url) { [weak self] didOpen in
             guard let self else { return }
+            DebugLog.info("openContainingApp stop result didOpen=\(didOpen) sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("openContainingApp stop result didOpen=\(didOpen) sessionID=\(sessionID)")
 
             guard didOpen else {
                 self.keyboardState = .recording
@@ -321,6 +367,7 @@ class KeyboardViewController: UIInputViewController {
             return
         }
 
+        DebugLog.info("inserting pending text sessionID=\(sessionID ?? "nil") length=\(text.count)", context: "KEYBOARD_DIAG")
         textDocumentProxy.insertText(textForInsertion(text))
         activeHandoffSessionID = nil
         keyboardState = .idle
@@ -330,6 +377,29 @@ class KeyboardViewController: UIInputViewController {
         statusLabel.text = ""
         statusLabel.isHidden = true
         updateKeyboardView(animated: true)
+    }
+
+    private func restoreActiveRecordingIfNeeded() {
+        guard keyboardState == .idle,
+              let sessionID = KeyboardDictationHandoff.activeSessionID()
+        else { return }
+
+        guard KeyboardDictationHandoff.consumeMeter(for: sessionID) != nil else {
+            DebugLog.info("skip restoring stale keyboard recording sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("skip restoring stale keyboard recording sessionID=\(sessionID)")
+            return
+        }
+
+        activeHandoffSessionID = sessionID
+        keyboardState = .recording
+        displayedAudioLevel = 0
+        displayedFrequencyBands = Array(repeating: 0.0, count: 10)
+        statusLabel.text = ""
+        statusLabel.isHidden = true
+        DebugLog.info("restoring active keyboard recording sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("restoring active keyboard recording sessionID=\(sessionID)")
+        updateKeyboardView(animated: true)
+        startRecordingMeter()
     }
 
     private func textForInsertion(_ text: String) -> String {
@@ -362,16 +432,29 @@ class KeyboardViewController: UIInputViewController {
 
     private func startRecordingMeter() {
         stopRecordingMeter()
-        recordingMeterTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            guard let self, self.keyboardState == .recording else { return }
-            let sessionID = self.activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID()
-            guard let meter = KeyboardDictationHandoff.consumeMeter(for: sessionID) else {
-                return
-            }
-            self.displayedFrequencyBands = meter.frequencyBands
-            self.displayedAudioLevel = meter.audioLevel
-            self.updateKeyboardView(animated: false)
+        DebugLog.info("start meter polling sessionID=\(activeHandoffSessionID ?? "nil")", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("start meter polling sessionID=\(activeHandoffSessionID ?? "nil")")
+        pollRecordingMeter()
+        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            self?.pollRecordingMeter()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        recordingMeterTimer = timer
+    }
+
+    private func pollRecordingMeter() {
+        guard keyboardState == .recording else { return }
+        let sessionID = activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID()
+        guard let meter = KeyboardDictationHandoff.consumeMeter(for: sessionID) else {
+            return
+        }
+        if meter.audioLevel > 0.02 {
+            DebugLog.info("consume meter sessionID=\(sessionID ?? "nil") level=\(String(format: "%.3f", meter.audioLevel)) bands=\(meter.frequencyBands.count)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("consume meter sessionID=\(sessionID ?? "nil") level=\(String(format: "%.3f", meter.audioLevel)) bands=\(meter.frequencyBands.count)")
+        }
+        displayedFrequencyBands = meter.frequencyBands
+        displayedAudioLevel = meter.audioLevel
+        updateKeyboardView(animated: false)
     }
 
     private func stopRecordingMeter() {

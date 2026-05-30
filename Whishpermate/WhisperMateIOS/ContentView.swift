@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import MediaPlayer
 import SwiftUI
 import WhisperMateShared
 
@@ -26,7 +27,9 @@ struct ContentView: View {
     @State private var historySearchText = ""
     @State private var recordingToShare: Recording?
     @State private var activeKeyboardDictationSessionID: String?
+    @State private var showKeyboardReturnScreen = false
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
+    @State private var keyboardCommandPollTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -34,13 +37,26 @@ struct ContentView: View {
         // Use iPhone layout for all devices (scales nicely on iPad)
         iPhoneLayout
             .onAppear {
+                DebugLog.info("ContentView appeared; starting keyboard command polling", context: "KEYBOARD_DIAG")
+                drainKeyboardDiagnostics()
+                startKeyboardCommandPolling()
                 consumePendingKeyboardCommandIfNeeded()
-                resumePendingKeyboardDictationIfNeeded()
+            }
+            .onDisappear {
+                stopKeyboardCommandPolling()
             }
             .onChange(of: scenePhase) { phase in
-                guard phase == .active else { return }
-                consumePendingKeyboardCommandIfNeeded()
-                resumePendingKeyboardDictationIfNeeded()
+                DebugLog.info("scenePhase=\(String(describing: phase))", context: "KEYBOARD_DIAG")
+                if phase == .active {
+                    drainKeyboardDiagnostics()
+                    startKeyboardCommandPolling()
+                    consumePendingKeyboardCommandIfNeeded()
+                } else {
+                    stopKeyboardCommandPolling()
+                }
+            }
+            .onChange(of: selectedRecordingMode) { _ in
+                prepareOfflineRuntimeForSelectedModeIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.openAppNotification)) { notification in
                 let sessionID = notification.object as? String ?? KeyboardDictationHandoff.activeSessionID()
@@ -133,12 +149,12 @@ struct ContentView: View {
                     let sheetBaseHeight = max(proxy.size.height, UIScreen.main.bounds.height)
                     let isCompleting = inlineRecording.state == .completing
                     let completionOffset = sheetBaseHeight * 0.4
+                    let recordingSheetHeight = sheetBaseHeight * 0.9
+                    let recordingSheetTop = max(0, proxy.size.height - recordingSheetHeight)
                     VStack {
                         Spacer()
                         InlineRecordingPanel(
                             recorder: inlineRecording,
-                            toneStyleManager: toneStyleManager,
-                            selectedMode: $selectedRecordingMode,
                             dismissErrorAction: inlineRecording.dismissError
                         )
                         .frame(height: isCompleting ? 92 : sheetBaseHeight * 0.9)
@@ -146,9 +162,35 @@ struct ContentView: View {
                         .offset(y: isCompleting ? -completionOffset : 0)
                     }
                     .ignoresSafeArea(edges: .bottom)
+
+                    if !isCompleting, inlineRecording.errorMessage == nil {
+                        RecordingPresetMenu(
+                            manager: toneStyleManager,
+                            selectedMode: $selectedRecordingMode,
+                            isOnDarkSurface: true
+                        )
+                        .position(x: proxy.size.width / 2, y: recordingSheetTop + 74)
+                        .zIndex(4)
+
+                        if let inlineModelCueText {
+                            InlineModelStatusBar(
+                                text: inlineModelCueText,
+                                iconName: inlineModelCueIconName,
+                                showsProgress: inlineModelCueShowsProgress
+                            )
+                            .position(x: proxy.size.width / 2, y: recordingSheetTop + 118)
+                            .zIndex(4)
+                        }
+                    }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .zIndex(1)
+            }
+
+            if showKeyboardReturnScreen {
+                KeyboardDictationReturnView(state: inlineRecording.state)
+                    .transition(.opacity)
+                    .zIndex(3)
             }
 
             VStack {
@@ -768,6 +810,61 @@ struct ContentView: View {
         }
     }
 
+    private var selectedModeNeedsOfflineRuntime: Bool {
+        transcriptionProviderManager.shouldUseOnDeviceTranscription || selectedRecordingMode == .meetings
+    }
+
+    private var inlineModelCueText: String? {
+        guard selectedModeNeedsOfflineRuntime else {
+            return nil
+        }
+
+        guard SharedParakeetTranscriptionService.isRuntimeSupported else {
+            return SharedParakeetTranscriptionService.unavailableMessage
+        }
+
+        switch parakeetService.state {
+        case .downloading:
+            return selectedRecordingMode == .meetings ? "Downloading speaker detection" : "Downloading offline model"
+        case .initializing:
+            return selectedRecordingMode == .meetings ? "Preparing speaker detection" : "Preparing offline model"
+        case .ready, .transcribing:
+            return selectedRecordingMode == .meetings ? "Speaker detection ready" : "Offline mode ready"
+        case .error(let message):
+            return message.isEmpty ? "Model setup failed" : message
+        case .notInitialized:
+            return parakeetService.isModelDownloaded
+                ? (selectedRecordingMode == .meetings ? "Speaker detection ready" : "Offline mode ready")
+                : (selectedRecordingMode == .meetings ? "Speaker detection needs download" : "Offline model needs download")
+        @unknown default:
+            return selectedRecordingMode == .meetings ? "Speaker detection needs download" : "Offline model needs download"
+        }
+    }
+
+    private var inlineModelCueShowsProgress: Bool {
+        switch parakeetService.state {
+        case .downloading, .initializing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var inlineModelCueIconName: String {
+        if parakeetService.isModelDownloaded {
+            return "checkmark.circle.fill"
+        }
+
+        switch parakeetService.state {
+        case .downloading, .initializing:
+            return "arrow.down.circle.fill"
+        case .error:
+            return "exclamationmark.triangle.fill"
+        default:
+            return "arrow.down.circle"
+        }
+    }
+
     private var canDownloadOfflineModelFromAlert: Bool {
         SharedParakeetTranscriptionService.isRuntimeSupported && !offlineModelIsBusy && !parakeetService.isModelDownloaded
     }
@@ -793,8 +890,18 @@ struct ContentView: View {
         }
     }
 
+    private func prepareOfflineRuntimeForSelectedModeIfNeeded() {
+        guard selectedModeNeedsOfflineRuntime,
+              SharedParakeetTranscriptionService.isRuntimeSupported,
+              !offlineModelIsBusy,
+              !parakeetService.isModelDownloaded
+        else { return }
+
+        prepareOfflineModel()
+    }
+
     private func ensureOfflineModelReadyForRecording() -> Bool {
-        guard transcriptionProviderManager.shouldUseOnDeviceTranscription else {
+        guard selectedModeNeedsOfflineRuntime else {
             return true
         }
 
@@ -809,9 +916,13 @@ struct ContentView: View {
         }
 
         if offlineModelIsBusy {
-            offlineModelMessage = "The offline model is still downloading. Please wait until it is ready before recording."
+            offlineModelMessage = selectedRecordingMode == .meetings
+                ? "Speaker detection is still downloading. Please wait until it is ready before recording."
+                : "The offline model is still downloading. Please wait until it is ready before recording."
         } else {
-            offlineModelMessage = "Download the offline model before recording in offline mode."
+            offlineModelMessage = selectedRecordingMode == .meetings
+                ? "Download speaker detection before recording in Meetings mode."
+                : "Download the offline model before recording in offline mode."
         }
         showOfflineModelAlert = true
         return false
@@ -827,6 +938,7 @@ struct ContentView: View {
     }
 
     private func handleInlineRecordingTap() {
+        DebugLog.info("inline primary action state=\(inlineRecording.state) selectedMode=\(selectedRecordingMode.displayName)", context: "KEYBOARD_DIAG")
         if inlineRecording.state == .idle {
             guard ensureOfflineModelReadyForRecording() else { return }
         }
@@ -839,56 +951,81 @@ struct ContentView: View {
             selectedPreset: recordingPreset(for: selectedRecordingMode, manager: toneStyleManager)
         ) { recording in
             if let activeKeyboardDictationSessionID {
+                DebugLog.info("publishing keyboard text sessionID=\(activeKeyboardDictationSessionID) length=\(recording.transcription.count)", context: "KEYBOARD_DIAG")
                 KeyboardDictationHandoff.publish(
                     text: recording.transcription,
                     sessionID: activeKeyboardDictationSessionID
                 )
                 self.activeKeyboardDictationSessionID = nil
+                self.showKeyboardReturnScreen = false
+                self.inlineRecording.setKeyboardMeterSessionID(nil)
             }
             markRecordingAsNew(recording)
         }
     }
 
     private func startKeyboardDictation(sessionID: String?) {
-        activeKeyboardDictationSessionID = sessionID ?? KeyboardDictationHandoff.beginSession()
+        let resolvedSessionID = sessionID ?? KeyboardDictationHandoff.beginSession()
+        DebugLog.info("startKeyboardDictation sessionID=\(resolvedSessionID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
+        activeKeyboardDictationSessionID = resolvedSessionID
+        showKeyboardReturnScreen = true
+        inlineRecording.setKeyboardMeterSessionID(resolvedSessionID)
         if inlineRecording.state == .idle {
             handleInlineRecordingTap()
         }
     }
 
     private func stopKeyboardDictation(sessionID: String?) {
-        activeKeyboardDictationSessionID = sessionID ?? activeKeyboardDictationSessionID ?? KeyboardDictationHandoff.activeSessionID()
+        let resolvedSessionID = sessionID ?? activeKeyboardDictationSessionID ?? KeyboardDictationHandoff.activeSessionID()
+        DebugLog.info("stopKeyboardDictation sessionID=\(resolvedSessionID ?? "nil") inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
+        activeKeyboardDictationSessionID = resolvedSessionID
+        showKeyboardReturnScreen = true
+        inlineRecording.setKeyboardMeterSessionID(resolvedSessionID)
         if inlineRecording.state == .recording || inlineRecording.state == .paused {
             handleInlineRecordingTap()
         }
     }
 
     private func consumePendingKeyboardCommandIfNeeded() {
+        drainKeyboardDiagnostics()
         guard let pending = KeyboardDictationHandoff.consumePendingCommand() else {
             return
         }
 
+        DebugLog.info("app consumed command=\(pending.command.rawValue) sessionID=\(pending.sessionID ?? "nil")", context: "KEYBOARD_DIAG")
         switch pending.command {
         case .start:
             startKeyboardDictation(sessionID: pending.sessionID)
         case .stop:
             stopKeyboardDictation(sessionID: pending.sessionID)
+        @unknown default:
+            DebugLog.info("unknown keyboard command=\(pending.command.rawValue)", context: "KEYBOARD_DIAG")
         }
     }
 
-    private func resumePendingKeyboardDictationIfNeeded() {
-        guard activeKeyboardDictationSessionID == nil,
-              let sessionID = KeyboardDictationHandoff.activeSessionID()
-        else { return }
+    private func startKeyboardCommandPolling() {
+        guard keyboardCommandPollTask == nil else { return }
 
-        startKeyboardDictation(sessionID: sessionID)
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard activeKeyboardDictationSessionID == sessionID,
-                  inlineRecording.state == .idle
-            else { return }
-            startKeyboardDictation(sessionID: sessionID)
+        DebugLog.info("start command polling", context: "KEYBOARD_DIAG")
+        keyboardCommandPollTask = Task { @MainActor in
+            while !Task.isCancelled {
+                drainKeyboardDiagnostics()
+                consumePendingKeyboardCommandIfNeeded()
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
         }
+    }
+
+    private func drainKeyboardDiagnostics() {
+        for entry in KeyboardDictationHandoff.consumeDiagnostics() {
+            DebugLog.info(entry, context: "KEYBOARD_DIAG_SHARED")
+        }
+    }
+
+    private func stopKeyboardCommandPolling() {
+        DebugLog.info("stop command polling", context: "KEYBOARD_DIAG")
+        keyboardCommandPollTask?.cancel()
+        keyboardCommandPollTask = nil
     }
 
     private func markRecordingAsNew(_ recording: Recording) {
@@ -903,6 +1040,75 @@ struct ContentView: View {
                 newlyInsertedRecordingID = nil
             }
         }
+    }
+}
+
+private struct KeyboardDictationReturnView: View {
+    let state: InlineRecordingState
+
+    private var title: String {
+        switch state {
+        case .processing, .completing:
+            return "Finishing dictation"
+        default:
+            return "Recording is ready"
+        }
+    }
+
+    private var message: String {
+        switch state {
+        case .processing, .completing:
+            return "Go back to the keyboard. Your text will appear there when it is ready."
+        default:
+            return "Swipe back to the keyboard. Microphone access is active now."
+        }
+    }
+
+    private var iconName: String {
+        switch state {
+        case .processing, .completing:
+            return "text.badge.checkmark"
+        default:
+            return "keyboard"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color(.systemBackground)
+                .ignoresSafeArea()
+
+            VStack(spacing: 22) {
+                Image(systemName: iconName)
+                    .font(.system(size: 46, weight: .semibold))
+                    .foregroundStyle(Color.dsPrimary)
+                    .frame(width: 88, height: 88)
+                    .background(Circle().fill(Color.dsPrimary.opacity(0.12)))
+
+                VStack(spacing: 10) {
+                    Text(title)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .multilineTextAlignment(.center)
+
+                    Text(message)
+                        .font(.system(size: 17))
+                        .foregroundStyle(Color.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.left")
+                    Text("Return to the keyboard")
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .padding(.top, 8)
+            }
+            .padding(.horizontal, 32)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1104,10 +1310,46 @@ private enum InlineRecordingState: Equatable {
     case completing
 }
 
+private final class RecordingNowPlayingStatus {
+    private var isActive = false
+
+    func start() {
+        isActive = true
+
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: "AI Dictation",
+            MPMediaItemPropertyArtist: "Recording",
+            MPNowPlayingInfoPropertyIsLiveStream: true,
+            MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0,
+        ]
+
+        if #available(iOS 10.0, *) {
+            info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
+        }
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        UIApplication.shared.beginReceivingRemoteControlEvents()
+        DebugLog.info("recording now playing status started", context: "KEYBOARD_DIAG")
+    }
+
+    func stop() {
+        guard isActive || MPNowPlayingInfoCenter.default().nowPlayingInfo != nil else {
+            return
+        }
+
+        isActive = false
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        UIApplication.shared.endReceivingRemoteControlEvents()
+        DebugLog.info("recording now playing status stopped", context: "KEYBOARD_DIAG")
+    }
+}
+
 struct RecordingPresetMenu: View {
     @ObservedObject var manager: ToneStyleManager
     @Binding var selectedMode: TranscriptionOutputMode
     var isEnabled = true
+    var isOnDarkSurface = false
 
     private var title: String {
         selectedMode.displayName
@@ -1128,15 +1370,25 @@ struct RecordingPresetMenu: View {
                     .foregroundStyle(Color.dsPrimary)
                 Text(title)
                     .lineLimit(1)
-                    .foregroundStyle(.primary)
+                    .minimumScaleFactor(0.82)
+                    .foregroundStyle(isOnDarkSurface ? Color.white : Color.primary)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.dsPrimary)
+                    .foregroundStyle(isOnDarkSurface ? Color.white.opacity(0.78) : Color.dsPrimary)
             }
             .font(.subheadline.weight(.medium))
+            .frame(minWidth: 142)
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
-            .background(Capsule().fill(Color(uiColor: .secondarySystemGroupedBackground)))
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isOnDarkSurface ? Color.black.opacity(0.38) : Color(uiColor: .secondarySystemGroupedBackground))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(isOnDarkSurface ? Color.white.opacity(0.18) : Color.clear, lineWidth: 1)
+                    )
+            )
+            .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -1186,10 +1438,11 @@ private final class InlineRecordingCoordinator: ObservableObject {
     @Published var completionText: String?
 
     private let audioRecorder = AudioRecorder()
+    private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared
     private var recordingStartTime: Date?
-    private var activeRecordingPreset: ContextRule?
     private var recorderHasStarted = false
+    private var keyboardMeterSessionID: String?
     private var cancellables = Set<AnyCancellable>()
 
     private let minimumRecordingDuration: TimeInterval = 0.35
@@ -1258,13 +1511,14 @@ private final class InlineRecordingCoordinator: ObservableObject {
     ) {
         switch state {
         case .idle:
-            startRecording(selectedPreset: selectedPreset)
+            startRecording()
         case .recording, .paused:
             stopRecording(
                 historyManager: historyManager,
                 dictionaryManager: dictionaryManager,
                 toneStyleManager: toneStyleManager,
                 shortcutManager: shortcutManager,
+                selectedPreset: selectedPreset,
                 onCompleted: onCompleted
             )
         case .processing:
@@ -1293,8 +1547,19 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
+    func setKeyboardMeterSessionID(_ sessionID: String?) {
+        keyboardMeterSessionID = sessionID
+        DebugLog.info("set keyboard meter sessionID=\(sessionID ?? "nil")", context: "KEYBOARD_DIAG")
+        if sessionID == nil {
+            KeyboardDictationHandoff.clearMeter()
+        }
+    }
+
     private func publishKeyboardMeter() {
-        guard let sessionID = KeyboardDictationHandoff.activeSessionID() else { return }
+        guard let sessionID = keyboardMeterSessionID ?? KeyboardDictationHandoff.activeSessionID() else { return }
+        if audioLevel > 0.02 {
+            DebugLog.info("app meter sessionID=\(sessionID) level=\(String(format: "%.3f", audioLevel)) bands=\(frequencyBands.count)", context: "KEYBOARD_DIAG")
+        }
         KeyboardDictationHandoff.publishMeter(
             audioLevel: audioLevel,
             frequencyBands: frequencyBands,
@@ -1308,25 +1573,29 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    private func startRecording(selectedPreset: ContextRule?) {
+    private func startRecording() {
         dismissError()
+        DebugLog.info("inline startRecording permission=\(AVAudioSession.sharedInstance().recordPermission.rawValue)", context: "KEYBOARD_DIAG")
 
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
+            DebugLog.info("inline start blocked by subscription reason=\(access.reason ?? "nil")", context: "KEYBOARD_DIAG")
             showError(access.reason ?? "Log in to continue transcribing.")
             return
         }
 
         switch AVAudioSession.sharedInstance().recordPermission {
         case .granted:
-            beginRecording(selectedPreset: selectedPreset)
+            beginRecording()
         case .denied:
             showError("Microphone permission denied. Please enable it in Settings.")
         case .undetermined:
+            DebugLog.info("requesting microphone permission", context: "KEYBOARD_DIAG")
             AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
                 DispatchQueue.main.async {
+                    DebugLog.info("microphone permission response granted=\(granted)", context: "KEYBOARD_DIAG")
                     if granted {
-                        self?.beginRecording(selectedPreset: selectedPreset)
+                        self?.beginRecording()
                     } else {
                         self?.showError("Microphone permission denied. Please enable it in Settings.")
                     }
@@ -1337,9 +1606,10 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    private func beginRecording(selectedPreset: ContextRule?) {
+    private func beginRecording() {
+        DebugLog.info("inline beginRecording", context: "KEYBOARD_DIAG")
         recordingStartTime = Date()
-        activeRecordingPreset = selectedPreset
+        recordingStatus.start()
         recorderHasStarted = false
         errorMessage = nil
         audioLevel = 0
@@ -1360,6 +1630,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 return
             }
 
+            DebugLog.info("inline recording start timeout isRecording=\(audioRecorder.isRecording)", context: "KEYBOARD_DIAG")
             showError("Recording could not start. Please try again.")
         }
     }
@@ -1369,11 +1640,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
         dictionaryManager: DictionaryManager,
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
+        selectedPreset: ContextRule?,
         onCompleted: @escaping (Recording) -> Void
     ) {
         let recordingStartedAt = recordingStartTime
-        let selectedPreset = activeRecordingPreset
 
+        DebugLog.info("inline stopRecording state=\(state) preset=\(selectedPreset?.name ?? "dictation")", context: "KEYBOARD_DIAG")
+        recordingStatus.stop()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             state = .processing
             audioLevel = 0
@@ -1382,10 +1655,12 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
         Task {
             guard let audioURL = await audioRecorder.stopRecordingAsync(deactivateAudioSession: false) else {
+                DebugLog.info("inline stop returned nil audioURL", context: "KEYBOARD_DIAG")
                 reset()
                 return
             }
 
+            DebugLog.info("inline stop returned url=\(audioURL.path)", context: "KEYBOARD_DIAG")
             guard validateRecordingForTranscription(audioURL, recordingStartTime: recordingStartedAt) else {
                 try? FileManager.default.removeItem(at: audioURL)
                 reset()
@@ -1482,6 +1757,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
 
         let audioDuration = audioFileDuration(audioURL)
+        DebugLog.info("inline recording validation elapsed=\(String(format: "%.2f", elapsed)) duration=\(audioDuration.map { String(format: "%.2f", $0) } ?? "nil") fileSize=\(fileSize)", context: "KEYBOARD_DIAG")
         if elapsed < minimumRecordingDuration || (audioDuration ?? elapsed) < minimumRecordingDuration {
             DebugLog.info("Inline recording too short; skipping transcription", context: "ContentView")
             return false
@@ -1536,8 +1812,8 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     private func reset() {
+        recordingStatus.stop()
         recordingStartTime = nil
-        activeRecordingPreset = nil
         recorderHasStarted = false
         state = .idle
         audioLevel = 0
@@ -1546,11 +1822,11 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     private func showError(_ message: String) {
+        recordingStatus.stop()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
             state = .idle
             errorMessage = message
             completionText = nil
-            activeRecordingPreset = nil
             recorderHasStarted = false
             audioLevel = 0
             frequencyBands = Array(repeating: 0.0, count: 10)
@@ -1560,8 +1836,6 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
 private struct InlineRecordingPanel: View {
     @ObservedObject var recorder: InlineRecordingCoordinator
-    @ObservedObject var toneStyleManager: ToneStyleManager
-    @Binding var selectedMode: TranscriptionOutputMode
     let dismissErrorAction: () -> Void
     private let sheetColor = Color(red: 0.10, green: 0.10, blue: 0.10)
 
@@ -1607,16 +1881,6 @@ private struct InlineRecordingPanel: View {
                     x: proxy.size.width / 2,
                     y: proxy.size.height / 2
                 )
-
-                RecordingPresetMenu(
-                    manager: toneStyleManager,
-                    selectedMode: $selectedMode
-                )
-                .position(
-                    x: proxy.size.width / 2,
-                    y: 58
-                )
-                .zIndex(1)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1654,6 +1918,67 @@ private struct InlineRecordingPanel: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(Color.dsPrimary)
         }
+    }
+}
+
+private struct InlineModelStatusBar: View {
+    let text: String
+    let iconName: String
+    let showsProgress: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white.opacity(0.9))
+
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .foregroundStyle(.white)
+
+            if showsProgress {
+                IndeterminateCapsuleProgressBar()
+                    .frame(width: 72, height: 4)
+            }
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 30)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.58))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+        )
+        .contentShape(Capsule(style: .continuous))
+    }
+}
+
+struct IndeterminateCapsuleProgressBar: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let progress = movingProgress(at: timeline.date)
+                Capsule()
+                    .fill(Color.white.opacity(0.22))
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.82))
+                            .frame(width: width * 0.36)
+                            .offset(x: max(0, width * 0.64) * progress)
+                    }
+                    .clipShape(Capsule())
+            }
+        }
+    }
+
+    private func movingProgress(at date: Date) -> Double {
+        let cycle = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.25) / 1.25
+        return 0.5 - 0.5 * cos(cycle * 2 * .pi)
     }
 }
 

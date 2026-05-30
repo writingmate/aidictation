@@ -40,10 +40,10 @@ public class AudioRecorder: NSObject, ObservableObject {
         private func configureAudioSession() -> Bool {
             do {
                 let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.record, mode: .default, options: [])
+                try session.setCategory(.playAndRecord, mode: .measurement, options: [.allowBluetooth])
                 try session.setActive(true)
                 isAudioSessionConfigured = true
-                DebugLog.info("Audio session configured for iOS", context: "AudioRecorder")
+                DebugLog.info("Audio session configured for iOS category=playAndRecord mode=measurement", context: "AudioRecorder")
                 return true
             } catch {
                 DebugLog.info("Failed to configure audio session: \(error)", context: "AudioRecorder")

@@ -188,17 +188,7 @@ struct RecordingSheetView: View {
                 .foregroundStyle(.white)
 
             if modelCueShowsProgress {
-                GeometryReader { proxy in
-                    Capsule()
-                        .fill(Color.white.opacity(0.22))
-                        .overlay(alignment: .leading) {
-                            Capsule()
-                                .fill(Color.white.opacity(0.82))
-                                .frame(width: proxy.size.width * 0.36)
-                                .offset(x: modelStatusProgressOffset(in: proxy.size.width))
-                        }
-                        .clipShape(Capsule())
-                }
+                IndeterminateCapsuleProgressBar()
                 .frame(height: 4)
                 .frame(maxWidth: 72)
             }
@@ -213,18 +203,6 @@ struct RecordingSheetView: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         )
-    }
-
-    private func modelStatusProgressOffset(in width: CGFloat) -> CGFloat {
-        let travel = max(0, width * 0.64)
-        switch parakeetService.state {
-        case .downloading:
-            return travel * 0.18
-        case .initializing:
-            return travel * 0.68
-        default:
-            return 0
-        }
     }
 
     private var viewingStateView: some View {
@@ -374,9 +352,9 @@ struct RecordingSheetView: View {
 
         switch parakeetService.state {
         case .downloading:
-            return selectedOutputMode == .meetings ? "Downloading speaker labels" : "Downloading offline model"
+            return selectedOutputMode == .meetings ? "Downloading speaker detection" : "Downloading offline model"
         case .initializing:
-            return selectedOutputMode == .meetings ? "Preparing speaker labels" : "Preparing offline model"
+            return selectedOutputMode == .meetings ? "Preparing speaker detection" : "Preparing offline model"
         case .error(let message):
             guard needsOfflineRuntimeForSelectedMode else { return nil }
             return message
@@ -389,14 +367,14 @@ struct RecordingSheetView: View {
         guard needsOfflineRuntimeForSelectedMode else { return nil }
 
         if parakeetService.isModelDownloaded {
-            return selectedOutputMode == .meetings ? "Speaker labels ready" : "Offline mode ready"
+            return selectedOutputMode == .meetings ? "Speaker detection ready" : "Offline mode ready"
         }
 
         switch parakeetService.state {
         case .notInitialized:
-            return selectedOutputMode == .meetings ? "Speaker labels need download" : "Offline model needs download"
+            return selectedOutputMode == .meetings ? "Speaker detection needs download" : "Offline model needs download"
         case .ready:
-            return selectedOutputMode == .meetings ? "Speaker labels ready" : "Offline mode ready"
+            return selectedOutputMode == .meetings ? "Speaker detection ready" : "Offline mode ready"
         case .downloading, .initializing, .error, .transcribing:
             return nil
         }
@@ -420,18 +398,6 @@ struct RecordingSheetView: View {
             return "exclamationmark.triangle.fill"
         default:
             return "arrow.down.circle.fill"
-        }
-    }
-
-    private var modelCueIconColor: Color {
-        if parakeetService.isModelDownloaded {
-            return .green
-        }
-        switch parakeetService.state {
-        case .error:
-            return .orange
-        default:
-            return Color.dsPrimary
         }
     }
 
@@ -645,16 +611,6 @@ struct RecordingSheetView: View {
         }
     }
 
-    private func recordingOutputMode(for preset: ContextRule?) -> TranscriptionOutputMode {
-        if preset?.isMeetingsModeRule == true {
-            return .meetings
-        }
-        if preset?.isNotesModeRule == true {
-            return .notes
-        }
-        return .dictation
-    }
-
     private func transcriptionOptions(for outputMode: TranscriptionOutputMode, preset: ContextRule?) -> TranscriptionOptions {
         if outputMode == .meetings {
             return TranscriptionOptions(diarization: true)
@@ -799,7 +755,7 @@ private struct RecordingSheetModeSelector: View {
                     .overlay(
                         Capsule(style: .continuous)
                             .stroke(Color.white.opacity(0.14), lineWidth: 1)
-                )
+                    )
             )
         }
         .pickerStyle(.menu)

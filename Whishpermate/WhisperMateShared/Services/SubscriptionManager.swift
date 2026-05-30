@@ -148,7 +148,12 @@ public class SubscriptionManager: ObservableObject {
 
     /// Check if user can transcribe (works for both authenticated and anonymous users)
     public func checkCanTranscribe() -> (canTranscribe: Bool, reason: String?) {
-        DebugLog.info("checkCanTranscribe: isAuthenticated=\(authManager.isAuthenticated)", context: "SubscriptionManager")
+        DebugLog.info("checkCanTranscribe: isAuthenticated=\(authManager.isAuthenticated), isLoading=\(authManager.isLoading), hasUser=\(authManager.currentUser != nil)", context: "SubscriptionManager")
+        if authManager.isLoading {
+            DebugLog.info("checkCanTranscribe: allowing while auth state is loading", context: "SubscriptionManager")
+            return (true, nil)
+        }
+
         if authManager.isAuthenticated {
             // Use server-side tracking for authenticated users
             let result = authManager.checkCanTranscribe()

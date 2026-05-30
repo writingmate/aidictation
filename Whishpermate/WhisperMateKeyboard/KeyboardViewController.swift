@@ -178,33 +178,56 @@ class KeyboardViewController: UIInputViewController {
     private func startRecording() {
         let sessionID = KeyboardDictationHandoff.beginSession()
         activeHandoffSessionID = sessionID
-        keyboardState = .recording
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-        updateKeyboardView(animated: true)
-        startRecordingMeter()
         statusLabel.text = ""
         statusLabel.isHidden = true
 
         guard let url = KeyboardDictationHandoff.makeDictationURL(sessionID: sessionID) else {
-            stopRecordingMeter()
             keyboardState = .idle
             updateKeyboardView(animated: true)
             showError("Could not open AI Dictation.")
             return
         }
 
-        guard openContainingApp(url) else {
-            stopRecordingMeter()
-            keyboardState = .idle
-            updateKeyboardView(animated: true)
-            showError("Could not open AI Dictation.")
-            return
+        openContainingApp(url) { [weak self] didOpen in
+            guard let self else { return }
+
+            guard didOpen else {
+                KeyboardDictationHandoff.clearActiveSession()
+                self.activeHandoffSessionID = nil
+                self.stopRecordingMeter()
+                self.keyboardState = .idle
+                self.updateKeyboardView(animated: true)
+                self.showError("Could not open AI Dictation.")
+                return
+            }
+
+            self.keyboardState = .recording
+            self.updateKeyboardView(animated: true)
+            self.startRecordingMeter()
         }
     }
 
-    @discardableResult
-    private func openContainingApp(_ url: URL) -> Bool {
+    private func openContainingApp(_ url: URL, completion: @escaping (Bool) -> Void) {
+        if let extensionContext {
+            extensionContext.open(url) { [weak self] didOpen in
+                DispatchQueue.main.async {
+                    if didOpen {
+                        DebugLog.info("Opened keyboard dictation deep link via extension context", context: "KeyboardViewController")
+                        completion(true)
+                    } else {
+                        self?.openContainingAppViaResponderChain(url, completion: completion)
+                    }
+                }
+            }
+            return
+        }
+
+        openContainingAppViaResponderChain(url, completion: completion)
+    }
+
+    private func openContainingAppViaResponderChain(_ url: URL, completion: @escaping (Bool) -> Void) {
         var responder: UIResponder? = self
         let selector = sel_registerName("openURL:")
 
@@ -212,14 +235,15 @@ class KeyboardViewController: UIInputViewController {
             if currentResponder.responds(to: selector) {
                 currentResponder.perform(selector, with: url)
                 DebugLog.info("Open keyboard dictation deep link via responder chain", context: "KeyboardViewController")
-                return true
+                completion(true)
+                return
             }
 
             responder = currentResponder.next
         }
 
         DebugLog.info("Failed to find responder for keyboard dictation deep link", context: "KeyboardViewController")
-        return false
+        completion(false)
     }
 
     private func togglePauseRecording() {
@@ -243,12 +267,16 @@ class KeyboardViewController: UIInputViewController {
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
         updateKeyboardView(animated: true)
 
-        guard openContainingApp(url) else {
-            keyboardState = .recording
-            startRecordingMeter()
-            updateKeyboardView(animated: true)
-            showError("Could not stop recording.")
-            return
+        openContainingApp(url) { [weak self] didOpen in
+            guard let self else { return }
+
+            guard didOpen else {
+                self.keyboardState = .recording
+                self.startRecordingMeter()
+                self.updateKeyboardView(animated: true)
+                self.showError("Could not stop recording.")
+                return
+            }
         }
     }
 

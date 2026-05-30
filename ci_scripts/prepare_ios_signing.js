@@ -9,7 +9,6 @@ const path = require("path");
 const appBundleId = "com.whispermate.ios";
 const keyboardBundleId = "com.whispermate.ios.keyboard";
 const liveActivityBundleId = "com.whispermate.ios.liveactivity";
-const sharedAppGroupId = "group.com.whispermate.shared";
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -116,18 +115,7 @@ function appGroupsCapabilityPayload(bundleId) {
     data: {
       type: "bundleIdCapabilities",
       attributes: {
-        capabilityType: "APP_GROUPS",
-        settings: [
-          {
-            key: "APP_GROUP_IDS",
-            options: [
-              {
-                key: sharedAppGroupId,
-                enabled: true
-              }
-            ]
-          }
-        ]
+        capabilityType: "APP_GROUPS"
       },
       relationships: {
         bundleId: {

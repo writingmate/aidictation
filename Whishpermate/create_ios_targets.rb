@@ -48,7 +48,7 @@ shared_target.build_configurations.each do |config|
   config.build_settings['DEFINES_MODULE'] = 'YES'
   config.build_settings['SWIFT_VERSION'] = '5.0'
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
-  config.build_settings['TARGETED_DEVICE_FAMILY'] = '1,2' # iPhone and iPad
+  config.build_settings['TARGETED_DEVICE_FAMILY'] = '1' # iPhone only
 end
 
 # STEP 2: Create WhisperMateIOS App Target
@@ -80,7 +80,7 @@ ios_target.build_configurations.each do |config|
   config.build_settings['INFOPLIST_FILE'] = 'WhisperMateIOS/Info.plist'
   config.build_settings['SWIFT_VERSION'] = '5.0'
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
-  config.build_settings['TARGETED_DEVICE_FAMILY'] = '1,2'
+  config.build_settings['TARGETED_DEVICE_FAMILY'] = '1'
   config.build_settings['CODE_SIGN_ENTITLEMENTS'] = 'WhisperMateIOS/WhisperMateIOS.entitlements'
 end
 
@@ -113,7 +113,7 @@ keyboard_target.build_configurations.each do |config|
   config.build_settings['INFOPLIST_FILE'] = 'WhisperMateKeyboard/Info.plist'
   config.build_settings['SWIFT_VERSION'] = '5.0'
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
-  config.build_settings['TARGETED_DEVICE_FAMILY'] = '1,2'
+  config.build_settings['TARGETED_DEVICE_FAMILY'] = '1'
   config.build_settings['CODE_SIGN_ENTITLEMENTS'] = 'WhisperMateKeyboard/WhisperMateKeyboard.entitlements'
 end
 

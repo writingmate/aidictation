@@ -51,6 +51,8 @@ struct ContentView: View {
                     drainKeyboardDiagnostics()
                     startKeyboardCommandPolling()
                     consumePendingKeyboardCommandIfNeeded()
+                } else if shouldKeepKeyboardCommandPolling {
+                    startKeyboardCommandPolling()
                 } else {
                     stopKeyboardCommandPolling()
                 }
@@ -1001,6 +1003,11 @@ struct ContentView: View {
         @unknown default:
             DebugLog.info("unknown keyboard command=\(pending.command.rawValue)", context: "KEYBOARD_DIAG")
         }
+    }
+
+    private var shouldKeepKeyboardCommandPolling: Bool {
+        activeKeyboardDictationSessionID != nil
+            && (inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing)
     }
 
     private func startKeyboardCommandPolling() {

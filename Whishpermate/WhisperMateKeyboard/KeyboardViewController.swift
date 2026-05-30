@@ -299,8 +299,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func stopRecordingAndTranscribe() {
-        guard let sessionID = activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID(),
-              let url = KeyboardDictationHandoff.makeStopDictationURL(sessionID: sessionID)
+        guard let sessionID = activeHandoffSessionID ?? KeyboardDictationHandoff.activeSessionID()
         else {
             keyboardState = .idle
             stopRecordingMeter()
@@ -317,20 +316,6 @@ class KeyboardViewController: UIInputViewController {
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
         updateKeyboardView(animated: true)
-
-        openContainingApp(url) { [weak self] didOpen in
-            guard let self else { return }
-            DebugLog.info("openContainingApp stop result didOpen=\(didOpen) sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
-            KeyboardDictationHandoff.appendDiagnostic("openContainingApp stop result didOpen=\(didOpen) sessionID=\(sessionID)")
-
-            guard didOpen else {
-                self.keyboardState = .recording
-                self.startRecordingMeter()
-                self.updateKeyboardView(animated: true)
-                self.showError("Could not stop recording.")
-                return
-            }
-        }
     }
 
     // MARK: - UI Updates

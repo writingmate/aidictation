@@ -107,7 +107,7 @@ async function bundleIdFor(identifier, name) {
 }
 
 async function appGroupsCapabilityFor(bundleId) {
-  const response = await request("GET", `/v1/bundleIds/${bundleId}/bundleIdCapabilities?fields[bundleIdCapabilities]=capabilityType,settings&limit=200`);
+  const response = await request("GET", `/v1/bundleIds/${bundleId}/bundleIdCapabilities?fields[bundleIdCapabilities]=capabilityType,settings`);
   return (response.data || []).find((capability) => capability.attributes && capability.attributes.capabilityType === "APP_GROUPS");
 }
 

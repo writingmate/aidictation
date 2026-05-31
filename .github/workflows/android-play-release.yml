@@ -13,7 +13,7 @@ on:
       play_track:
         description: 'Google Play track'
         required: true
-        default: production
+        default: alpha
         type: choice
         options:
           - internal
@@ -72,7 +72,7 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      PLAY_TRACK: ${{ inputs.play_track || vars.ANDROID_PLAY_TRACK || 'production' }}
+      PLAY_TRACK: ${{ inputs.play_track || vars.ANDROID_PLAY_TRACK || 'alpha' }}
       PLAY_RELEASE_STATUS: ${{ inputs.release_status || vars.ANDROID_PLAY_RELEASE_STATUS || 'completed' }}
       PLAY_PUBLISH_MODE: ${{ inputs.publish_mode || 'upload' }}
       PLAY_PROMOTE_FROM_TRACK: ${{ inputs.promote_from_track || 'internal' }}

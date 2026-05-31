@@ -15,9 +15,14 @@ on-device transcription, and builds the Play AAB with the `parakeet_v3_pack`
 asset pack.
 
 `.github/workflows/android-play-release.yml` publishes the signed release
-AAB to the Google Play `internal` track from the same `android-v<versionName>`
-tag. It uses the checked-in `versionName` and `versionCode`, and rejects tags
-that do not point at a commit reachable from `origin/main`.
+AAB to Google Play from the same `android-v<versionName>` tag. Tag pushes ship
+to the Google Play `production` track by default with a `completed` release
+status. Set repository variable `ANDROID_PLAY_TRACK` to `internal`, `alpha`,
+`beta`, or `production` if a different automatic target is needed. Set
+`ANDROID_PLAY_RELEASE_STATUS` to `draft`, `inProgress`, `halted`, or
+`completed` to override the default. The workflow uses the checked-in
+`versionName` and `versionCode`, and rejects tags that do not point at a commit
+reachable from `origin/main`.
 
 Google Play version codes are monotonic across every track. Because an earlier
 internal upload used version code `1007`, Android release version codes must be
@@ -72,10 +77,19 @@ runs, matching the local-developer layout described in
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` | Preferred. Base64-encoded Google Play service account JSON. |
 | `ANDROID_PUBLISHER_CREDENTIALS` | Optional fallback. Raw Google Play service account JSON used by Gradle Play Publisher. |
 
+Optional repository variables:
+
+| Variable | Purpose |
+|---|---|
+| `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `production`; supported values are `internal`, `alpha`, `beta`, and `production`. |
+| `ANDROID_PLAY_RELEASE_STATUS` | Automatic tagged release status. Defaults to `completed`; supported values are `draft`, `inProgress`, `halted`, and `completed`. |
+
 Before the workflow can publish, create the app once in Play Console and
 upload the first signed AAB manually if the package has never been uploaded.
 Then enable the Android Publisher API, link the Play Console account to the
 Google Cloud project, and grant the service account release access to this app.
+Production releases can still be held by Google review or Play Console managed
+publishing settings.
 
 ## Adding secrets
 

@@ -1,1 +1,1 @@
-Routes lower-accuracy offline languages to cloud mode, improves multilingual language selection, and labels cloud-recommended languages in settings.
+Adds referral rewards so you can share invite codes, redeem codes, and see earned words in settings.

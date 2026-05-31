@@ -1,3 +1,4 @@
+import com.github.triplet.gradle.androidpublisher.ReleaseStatus
 import java.util.Properties
 
 plugins {
@@ -21,6 +22,18 @@ fun configValue(name: String, defaultValue: String = ""): String {
     return providers.gradleProperty(name).orNull
         ?: providers.environmentVariable(name).orNull
         ?: localProperties.getProperty(name, defaultValue)
+}
+
+fun playReleaseStatus(value: String): ReleaseStatus {
+    return when (value.trim().lowercase().replace("-", "_")) {
+        "", "completed" -> ReleaseStatus.COMPLETED
+        "draft" -> ReleaseStatus.DRAFT
+        "halted" -> ReleaseStatus.HALTED
+        "inprogress", "in_progress" -> ReleaseStatus.IN_PROGRESS
+        else -> throw org.gradle.api.GradleException(
+            "Unsupported PLAY_RELEASE_STATUS '$value'. Use completed, draft, halted, or inProgress."
+        )
+    }
 }
 
 val packageOfflineModels = configValue("PACKAGE_OFFLINE_MODELS", "false").toBooleanStrictOrNull() ?: false
@@ -50,8 +63,8 @@ android {
         applicationId = "com.aidictation.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = configValue("VERSION_CODE", "1015").toInt()
-        versionName = configValue("VERSION_NAME", "0.0.18")
+        versionCode = configValue("VERSION_CODE", "1016").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.19")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -127,6 +140,7 @@ play {
     }
     track.set(configValue("PLAY_TRACK", "internal"))
     defaultToAppBundles.set(true)
+    releaseStatus.set(playReleaseStatus(configValue("PLAY_RELEASE_STATUS", "completed")))
     releaseName.set(
         releaseNameOverride.ifBlank {
             "AIDictation Android ${android.defaultConfig.versionName} (${android.defaultConfig.versionCode})"

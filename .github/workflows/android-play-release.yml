@@ -7,21 +7,33 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Android release tag to publish, for example android-v0.0.18'
+        description: 'Android release tag to publish, for example android-v0.0.19'
         required: true
         type: string
       play_track:
         description: 'Google Play track'
         required: true
-        default: alpha
+        default: production
         type: choice
         options:
           - internal
           - alpha
+          - beta
+          - production
+      release_status:
+        description: 'Google Play release status'
+        required: true
+        default: completed
+        type: choice
+        options:
+          - completed
+          - draft
+          - inProgress
+          - halted
       publish_mode:
         description: 'Upload a new bundle, or promote an existing version code between tracks'
         required: true
-        default: promote
+        default: upload
         type: choice
         options:
           - upload
@@ -34,6 +46,8 @@ on:
         options:
           - internal
           - alpha
+          - beta
+          - production
 
 permissions:
   contents: read
@@ -58,7 +72,8 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      PLAY_TRACK: ${{ inputs.play_track || 'internal' }}
+      PLAY_TRACK: ${{ inputs.play_track || vars.ANDROID_PLAY_TRACK || 'production' }}
+      PLAY_RELEASE_STATUS: ${{ inputs.release_status || vars.ANDROID_PLAY_RELEASE_STATUS || 'completed' }}
       PLAY_PUBLISH_MODE: ${{ inputs.publish_mode || 'upload' }}
       PLAY_PROMOTE_FROM_TRACK: ${{ inputs.promote_from_track || 'internal' }}
       PLAY_RELEASE_NAME: ''
@@ -105,6 +120,21 @@ jobs:
         id: release_meta
         shell: bash
         run: |
+          case "${PLAY_TRACK}" in
+            internal|alpha|beta|production) ;;
+            *)
+              echo "Unsupported PLAY_TRACK '${PLAY_TRACK}'. Use internal, alpha, beta, or production." >&2
+              exit 1
+              ;;
+          esac
+          case "${PLAY_RELEASE_STATUS}" in
+            completed|draft|inProgress|halted) ;;
+            *)
+              echo "Unsupported PLAY_RELEASE_STATUS '${PLAY_RELEASE_STATUS}'. Use completed, draft, inProgress, or halted." >&2
+              exit 1
+              ;;
+          esac
+
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             release_tag="${{ inputs.release_tag }}"
           else
@@ -310,6 +340,10 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Unit tests
+        if: env.PLAY_PUBLISH_MODE != 'promote'
+        run: ./gradlew testDebugUnitTest --stacktrace
+
       - name: Validate release bundle
         if: env.PLAY_PUBLISH_MODE != 'promote'
         run: |
@@ -332,6 +366,7 @@ jobs:
             --promote-track="${PLAY_TRACK}"
             --version-code="${VERSION_CODE}"
             -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}"
+            -PPLAY_RELEASE_STATUS="${PLAY_RELEASE_STATUS}"
             --stacktrace
           )
           if [ -n "${PLAY_RELEASE_NAME}" ]; then
@@ -345,6 +380,7 @@ jobs:
           args=(
             :app:publishReleaseBundle
             -PPLAY_TRACK="${PLAY_TRACK}"
+            -PPLAY_RELEASE_STATUS="${PLAY_RELEASE_STATUS}"
             -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}"
             -PPARAKEET_RUNTIME="${PARAKEET_RUNTIME}"
             --stacktrace

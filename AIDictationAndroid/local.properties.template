@@ -5,8 +5,8 @@
 sdk.dir=/path/to/Android/Sdk
 
 # Optional local version overrides. Tagged Android releases use these defaults.
-VERSION_CODE=1015
-VERSION_NAME=0.0.18
+VERSION_CODE=1016
+VERSION_NAME=0.0.19
 
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here
@@ -42,4 +42,5 @@ STRIPE_PAYMENT_LINK_LIFETIME=https://buy.stripe.com/your_lifetime_checkout_link
 # Optional Google Play publishing configuration for local Gradle Play Publisher runs.
 # CI normally writes PLAY_SERVICE_ACCOUNT_CREDENTIALS from a GitHub secret.
 PLAY_TRACK=internal
+PLAY_RELEASE_STATUS=completed
 PLAY_SERVICE_ACCOUNT_CREDENTIALS=/path/to/google-play-service-account.json

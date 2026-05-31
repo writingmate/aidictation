@@ -1,6 +1,6 @@
 import Foundation
 
-#if canImport(ActivityKit)
+#if os(iOS) && canImport(ActivityKit)
     import ActivityKit
 
     @available(iOS 16.2, *)

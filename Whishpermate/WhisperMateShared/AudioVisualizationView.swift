@@ -70,7 +70,7 @@ public struct AIDictationMicButtonVisual: View {
 
     private var backgroundColor: Color {
         switch (style, state) {
-        case (.keyboard, .recording):
+        case (.keyboard, .idle), (.keyboard, .recording):
             return .primary
         case (.keyboard, .processing):
             return .secondary
@@ -81,7 +81,7 @@ public struct AIDictationMicButtonVisual: View {
 
     private var iconColor: Color {
         switch (style, state) {
-        case (.keyboard, .recording), (.keyboard, .processing):
+        case (.keyboard, .idle), (.keyboard, .recording), (.keyboard, .processing):
             #if os(iOS)
             return Color(uiColor: .systemBackground)
             #elseif os(macOS)

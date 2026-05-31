@@ -201,6 +201,38 @@ public class SupabaseManager {
         return updatedUser
     }
 
+    public func ensureReferralCode() async throws -> User {
+        let client = try requireClient()
+
+        struct EmptyPayload: Encodable {}
+
+        let updatedUser: User = try await client.rpc(
+            "ensure_referral_code",
+            params: EmptyPayload()
+        )
+        .execute()
+        .value
+
+        return updatedUser
+    }
+
+    public func redeemReferralCode(_ code: String) async throws -> User {
+        let client = try requireClient()
+
+        struct RedeemPayload: Encodable {
+            let code: String
+        }
+
+        let updatedUser: User = try await client.rpc(
+            "redeem_referral_code",
+            params: RedeemPayload(code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+        .execute()
+        .value
+
+        return updatedUser
+    }
+
     // MARK: - Transcription
 
     public func transcribe(audioData: Data, language: String = "en") async throws -> (transcription: String, wordCount: Int, updatedUser: User) {

@@ -274,6 +274,22 @@ public class AuthManager: ObservableObject {
         return updatedUser
     }
 
+    public func ensureReferralCode() async throws -> User {
+        let updatedUser = try await supabase.ensureReferralCode()
+        await MainActor.run {
+            self.currentUser = updatedUser
+        }
+        return updatedUser
+    }
+
+    public func redeemReferralCode(_ code: String) async throws -> User {
+        let updatedUser = try await supabase.redeemReferralCode(code)
+        await MainActor.run {
+            self.currentUser = updatedUser
+        }
+        return updatedUser
+    }
+
     public func checkCanTranscribe() -> (canTranscribe: Bool, reason: String?) {
         guard isAuthenticated, let user = currentUser else {
             return (false, "Please create an account to start transcribing")

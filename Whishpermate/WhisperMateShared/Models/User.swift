@@ -18,6 +18,9 @@ public struct User: Codable, Identifiable {
     public let stripeCustomerId: String?
     public let stripeSubscriptionId: String?
     public let wordCountResetAt: Date?
+    public let referralCode: String?
+    public let referredByUserId: UUID?
+    public let referralBonusWords: Int?
 
     // Computed property for compatibility
     public var subscriptionTier: SubscriptionTier {
@@ -34,7 +37,7 @@ public struct User: Codable, Identifiable {
     }
 
     public var wordsRemaining: Int {
-        let limit = subscriptionTier.wordLimit
+        let limit = effectiveWordLimit
         if limit == Int.max {
             return Int.max // Unlimited
         }
@@ -42,14 +45,24 @@ public struct User: Codable, Identifiable {
     }
 
     public var hasReachedLimit: Bool {
-        subscriptionTier.wordLimit != Int.max && monthlyWordCount >= subscriptionTier.wordLimit
+        effectiveWordLimit != Int.max && monthlyWordCount >= effectiveWordLimit
     }
 
     public var usagePercentage: Double {
-        guard subscriptionTier.wordLimit != Int.max else {
+        guard effectiveWordLimit != Int.max else {
             return 0.0
         }
-        return Double(monthlyWordCount) / Double(subscriptionTier.wordLimit)
+        return Double(monthlyWordCount) / Double(effectiveWordLimit)
+    }
+
+    public var bonusWords: Int {
+        max(0, referralBonusWords ?? 0)
+    }
+
+    public var effectiveWordLimit: Int {
+        let baseLimit = subscriptionTier.wordLimit
+        guard baseLimit != Int.max else { return Int.max }
+        return baseLimit + bonusWords
     }
 
     /// Check if word count needs to be reset (new month has started)
@@ -73,6 +86,9 @@ public struct User: Codable, Identifiable {
         case stripeCustomerId = "stripe_customer_id"
         case stripeSubscriptionId = "stripe_subscription_id"
         case wordCountResetAt = "word_count_reset_at"
+        case referralCode = "referral_code"
+        case referredByUserId = "referred_by_user_id"
+        case referralBonusWords = "referral_bonus_words"
     }
 }
 

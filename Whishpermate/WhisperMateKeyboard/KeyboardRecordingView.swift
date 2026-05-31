@@ -66,15 +66,15 @@ struct KeyboardRecordingView: View {
                 KeyboardKey(title: "shift", systemImage: isShifted ? "shift.fill" : "shift", style: .utility, action: onShift)
                     .frame(width: 42)
                 letterRow(rows[2])
-                KeyboardKey(title: "delete", systemImage: "delete.left", style: .utility, action: onBackspace)
+                KeyboardKey(title: "delete", systemImage: "delete.left", style: .utility, repeatsWhilePressed: true, action: onBackspace)
                     .frame(width: 42)
             }
 
             HStack(spacing: 6) {
                 KeyboardKey(title: "next keyboard", systemImage: "globe", style: .utility, action: onNextKeyboard)
                     .frame(width: 44)
-                KeyboardKey(title: "space", text: "space", style: .space, action: onSpace)
-                KeyboardKey(title: "return", text: "return", style: .utility, action: onReturn)
+                KeyboardKey(title: "space", text: "space", style: .space, repeatsWhilePressed: true, action: onSpace)
+                KeyboardKey(title: "return", text: "return", style: .utility, repeatsWhilePressed: true, action: onReturn)
                     .frame(width: 76)
             }
         }
@@ -127,6 +127,7 @@ struct KeyboardRecordingView: View {
                     title: key,
                     text: isShifted ? key.uppercased() : key,
                     style: .letter,
+                    repeatsWhilePressed: true,
                     action: { onKeyPress(isShifted ? key.uppercased() : key) }
                 )
             }
@@ -169,10 +170,18 @@ private struct KeyboardKey: View {
     var text: String?
     var systemImage: String?
     let style: Style
+    var repeatsWhilePressed = false
     let action: () -> Void
+    @State private var isPressing = false
+    @State private var initialRepeatTimer: Timer?
+    @State private var repeatTimer: Timer?
 
     var body: some View {
-        Button(action: action) {
+        Button(action: {
+            if !repeatsWhilePressed {
+                action()
+            }
+        }) {
             Group {
                 if let systemImage {
                     Image(systemName: systemImage)
@@ -190,7 +199,9 @@ private struct KeyboardKey: View {
             .shadow(color: .black.opacity(0.18), radius: 0, x: 0, y: 1)
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(repeatGesture)
         .accessibilityLabel(title)
+        .onDisappear(perform: stopRepeating)
     }
 
     private var backgroundColor: Color {
@@ -200,6 +211,42 @@ private struct KeyboardKey: View {
         case .utility:
             return Color(uiColor: KeyboardPalette.utilityKeyColor)
         }
+    }
+
+    private var repeatGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                startRepeatingIfNeeded()
+            }
+            .onEnded { _ in
+                stopRepeating()
+            }
+    }
+
+    private func startRepeatingIfNeeded() {
+        guard repeatsWhilePressed, !isPressing else { return }
+
+        isPressing = true
+        action()
+
+        let initialTimer = Timer(timeInterval: 0.42, repeats: false) { _ in
+            repeatTimer?.invalidate()
+            let repeatingTimer = Timer(timeInterval: 0.075, repeats: true) { _ in
+                action()
+            }
+            RunLoop.main.add(repeatingTimer, forMode: .common)
+            repeatTimer = repeatingTimer
+        }
+        RunLoop.main.add(initialTimer, forMode: .common)
+        initialRepeatTimer = initialTimer
+    }
+
+    private func stopRepeating() {
+        isPressing = false
+        initialRepeatTimer?.invalidate()
+        initialRepeatTimer = nil
+        repeatTimer?.invalidate()
+        repeatTimer = nil
     }
 }
 

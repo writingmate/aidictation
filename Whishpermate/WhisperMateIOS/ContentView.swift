@@ -29,6 +29,11 @@ struct ContentView: View {
     @State private var newlyInsertedRecordingID: UUID?
     @State private var historySearchText = ""
     @State private var recordingToShare: Recording?
+    @State private var referralShareItem: ReferralShareItem?
+    @State private var isPreparingReferral = false
+    @State private var isRedeemingReferral = false
+    @State private var referralCodeToRedeem = ""
+    @State private var referralError: String?
     @State private var activeKeyboardDictationSessionID: String?
     @State private var showKeyboardReturnScreen = false
     @State private var keyboardBridgeAliveUntil: Date?
@@ -139,6 +144,9 @@ struct ContentView: View {
             }
             .sheet(item: $recordingToShare) { recording in
                 ShareSheet(activityItems: [recording.transcription])
+            }
+            .sheet(item: $referralShareItem) { item in
+                ShareSheet(activityItems: [item.text])
             }
         }
         .navigationViewStyle(.stack)
@@ -484,6 +492,9 @@ struct ContentView: View {
         .sheet(item: $recordingToShare) { recording in
             ShareSheet(activityItems: [recording.transcription])
         }
+        .sheet(item: $referralShareItem) { item in
+            ShareSheet(activityItems: [item.text])
+        }
     }
 
     @ViewBuilder
@@ -604,6 +615,22 @@ struct ContentView: View {
                             Label("Log In to Get More", systemImage: "person.crop.circle.badge.plus")
                                 .foregroundColor(.primary)
                         }
+                    }
+                }
+
+                if !subscriptionManager.getUsageStatus().isPro {
+                    Section("Get More Words") {
+                        ReferralInviteView(
+                            user: authManager.currentUser,
+                            isAuthenticated: authManager.isAuthenticated,
+                            isLoading: isPreparingReferral,
+                            isRedeeming: isRedeemingReferral,
+                            codeToRedeem: $referralCodeToRedeem,
+                            error: referralError,
+                            onInvite: prepareReferralInvite,
+                            onRedeem: redeemReferralCode,
+                            onLogin: openLogin
+                        )
                     }
                 }
 
@@ -943,6 +970,75 @@ struct ContentView: View {
         UIApplication.shared.open(url)
     }
 
+    private func prepareReferralInvite() {
+        guard authManager.isAuthenticated else {
+            openLogin()
+            return
+        }
+
+        Task {
+            await MainActor.run {
+                isPreparingReferral = true
+                referralError = nil
+            }
+
+            do {
+                let user = try await authManager.ensureReferralCode()
+                guard let code = user.referralCode, !code.isEmpty else {
+                    throw NSError(domain: "Referral", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "Your invite link is not ready yet. Please try again.",
+                    ])
+                }
+
+                await MainActor.run {
+                    referralShareItem = ReferralShareItem(text: ReferralProgram.inviteText(code: code))
+                    isPreparingReferral = false
+                }
+            } catch {
+                await MainActor.run {
+                    referralError = "Could not create your invite link. Please try again."
+                    isPreparingReferral = false
+                }
+                DebugLog.warning("Referral invite failed: \(error.localizedDescription)", context: "Referral")
+            }
+        }
+    }
+
+    private func redeemReferralCode() {
+        guard authManager.isAuthenticated else {
+            openLogin()
+            return
+        }
+
+        let code = referralCodeToRedeem.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else {
+            referralError = "Enter an invite code."
+            return
+        }
+
+        Task {
+            await MainActor.run {
+                isRedeemingReferral = true
+                referralError = nil
+            }
+
+            do {
+                _ = try await authManager.redeemReferralCode(code)
+                await MainActor.run {
+                    referralCodeToRedeem = ""
+                    referralError = "Invite applied. Extra words added."
+                    isRedeemingReferral = false
+                }
+            } catch {
+                await MainActor.run {
+                    referralError = "Could not apply that invite code."
+                    isRedeemingReferral = false
+                }
+                DebugLog.warning("Referral redeem failed: \(error.localizedDescription)", context: "Referral")
+            }
+        }
+    }
+
     private func handleInlineRecordingTap() {
         DebugLog.info("inline primary action state=\(inlineRecording.state) selectedMode=\(selectedRecordingMode.displayName)", context: "KEYBOARD_DIAG")
         if inlineRecording.state == .idle {
@@ -1083,6 +1179,11 @@ struct ContentView: View {
     }
 }
 
+private struct ReferralShareItem: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
 private struct KeyboardDictationReturnView: View {
     let state: InlineRecordingState
 
@@ -1215,6 +1316,69 @@ private struct UsageSummaryView: View {
 	            }
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct ReferralInviteView: View {
+    let user: User?
+    let isAuthenticated: Bool
+    let isLoading: Bool
+    let isRedeeming: Bool
+    @Binding var codeToRedeem: String
+    let error: String?
+    let onInvite: () -> Void
+    let onRedeem: () -> Void
+    let onLogin: () -> Void
+
+    private var bonusText: String {
+        guard let user, user.bonusWords > 0 else {
+            return "Invite a friend and get \(ReferralProgram.bonusWordsPerReferral.formatted()) extra words when they join."
+        }
+        return "\(user.bonusWords.formatted()) extra words earned from invites."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Invite friends for more words", systemImage: "gift")
+                .font(.body.weight(.medium))
+
+            Text(bonusText)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let error {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                isAuthenticated ? onInvite() : onLogin()
+            } label: {
+                HStack {
+                    if isLoading {
+                        ProgressView()
+                    }
+                    Text(isAuthenticated ? "Share Invite" : "Log In to Invite")
+                }
+            }
+            .disabled(isLoading)
+
+            if isAuthenticated {
+                HStack(spacing: 8) {
+                    TextField("Invite code", text: $codeToRedeem)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                    Button("Apply") {
+                        onRedeem()
+                    }
+                    .disabled(isRedeeming || codeToRedeem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

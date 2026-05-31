@@ -101,7 +101,7 @@ public class SubscriptionManager: ObservableObject {
     public func getUsageStatus() -> (used: Int, limit: Int, percentage: Double, isPro: Bool) {
         if let user = authManager.currentUser {
             let isPaid = user.subscriptionTier.isPaid
-            let limit = user.subscriptionTier.wordLimit
+            let limit = user.effectiveWordLimit
             let used = user.totalWordsUsed
             let percentage = isPaid ? 0.0 : user.usagePercentage
             return (used, limit, percentage, isPaid)
@@ -127,7 +127,7 @@ public class SubscriptionManager: ObservableObject {
 
         // Show if they're approaching limit (90%) or over
         let newTotal = user.totalWordsUsed + wordCount
-        let limit = user.subscriptionTier.wordLimit
+        let limit = user.effectiveWordLimit
         let percentage = Double(newTotal) / Double(limit)
 
         return percentage >= 0.9
@@ -136,9 +136,9 @@ public class SubscriptionManager: ObservableObject {
     public func getUpgradeMessage(for user: User) -> String {
         let remaining = user.wordsRemaining
         if remaining <= 0 {
-            return "You've used all \(UsageLimits.freeMonthlyWordLimit.formatted()) free words. Upgrade to Pro for unlimited transcriptions!"
+            return "You've used all \(user.effectiveWordLimit.formatted()) free words. Upgrade to Pro for unlimited transcriptions or invite a friend for more words."
         } else if remaining < 200 {
-            return "Only \(remaining) words left in your free trial. Upgrade now for unlimited access!"
+            return "Only \(remaining) words left. Upgrade for unlimited access or invite a friend for more words."
         } else {
             return "Upgrade to Pro for unlimited transcriptions and included API access."
         }
@@ -221,5 +221,38 @@ public class SubscriptionManager: ObservableObject {
         let components = calendar.dateComponents([.year, .month], from: now)
         let startOfMonth = calendar.date(from: components)!
         return calendar.date(byAdding: .month, value: 1, to: startOfMonth)!
+    }
+}
+
+public enum ReferralProgram {
+    public static let bonusWordsPerReferral = 1000
+
+    public static func inviteURL(for code: String) -> URL? {
+        if let base = SecretsLoader.getValue(for: "REFERRAL_URL"), !base.isEmpty {
+            return referralURL(base: base, code: code)
+        }
+
+        if let authWebURL = SecretsLoader.getValue(for: "AUTH_WEB_URL"), !authWebURL.isEmpty {
+            return referralURL(base: authWebURL, code: code)
+        }
+
+        return URL(string: "https://aidictation.app/referral?code=\(code)")
+    }
+
+    public static func inviteText(code: String) -> String {
+        guard let url = inviteURL(for: code) else {
+            return "Try AI Dictation with my invite code: \(code)"
+        }
+
+        return "Try AI Dictation with my invite link. We both get \(bonusWordsPerReferral.formatted()) extra words: \(url.absoluteString)"
+    }
+
+    private static func referralURL(base: String, code: String) -> URL? {
+        guard var components = URLComponents(string: base) else { return nil }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "ref" || $0.name == "referral_code" }
+        queryItems.append(URLQueryItem(name: "ref", value: code))
+        components.queryItems = queryItems
+        return components.url
     }
 }

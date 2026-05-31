@@ -113,6 +113,10 @@ struct SettingsView: View {
     @State private var pendingTranscriptionMode: TranscriptionMode?
     @State private var pendingCloudLanguage: Language?
     @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
+    @State private var isPreparingReferral = false
+    @State private var isRedeemingReferral = false
+    @State private var referralCodeToRedeem = ""
+    @State private var referralStatusText: String?
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -401,6 +405,64 @@ struct SettingsView: View {
                 }
             }
 
+            if !isPro {
+                SettingsCard {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Invite Friends")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+
+                            if let user = authManager.currentUser, user.bonusWords > 0 {
+                                Text("\(user.bonusWords.formatted()) extra words earned")
+                                    .dsFont(.label)
+                                    .foregroundStyle(Color.dsMutedForeground)
+                            } else {
+                                Text("Get \(ReferralProgram.bonusWordsPerReferral.formatted()) extra words when a friend joins.")
+                                    .dsFont(.label)
+                                    .foregroundStyle(Color.dsMutedForeground)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if let referralStatusText {
+                                Text(referralStatusText)
+                                    .dsFont(.label)
+                                    .foregroundStyle(Color.dsMutedForeground)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer()
+                        if isPreparingReferral {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button(authManager.isAuthenticated ? "Copy Invite" : "Log In") {
+                                authManager.isAuthenticated ? copyReferralInvite() : authManager.openSignUp()
+                            }
+                            .controlSize(.small)
+                            .disabled(authManager.isAuthenticationSessionActive)
+                        }
+                    }
+
+                    if authManager.isAuthenticated {
+                        HStack(spacing: 8) {
+                            TextField("Invite code", text: $referralCodeToRedeem)
+                                .textFieldStyle(.roundedBorder)
+                            if isRedeemingReferral {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Button("Apply") {
+                                    redeemReferralCode()
+                                }
+                                .controlSize(.small)
+                                .disabled(referralCodeToRedeem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Upgrade Card (only for authenticated Free tier users)
             if authManager.isAuthenticated && !isPro {
                 SettingsCard {
@@ -518,6 +580,61 @@ struct SettingsView: View {
 
         // Start checking for payment confirmation
         startPaymentConfirmationCheck(resuming: false)
+    }
+
+    private func copyReferralInvite() {
+        isPreparingReferral = true
+        referralStatusText = nil
+
+        Task {
+            do {
+                let user = try await authManager.ensureReferralCode()
+                guard let code = user.referralCode, !code.isEmpty else {
+                    throw NSError(domain: "Referral", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "Your invite link is not ready yet. Please try again.",
+                    ])
+                }
+
+                let inviteText = ReferralProgram.inviteText(code: code)
+                await MainActor.run {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(inviteText, forType: .string)
+                    referralStatusText = "Invite copied."
+                    isPreparingReferral = false
+                }
+            } catch {
+                await MainActor.run {
+                    referralStatusText = "Could not create your invite link. Please try again."
+                    isPreparingReferral = false
+                }
+                DebugLog.warning("Referral invite failed: \(error.localizedDescription)", context: "Referral")
+            }
+        }
+    }
+
+    private func redeemReferralCode() {
+        let code = referralCodeToRedeem.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+
+        isRedeemingReferral = true
+        referralStatusText = nil
+
+        Task {
+            do {
+                _ = try await authManager.redeemReferralCode(code)
+                await MainActor.run {
+                    referralCodeToRedeem = ""
+                    referralStatusText = "Invite applied. Extra words added."
+                    isRedeemingReferral = false
+                }
+            } catch {
+                await MainActor.run {
+                    referralStatusText = "Could not apply that invite code."
+                    isRedeemingReferral = false
+                }
+                DebugLog.warning("Referral redeem failed: \(error.localizedDescription)", context: "Referral")
+            }
+        }
     }
 
     private enum PaymentTracking {

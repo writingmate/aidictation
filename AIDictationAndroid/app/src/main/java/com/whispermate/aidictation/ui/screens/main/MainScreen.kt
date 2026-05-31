@@ -254,6 +254,8 @@ fun MainScreen(
                 onSignIn = { viewModel.openLogin() },
                 onSignOut = { viewModel.signOut() },
                 onUpgrade = { viewModel.openUpgrade() },
+                onShareInvite = { viewModel.shareReferralInvite() },
+                onRedeemInvite = { viewModel.redeemReferralCode(it) },
                 modifier = Modifier.padding(paddingValues)
             )
         }

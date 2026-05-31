@@ -205,6 +205,39 @@ class AuthRepository @Inject constructor(
         }
     }
 
+    suspend fun ensureReferralCode(): Result<UserProfile> = withContext(Dispatchers.IO) {
+        val token = securePrefs.getString(SecureKeys.ACCESS_TOKEN, null)
+            ?: return@withContext Result.failure(Exception("Sign in to create an invite link."))
+
+        callProfileRpc("ensure_referral_code", JSONObject(), token)
+    }
+
+    suspend fun redeemReferralCode(code: String): Result<UserProfile> = withContext(Dispatchers.IO) {
+        val token = securePrefs.getString(SecureKeys.ACCESS_TOKEN, null)
+            ?: return@withContext Result.failure(Exception("Sign in to apply an invite code."))
+        val cleanedCode = code.trim()
+        if (cleanedCode.isBlank()) {
+            return@withContext Result.failure(Exception("Enter an invite code."))
+        }
+
+        callProfileRpc("redeem_referral_code", JSONObject().put("code", cleanedCode), token)
+    }
+
+    private fun callProfileRpc(functionName: String, payload: JSONObject, accessToken: String): Result<UserProfile> = runCatching {
+        val request = Request.Builder()
+            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/$functionName")
+            .addSupabaseHeaders(accessToken)
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("Request failed: ${response.code}")
+            val updated = parseProfile(response.body?.string().orEmpty(), _authState.value.user?.email.orEmpty())
+            _authState.value = _authState.value.copy(user = updated)
+            updated
+        }
+    }
+
     private fun fetchProfile(accessToken: String): Result<UserProfile> = runCatching {
         val authUser = fetchAuthUser(accessToken)
         val request = Request.Builder()
@@ -263,17 +296,27 @@ class AuthRepository @Inject constructor(
     private fun parseProfileArray(json: String, fallbackEmail: String): List<UserProfile> {
         val array = JSONArray(json.ifBlank { "[]" })
         return (0 until array.length()).map { index ->
-            val item = array.getJSONObject(index)
-            UserProfile(
-                userId = item.optString("user_id"),
-                email = item.optString("email", fallbackEmail),
-                monthlyWordCount = item.optInt("monthly_word_count", 0),
-                subscriptionStatus = item.optString("subscription_status", "free"),
-                stripeCustomerId = item.optNullableString("stripe_customer_id"),
-                stripeSubscriptionId = item.optNullableString("stripe_subscription_id"),
-                wordCountResetAt = null
-            )
+            parseProfile(array.getJSONObject(index), fallbackEmail)
         }
+    }
+
+    private fun parseProfile(json: String, fallbackEmail: String): UserProfile {
+        return parseProfile(JSONObject(json.ifBlank { "{}" }), fallbackEmail)
+    }
+
+    private fun parseProfile(item: JSONObject, fallbackEmail: String): UserProfile {
+        return UserProfile(
+            userId = item.optString("user_id"),
+            email = item.optString("email", fallbackEmail),
+            monthlyWordCount = item.optInt("monthly_word_count", 0),
+            subscriptionStatus = item.optString("subscription_status", "free"),
+            stripeCustomerId = item.optNullableString("stripe_customer_id"),
+            stripeSubscriptionId = item.optNullableString("stripe_subscription_id"),
+            wordCountResetAt = null,
+            referralCode = item.optNullableString("referral_code"),
+            referredByUserId = item.optNullableString("referred_by_user_id"),
+            referralBonusWords = item.optInt("referral_bonus_words", 0)
+        )
     }
 
     private fun storeTokens(accessToken: String, refreshToken: String?) {

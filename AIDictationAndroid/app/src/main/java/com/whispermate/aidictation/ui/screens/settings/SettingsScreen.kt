@@ -42,12 +42,14 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -94,6 +96,8 @@ fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
+    onShareInvite: () -> Unit,
+    onRedeemInvite: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -101,6 +105,7 @@ fun SettingsScreen(
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
+    var referralCodeInput by remember { mutableStateOf("") }
 
     val hasMicPermission = ContextCompat.checkSelfPermission(
         context,
@@ -216,6 +221,20 @@ fun SettingsScreen(
             )
         ) {
             UsageSummary(usageStatus = usageStatus)
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            ReferralInviteItem(
+                usageStatus = usageStatus,
+                referralCodeInput = referralCodeInput,
+                onReferralCodeChange = { referralCodeInput = it },
+                onShareInvite = onShareInvite,
+                onRedeemInvite = {
+                    onRedeemInvite(referralCodeInput)
+                    referralCodeInput = ""
+                },
+                onSignIn = onSignIn
+            )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
@@ -666,6 +685,81 @@ private fun UsageSummary(usageStatus: UsageStatus) {
                 progress = { usageStatus.percentage.coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth()
             )
+        }
+    }
+}
+
+@Composable
+private fun ReferralInviteItem(
+    usageStatus: UsageStatus,
+    referralCodeInput: String,
+    onReferralCodeChange: (String) -> Unit,
+    onShareInvite: () -> Unit,
+    onRedeemInvite: () -> Unit,
+    onSignIn: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Star,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.referral_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = if (usageStatus.referralBonusWords > 0) {
+                        stringResource(R.string.referral_earned, usageStatus.referralBonusWords)
+                    } else {
+                        stringResource(R.string.referral_description)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = if (usageStatus.isAuthenticated) onShareInvite else onSignIn,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(if (usageStatus.isAuthenticated) R.string.referral_share else R.string.referral_sign_in))
+            }
+        }
+
+        if (usageStatus.isAuthenticated) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = referralCodeInput,
+                    onValueChange = onReferralCodeChange,
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.referral_code_hint)) }
+                )
+                Button(
+                    onClick = onRedeemInvite,
+                    enabled = referralCodeInput.isNotBlank()
+                ) {
+                    Text(stringResource(R.string.referral_apply))
+                }
+            }
         }
     }
 }

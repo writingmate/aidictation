@@ -105,6 +105,13 @@
     <string name="account_usage_unlimited">Unlimited words</string>
     <string name="account_anonymous_hint">Sign in only when you need more words or want to purchase.</string>
     <string name="account_authenticated_hint">Your word usage and purchases are linked to this account.</string>
+    <string name="referral_title">Invite friends for more words</string>
+    <string name="referral_description">Get 2,000 extra words when a friend joins.</string>
+    <string name="referral_earned">%1$d extra words earned from invites.</string>
+    <string name="referral_share">Share invite</string>
+    <string name="referral_sign_in">Sign in to invite</string>
+    <string name="referral_code_hint">Invite code</string>
+    <string name="referral_apply">Apply</string>
     <string name="settings_transcription">Transcription</string>
     <string name="settings_on_device_transcription">Transcription mode</string>
     <string name="settings_on_device_cloud">Cloud</string>

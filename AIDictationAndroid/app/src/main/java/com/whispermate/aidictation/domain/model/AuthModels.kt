@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.domain.model
 
 const val FREE_MONTHLY_WORD_LIMIT = 2_000
+const val REFERRAL_BONUS_WORDS = 2_000
 
 enum class SubscriptionTier {
     Free,
@@ -36,16 +37,22 @@ data class UserProfile(
     val subscriptionStatus: String,
     val stripeCustomerId: String? = null,
     val stripeSubscriptionId: String? = null,
-    val wordCountResetAt: Long? = null
+    val wordCountResetAt: Long? = null,
+    val referralCode: String? = null,
+    val referredByUserId: String? = null,
+    val referralBonusWords: Int = 0
 ) {
     val subscriptionTier: SubscriptionTier
         get() = SubscriptionTier.fromStatus(subscriptionStatus)
 
+    val effectiveWordLimit: Int
+        get() = if (subscriptionTier.isPaid) Int.MAX_VALUE else FREE_MONTHLY_WORD_LIMIT + referralBonusWords.coerceAtLeast(0)
+
     val hasReachedLimit: Boolean
-        get() = !subscriptionTier.isPaid && monthlyWordCount >= FREE_MONTHLY_WORD_LIMIT
+        get() = !subscriptionTier.isPaid && monthlyWordCount >= effectiveWordLimit
 
     val wordsRemaining: Int
-        get() = if (subscriptionTier.isPaid) Int.MAX_VALUE else (FREE_MONTHLY_WORD_LIMIT - monthlyWordCount).coerceAtLeast(0)
+        get() = if (subscriptionTier.isPaid) Int.MAX_VALUE else (effectiveWordLimit - monthlyWordCount).coerceAtLeast(0)
 }
 
 data class AuthState(
@@ -63,7 +70,9 @@ data class UsageStatus(
     val isPro: Boolean,
     val isAuthenticated: Boolean,
     val email: String? = null,
-    val tierName: String = SubscriptionTier.Free.displayName
+    val tierName: String = SubscriptionTier.Free.displayName,
+    val referralCode: String? = null,
+    val referralBonusWords: Int = 0
 ) {
     val remaining: Int
         get() = if (isPro) Int.MAX_VALUE else (limit - used).coerceAtLeast(0)

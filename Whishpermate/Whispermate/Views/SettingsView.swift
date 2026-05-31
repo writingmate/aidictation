@@ -405,59 +405,57 @@ struct SettingsView: View {
                 }
             }
 
-            if !isPro {
-                SettingsCard {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Invite Friends")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
+            SettingsCard {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Invite Friends")
+                            .dsFont(.body)
+                            .foregroundStyle(Color.dsForeground)
 
-                            if let user = authManager.currentUser, user.bonusWords > 0 {
-                                Text("\(user.bonusWords.formatted()) extra words earned")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            } else {
-                                Text("Get \(ReferralProgram.bonusWordsPerReferral.formatted()) extra words when a friend joins.")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            if let referralStatusText {
-                                Text(referralStatusText)
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                        if let user = authManager.currentUser, user.bonusWords > 0 {
+                            Text("\(user.bonusWords.formatted()) extra words earned")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        } else {
+                            Text("Get \(ReferralProgram.bonusWordsPerReferral.formatted()) extra words when a friend joins.")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        Spacer()
-                        if isPreparingReferral {
+
+                        if let referralStatusText {
+                            Text(referralStatusText)
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer()
+                    if isPreparingReferral {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button(authManager.isAuthenticated ? "Copy Invite" : "Log In") {
+                            authManager.isAuthenticated ? copyReferralInvite() : authManager.openSignUp()
+                        }
+                        .controlSize(.small)
+                        .disabled(authManager.isAuthenticationSessionActive)
+                    }
+                }
+
+                if authManager.isAuthenticated {
+                    HStack(spacing: 8) {
+                        TextField("Invite code", text: $referralCodeToRedeem)
+                            .textFieldStyle(.roundedBorder)
+                        if isRedeemingReferral {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Button(authManager.isAuthenticated ? "Copy Invite" : "Log In") {
-                                authManager.isAuthenticated ? copyReferralInvite() : authManager.openSignUp()
+                            Button("Apply") {
+                                redeemReferralCode()
                             }
                             .controlSize(.small)
-                            .disabled(authManager.isAuthenticationSessionActive)
-                        }
-                    }
-
-                    if authManager.isAuthenticated {
-                        HStack(spacing: 8) {
-                            TextField("Invite code", text: $referralCodeToRedeem)
-                                .textFieldStyle(.roundedBorder)
-                            if isRedeemingReferral {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Button("Apply") {
-                                    redeemReferralCode()
-                                }
-                                .controlSize(.small)
-                                .disabled(referralCodeToRedeem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            }
+                            .disabled(referralCodeToRedeem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
                 }

@@ -7,7 +7,7 @@ create table if not exists public.referrals (
     id uuid primary key default gen_random_uuid(),
     referrer_user_id uuid not null references public.profiles(user_id) on delete cascade,
     referred_user_id uuid not null references public.profiles(user_id) on delete cascade,
-    bonus_words integer not null default 1000,
+    bonus_words integer not null default 2000,
     created_at timestamptz not null default now(),
     unique (referred_user_id)
 );
@@ -63,7 +63,7 @@ declare
     cleaned_code text := upper(trim(code));
     referrer public.profiles;
     updated_profile public.profiles;
-    bonus integer := 1000;
+    bonus integer := 2000;
 begin
     if cleaned_code = '' then
         raise exception 'Invite code is required';

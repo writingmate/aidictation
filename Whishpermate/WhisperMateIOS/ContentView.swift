@@ -618,20 +618,18 @@ struct ContentView: View {
                     }
                 }
 
-                if !subscriptionManager.getUsageStatus().isPro {
-                    Section("Get More Words") {
-                        ReferralInviteView(
-                            user: authManager.currentUser,
-                            isAuthenticated: authManager.isAuthenticated,
-                            isLoading: isPreparingReferral,
-                            isRedeeming: isRedeemingReferral,
-                            codeToRedeem: $referralCodeToRedeem,
-                            error: referralError,
-                            onInvite: prepareReferralInvite,
-                            onRedeem: redeemReferralCode,
-                            onLogin: openLogin
-                        )
-                    }
+                Section("Get More Words") {
+                    ReferralInviteView(
+                        user: authManager.currentUser,
+                        isAuthenticated: authManager.isAuthenticated,
+                        isLoading: isPreparingReferral,
+                        isRedeeming: isRedeemingReferral,
+                        codeToRedeem: $referralCodeToRedeem,
+                        error: referralError,
+                        onInvite: prepareReferralInvite,
+                        onRedeem: redeemReferralCode,
+                        onLogin: openLogin
+                    )
                 }
 
                 Section("Permissions") {

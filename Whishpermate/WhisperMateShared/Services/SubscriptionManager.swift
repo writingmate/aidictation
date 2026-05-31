@@ -225,7 +225,7 @@ public class SubscriptionManager: ObservableObject {
 }
 
 public enum ReferralProgram {
-    public static let bonusWordsPerReferral = 1000
+    public static let bonusWordsPerReferral = 2000
 
     public static func inviteURL(for code: String) -> URL? {
         if let base = SecretsLoader.getValue(for: "REFERRAL_URL"), !base.isEmpty {

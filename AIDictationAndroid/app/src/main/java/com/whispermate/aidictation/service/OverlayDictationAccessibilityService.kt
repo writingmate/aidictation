@@ -1,8 +1,5 @@
 package com.whispermate.aidictation.service
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
@@ -27,11 +24,11 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.view.animation.DecelerateInterpolator
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -73,7 +70,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val MIN_RECORDING_MS = 500L
         private const val BUBBLE_SIZE_DP = 55
         private const val BUBBLE_MARGIN_DP = 20
-        private const val BUBBLE_ANIMATION_MS = 140L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val VOLUME_SHORTCUT_WINDOW_MS = 1_200L
@@ -141,7 +137,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var bubbleView: CircularMicButtonView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var isBubbleAttached = false
-    private var bubbleVisibilityToken = 0L
     private var bubbleShouldBeVisible = false
     private var commandActionsView: LinearLayout? = null
     private var commandActionsParams: WindowManager.LayoutParams? = null
@@ -161,7 +156,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var recordingStartedByVolumeShortcut = false
     private var bubbleAnimationJob: Job? = null
     private var bubbleHideJob: Job? = null
-    private var bubbleSnapAnimator: ValueAnimator? = null
 
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
@@ -225,11 +219,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         stopRecording(discard = true)
-        hideBubble(animated = false)
-        hideCommandActions(animated = false)
+        hideBubble()
+        hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
-        stopBubbleSnapAnimation()
     }
 
     private fun registerBubblePreferenceListener() {
@@ -299,15 +292,26 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         stopRecording(discard = true)
-        hideBubble(animated = false)
-        hideCommandActions(animated = false)
+        hideBubble()
+        hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
-        stopBubbleSnapAnimation()
         unregisterBubblePreferenceListener()
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
+        if (!shouldKeepBubbleVisibleWithoutKeyboard() && !isKeyboardVisible()) {
+            bubbleHideJob?.cancel()
+            bubbleHideJob = null
+            bubbleShouldBeVisible = false
+            if (recordingState == RecordingState.Recording) {
+                stopRecording(discard = true)
+            }
+            hideBubble()
+            hideCommandActions()
+            return
+        }
+
         if (shouldShowBubble(source)) {
             bubbleHideJob?.cancel()
             bubbleHideJob = null
@@ -331,13 +335,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             if (recordingState == RecordingState.Recording) {
                 stopRecording(discard = true)
             }
-            hideBubble(animated = false)
-            hideCommandActions(animated = false)
+            hideBubble()
+            hideCommandActions()
         }
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        if (recordingStartedByVolumeShortcut && recordingState != RecordingState.Idle) {
+        if (shouldKeepBubbleVisibleWithoutKeyboard()) {
             return true
         }
         if (!isKeyboardVisible()) return false
@@ -347,6 +351,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return false
         }
         return true
+    }
+
+    private fun shouldKeepBubbleVisibleWithoutKeyboard(): Boolean {
+        return recordingStartedByVolumeShortcut && recordingState != RecordingState.Idle
     }
 
     private fun isVolumeShortcutEnabled(): Boolean {
@@ -363,6 +371,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun isKeyboardVisible(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            bubbleView?.rootWindowInsets?.let { insets ->
+                return insets.isVisible(WindowInsets.Type.ime())
+            }
+        }
         return inputMethodBounds() != null
     }
 
@@ -418,8 +431,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (recordingState == RecordingState.Recording) {
             stopRecording(discard = true)
         }
-        hideBubble(animated = false)
-        hideCommandActions(animated = false)
+        hideBubble()
+        hideCommandActions()
         Toast.makeText(this, messageRes, Toast.LENGTH_SHORT).show()
     }
 
@@ -474,50 +487,30 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val params = bubbleParams ?: return
 
         bubbleShouldBeVisible = true
-        val token = ++bubbleVisibilityToken
         if (isBubbleAttached) {
-            // A pending fade-out got cancelled (e.g. transient focus loss during keyboard
-            // dismissal). Snap back to fully visible instead of running a fade-in during
-            // the fade-out — the debounce keeps the snap imperceptible, whereas a reverse
-            // animation reads as a visible flicker.
-            bubble.animate().cancel()
             bubble.alpha = 1f
             updateCommandActionsPosition()
             updateBubbleUi()
             return
         }
-        bubble.animate().cancel()
 
         try {
-            bubble.alpha = 0f
+            bubble.alpha = 1f
             windowManager.addView(bubble, params)
             isBubbleAttached = true
             updateCommandActionsPosition()
-            bubble.animate()
-                .alpha(1f)
-                .setDuration(BUBBLE_ANIMATION_MS)
-                .withEndAction {
-                    if (token != bubbleVisibilityToken) return@withEndAction
-                    bubble.alpha = 1f
-                }
-                .start()
             updateBubbleUi()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to attach bubble overlay", e)
         }
     }
 
-    private fun hideBubble(animated: Boolean = true) {
+    private fun hideBubble() {
         bubbleHideJob?.cancel()
         bubbleHideJob = null
         bubbleShouldBeVisible = false
         if (!isBubbleAttached) return
-        val bubble = bubbleView ?: return
-        ++bubbleVisibilityToken
-        bubble.animate().cancel()
 
-        // Do not fade out. Keyboard dismissal can produce alternating focus/window
-        // events, and an in-flight alpha animation makes the bubble visibly blink.
         removeBubbleView()
     }
 
@@ -531,9 +524,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         } finally {
             isBubbleAttached = false
             bubble.alpha = 1f
-            hideCommandActions(animated = false)
+            hideCommandActions()
             stopBubbleAnimation()
-            stopBubbleSnapAnimation()
         }
     }
 
@@ -565,6 +557,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             gravity = Gravity.TOP or Gravity.START
             x = startX
             y = startY
+            windowAnimations = 0
         }
 
         attachDragAndTapHandler()
@@ -645,6 +638,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             gravity = Gravity.TOP or Gravity.START
             x = defaultBubbleX()
             y = defaultBubbleY()
+            windowAnimations = 0
         }
 
         updateCommandActionButtons()
@@ -676,7 +670,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun updateCommandActionsVisibility(source: AccessibilityNodeInfo?) {
         if (!isBubbleAttached) {
-            hideCommandActions(animated = true)
+            hideCommandActions()
             return
         }
 
@@ -684,7 +678,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             if (activeCommandAction != null) {
                 showCommandActions()
             } else {
-                hideCommandActions(animated = true)
+                hideCommandActions()
             }
             updateCommandActionButtons()
             return
@@ -692,7 +686,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         val node = resolveFocusedEditableNode(source)
         if (node == null) {
-            hideCommandActions(animated = true)
+            hideCommandActions()
             return
         }
 
@@ -702,7 +696,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (hasSelection) {
             showCommandActions()
         } else {
-            hideCommandActions(animated = true)
+            hideCommandActions()
         }
         updateCommandActionButtons()
     }
@@ -713,7 +707,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val params = commandActionsParams ?: return
         if (!isBubbleAttached) return
 
-        actions.animate().cancel()
         if (isCommandActionsAttached) {
             actions.alpha = 1f
             updateCommandActionsPosition()
@@ -722,27 +715,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         try {
-            actions.alpha = 0f
+            actions.alpha = 1f
             windowManager.addView(actions, params)
             isCommandActionsAttached = true
             updateCommandActionsPosition()
             updateCommandActionButtons()
-            actions.animate()
-                .alpha(1f)
-                .setDuration(BUBBLE_ANIMATION_MS)
-                .start()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to attach command actions overlay", e)
         }
     }
 
-    private fun hideCommandActions(animated: Boolean = true) {
+    private fun hideCommandActions() {
         if (!isCommandActionsAttached) return
-        val actions = commandActionsView ?: return
-        actions.animate().cancel()
 
-        // Match bubble removal to avoid a lingering fading command strip when the
-        // keyboard is closing.
         removeCommandActionsView()
     }
 
@@ -809,6 +794,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             gravity = Gravity.BOTTOM or Gravity.START
             x = 0
             y = 0
+            windowAnimations = 0
         }
     }
 
@@ -837,7 +823,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val actions = dismissActionsView ?: return
         val params = dismissActionsParams ?: return
 
-        hideCommandActions(animated = false)
+        hideCommandActions()
         updateDismissActionsPosition()
         if (isDismissActionsAttached) return
 
@@ -854,7 +840,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun hideDismissActions() {
         if (!isDismissActionsAttached) return
         val actions = dismissActionsView ?: return
-        actions.animate().cancel()
         try {
             windowManager.removeView(actions)
         } catch (e: Exception) {
@@ -964,7 +949,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubble.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    stopBubbleSnapAnimation()
                     downRawX = event.rawX
                     downRawY = event.rawY
                     downX = params.x
@@ -1063,60 +1047,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val maxY = (keyboardTop() - bubbleHeight - margin).coerceAtLeast(margin)
         val targetY = currentY.coerceIn(margin, maxY)
 
-        animateBubbleTo(targetX, targetY)
+        moveBubbleTo(targetX, targetY)
     }
 
-    private fun animateBubbleTo(targetX: Int, targetY: Int) {
+    private fun moveBubbleTo(targetX: Int, targetY: Int) {
         val params = bubbleParams ?: return
-        if (!isBubbleAttached) {
-            persistBubblePosition(targetX, targetY)
-            return
-        }
-
-        val startX = params.x
-        val startY = params.y
-        if (startX == targetX && startY == targetY) {
-            persistBubblePosition(targetX, targetY)
-            return
-        }
-
-        stopBubbleSnapAnimation()
-        var cancelled = false
-        bubbleSnapAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = BUBBLE_ANIMATION_MS
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { animator ->
-                val fraction = animator.animatedValue as Float
-                params.x = startX + ((targetX - startX) * fraction).roundToInt()
-                params.y = startY + ((targetY - startY) * fraction).roundToInt()
-                updateBubblePosition()
-            }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationCancel(animation: Animator) {
-                    cancelled = true
-                    if (bubbleSnapAnimator === animation) {
-                        bubbleSnapAnimator = null
-                    }
-                }
-
-                override fun onAnimationEnd(animation: Animator) {
-                    if (cancelled) return
-                    params.x = targetX
-                    params.y = targetY
-                    updateBubblePosition()
-                    persistBubblePosition(targetX, targetY)
-                    if (bubbleSnapAnimator === animation) {
-                        bubbleSnapAnimator = null
-                    }
-                }
-            })
-            start()
-        }
-    }
-
-    private fun stopBubbleSnapAnimation() {
-        bubbleSnapAnimator?.cancel()
-        bubbleSnapAnimator = null
+        params.x = targetX
+        params.y = targetY
+        updateBubblePosition()
+        persistBubblePosition(targetX, targetY)
     }
 
     private fun updateBubblePosition() {
@@ -1164,7 +1103,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         val target = resolveSelectionCommandTarget()
         if (target == null) {
-            hideCommandActions(animated = true)
+            hideCommandActions()
             return
         }
 
@@ -1305,7 +1244,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         val target = resolveSelectionCommandTarget()
         if (target == null) {
-            hideCommandActions(animated = true)
+            hideCommandActions()
             return
         }
 
@@ -1327,7 +1266,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (mode == RecordingMode.Dictation) {
             pendingRewriteTarget = null
             activeCommandAction = null
-            hideCommandActions(animated = true)
+            hideCommandActions()
         } else {
             showCommandActions()
             updateCommandActionButtons()

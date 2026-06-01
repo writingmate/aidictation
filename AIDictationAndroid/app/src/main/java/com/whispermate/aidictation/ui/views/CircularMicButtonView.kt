@@ -5,8 +5,10 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.OvershootInterpolator
@@ -19,7 +21,7 @@ import kotlin.math.sin
 
 /**
  * Custom View version of the logo-style mic button for overlay layouts.
- * Displays a circular button with animated audio bars inside.
+ * Displays a rounded-square button with animated audio bars inside.
  *
  * States:
  * - Idle: brand background, frozen sine wave pattern
@@ -54,9 +56,12 @@ class CircularMicButtonView @JvmOverloads constructor(
     private var processingAnimator: ValueAnimator? = null
 
     // Paint objects
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val barShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
     private val buttonRect = RectF()
+    private val shadowRect = RectF()
     private val barRect = RectF()
 
     // Click handling
@@ -279,7 +284,7 @@ class CircularMicButtonView @JvmOverloads constructor(
         val centerY = height / 2f
         val inset = size * 0.06f
         val buttonSize = size - (inset * 2f)
-        val radius = buttonSize / 2f
+        val cornerRadius = buttonSize * 0.24f
         buttonRect.set(
             centerX - buttonSize / 2f,
             centerY - buttonSize / 2f,
@@ -287,12 +292,30 @@ class CircularMicButtonView @JvmOverloads constructor(
             centerY + buttonSize / 2f
         )
 
-        backgroundPaint.color = currentBackgroundColor
-        canvas.drawCircle(centerX, centerY, radius, backgroundPaint)
+        shadowPaint.alpha = if (state == State.Idle) 70 else 82
+        shadowRect.set(buttonRect)
+        shadowRect.offset(0f, buttonSize * 0.07f)
+        canvas.drawRoundRect(shadowRect, cornerRadius, cornerRadius, shadowPaint)
 
-        val barWidth = buttonSize * 0.092f
-        val barSpacing = buttonSize * 0.044f
-        val maxBarHeight = buttonSize * 0.496f
+        backgroundPaint.shader = LinearGradient(
+            0f,
+            buttonRect.top,
+            0f,
+            buttonRect.bottom,
+            intArrayOf(
+                blendColor(currentBackgroundColor, Color.WHITE, 0.18f),
+                currentBackgroundColor,
+                blendColor(currentBackgroundColor, Color.BLACK, 0.20f)
+            ),
+            floatArrayOf(0f, 0.48f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRoundRect(buttonRect, cornerRadius, cornerRadius, backgroundPaint)
+        backgroundPaint.shader = null
+
+        val barWidth = buttonSize * 0.085f
+        val barSpacing = buttonSize * 0.035f
+        val maxBarHeight = buttonSize * 0.58f
         val dotSize = barWidth
         val barCornerRadius = barWidth / 2
 
@@ -320,9 +343,25 @@ class CircularMicButtonView @JvmOverloads constructor(
             val right = barCenterX + barWidth / 2
             val bottom = centerY + barHeight / 2
 
+            barShadowPaint.alpha = if (state == State.Idle) 72 else 58
+            val barShadowOffset = buttonSize * 0.045f
+            barRect.set(left, top + barShadowOffset, right, bottom + barShadowOffset)
+            canvas.drawRoundRect(barRect, barCornerRadius, barCornerRadius, barShadowPaint)
+
             barRect.set(left, top, right, bottom)
             canvas.drawRoundRect(barRect, barCornerRadius, barCornerRadius, barPaint)
         }
+    }
+
+    private fun blendColor(from: Int, to: Int, amount: Float): Int {
+        val ratio = amount.coerceIn(0f, 1f)
+        val inverse = 1f - ratio
+        return Color.argb(
+            Color.alpha(from),
+            (Color.red(from) * inverse + Color.red(to) * ratio).toInt(),
+            (Color.green(from) * inverse + Color.green(to) * ratio).toInt(),
+            (Color.blue(from) * inverse + Color.blue(to) * ratio).toInt()
+        )
     }
 
     override fun onDetachedFromWindow() {

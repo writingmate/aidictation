@@ -573,7 +573,7 @@ private fun BubbleLogoSwatch(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    val shape = CircleShape
+    val shape = RoundedCornerShape(12.dp)
     val composeColor = Color(color)
     val borderColor = if (selected) {
         if (color == OverlayBubblePreferences.BLACK_COLOR) {
@@ -584,7 +584,7 @@ private fun BubbleLogoSwatch(
     } else {
         MaterialTheme.colorScheme.outlineVariant
     }
-    val barHeights = listOf(14.dp, 25.dp, 14.dp, 25.dp, 14.dp)
+    val barHeights = listOf(16.dp, 30.dp, 16.dp, 30.dp, 16.dp)
 
     Box(
         modifier = Modifier
@@ -607,12 +607,30 @@ private fun BubbleLogoSwatch(
                     modifier = Modifier
                         .width(4.6.dp)
                         .height(height)
-                        .clip(CircleShape)
+                        .clip(RoundedCornerShape(2.3.dp))
                         .background(Color.White)
                 )
             }
         }
 
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.94f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = composeColor,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+        }
     }
 }
 

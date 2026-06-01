@@ -1,1 +1,1 @@
-Improves the Android update rollout so new builds reach testers more reliably.
+Restores the updated overlay button visual with a rounded-square logo style.

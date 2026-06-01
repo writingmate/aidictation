@@ -30,7 +30,6 @@ class CircularMicButtonView @JvmOverloads constructor(
     private var audioLevel: Float = 0f
     private var frequencyBands: FloatArray? = null
     private var processingPhase: Float = 0f
-    private var expandsFromRight: Boolean = true
 
     private val barHeights = FloatArray(TOTAL_BARS) { FROZEN_HEIGHTS[it] }
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -93,11 +92,6 @@ class CircularMicButtonView @JvmOverloads constructor(
     }
 
     fun preferredHeightDp(): Int = 55
-
-    fun setExpandsFromRight(value: Boolean) {
-        expandsFromRight = value
-        invalidate()
-    }
 
     fun isCancelHit(x: Float, y: Float): Boolean {
         return state == State.Recording && cancelRect.contains(x, y)
@@ -251,7 +245,6 @@ class CircularMicButtonView @JvmOverloads constructor(
         val surfaceSize = h * 0.86f
         val surfaceInset = (h - surfaceSize) / 2f
         val gap = h * 0.13f
-        val showCancelControl = state == State.Recording
 
         acceptRect.set(
             currentWidth - surfaceInset - surfaceSize,
@@ -260,8 +253,7 @@ class CircularMicButtonView @JvmOverloads constructor(
             surfaceInset + surfaceSize
         )
         cancelRect.set(surfaceInset, surfaceInset, surfaceInset + surfaceSize, surfaceInset + surfaceSize)
-        val pillLeft = if (showCancelControl) cancelRect.right + gap else surfaceInset
-        pillRect.set(pillLeft, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
+        pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
 
         val expanded = if (state == State.Idle) 0f else 1f
         val primaryColor = if (state == State.Idle) idleColor else activeColor
@@ -272,7 +264,7 @@ class CircularMicButtonView @JvmOverloads constructor(
         }
 
         backgroundPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
-        if (expanded > 0f && showCancelControl) {
+        if (expanded > 0f && state == State.Recording) {
             canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
         }
 

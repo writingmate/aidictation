@@ -1977,7 +1977,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val startWidth = params.width.takeIf { it > 0 } ?: dp(BUBBLE_SIZE_DP)
         val startX = params.x
         val anchoredRight = startX + (startWidth / 2) >= resources.displayMetrics.widthPixels / 2
-        bubble.setExpandsFromRight(anchoredRight)
         val anchoredEdgeX = if (anchoredRight) startX + startWidth else startX
         val margin = dp(BUBBLE_MARGIN_DP)
         val targetX = if (anchoredRight) {

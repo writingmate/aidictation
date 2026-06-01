@@ -251,6 +251,7 @@ class CircularMicButtonView @JvmOverloads constructor(
         val surfaceSize = h * 0.86f
         val surfaceInset = (h - surfaceSize) / 2f
         val gap = h * 0.13f
+        val showCancelControl = state == State.Recording
 
         acceptRect.set(
             currentWidth - surfaceInset - surfaceSize,
@@ -259,7 +260,8 @@ class CircularMicButtonView @JvmOverloads constructor(
             surfaceInset + surfaceSize
         )
         cancelRect.set(surfaceInset, surfaceInset, surfaceInset + surfaceSize, surfaceInset + surfaceSize)
-        pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
+        val pillLeft = if (showCancelControl) cancelRect.right + gap else surfaceInset
+        pillRect.set(pillLeft, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
 
         val expanded = if (state == State.Idle) 0f else 1f
         val primaryColor = if (state == State.Idle) idleColor else activeColor
@@ -270,7 +272,7 @@ class CircularMicButtonView @JvmOverloads constructor(
         }
 
         backgroundPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
-        if (expanded > 0f) {
+        if (expanded > 0f && showCancelControl) {
             canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
         }
 

@@ -96,7 +96,7 @@ private val FigtreeFontFamily = FontFamily(
 private fun figtreeStyle(
     size: Int,
     lineHeight: Int,
-    weight: FontWeight = FontWeight.Medium
+    weight: FontWeight = FontWeight.SemiBold
 ) = TextStyle(
     fontFamily = FigtreeFontFamily,
     fontWeight = weight,
@@ -106,19 +106,19 @@ private fun figtreeStyle(
 )
 
 private val AIDictationTypography = Typography(
-    displayLarge = figtreeStyle(size = 72, lineHeight = 79, weight = FontWeight.SemiBold),
-    displayMedium = figtreeStyle(size = 48, lineHeight = 53, weight = FontWeight.SemiBold),
+    displayLarge = figtreeStyle(size = 72, lineHeight = 79, weight = FontWeight.Bold),
+    displayMedium = figtreeStyle(size = 48, lineHeight = 53, weight = FontWeight.Bold),
     displaySmall = figtreeStyle(size = 32, lineHeight = 38),
     headlineLarge = figtreeStyle(size = 32, lineHeight = 38),
     headlineMedium = figtreeStyle(size = 24, lineHeight = 29),
     headlineSmall = figtreeStyle(size = 24, lineHeight = 29),
     titleLarge = figtreeStyle(size = 20, lineHeight = 24),
-    titleMedium = figtreeStyle(size = 16, lineHeight = 19, weight = FontWeight.SemiBold),
+    titleMedium = figtreeStyle(size = 16, lineHeight = 19, weight = FontWeight.Bold),
     titleSmall = figtreeStyle(size = 14, lineHeight = 17),
     bodyLarge = figtreeStyle(size = 20, lineHeight = 24),
     bodyMedium = figtreeStyle(size = 16, lineHeight = 21),
     bodySmall = figtreeStyle(size = 14, lineHeight = 17),
-    labelLarge = figtreeStyle(size = 16, lineHeight = 19, weight = FontWeight.SemiBold),
+    labelLarge = figtreeStyle(size = 16, lineHeight = 19, weight = FontWeight.Bold),
     labelMedium = figtreeStyle(size = 14, lineHeight = 17),
     labelSmall = figtreeStyle(size = 12, lineHeight = 14)
 )

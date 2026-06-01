@@ -1,1 +1,1 @@
-Adds referral rewards so you can share invite codes, redeem codes, and see earned words in settings.
+Improves the Android update rollout so new builds reach testers more reliably.

@@ -19,7 +19,8 @@ enum SecretsLoader {
         case .custom:
             return secretsDictionary?["CustomTranscriptionKey"] as? String
         case .openai:
-            return nil
+            return (secretsDictionary?["OpenAITranscriptionKey"] as? String)
+                ?? (secretsDictionary?["OpenAIAPIKey"] as? String)
         }
     }
 
@@ -27,11 +28,19 @@ enum SecretsLoader {
         return secretsDictionary?["CustomTranscriptionEndpoint"] as? String
     }
 
+    static func customTranscriptionRealtimeEndpoint() -> String? {
+        return secretsDictionary?["CustomTranscriptionRealtimeEndpoint"] as? String
+    }
+
     static func customTranscriptionModel() -> String? {
         guard let model = secretsDictionary?["CustomTranscriptionModel"] as? String else {
             return nil
         }
         return normalizedCustomTranscriptionModel(model)
+    }
+
+    static func customTranscriptionRealtimeModel() -> String? {
+        return secretsDictionary?["CustomTranscriptionRealtimeModel"] as? String
     }
 
     static func aidictationPostProcessingEndpoint() -> String? {

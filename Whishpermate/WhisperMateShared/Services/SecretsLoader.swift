@@ -19,7 +19,7 @@ public enum SecretsLoader {
         case .custom:
             return sanitizedSecret("CustomTranscriptionKey")
         case .openai:
-            return nil
+            return sanitizedSecret("OpenAITranscriptionKey") ?? sanitizedSecret("OpenAIAPIKey")
         }
     }
 
@@ -27,11 +27,19 @@ public enum SecretsLoader {
         return sanitizedSecret("CustomTranscriptionEndpoint")
     }
 
+    public static func customTranscriptionRealtimeEndpoint() -> String? {
+        return sanitizedSecret("CustomTranscriptionRealtimeEndpoint")
+    }
+
     public static func customTranscriptionModel() -> String? {
         guard let model = sanitizedSecret("CustomTranscriptionModel") else {
             return nil
         }
         return normalizedCustomTranscriptionModel(model)
+    }
+
+    public static func customTranscriptionRealtimeModel() -> String? {
+        return sanitizedSecret("CustomTranscriptionRealtimeModel")
     }
 
     public static func llmKey(for provider: LLMProvider) -> String? {

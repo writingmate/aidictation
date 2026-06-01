@@ -309,12 +309,12 @@ class TranscriptionProviderManager: ObservableObject {
         // For custom provider, check Secrets.plist first
         if selectedProvider == .custom {
             if let secretEndpoint = SecretsLoader.customTranscriptionEndpoint(), !secretEndpoint.isEmpty {
-                return secretEndpoint
+                return normalizedCustomEndpoint(secretEndpoint)
             }
         }
 
         if !customEndpoint.isEmpty {
-            return customEndpoint
+            return normalizedCustomEndpoint(customEndpoint)
         }
         return selectedProvider.defaultEndpoint
     }
@@ -336,13 +336,27 @@ class TranscriptionProviderManager: ObservableObject {
 
     private func normalizedCustomModel(_ model: String, endpoint: String) -> String {
         guard selectedProvider == .custom,
-              let host = URL(string: endpoint)?.host?.lowercased(),
-              host.contains("writingmate") || host.contains("aidictation")
+              let url = URL(string: endpoint),
+              let host = url.host?.lowercased()
         else {
             return model
         }
 
-        switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if host == "api.openai.com",
+           url.path == "/v1/audio/transcriptions",
+           trimmedModel == "gpt-realtime-whisper"
+        {
+            DebugLog.warning("Replacing realtime transcription model \(model) with \(TranscriptionProvider.openai.defaultModel) for HTTP batch transcription", context: "TranscriptionProviderManager")
+            return TranscriptionProvider.openai.defaultModel
+        }
+
+        guard host.contains("writingmate") || host.contains("aidictation") else {
+            return model
+        }
+
+        switch trimmedModel {
         case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
             DebugLog.warning("Replacing stale shipped transcription model \(model) with \(TranscriptionProvider.custom.defaultModel)", context: "TranscriptionProviderManager")
             return TranscriptionProvider.custom.defaultModel
@@ -351,12 +365,33 @@ class TranscriptionProviderManager: ObservableObject {
         }
     }
 
+    private func normalizedCustomEndpoint(_ endpoint: String) -> String {
+        let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmedEndpoint),
+              let host = url.host?.lowercased(),
+              host == "api.openai.com"
+        else {
+            return endpoint
+        }
+
+        let scheme = url.scheme?.lowercased()
+        if scheme == "ws" || scheme == "wss" || url.path == "/v1/realtime" {
+            DebugLog.warning("Replacing OpenAI realtime endpoint with HTTP batch transcription endpoint", context: "TranscriptionProviderManager")
+            return TranscriptionProvider.openai.defaultEndpoint
+        }
+
+        return endpoint
+    }
+
     var effectiveTransport: TranscriptionTransport {
         if selectedProvider == .custom {
             if let secretTransport = SecretsLoader.getValue(for: "CustomTranscriptionTransport")?.lowercased(),
                let transport = TranscriptionTransport(rawValue: secretTransport)
             {
                 return transport
+            }
+            if URL(string: effectiveEndpoint)?.host?.lowercased() == "api.openai.com" {
+                return .batch
             }
             return customTransport
         }

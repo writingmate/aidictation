@@ -25,6 +25,11 @@ struct WritingmateRealtimeClientSecretProvider {
 
     static func endpoint(from transcriptionEndpoint: String) -> URL? {
         guard var components = URLComponents(string: transcriptionEndpoint) else { return nil }
+        let scheme = components.scheme?.lowercased()
+        if scheme == "ws" || scheme == "wss" {
+            return nil
+        }
+
         let path = components.path
 
         if path.hasSuffix("/audio/transcriptions") {
@@ -42,6 +47,7 @@ struct WritingmateRealtimeClientSecretProvider {
     static func fetchAuthorization(
         endpoint: URL,
         apiKey: String,
+        model: String?,
         prompt: String?,
         language: String?
     ) async throws -> Authorization {
@@ -53,6 +59,9 @@ struct WritingmateRealtimeClientSecretProvider {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var payload: [String: String] = [:]
+        if let model, !model.isEmpty {
+            payload["model"] = model
+        }
         if let prompt, !prompt.isEmpty {
             payload["prompt"] = prompt
         }
@@ -76,7 +85,7 @@ struct WritingmateRealtimeClientSecretProvider {
         guard let token = decoded.token, !token.isEmpty else {
             throw OpenAIRealtimeTranscriptionClientError.missingClientSecret
         }
-        guard let webSocketURL = decoded.webSocketURL ?? URL(string: "wss://api.openai.com/v1/realtime?model=gpt-realtime") else {
+        guard let webSocketURL = decoded.webSocketURL ?? OpenAIRealtimeTranscriptionClient.webSocketURL() else {
             throw OpenAIRealtimeTranscriptionClientError.clientSecretRequestFailed("Realtime session did not return a valid WebSocket URL")
         }
 
@@ -84,33 +93,88 @@ struct WritingmateRealtimeClientSecretProvider {
     }
 
     private struct ClientSecretResponse: Decodable {
-        let value: String?
-        let clientSecret: Secret?
-        let session: Session?
-        let webSocketURLString: String?
-
-        var token: String? {
-            value ?? clientSecret?.value ?? session?.clientSecret?.value
-        }
-
-        var webSocketURL: URL? {
-            guard let webSocketURLString else { return nil }
-            return URL(string: webSocketURLString)
-        }
+        let token: String?
+        let webSocketURL: URL?
 
         private enum CodingKeys: String, CodingKey {
             case value
+            case token
             case clientSecret = "client_secret"
+            case clientSecretCamel = "clientSecret"
             case session
             case webSocketURLString = "websocket_url"
+            case webSocketURLCamel = "websocketUrl"
+            case webSocketURLPascal = "webSocketURL"
+            case url
+            case realtimeURLString = "realtime_url"
+            case wsURLString = "ws_url"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            token = Self.stringOrSecret(in: container, forKey: .value)
+                ?? Self.stringOrSecret(in: container, forKey: .token)
+                ?? Self.stringOrSecret(in: container, forKey: .clientSecret)
+                ?? Self.stringOrSecret(in: container, forKey: .clientSecretCamel)
+                ?? Self.sessionSecret(in: container)
+
+            let urlString = Self.string(in: container, forKey: .webSocketURLString)
+                ?? Self.string(in: container, forKey: .webSocketURLCamel)
+                ?? Self.string(in: container, forKey: .webSocketURLPascal)
+                ?? Self.string(in: container, forKey: .url)
+                ?? Self.string(in: container, forKey: .realtimeURLString)
+                ?? Self.string(in: container, forKey: .wsURLString)
+            webSocketURL = urlString.flatMap(URL.init(string:))
+        }
+
+        private static func string(in container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> String? {
+            guard let value = try? container.decode(String.self, forKey: key) else {
+                return nil
+            }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        private static func stringOrSecret(in container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> String? {
+            if let value = string(in: container, forKey: key) {
+                return value
+            }
+            guard let secret = try? container.decode(Secret.self, forKey: key) else {
+                return nil
+            }
+            return secret.value?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        }
+
+        private static func sessionSecret(in container: KeyedDecodingContainer<CodingKeys>) -> String? {
+            guard let session = try? container.decode(Session.self, forKey: .session) else {
+                return nil
+            }
+            return session.clientSecret
         }
     }
 
     private struct Session: Decodable {
-        let clientSecret: Secret?
+        let clientSecret: String?
 
         private enum CodingKeys: String, CodingKey {
             case clientSecret = "client_secret"
+            case clientSecretCamel = "clientSecret"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            clientSecret = Self.stringOrSecret(in: container, forKey: .clientSecret)
+                ?? Self.stringOrSecret(in: container, forKey: .clientSecretCamel)
+        }
+
+        private static func stringOrSecret(in container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> String? {
+            if let value = try? container.decode(String.self, forKey: key) {
+                return value.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            }
+            guard let secret = try? container.decode(Secret.self, forKey: key) else {
+                return nil
+            }
+            return secret.value?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         }
     }
 
@@ -119,9 +183,32 @@ struct WritingmateRealtimeClientSecretProvider {
     }
 }
 
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
 final class OpenAIRealtimeTranscriptionClient {
+    static let defaultTranscriptionModel = "gpt-realtime-whisper"
+    private static let realtimeBytesPerSecond = 24_000 * MemoryLayout<Int16>.size
+    private static let liveCommitByteThreshold = Int(Double(realtimeBytesPerSecond) * 0.8)
+
+    static func webSocketURL() -> URL? {
+        var components = URLComponents()
+        components.scheme = "wss"
+        components.host = "api.openai.com"
+        components.path = "/v1/realtime"
+        components.queryItems = [
+            URLQueryItem(name: "intent", value: "transcription"),
+        ]
+        return components.url
+    }
+
     private let authorizationProvider: () async throws -> WritingmateRealtimeClientSecretProvider.Authorization
     private let prompt: String?
+    private let transcriptionModel: String
+    private let language: String?
     private let shouldSendSessionUpdate: Bool
     private let onPartialTranscript: @MainActor (String) -> Void
     private let onError: @MainActor (String) -> Void
@@ -136,20 +223,37 @@ final class OpenAIRealtimeTranscriptionClient {
     private var failedMessage: String?
     private var finishContinuation: CheckedContinuation<String?, Never>?
     private var finishTimeoutTask: Task<Void, Never>?
+    private var didRequestFinish = false
+    private var audioChunkCount = 0
+    private var audioByteCount = 0
+    private var uncommittedAudioByteCount = 0
+    private var commitSequence = 0
+    private var pendingCommitAcknowledgements = 0
+    private var pendingCompletionItemIDs = Set<String>()
+    private var completedItemIDs = Set<String>()
+    private var trackedItemIDs = Set<String>()
+    private var itemOrder: [String] = []
+    private var itemTranscripts: [String: String] = [:]
 
     init(
         apiKey: String,
+        webSocketURL: URL? = nil,
+        transcriptionModel: String = OpenAIRealtimeTranscriptionClient.defaultTranscriptionModel,
+        language: String? = nil,
         prompt: String?,
         onPartialTranscript: @escaping @MainActor (String) -> Void,
         onError: @escaping @MainActor (String) -> Void
     ) {
+        let model = transcriptionModel.trimmingCharacters(in: .whitespacesAndNewlines)
         self.authorizationProvider = {
-            guard let url = URL(string: "wss://api.openai.com/v1/realtime?model=gpt-realtime") else {
+            guard let url = webSocketURL ?? Self.webSocketURL() else {
                 throw OpenAIRealtimeTranscriptionClientError.clientSecretRequestFailed("Invalid OpenAI Realtime URL")
             }
             return WritingmateRealtimeClientSecretProvider.Authorization(token: apiKey, webSocketURL: url)
         }
         self.prompt = prompt
+        self.transcriptionModel = model.isEmpty ? Self.defaultTranscriptionModel : model
+        self.language = language
         self.shouldSendSessionUpdate = true
         self.onPartialTranscript = onPartialTranscript
         self.onError = onError
@@ -159,11 +263,16 @@ final class OpenAIRealtimeTranscriptionClient {
     init(
         authorizationProvider: @escaping () async throws -> WritingmateRealtimeClientSecretProvider.Authorization,
         prompt: String?,
+        transcriptionModel: String = OpenAIRealtimeTranscriptionClient.defaultTranscriptionModel,
+        language: String? = nil,
         onPartialTranscript: @escaping @MainActor (String) -> Void,
         onError: @escaping @MainActor (String) -> Void
     ) {
+        let model = transcriptionModel.trimmingCharacters(in: .whitespacesAndNewlines)
         self.authorizationProvider = authorizationProvider
         self.prompt = prompt
+        self.transcriptionModel = model.isEmpty ? Self.defaultTranscriptionModel : model
+        self.language = language
         self.shouldSendSessionUpdate = false
         self.onPartialTranscript = onPartialTranscript
         self.onError = onError
@@ -172,7 +281,26 @@ final class OpenAIRealtimeTranscriptionClient {
 
     func start() {
         sendQueue.async { [weak self] in
-            self?.isClosed = false
+            guard let self else { return }
+            self.isClosed = false
+            self.audioChunkCount = 0
+            self.audioByteCount = 0
+            self.uncommittedAudioByteCount = 0
+            self.commitSequence = 0
+            self.pendingCommitAcknowledgements = 0
+            self.pendingCompletionItemIDs.removeAll()
+            self.completedItemIDs.removeAll()
+            self.trackedItemIDs.removeAll()
+            self.itemOrder.removeAll()
+            self.itemTranscripts.removeAll()
+            self.accumulatedTranscript = ""
+            self.finalTranscript = nil
+            self.failedMessage = nil
+            self.didRequestFinish = false
+            DebugLog.info(
+                "Realtime start requested model=\(self.transcriptionModel) language=\(self.language ?? "auto") promptIncluded=\(self.supportsPromptSteering && self.prompt?.isEmpty == false)",
+                context: "OpenAIRealtime"
+            )
         }
 
         Task { [weak self] in
@@ -189,24 +317,49 @@ final class OpenAIRealtimeTranscriptionClient {
     func sendAudio(_ pcm24kMono16: Data) {
         guard !pcm24kMono16.isEmpty else { return }
 
-        sendEvent([
+        let event: [String: Any] = [
             "type": "input_audio_buffer.append",
             "audio": pcm24kMono16.base64EncodedString(),
-        ])
+        ]
+        sendQueue.async { [weak self] in
+            guard let self else { return }
+            guard !self.isClosed else { return }
+
+            self.audioChunkCount += 1
+            self.audioByteCount += pcm24kMono16.count
+            self.uncommittedAudioByteCount += pcm24kMono16.count
+            if self.audioChunkCount == 1 || self.audioChunkCount % 50 == 0 {
+                DebugLog.info(
+                    "Realtime audio queued chunks=\(self.audioChunkCount) bytes=\(self.audioByteCount) pendingCommitBytes=\(self.uncommittedAudioByteCount) socketReady=\(self.task != nil)",
+                    context: "OpenAIRealtime"
+                )
+            }
+
+            if self.task == nil {
+                self.pendingEvents.append(event)
+                self.commitAudioBufferIfNeeded(reason: "live")
+                return
+            }
+            self.sendEventOnQueue(event)
+            self.commitAudioBufferIfNeeded(reason: "live")
+        }
     }
 
     func finish(timeout: TimeInterval = 1.5) async -> String? {
+        DebugLog.info(
+            "Realtime finish requested timeout=\(timeout)s accumulatedLength=\(accumulatedTranscript.count) finalLength=\(finalTranscript?.count ?? 0) failed=\(failedMessage != nil)",
+            context: "OpenAIRealtime"
+        )
         if failedMessage != nil {
             return nil
         }
 
-        if let finalTranscript {
-            close()
-            return finalTranscript
-        }
-
         return await withCheckedContinuation { continuation in
-            if let finalTranscript {
+            if uncommittedAudioByteCount == 0,
+               pendingCommitAcknowledgements == 0,
+               pendingCompletionItemIDs.isEmpty,
+               let finalTranscript
+            {
                 continuation.resume(returning: finalTranscript)
                 return
             }
@@ -217,11 +370,24 @@ final class OpenAIRealtimeTranscriptionClient {
 
             finishContinuation = continuation
             let currentTranscript = accumulatedTranscript.isEmpty ? nil : accumulatedTranscript
+            DebugLog.info(
+                "Realtime commit queued chunks=\(audioChunkCount) bytes=\(audioByteCount) currentLength=\(currentTranscript?.count ?? 0)",
+                context: "OpenAIRealtime"
+            )
+            didRequestFinish = true
             finishTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                DebugLog.info(
+                    "Realtime finish timeout elapsed finalLength=\(self?.finalTranscript?.count ?? 0) accumulatedLength=\(self?.accumulatedTranscript.count ?? 0)",
+                    context: "OpenAIRealtime"
+                )
                 self?.resumeFinishIfNeeded(with: self?.finalTranscript ?? currentTranscript)
             }
-            sendEvent(["type": "input_audio_buffer.commit"])
+            sendQueue.async { [weak self] in
+                guard let self else { return }
+                self.commitAudioBuffer(reason: "finish")
+                self.resumeFinishIfReady()
+            }
         }
     }
 
@@ -248,6 +414,10 @@ final class OpenAIRealtimeTranscriptionClient {
             let socket = self.session.webSocketTask(with: request)
             self.task = socket
             socket.resume()
+            DebugLog.info(
+                "Realtime socket opened host=\(authorization.webSocketURL.host ?? "unknown") path=\(authorization.webSocketURL.path) query=\(authorization.webSocketURL.query ?? "") queuedEvents=\(self.pendingEvents.count)",
+                context: "OpenAIRealtime"
+            )
             self.receiveNextMessage()
             if self.shouldSendSessionUpdate {
                 self.sendEventOnQueue(self.sessionUpdateEvent())
@@ -261,9 +431,13 @@ final class OpenAIRealtimeTranscriptionClient {
 
     private func sessionUpdateEvent() -> [String: Any] {
         var transcription: [String: Any] = [
-            "model": "gpt-4o-mini-transcribe",
+            "model": transcriptionModel,
+            "delay": "low",
         ]
-        if let prompt, !prompt.isEmpty {
+        if let language, !language.isEmpty, !language.contains(",") {
+            transcription["language"] = language
+        }
+        if supportsPromptSteering, let prompt, !prompt.isEmpty {
             transcription["prompt"] = prompt
         }
 
@@ -277,20 +451,35 @@ final class OpenAIRealtimeTranscriptionClient {
                             "type": "audio/pcm",
                             "rate": 24_000,
                         ],
-                        "noise_reduction": [
-                            "type": "near_field",
-                        ],
                         "transcription": transcription,
-                        "turn_detection": [
-                            "type": "server_vad",
-                            "threshold": 0.35,
-                            "prefix_padding_ms": 150,
-                            "silence_duration_ms": 300,
-                        ],
                     ],
                 ],
             ],
         ]
+    }
+
+    private var supportsPromptSteering: Bool {
+        transcriptionModel != Self.defaultTranscriptionModel
+    }
+
+    private func commitAudioBufferIfNeeded(reason: String) {
+        guard uncommittedAudioByteCount >= Self.liveCommitByteThreshold else { return }
+        commitAudioBuffer(reason: reason)
+    }
+
+    private func commitAudioBuffer(reason: String) {
+        guard uncommittedAudioByteCount > 0 else { return }
+
+        commitSequence += 1
+        pendingCommitAcknowledgements += 1
+        let committedBytes = uncommittedAudioByteCount
+        uncommittedAudioByteCount = 0
+
+        DebugLog.info(
+            "Realtime commit sent reason=\(reason) sequence=\(commitSequence) bytes=\(committedBytes) pendingAcks=\(pendingCommitAcknowledgements)",
+            context: "OpenAIRealtime"
+        )
+        sendEventOnQueue(["type": "input_audio_buffer.commit"])
     }
 
     private func sendEvent(_ event: [String: Any]) {
@@ -298,6 +487,10 @@ final class OpenAIRealtimeTranscriptionClient {
             guard let self else { return }
             guard !self.isClosed else { return }
             if self.task == nil {
+                DebugLog.info(
+                    "Realtime event queued before socket type=\((event["type"] as? String) ?? "unknown") pending=\(self.pendingEvents.count + 1)",
+                    context: "OpenAIRealtime"
+                )
                 self.pendingEvents.append(event)
                 return
             }
@@ -313,9 +506,17 @@ final class OpenAIRealtimeTranscriptionClient {
         guard let data = try? JSONSerialization.data(withJSONObject: event),
               let message = String(data: data, encoding: .utf8)
         else {
+            DebugLog.warning(
+                "Realtime event serialization failed type=\((event["type"] as? String) ?? "unknown")",
+                context: "OpenAIRealtime"
+            )
             return
         }
 
+        let eventType = (event["type"] as? String) ?? "unknown"
+        if eventType != "input_audio_buffer.append" {
+            DebugLog.info("Realtime send event type=\(eventType)", context: "OpenAIRealtime")
+        }
         let onError = onError
         task.send(.string(message)) { error in
             if let error {
@@ -359,27 +560,116 @@ final class OpenAIRealtimeTranscriptionClient {
         }
 
         switch type {
+        case "input_audio_buffer.committed":
+            if pendingCommitAcknowledgements > 0 {
+                pendingCommitAcknowledgements -= 1
+            }
+
+            if let itemID = payload["item_id"] as? String {
+                trackItem(itemID)
+                if !completedItemIDs.contains(itemID) {
+                    pendingCompletionItemIDs.insert(itemID)
+                }
+                DebugLog.info(
+                    "Realtime buffer committed itemIDPresent=true pendingAcks=\(pendingCommitAcknowledgements) pendingItems=\(pendingCompletionItemIDs.count)",
+                    context: "OpenAIRealtime"
+                )
+            } else {
+                DebugLog.info(
+                    "Realtime buffer committed itemIDPresent=false pendingAcks=\(pendingCommitAcknowledgements)",
+                    context: "OpenAIRealtime"
+                )
+            }
+            resumeFinishIfReady()
         case "conversation.item.input_audio_transcription.delta":
             guard let delta = payload["delta"] as? String, !delta.isEmpty else { return }
-            accumulatedTranscript += delta
+            let itemID = transcriptItemID(from: payload)
+            trackItem(itemID)
+            itemTranscripts[itemID, default: ""] += delta
+            rebuildTranscript()
+            DebugLog.info(
+                "Realtime delta received deltaLength=\(delta.count) accumulatedLength=\(accumulatedTranscript.count)",
+                context: "OpenAIRealtime"
+            )
             let transcript = accumulatedTranscript
             Task { @MainActor in
                 onPartialTranscript(transcript)
             }
         case "conversation.item.input_audio_transcription.completed":
             guard let transcript = payload["transcript"] as? String else { return }
-            finalTranscript = transcript
-            accumulatedTranscript = transcript
+            let itemID = transcriptItemID(from: payload)
+            trackItem(itemID)
+            itemTranscripts[itemID] = transcript
+            completedItemIDs.insert(itemID)
+            pendingCompletionItemIDs.remove(itemID)
+            rebuildTranscript()
+            DebugLog.info(
+                "Realtime completed transcriptLength=\(transcript.count) accumulatedLength=\(accumulatedTranscript.count) pendingItems=\(pendingCompletionItemIDs.count)",
+                context: "OpenAIRealtime"
+            )
+            let fullTranscript = accumulatedTranscript
             Task { @MainActor in
-                onPartialTranscript(transcript)
+                onPartialTranscript(fullTranscript)
             }
-            resumeFinishIfNeeded(with: transcript)
+            resumeFinishIfReady()
         case "error":
-            let message = ((payload["error"] as? [String: Any])?["message"] as? String) ?? "OpenAI Realtime error"
+            let error = payload["error"] as? [String: Any]
+            let code = (error?["code"] as? String) ?? "unknown"
+            let message = (error?["message"] as? String) ?? "OpenAI Realtime error"
+            DebugLog.warning("Realtime error event code=\(code) message=\(message)", context: "OpenAIRealtime")
             fail(message)
+        case "session.created", "session.updated":
+            DebugLog.info("Realtime event received type=\(type)", context: "OpenAIRealtime")
         default:
             break
         }
+    }
+
+    private func transcriptItemID(from payload: [String: Any]) -> String {
+        if let itemID = payload["item_id"] as? String, !itemID.isEmpty {
+            return itemID
+        }
+        return "__unidentified_transcript_item"
+    }
+
+    private func trackItem(_ itemID: String) {
+        guard !trackedItemIDs.contains(itemID) else { return }
+        trackedItemIDs.insert(itemID)
+        itemOrder.append(itemID)
+    }
+
+    private func rebuildTranscript() {
+        let pieces = itemOrder.compactMap { itemID -> String? in
+            guard let transcript = itemTranscripts[itemID]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !transcript.isEmpty
+            else {
+                return nil
+            }
+            return transcript
+        }
+
+        accumulatedTranscript = pieces.reduce(into: "") { result, piece in
+            appendTranscriptPiece(piece, to: &result)
+        }
+        finalTranscript = accumulatedTranscript.isEmpty ? nil : accumulatedTranscript
+    }
+
+    private func appendTranscriptPiece(_ piece: String, to result: inout String) {
+        if result.isEmpty {
+            result = piece
+            return
+        }
+
+        if result.last?.isWhitespace == true || shouldAttachWithoutLeadingSpace(piece) {
+            result += piece
+        } else {
+            result += " " + piece
+        }
+    }
+
+    private func shouldAttachWithoutLeadingSpace(_ piece: String) -> Bool {
+        guard let first = piece.unicodeScalars.first else { return true }
+        return CharacterSet(charactersIn: ".,!?;:%)]}").contains(first)
     }
 
     private func fail(_ message: String) {
@@ -387,10 +677,19 @@ final class OpenAIRealtimeTranscriptionClient {
             return
         }
         failedMessage = message
+        DebugLog.warning("Realtime failed message=\(message)", context: "OpenAIRealtime")
         resumeFinishIfNeeded(with: nil)
         Task { @MainActor in
             onError(message)
         }
+    }
+
+    private func resumeFinishIfReady() {
+        guard didRequestFinish else { return }
+        guard uncommittedAudioByteCount == 0 else { return }
+        guard pendingCommitAcknowledgements == 0 else { return }
+        guard pendingCompletionItemIDs.isEmpty else { return }
+        resumeFinishIfNeeded(with: finalTranscript ?? (accumulatedTranscript.isEmpty ? nil : accumulatedTranscript))
     }
 
     private func resumeFinishIfNeeded(with transcript: String?) {

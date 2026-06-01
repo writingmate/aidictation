@@ -108,6 +108,7 @@ class AppState: ObservableObject {
         DebugLog.info("Recording mode: \(recordingMode)", context: "AppState")
 
         // Clear previous state
+        ClipboardManager.cancelLiveDictationInsertion(removeInsertedText: false)
         DispatchQueue.main.async { [weak self] in
             self?.errorMessage = ""
             self?.transcriptionText = ""
@@ -182,6 +183,10 @@ class AppState: ObservableObject {
     /// Stop recording and begin transcription
     func stopRecording() {
         DebugLog.info("🛑 AppState.stopRecording()", context: "AppState")
+        DebugLog.info(
+            "Stop requested state=\(recordingState) continuous=\(isContinuousRecording) autoPaste=\(shouldAutoPaste) mode=\(recordingMode)",
+            context: "DictationFlow"
+        )
 
         guard recordingState == .recording else {
             DebugLog.info("⚠️ Not recording, current state: \(recordingState)", context: "AppState")
@@ -201,6 +206,7 @@ class AppState: ObservableObject {
                 _ = audioRecorder.stopRecording()
                 let realtimeClient = stopRealtimeTranscription()
                 realtimeClient?.close()
+                ClipboardManager.cancelLiveDictationInsertion()
 
                 finishOverlayAfterRecording()
                 return
@@ -215,16 +221,22 @@ class AppState: ObservableObject {
             recordingState = .idle
             recordingMode = .dictation
             errorMessage = "Failed to save recording"
+            ClipboardManager.cancelLiveDictationInsertion()
             finishOverlayAfterRecording()
             return
         }
 
         let realtimeClient = stopRealtimeTranscription()
+        DebugLog.info("Realtime client captured on stop: \(realtimeClient != nil)", context: "DictationFlow")
 
         // Check file size
         do {
             let fileAttributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
             let fileSize = fileAttributes[.size] as? Int64 ?? 0
+            DebugLog.info(
+                "Recording file ready name=\(audioURL.lastPathComponent) bytes=\(fileSize)",
+                context: "DictationFlow"
+            )
 
             if fileSize < 1000 {
                 DebugLog.info("Audio file too small (\(fileSize) bytes)", context: "AppState")
@@ -233,6 +245,7 @@ class AppState: ObservableObject {
                 recordingMode = .dictation
                 try? FileManager.default.removeItem(at: audioURL)
                 realtimeClient?.close()
+                ClipboardManager.cancelLiveDictationInsertion()
                 finishOverlayAfterRecording()
                 return
             }
@@ -266,6 +279,7 @@ class AppState: ObservableObject {
         recordingStartTime = nil
         recordingMode = .dictation
 
+        ClipboardManager.cancelLiveDictationInsertion()
         finishOverlayAfterRecording()
     }
 
@@ -278,7 +292,6 @@ class AppState: ObservableObject {
         if isContinuousRecording, recordingState == .recording {
             // Stop continuous recording
             isContinuousRecording = false
-            shouldAutoPaste = false
             stopRecording()
         } else if recordingState == .idle {
             // Start continuous recording
@@ -369,6 +382,10 @@ class AppState: ObservableObject {
 
     private func transcribe(audioURL: URL, realtimeClient: OpenAIRealtimeTranscriptionClient? = nil) {
         DebugLog.info("📝 AppState.transcribe()", context: "AppState")
+        DebugLog.info(
+            "Transcribe start audio=\(audioURL.lastPathComponent) realtimeClient=\(realtimeClient != nil) autoPaste=\(shouldAutoPaste) recordingMode=\(recordingMode)",
+            context: "DictationFlow"
+        )
 
         recordingState = .transcribing
         isProcessing = true
@@ -388,6 +405,7 @@ class AppState: ObservableObject {
                         self.recordingState = .idle
                         self.isProcessing = false
                     }
+                    ClipboardManager.cancelLiveDictationInsertion(removeInsertedText: false)
                     try? FileManager.default.removeItem(at: audioURL)
                     finishOverlayAfterRecording()
 
@@ -401,11 +419,16 @@ class AppState: ObservableObject {
                 let requestedOutputMode = self.requestedOutputMode()
                 let transcriptionOptions = self.requestedTranscriptionOptions()
                 let activeTransport = requestedOutputMode != .dictation || transcriptionOptions.diarization ? .batch : transcriptionProviderManager.effectiveTransport
+                DebugLog.info(
+                    "Transcribe routing outputMode=\(requestedOutputMode.rawValue) diarization=\(transcriptionOptions.diarization) activeTransport=\(activeTransport.rawValue) provider=\(transcriptionProviderManager.selectedProvider.rawValue)",
+                    context: "DictationFlow"
+                )
                 let realtimeResult: String?
                 if activeTransport == .realtime {
-                    let result = await realtimeClient?.finish(timeout: 1.2)?
+                    let result = await realtimeClient?.finish(timeout: 2.0)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if let result, !result.isEmpty {
+                        DebugLog.info("Realtime result accepted length=\(result.count)", context: "DictationFlow")
                         realtimeResult = result
                     } else {
                         DebugLog.warning("Realtime transcription unavailable; falling back to batch cloud transcription", context: "AppState")
@@ -413,6 +436,7 @@ class AppState: ObservableObject {
                         realtimeResult = nil
                     }
                 } else {
+                    DebugLog.info("Closing realtime client because active transport is \(activeTransport.rawValue)", context: "DictationFlow")
                     realtimeClient?.close()
                     realtimeResult = nil
                 }
@@ -435,6 +459,7 @@ class AppState: ObservableObject {
                             self.isProcessing = false
                             self.shouldAutoPaste = false
                         }
+                        ClipboardManager.cancelLiveDictationInsertion(removeInsertedText: false)
                         try? FileManager.default.removeItem(at: audioURL)
                         finishOverlayAfterRecording()
                         return
@@ -460,6 +485,7 @@ class AppState: ObservableObject {
                     DebugLog.info("Using realtime transcription result", context: "AppState")
                     result = dictionaryManager.applyReplacements(to: TranscriptionOutputFilter.filter(realtimeResult))
                 } else {
+                    DebugLog.info("Using batch transcription path", context: "DictationFlow")
                     result = try await performTranscription(
                         audioURL: audioURL,
                         appContext: capturedAppContext,
@@ -471,6 +497,7 @@ class AppState: ObservableObject {
                 }
                 let transcriptionMs = Int((CFAbsoluteTimeGetCurrent() - transcriptionStart) * 1000)
                 DebugLog.info("⏱️ Transcription took \(transcriptionMs)ms", context: "AppState")
+                DebugLog.info("Transcription result length=\(result.count) words=\(result.split(separator: " ").count)", context: "DictationFlow")
 
                 // Success - save to history
                 let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
@@ -516,6 +543,10 @@ class AppState: ObservableObject {
                 NotificationCenter.default.post(name: .recordingCompleted, object: recording)
 
                 // Dispatch to appropriate handler based on mode
+                DebugLog.info(
+                    "Dispatching transcription result wasCommandMode=\(wasCommandMode) autoPaste=\(shouldAutoPaste) duration=\(duration)",
+                    context: "DictationFlow"
+                )
                 if wasCommandMode {
                     await processCommandResult(instruction: result, targetText: commandTargetText)
                 } else {
@@ -554,6 +585,14 @@ class AppState: ObservableObject {
 
                 if overlayManager.isOverlayMode {
                     finishOverlayAfterRecording()
+                }
+
+                if ClipboardManager.hasActiveLiveDictationInsertion {
+                    if self.realtimeTranscript.isEmpty {
+                        ClipboardManager.cancelLiveDictationInsertion()
+                    } else {
+                        ClipboardManager.finishLiveDictationInsertion(finalText: self.realtimeTranscript)
+                    }
                 }
             }
 
@@ -613,6 +652,7 @@ class AppState: ObservableObject {
             }
             client = OpenAIRealtimeTranscriptionClient(
                 apiKey: apiKey,
+                language: languageCode,
                 prompt: realtimePrompt,
                 onPartialTranscript: { [weak self] partial in
                     self?.handleRealtimePartial(partial)
@@ -625,30 +665,49 @@ class AppState: ObservableObject {
             guard let apiKey = resolvedTranscriptionApiKey(), !apiKey.isEmpty else {
                 return
             }
-            guard let endpoint = WritingmateRealtimeClientSecretProvider.endpoint(
-                from: transcriptionProviderManager.effectiveEndpoint
-            ) else {
-                DebugLog.warning("Invalid realtime token endpoint", context: "AppState")
-                return
-            }
+            let realtimeModel = resolvedRealtimeTranscriptionModel()
 
-            client = OpenAIRealtimeTranscriptionClient(
-                authorizationProvider: {
-                    try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
-                        endpoint: endpoint,
-                        apiKey: apiKey,
-                        prompt: realtimePrompt,
-                        language: languageCode
-                    )
-                },
-                prompt: realtimePrompt,
-                onPartialTranscript: { [weak self] partial in
-                    self?.handleRealtimePartial(partial)
-                },
-                onError: { message in
-                    DebugLog.warning(message, context: "AppState")
+            if let webSocketURL = customRealtimeWebSocketURL() {
+                client = OpenAIRealtimeTranscriptionClient(
+                    apiKey: apiKey,
+                    webSocketURL: webSocketURL,
+                    transcriptionModel: realtimeModel,
+                    language: languageCode,
+                    prompt: realtimePrompt,
+                    onPartialTranscript: { [weak self] partial in
+                        self?.handleRealtimePartial(partial)
+                    },
+                    onError: { message in
+                        DebugLog.warning(message, context: "AppState")
+                    }
+                )
+            } else {
+                guard let endpoint = customRealtimeSessionEndpoint() else {
+                    DebugLog.warning("Invalid custom realtime session endpoint", context: "AppState")
+                    return
                 }
-            )
+
+                client = OpenAIRealtimeTranscriptionClient(
+                    authorizationProvider: {
+                        try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
+                            endpoint: endpoint,
+                            apiKey: apiKey,
+                            model: realtimeModel,
+                            prompt: realtimePrompt,
+                            language: languageCode
+                        )
+                    },
+                    prompt: realtimePrompt,
+                    transcriptionModel: realtimeModel,
+                    language: languageCode,
+                    onPartialTranscript: { [weak self] partial in
+                        self?.handleRealtimePartial(partial)
+                    },
+                    onError: { message in
+                        DebugLog.warning(message, context: "AppState")
+                    }
+                )
+            }
         case .groq, .parakeet:
             return
         }
@@ -659,6 +718,66 @@ class AppState: ObservableObject {
         }
         client.start()
         DebugLog.info("Started realtime transcription stream for \(provider.displayName)", context: "AppState")
+    }
+
+    private func customRealtimeSessionEndpoint() -> URL? {
+        if let configuredEndpoint = configuredCustomRealtimeEndpoint(),
+           !isWebSocketURL(configuredEndpoint)
+        {
+            return configuredEndpoint
+        }
+
+        return WritingmateRealtimeClientSecretProvider.endpoint(
+            from: transcriptionProviderManager.effectiveEndpoint
+        )
+    }
+
+    private func customRealtimeWebSocketURL() -> URL? {
+        if let configuredEndpoint = configuredCustomRealtimeEndpoint(),
+           isWebSocketURL(configuredEndpoint)
+        {
+            return configuredEndpoint
+        }
+
+        guard let endpoint = URL(string: transcriptionProviderManager.effectiveEndpoint),
+              isWebSocketURL(endpoint)
+        else {
+            return nil
+        }
+        return endpoint
+    }
+
+    private func configuredCustomRealtimeEndpoint() -> URL? {
+        guard let configured = SecretsLoader.customTranscriptionRealtimeEndpoint()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !configured.isEmpty
+        else {
+            return nil
+        }
+        return URL(string: configured)
+    }
+
+    private func isWebSocketURL(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased()
+        return scheme == "ws" || scheme == "wss"
+    }
+
+    private func resolvedRealtimeTranscriptionModel() -> String {
+        if let configuredModel = SecretsLoader.customTranscriptionRealtimeModel()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !configuredModel.isEmpty
+        {
+            return configuredModel
+        }
+
+        let model = transcriptionProviderManager.effectiveModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty,
+              !model.contains("/"),
+              model != TranscriptionProvider.custom.defaultModel
+        else {
+            return OpenAIRealtimeTranscriptionClient.defaultTranscriptionModel
+        }
+        return model
     }
 
     private func stopRealtimeTranscription() -> OpenAIRealtimeTranscriptionClient? {
@@ -673,7 +792,7 @@ class AppState: ObservableObject {
         guard !text.isEmpty else { return }
         realtimeTranscript = text
         transcriptionText = text
-        DebugLog.info("Realtime transcription partial: \(text)", context: "AppState")
+        DebugLog.info("Realtime transcription partial length=\(text.count)", context: "AppState")
     }
 
     private func requestedOutputMode() -> TranscriptionOutputMode {
@@ -1085,6 +1204,17 @@ class AppState: ObservableObject {
             return secretKey
         }
 
+        if provider == .custom,
+           URL(string: transcriptionProviderManager.effectiveEndpoint)?.host?.lowercased() == "api.openai.com"
+        {
+            if let openAISecretKey = SecretsLoader.transcriptionKey(for: .openai), !openAISecretKey.isEmpty {
+                return openAISecretKey
+            }
+            if let openAIStoredKey = KeychainHelper.get(key: TranscriptionProvider.openai.apiKeyName), !openAIStoredKey.isEmpty {
+                return openAIStoredKey
+            }
+        }
+
         if !provider.requiresAPIKey {
             return "not-needed"
         }
@@ -1112,6 +1242,10 @@ class AppState: ObservableObject {
     /// Process dictation result: update state and paste transcribed text
     private func processDictationResult(transcription: String) async {
         DebugLog.info("Processing dictation result...", context: "AppState")
+        DebugLog.info(
+            "Dictation result metadata length=\(transcription.count) autoPaste=\(shouldAutoPaste) overlayMode=\(overlayManager.isOverlayMode)",
+            context: "DictationFlow"
+        )
 
         // Update state
         await MainActor.run {
@@ -1122,16 +1256,22 @@ class AppState: ObservableObject {
         // Paste if needed
         if shouldAutoPaste {
             DebugLog.info("Auto-pasting dictation...", context: "AppState")
+            DebugLog.info("Auto-paste branch entered", context: "DictationFlow")
             await MainActor.run {
                 self.recordingState = .pasting
             }
-            ClipboardManager.copyAndPaste(transcription)
+            if ClipboardManager.hasActiveLiveDictationInsertion {
+                ClipboardManager.finishLiveDictationInsertion(finalText: transcription)
+            } else {
+                ClipboardManager.copyAndPaste(transcription)
+            }
             await MainActor.run {
                 self.recordingState = .idle
                 self.finishOverlayAfterRecording()
             }
         } else if overlayManager.isOverlayMode {
             // Not auto-pasting, just reset overlay state
+            DebugLog.info("Auto-paste disabled; finishing overlay only", context: "DictationFlow")
             finishOverlayAfterRecording()
         }
     }

@@ -26,6 +26,7 @@ public enum Language: String, CaseIterable, Identifiable {
     case hindi = "hi"
     case hinglish = "hi-Latn"
     case ukrainian = "uk"
+    case belarusian = "be"
     case czech = "cs"
     case swedish = "sv"
     case finnish = "fi"
@@ -58,7 +59,8 @@ public enum Language: String, CaseIterable, Identifiable {
              .cantonese,
              .arabic,
              .hindi,
-             .hinglish:
+             .hinglish,
+             .belarusian:
             return false
         }
     }
@@ -90,6 +92,7 @@ public enum Language: String, CaseIterable, Identifiable {
         case .hindi: return "Hindi"
         case .hinglish: return "Hinglish"
         case .ukrainian: return "Ukrainian"
+        case .belarusian: return "Belarusian"
         case .czech: return "Czech"
         case .swedish: return "Swedish"
         case .finnish: return "Finnish"
@@ -119,6 +122,7 @@ public enum Language: String, CaseIterable, Identifiable {
         case .hindi: return "🇮🇳"
         case .hinglish: return "🇮🇳"
         case .ukrainian: return "🇺🇦"
+        case .belarusian: return "🇧🇾"
         case .czech: return "🇨🇿"
         case .swedish: return "🇸🇪"
         case .finnish: return "🇫🇮"

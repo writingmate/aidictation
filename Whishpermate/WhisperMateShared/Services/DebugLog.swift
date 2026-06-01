@@ -3,12 +3,17 @@ import Foundation
 /// Debug logging utility that only logs in DEBUG builds
 /// Automatically strips all logging from Release builds for privacy and security
 public enum DebugLog {
+    private static func emit(_ message: String) {
+        print(message)
+        DebugLogFileWriter.shared.append(message)
+    }
+
     /// Log a general debug message
     public static func log(_ items: Any..., separator: String = " ", file: String = #file, line: Int = #line) {
         #if DEBUG
             let filename = (file as NSString).lastPathComponent
             let message = items.map { "\($0)" }.joined(separator: separator)
-            print("[\(filename):\(line)] \(message)")
+            emit("[\(filename):\(line)] \(message)")
         #endif
     }
 
@@ -17,9 +22,9 @@ public enum DebugLog {
         #if DEBUG
             let message = items.map { "\($0)" }.joined(separator: separator)
             if let context = context {
-                print("ℹ️ [\(context)] \(message)")
+                emit("ℹ️ [\(context)] \(message)")
             } else {
-                print("ℹ️ \(message)")
+                emit("ℹ️ \(message)")
             }
         #endif
     }
@@ -29,9 +34,9 @@ public enum DebugLog {
         #if DEBUG
             let message = items.map { "\($0)" }.joined(separator: separator)
             if let context = context {
-                print("⚠️ [\(context)] \(message)")
+                emit("⚠️ [\(context)] \(message)")
             } else {
-                print("⚠️ \(message)")
+                emit("⚠️ \(message)")
             }
         #endif
     }
@@ -41,8 +46,10 @@ public enum DebugLog {
         let message = items.map { "\($0)" }.joined(separator: separator)
         if let context = context {
             print("❌ [\(context)] \(message)")
+            DebugLogFileWriter.shared.append("❌ [\(context)] \(message)")
         } else {
             print("❌ \(message)")
+            DebugLogFileWriter.shared.append("❌ \(message)")
         }
     }
 
@@ -63,10 +70,67 @@ public enum DebugLog {
         #if DEBUG
             let message = items.map { "\($0)" }.joined(separator: separator)
             if let endpoint = endpoint {
-                print("🌐 [API][\(endpoint)] \(message)")
+                emit("🌐 [API][\(endpoint)] \(message)")
             } else {
-                print("🌐 [API] \(message)")
+                emit("🌐 [API] \(message)")
             }
         #endif
+    }
+}
+
+private final class DebugLogFileWriter {
+    static let shared = DebugLogFileWriter()
+
+    private let queue = DispatchQueue(label: "com.whispermate.shared-debug-log-writer", qos: .utility)
+    private let maxLogBytes: UInt64 = 5 * 1024 * 1024
+
+    private init() {}
+
+    func append(_ message: String) {
+        #if DEBUG
+            queue.async { [maxLogBytes] in
+                guard
+                    let logsDirectory = FileManager.default.urls(
+                        for: .libraryDirectory,
+                        in: .userDomainMask
+                    ).first?.appendingPathComponent("Logs/AIDictation", isDirectory: true),
+                    let data = "\(Self.timestamp()) \(message)\n".data(using: .utf8)
+                else {
+                    return
+                }
+
+                let logURL = logsDirectory.appendingPathComponent("debug.log")
+
+                do {
+                    try FileManager.default.createDirectory(
+                        at: logsDirectory,
+                        withIntermediateDirectories: true
+                    )
+
+                    if
+                        let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+                        let size = attributes[.size] as? NSNumber,
+                        size.uint64Value > maxLogBytes
+                    {
+                        try? FileManager.default.removeItem(at: logURL)
+                    }
+
+                    if FileManager.default.fileExists(atPath: logURL.path) {
+                        let handle = try FileHandle(forWritingTo: logURL)
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        handle.closeFile()
+                    } else {
+                        try data.write(to: logURL, options: .atomic)
+                    }
+                } catch {
+                    // Avoid recursive logging if the debug log file cannot be written.
+                }
+            }
+        #endif
+    }
+
+    private static func timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
     }
 }

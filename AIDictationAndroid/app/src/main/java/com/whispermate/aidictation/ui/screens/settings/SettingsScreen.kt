@@ -537,7 +537,7 @@ private fun BubbleColorSelector(
                 verticalAlignment = Alignment.Top
             ) {
                 rowOptions.forEach { option ->
-                    BubbleLogoSwatchOption(
+                    BubbleColorSwatchOption(
                         option = option,
                         selected = option.color == selectedColor,
                         onClick = { onColorSelected(option.color) }
@@ -558,7 +558,7 @@ private data class BubbleColorOption(
 )
 
 @Composable
-private fun BubbleLogoSwatchOption(
+private fun BubbleColorSwatchOption(
     option: BubbleColorOption,
     selected: Boolean,
     onClick: () -> Unit
@@ -568,7 +568,7 @@ private fun BubbleLogoSwatchOption(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        BubbleLogoSwatch(
+        BubbleColorSwatch(
             color = option.resolvedColor,
             selected = selected,
             onClick = onClick
@@ -588,12 +588,12 @@ private fun BubbleLogoSwatchOption(
 }
 
 @Composable
-private fun BubbleLogoSwatch(
+private fun BubbleColorSwatch(
     color: Int,
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    val shape = RoundedCornerShape(12.dp)
+    val shape = CircleShape
     val composeColor = Color(color)
     val borderColor = if (selected) {
         if (color == OverlayBubblePreferences.BLACK_COLOR) {
@@ -604,7 +604,6 @@ private fun BubbleLogoSwatch(
     } else {
         MaterialTheme.colorScheme.outlineVariant
     }
-    val barHeights = listOf(16.dp, 30.dp, 16.dp, 30.dp, 16.dp)
 
     Box(
         modifier = Modifier
@@ -618,21 +617,6 @@ private fun BubbleLogoSwatch(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(2.2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            barHeights.forEach { height ->
-                Box(
-                    modifier = Modifier
-                        .width(4.6.dp)
-                        .height(height)
-                        .clip(RoundedCornerShape(2.3.dp))
-                        .background(Color.White)
-                )
-            }
-        }
-
         if (selected) {
             Box(
                 modifier = Modifier

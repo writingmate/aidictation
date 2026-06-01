@@ -425,7 +425,8 @@ class AppState: ObservableObject {
                 )
                 let realtimeResult: String?
                 if activeTransport == .realtime {
-                    let result = await realtimeClient?.finish(timeout: 2.0)?
+                    let finishTimeout = transcriptionProviderManager.selectedProvider == .custom ? 6.0 : 2.0
+                    let result = await realtimeClient?.finish(timeout: finishTimeout)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if let result, !result.isEmpty {
                         DebugLog.info("Realtime result accepted length=\(result.count)", context: "DictationFlow")

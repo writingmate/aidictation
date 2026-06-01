@@ -27,6 +27,7 @@ class CircularMicButtonView @JvmOverloads constructor(
     private var state: State = State.Idle
     private var audioLevel: Float = 0f
     private var frequencyBands: FloatArray? = null
+    private var processingPhaseDegrees: Float = 0f
 
     private val barHeights = FloatArray(TOTAL_BARS) { FROZEN_HEIGHTS[it] }
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -51,6 +52,7 @@ class CircularMicButtonView @JvmOverloads constructor(
     private val barRect = RectF()
 
     private val barAnimators = arrayOfNulls<ValueAnimator>(TOTAL_BARS)
+    private var processingAnimator: ValueAnimator? = null
 
     private val springInterpolator = OvershootInterpolator(1.2f)
 
@@ -83,8 +85,8 @@ class CircularMicButtonView @JvmOverloads constructor(
     }
 
     fun preferredWidthDp(): Int = when (state) {
-        State.Idle -> 55
-        State.Recording, State.Processing -> 250
+        State.Recording -> 250
+        State.Idle, State.Processing -> 55
     }
 
     fun preferredHeightDp(): Int = 55
@@ -109,8 +111,18 @@ class CircularMicButtonView @JvmOverloads constructor(
     }
 
     fun setState(newState: State) {
-        if (state == newState) return
+        if (state == newState) {
+            if (state == State.Processing && processingAnimator == null) {
+                startProcessingAnimation()
+            }
+            return
+        }
         state = newState
+        if (state == State.Processing) {
+            startProcessingAnimation()
+        } else {
+            stopProcessingAnimation()
+        }
         updateBarHeights(animate = false)
         invalidate()
     }
@@ -204,6 +216,26 @@ class CircularMicButtonView @JvmOverloads constructor(
         }
     }
 
+    private fun startProcessingAnimation() {
+        processingAnimator?.cancel()
+        processingAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = 900
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            addUpdateListener {
+                processingPhaseDegrees = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun stopProcessingAnimation() {
+        processingAnimator?.cancel()
+        processingAnimator = null
+        processingPhaseDegrees = 0f
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val desiredWidth = (preferredWidthDp() * resources.displayMetrics.density).toInt()
         val desiredHeight = (preferredHeightDp() * resources.displayMetrics.density).toInt()
@@ -248,7 +280,6 @@ class CircularMicButtonView @JvmOverloads constructor(
         canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
 
         if (state == State.Processing) {
-            drawBars(canvas, pillRect, CIRCLE_ENVELOPE_HEIGHTS, expanded, circleSpacing = false)
             drawSpinner(canvas, acceptRect)
         } else {
             drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
@@ -325,7 +356,7 @@ class CircularMicButtonView @JvmOverloads constructor(
             bounds.right - bounds.width() * 0.34f,
             bounds.bottom - bounds.height() * 0.34f
         )
-        canvas.drawArc(tempRect, -90f, 260f, false, spinnerPaint)
+        canvas.drawArc(tempRect, processingPhaseDegrees - 90f, 260f, false, spinnerPaint)
     }
 
     private fun withAlpha(color: Int, alphaFraction: Float): Int {
@@ -333,8 +364,16 @@ class CircularMicButtonView @JvmOverloads constructor(
         return (color and 0x00FFFFFF) or (alpha shl 24)
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (state == State.Processing) {
+            startProcessingAnimation()
+        }
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         barAnimators.forEach { it?.cancel() }
+        stopProcessingAnimation()
     }
 }

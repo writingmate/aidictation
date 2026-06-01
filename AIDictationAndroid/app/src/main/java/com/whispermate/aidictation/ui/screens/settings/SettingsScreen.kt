@@ -445,8 +445,7 @@ private fun AccountSettingsSection(
             referralCodeInput = referralCodeInput,
             onReferralCodeChange = onReferralCodeChange,
             onShareInvite = onShareInvite,
-            onRedeemInvite = onRedeemInvite,
-            onSignIn = onSignIn
+            onRedeemInvite = onRedeemInvite
         )
 
         if (usageStatus.isAuthenticated) {
@@ -666,6 +665,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
         )
     }
     val previewState = previewStates[previewStateIndex]
+    val previewWidth = if (previewState == CircularMicButtonView.State.Recording) 250.dp else 55.dp
     val resolvedColor = when (selectedColor) {
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
         else -> selectedColor
@@ -700,7 +700,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
         ) {
             AndroidView(
                 modifier = Modifier
-                    .width(250.dp)
+                    .width(previewWidth)
                     .height(55.dp)
                     .padding(end = 10.dp),
                 factory = { context ->
@@ -804,8 +804,7 @@ private fun ReferralInviteItem(
     referralCodeInput: String,
     onReferralCodeChange: (String) -> Unit,
     onShareInvite: () -> Unit,
-    onRedeemInvite: () -> Unit,
-    onSignIn: () -> Unit
+    onRedeemInvite: () -> Unit
 ) {
     Column(
         modifier = Modifier.padding(16.dp),
@@ -837,19 +836,19 @@ private fun ReferralInviteItem(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = if (usageStatus.isAuthenticated) onShareInvite else onSignIn,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(stringResource(if (usageStatus.isAuthenticated) R.string.referral_share else R.string.referral_sign_in))
-            }
-        }
-
         if (usageStatus.isAuthenticated) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onShareInvite,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.referral_share))
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

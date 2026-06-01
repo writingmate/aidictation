@@ -5,8 +5,8 @@
 sdk.dir=/path/to/Android/Sdk
 
 # Optional local version overrides. Tagged Android releases use these defaults.
-VERSION_CODE=1017
-VERSION_NAME=0.0.20
+VERSION_CODE=1019
+VERSION_NAME=0.0.22
 
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here

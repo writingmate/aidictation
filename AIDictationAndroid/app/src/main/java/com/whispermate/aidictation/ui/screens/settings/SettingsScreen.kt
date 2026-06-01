@@ -122,6 +122,22 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        AccountSettingsSection(
+            usageStatus = usageStatus,
+            referralCodeInput = referralCodeInput,
+            onReferralCodeChange = { referralCodeInput = it },
+            onShareInvite = onShareInvite,
+            onRedeemInvite = {
+                onRedeemInvite(referralCodeInput)
+                referralCodeInput = ""
+            },
+            onSignIn = onSignIn,
+            onSignOut = onSignOut,
+            onUpgrade = onUpgrade
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         SectionHeader(stringResource(R.string.settings_permissions))
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -213,76 +229,6 @@ fun SettingsScreen(
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             OverlayPreviewCard(selectedColor = selectedBubbleColor)
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        SectionHeader(stringResource(R.string.settings_account))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            UsageSummary(usageStatus = usageStatus)
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            ReferralInviteItem(
-                usageStatus = usageStatus,
-                referralCodeInput = referralCodeInput,
-                onReferralCodeChange = { referralCodeInput = it },
-                onShareInvite = onShareInvite,
-                onRedeemInvite = {
-                    onRedeemInvite(referralCodeInput)
-                    referralCodeInput = ""
-                },
-                onSignIn = onSignIn
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            if (usageStatus.isAuthenticated) {
-                AccountIdentityItem(
-                    email = usageStatus.email ?: stringResource(R.string.account_signed_in),
-                    tierName = usageStatus.tierName
-                )
-
-                if (!usageStatus.isPro) {
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    SettingsItem(
-                        icon = Icons.Default.Star,
-                        title = stringResource(R.string.account_upgrade),
-                        onClick = onUpgrade,
-                        iconTint = MaterialTheme.colorScheme.primary,
-                        titleColor = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingsItem(
-                    icon = Icons.AutoMirrored.Filled.Logout,
-                    title = stringResource(R.string.account_sign_out),
-                    onClick = onSignOut
-                )
-            } else {
-                SettingsItem(
-                    icon = Icons.Default.AccountCircle,
-                    title = stringResource(R.string.account_sign_in),
-                    onClick = onSignIn,
-                    iconTint = MaterialTheme.colorScheme.primary,
-                    titleColor = MaterialTheme.colorScheme.primary
-                )
-
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingsItem(
-                    icon = Icons.Default.Star,
-                    title = stringResource(R.string.account_upgrade),
-                    onClick = onUpgrade,
-                    iconTint = MaterialTheme.colorScheme.primary,
-                    titleColor = MaterialTheme.colorScheme.primary
-                )
-            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -440,6 +386,77 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun AccountSettingsSection(
+    usageStatus: UsageStatus,
+    referralCodeInput: String,
+    onReferralCodeChange: (String) -> Unit,
+    onShareInvite: () -> Unit,
+    onRedeemInvite: () -> Unit,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onUpgrade: () -> Unit
+) {
+    SectionHeader(stringResource(R.string.settings_account))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        if (usageStatus.isAuthenticated) {
+            AccountIdentityItem(
+                email = usageStatus.email ?: stringResource(R.string.account_signed_in),
+                tierName = usageStatus.tierName
+            )
+        } else {
+            SettingsItem(
+                icon = Icons.Default.AccountCircle,
+                title = stringResource(R.string.account_sign_in),
+                onClick = onSignIn,
+                iconTint = MaterialTheme.colorScheme.primary,
+                titleColor = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+        UsageSummary(usageStatus = usageStatus)
+
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+        if (!usageStatus.isPro) {
+            SettingsItem(
+                icon = Icons.Default.Star,
+                title = stringResource(R.string.account_upgrade),
+                onClick = onUpgrade,
+                iconTint = MaterialTheme.colorScheme.primary,
+                titleColor = MaterialTheme.colorScheme.primary
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
+
+        ReferralInviteItem(
+            usageStatus = usageStatus,
+            referralCodeInput = referralCodeInput,
+            onReferralCodeChange = onReferralCodeChange,
+            onShareInvite = onShareInvite,
+            onRedeemInvite = onRedeemInvite,
+            onSignIn = onSignIn
+        )
+
+        if (usageStatus.isAuthenticated) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsItem(
+                icon = Icons.AutoMirrored.Filled.Logout,
+                title = stringResource(R.string.account_sign_out),
+                onClick = onSignOut
+            )
+        }
     }
 }
 

@@ -337,10 +337,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        val focusedNode = resolveFocusedEditableNode(source) ?: return false
         if (recordingStartedByVolumeShortcut && recordingState != RecordingState.Idle) {
             return true
         }
+        if (!isKeyboardVisible()) return false
+        resolveFocusedEditableNode(source) ?: return false
         if (isBubbleSuppressed()) return false
         if (isVolumeShortcutEnabled() && recordingState == RecordingState.Idle) {
             return false

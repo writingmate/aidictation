@@ -40,7 +40,7 @@ import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
-import com.whispermate.aidictation.ui.views.CircularMicButtonView
+import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 import com.whispermate.aidictation.util.AudioRecorder
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -134,7 +134,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     private lateinit var windowManager: WindowManager
 
-    private var bubbleView: CircularMicButtonView? = null
+    private var bubbleView: OverlayMicButtonView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var isBubbleAttached = false
     private var bubbleShouldBeVisible = false
@@ -546,12 +546,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val size = dp(BUBBLE_SIZE_DP)
         refreshBubbleBrandColor()
 
-        bubbleView = CircularMicButtonView(this).apply {
+        bubbleView = OverlayMicButtonView(this).apply {
             elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isHapticFeedbackEnabled = true
             setColors(bubbleIdleColor, resolveBubbleActiveColor())
-            setState(CircularMicButtonView.State.Idle)
+            setState(OverlayMicButtonView.State.Idle)
         }
 
         val startX = bubblePrefs.getInt(OverlayBubblePreferences.X_KEY, defaultBubbleX())
@@ -1004,7 +1004,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         }
                     } else {
                         hideDismissActions()
-                        val circularBubble = bubble as? CircularMicButtonView
+                        val circularBubble = bubble as? OverlayMicButtonView
                         when {
                             circularBubble?.isCancelHit(event.x, event.y) == true -> stopRecording(discard = true)
                             circularBubble?.isAcceptHit(event.x, event.y) == true -> stopRecording(discard = false)
@@ -1900,19 +1900,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         when (recordingState) {
             RecordingState.Idle -> {
                 stopBubbleAnimation()
-                bubble.setState(CircularMicButtonView.State.Idle)
+                bubble.setState(OverlayMicButtonView.State.Idle)
                 updateBubbleLayoutSize()
             }
 
             RecordingState.Recording -> {
-                bubble.setState(CircularMicButtonView.State.Recording)
+                bubble.setState(OverlayMicButtonView.State.Recording)
                 updateBubbleLayoutSize()
                 startBubbleAnimation()
             }
 
             RecordingState.Processing -> {
                 stopBubbleAnimation()
-                bubble.setState(CircularMicButtonView.State.Processing)
+                bubble.setState(OverlayMicButtonView.State.Processing)
                 updateBubbleLayoutSize()
             }
         }

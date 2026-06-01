@@ -19,18 +19,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -39,14 +37,12 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 import kotlin.math.sin
+import kotlin.random.Random
 
-private val activeColor = Color(0xFFFF6300)
-private val idleColor = activeColor
-private val barColor = Color.White
+private val activeColor = Color(0xFFFF9500) // iOS Orange
 private const val minActiveBars = 3
-private const val waveformLevelGain = 1.35f
-private const val waveformLevelMix = 0.08f
-private const val waveformContrast = 0.8f
+private const val waveformLevelGain = 1.7f
+private const val waveformLevelMix = 0.28f
 private const val waveformFloorThreshold = 0.045f
 private const val waveformActiveFloor = 0.16f
 
@@ -57,7 +53,7 @@ enum class MicButtonState {
 }
 
 /**
- * Logo-style mic button with iOS-style audio bars inside.
+ * Circular mic button with iOS-style audio bars inside.
  * - Smooth spring animations for bouncy feel (matches iOS .easeOut)
  * - Random organic variation per bar
  * - Idle: frozen sine wave pattern
@@ -68,25 +64,28 @@ enum class MicButtonState {
 fun CircularMicButton(
     state: MicButtonState,
     audioLevel: Float = 0f,
-    frequencyBands: FloatArray? = null,  // FFT frequency bands (0-1)
+    frequencyBands: FloatArray? = null,  // FFT frequency bands (7 values, 0-1)
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = 100.dp
 ) {
-    // Bar configuration matches the launcher logo: five pill bars.
-    val totalBars = 5
+    // Bar configuration - 6 bars, scaled proportionally to button size
+    // At 100dp: barWidth=8dp, spacing=2dp, total=58dp (58% of button)
+    val totalBars = 6
     val scale = size.value / 100f
-    val barWidth = 9.2.dp * scale
-    val barSpacing = 4.4.dp * scale
-    val maxBarHeight = 49.6.dp * scale
-    val dotSize = barWidth
+    val barWidth = 8.dp * scale
+    val barSpacing = 2.dp * scale
+    val maxBarHeight = 58.dp * scale  // Match width for perfect circle
+    val dotSize = 8.dp * scale
 
-    // Short, tall, short, tall, short: same rhythm as ic_launcher_foreground.png.
+    // Random factors for organic variation (like iOS randomFactor 0.8-1.2)
+    val randomFactors = remember { List(totalBars) { Random.nextFloat() * 0.4f + 0.8f } }
+
+    // Pre-calculate frozen heights for idle state - mathematically fit inside circle
+    // Bar centers at x = -25, -15, -5, 5, 15, 25 relative to center (R=29)
+    // Height at x = 2 * sqrt(R² - x²), normalized to diameter
     val frozenHeights = remember {
-        listOf(0.56f, 1f, 0.56f, 1f, 0.56f)
-    }
-    val circleEnvelopeHeights = remember {
-        listOf(0.72f, 0.94f, 1f, 0.94f, 0.72f)
+        listOf(0.51f, 0.86f, 0.99f, 0.99f, 0.86f, 0.51f)
     }
 
     // For processing animation
@@ -100,6 +99,9 @@ fun CircularMicButton(
         ),
         label = "phase"
     )
+
+    // Get idle color from theme
+    val idleColor = MaterialTheme.colorScheme.primary
 
     // Animated color transition
     val backgroundColor by animateColorAsState(
@@ -130,16 +132,8 @@ fun CircularMicButton(
     Box(
         modifier = modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.24f))
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        backgroundColor.blend(Color.White, 0.18f),
-                        backgroundColor,
-                        backgroundColor.blend(Color.Black, 0.20f)
-                    )
-                )
-            )
+            .clip(CircleShape)
+            .background(backgroundColor)
             .clickable(enabled = state != MicButtonState.Processing) { onClick() },
         contentAlignment = Alignment.Center
     ) {
@@ -165,14 +159,11 @@ fun CircularMicButton(
                         if (!isActive) {
                             dotSize
                         } else {
-                            val bandValue = recordingBandValue(
-                                index = index,
-                                totalBars = totalBars,
-                                frequencyBands = frequencyBands,
-                                audioLevel = audioLevel
-                            )
+                            // Use frequency band directly if available, otherwise fall back to audio level
+                            val bandValue = frequencyBands?.getOrNull(index)?.coerceIn(0f, 1f) ?: audioLevel
                             val boostedBand = boostWaveformLevel(bandValue, audioLevel)
-                            val maxForThisBar = circleEnvelopeHeights[index]
+                            // Max height for this bar is its frozen height (maintains circular shape)
+                            val maxForThisBar = frozenHeights[index]
                             val heightRange = maxBarHeight - dotSize
                             dotSize + heightRange * boostedBand * maxForThisBar
                         }
@@ -181,7 +172,8 @@ fun CircularMicButton(
                         val normalizedIndex = index.toFloat() / (totalBars - 1)
                         val wavePosition = normalizedIndex * 2f * PI.toFloat() - processingPhase
                         val sineValue = (sin(wavePosition) + 1f) / 2f
-                        val maxForThisBar = circleEnvelopeHeights[index]
+                        // Cap at frozen height to maintain circular shape
+                        val maxForThisBar = frozenHeights[index]
                         dotSize + (maxBarHeight - dotSize) * sineValue * maxForThisBar
                     }
                 }
@@ -200,56 +192,12 @@ fun CircularMicButton(
                     modifier = Modifier
                         .width(barWidth)
                         .height(animatedHeight.dp)
-                        .drawBehind {
-                            val offset = 2.dp.toPx() * scale
-                            drawRoundRect(
-                                color = Color.Black.copy(alpha = 0.28f),
-                                topLeft = Offset(0f, offset),
-                                size = Size(this.size.width, this.size.height),
-                                cornerRadius = CornerRadius(this.size.width / 2f, this.size.width / 2f)
-                            )
-                        }
                         .clip(RoundedCornerShape(barWidth / 2))
-                        .background(barColor)
+                        .background(Color.White)
                 )
             }
         }
     }
-}
-
-private fun Color.blend(target: Color, amount: Float): Color {
-    val ratio = amount.coerceIn(0f, 1f)
-    return Color(
-        red = red + (target.red - red) * ratio,
-        green = green + (target.green - green) * ratio,
-        blue = blue + (target.blue - blue) * ratio,
-        alpha = alpha
-    )
-}
-
-private fun recordingBandValue(
-    index: Int,
-    totalBars: Int,
-    frequencyBands: FloatArray?,
-    audioLevel: Float
-): Float {
-    if (frequencyBands == null || frequencyBands.isEmpty()) return audioLevel
-
-    val sourcePosition = if (totalBars == 1) {
-        0f
-    } else {
-        index * (frequencyBands.lastIndex.toFloat() / (totalBars - 1))
-    }
-    val lowerIndex = sourcePosition.toInt().coerceIn(0, frequencyBands.lastIndex)
-    val upperIndex = (lowerIndex + 1).coerceAtMost(frequencyBands.lastIndex)
-    val fraction = sourcePosition - lowerIndex
-    val lower = frequencyBands[lowerIndex].coerceIn(0f, 1f)
-    val upper = frequencyBands[upperIndex].coerceIn(0f, 1f)
-    val interpolated = lower + ((upper - lower) * fraction)
-    val average = frequencyBands.map { it.coerceIn(0f, 1f) }.average().toFloat()
-    val contrasted = interpolated + ((interpolated - average) * waveformContrast)
-    val floor = if (audioLevel > waveformFloorThreshold) audioLevel * 0.18f else 0f
-    return max(contrasted, floor).coerceIn(0f, 1f)
 }
 
 private fun boostWaveformLevel(level: Float, overallLevel: Float = level): Float {

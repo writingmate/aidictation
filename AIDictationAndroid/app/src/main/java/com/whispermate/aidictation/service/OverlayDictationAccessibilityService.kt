@@ -371,12 +371,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun isKeyboardVisible(): Boolean {
+        if (inputMethodBounds() != null) return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             bubbleView?.rootWindowInsets?.let { insets ->
-                return insets.isVisible(WindowInsets.Type.ime())
+                if (insets.isVisible(WindowInsets.Type.ime())) return true
             }
         }
-        return inputMethodBounds() != null
+        return false
     }
 
     private fun keyboardTop(): Int {
@@ -393,9 +394,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .filter { window -> window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
             .mapNotNull { window ->
                 Rect().also { window.getBoundsInScreen(it) }
-                    .takeIf { bounds -> bounds.height() > 0 && bounds.width() > 0 }
+                    .takeIf { bounds -> isVisibleInputMethodWindow(window, bounds) }
             }
             .minByOrNull { bounds -> bounds.top }
+    }
+
+    private fun isVisibleInputMethodWindow(window: AccessibilityWindowInfo, bounds: Rect): Boolean {
+        if (bounds.height() <= 0 || bounds.width() <= 0) return false
+        if (window.isActive || window.isFocused) return true
+
+        val root = window.root ?: return false
+        @Suppress("DEPRECATION")
+        root.recycle()
+        return true
     }
 
     private fun isBubbleSuppressed(): Boolean {

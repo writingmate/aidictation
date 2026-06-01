@@ -77,7 +77,7 @@ import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
-import com.whispermate.aidictation.ui.views.CircularMicButtonView
+import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 
 @Composable
 fun SettingsScreen(
@@ -659,13 +659,13 @@ private fun OverlayPreviewCard(selectedColor: Int) {
     var previewStateIndex by remember { mutableIntStateOf(0) }
     val previewStates = remember {
         listOf(
-            CircularMicButtonView.State.Idle,
-            CircularMicButtonView.State.Recording,
-            CircularMicButtonView.State.Processing
+            OverlayMicButtonView.State.Idle,
+            OverlayMicButtonView.State.Recording,
+            OverlayMicButtonView.State.Processing
         )
     }
     val previewState = previewStates[previewStateIndex]
-    val previewWidth = if (previewState == CircularMicButtonView.State.Recording) 250.dp else 55.dp
+    val previewWidth = if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp
     val resolvedColor = when (selectedColor) {
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
         else -> selectedColor
@@ -704,7 +704,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
                     .height(55.dp)
                     .padding(end = 10.dp),
                 factory = { context ->
-                    CircularMicButtonView(context).apply {
+                    OverlayMicButtonView(context).apply {
                         setColors(resolvedColor, resolvedColor)
                         setState(previewState)
                         setAudioLevel(0.72f)
@@ -717,7 +717,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
                 update = { view ->
                     view.setColors(resolvedColor, resolvedColor)
                     view.setState(previewState)
-                    view.setAudioLevel(if (previewState == CircularMicButtonView.State.Recording) 0.72f else 0f)
+                    view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
                     view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
                 }
             )

@@ -10,9 +10,11 @@ import android.util.AttributeSet
 import android.view.View
 import android.view.animation.OvershootInterpolator
 import com.whispermate.aidictation.R
+import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
+import kotlin.math.sin
 
 class OverlayMicButtonView @JvmOverloads constructor(
     context: Context,
@@ -50,6 +52,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private val acceptRect = RectF()
     private val pillRect = RectF()
     private val barRect = RectF()
+    private val processingHeights = FloatArray(TOTAL_BARS)
 
     private val barAnimators = arrayOfNulls<ValueAnimator>(TOTAL_BARS)
     private var processingAnimator: ValueAnimator? = null
@@ -85,8 +88,8 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     fun preferredWidthDp(): Int = when (state) {
-        State.Recording -> 250
-        State.Idle, State.Processing -> 55
+        State.Recording, State.Processing -> 250
+        State.Idle -> 55
     }
 
     fun preferredHeightDp(): Int = 55
@@ -280,15 +283,29 @@ class OverlayMicButtonView @JvmOverloads constructor(
         canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
 
         if (state == State.Processing) {
+            drawProcessingBars(canvas, pillRect)
             drawSpinner(canvas, acceptRect)
         } else {
             drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
-            drawX(canvas, cancelRect, expanded)
+            if (state == State.Recording) {
+                drawX(canvas, cancelRect, expanded)
+            }
             drawCheck(canvas, acceptRect, expanded)
             if (expanded < 1f) {
                 drawBars(canvas, acceptRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
             }
         }
+    }
+
+    private fun drawProcessingBars(canvas: Canvas, bounds: RectF) {
+        val phase = (processingPhaseDegrees / 360f) * (2f * PI.toFloat())
+        for (i in 0 until TOTAL_BARS) {
+            val normalizedIndex = if (TOTAL_BARS == 1) 0f else i.toFloat() / (TOTAL_BARS - 1)
+            val wavePosition = normalizedIndex * 2f * PI.toFloat() - phase
+            val sineValue = (sin(wavePosition) + 1f) / 2f
+            processingHeights[i] = sineValue * CIRCLE_ENVELOPE_HEIGHTS[i]
+        }
+        drawBars(canvas, bounds, processingHeights, 1f, circleSpacing = false)
     }
 
     private fun drawBars(

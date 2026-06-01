@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
@@ -76,6 +77,7 @@ import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
+import com.whispermate.aidictation.ui.views.CircularMicButtonView
 
 @Composable
 fun SettingsScreen(
@@ -120,6 +122,22 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        AccountSettingsSection(
+            usageStatus = usageStatus,
+            referralCodeInput = referralCodeInput,
+            onReferralCodeChange = { referralCodeInput = it },
+            onShareInvite = onShareInvite,
+            onRedeemInvite = {
+                onRedeemInvite(referralCodeInput)
+                referralCodeInput = ""
+            },
+            onSignIn = onSignIn,
+            onSignOut = onSignOut,
+            onUpgrade = onUpgrade
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         SectionHeader(stringResource(R.string.settings_permissions))
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -209,76 +227,8 @@ fun SettingsScreen(
                     OverlayBubblePreferences.setBubbleColor(context, color)
                 }
             )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        SectionHeader(stringResource(R.string.settings_account))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            UsageSummary(usageStatus = usageStatus)
-
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            ReferralInviteItem(
-                usageStatus = usageStatus,
-                referralCodeInput = referralCodeInput,
-                onReferralCodeChange = { referralCodeInput = it },
-                onShareInvite = onShareInvite,
-                onRedeemInvite = {
-                    onRedeemInvite(referralCodeInput)
-                    referralCodeInput = ""
-                },
-                onSignIn = onSignIn
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            if (usageStatus.isAuthenticated) {
-                AccountIdentityItem(
-                    email = usageStatus.email ?: stringResource(R.string.account_signed_in),
-                    tierName = usageStatus.tierName
-                )
-
-                if (!usageStatus.isPro) {
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    SettingsItem(
-                        icon = Icons.Default.Star,
-                        title = stringResource(R.string.account_upgrade),
-                        onClick = onUpgrade,
-                        iconTint = MaterialTheme.colorScheme.primary,
-                        titleColor = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingsItem(
-                    icon = Icons.AutoMirrored.Filled.Logout,
-                    title = stringResource(R.string.account_sign_out),
-                    onClick = onSignOut
-                )
-            } else {
-                SettingsItem(
-                    icon = Icons.Default.AccountCircle,
-                    title = stringResource(R.string.account_sign_in),
-                    onClick = onSignIn,
-                    iconTint = MaterialTheme.colorScheme.primary,
-                    titleColor = MaterialTheme.colorScheme.primary
-                )
-
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingsItem(
-                    icon = Icons.Default.Star,
-                    title = stringResource(R.string.account_upgrade),
-                    onClick = onUpgrade,
-                    iconTint = MaterialTheme.colorScheme.primary,
-                    titleColor = MaterialTheme.colorScheme.primary
-                )
-            }
+            OverlayPreviewCard(selectedColor = selectedBubbleColor)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -436,6 +386,77 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun AccountSettingsSection(
+    usageStatus: UsageStatus,
+    referralCodeInput: String,
+    onReferralCodeChange: (String) -> Unit,
+    onShareInvite: () -> Unit,
+    onRedeemInvite: () -> Unit,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onUpgrade: () -> Unit
+) {
+    SectionHeader(stringResource(R.string.settings_account))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        if (usageStatus.isAuthenticated) {
+            AccountIdentityItem(
+                email = usageStatus.email ?: stringResource(R.string.account_signed_in),
+                tierName = usageStatus.tierName
+            )
+        } else {
+            SettingsItem(
+                icon = Icons.Default.AccountCircle,
+                title = stringResource(R.string.account_sign_in),
+                onClick = onSignIn,
+                iconTint = MaterialTheme.colorScheme.primary,
+                titleColor = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+        UsageSummary(usageStatus = usageStatus)
+
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+        if (!usageStatus.isPro) {
+            SettingsItem(
+                icon = Icons.Default.Star,
+                title = stringResource(R.string.account_upgrade),
+                onClick = onUpgrade,
+                iconTint = MaterialTheme.colorScheme.primary,
+                titleColor = MaterialTheme.colorScheme.primary
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
+
+        ReferralInviteItem(
+            usageStatus = usageStatus,
+            referralCodeInput = referralCodeInput,
+            onReferralCodeChange = onReferralCodeChange,
+            onShareInvite = onShareInvite,
+            onRedeemInvite = onRedeemInvite,
+            onSignIn = onSignIn
+        )
+
+        if (usageStatus.isAuthenticated) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsItem(
+                icon = Icons.AutoMirrored.Filled.Logout,
+                title = stringResource(R.string.account_sign_out),
+                onClick = onSignOut
+            )
+        }
     }
 }
 
@@ -630,6 +651,76 @@ private fun BubbleLogoSwatch(
                     modifier = Modifier.size(11.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun OverlayPreviewCard(selectedColor: Int) {
+    var previewStateIndex by remember { mutableIntStateOf(0) }
+    val previewStates = remember {
+        listOf(
+            CircularMicButtonView.State.Idle,
+            CircularMicButtonView.State.Recording,
+            CircularMicButtonView.State.Processing
+        )
+    }
+    val previewState = previewStates[previewStateIndex]
+    val resolvedColor = when (selectedColor) {
+        OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
+        else -> selectedColor
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Overlay preview",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "Tap the control to switch states.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                .clickable {
+                    previewStateIndex = (previewStateIndex + 1) % previewStates.size
+                },
+            contentAlignment = Alignment.CenterEnd
+        ) {
+            AndroidView(
+                modifier = Modifier
+                    .width(250.dp)
+                    .height(55.dp)
+                    .padding(end = 10.dp),
+                factory = { context ->
+                    CircularMicButtonView(context).apply {
+                        setColors(resolvedColor, resolvedColor)
+                        setState(previewState)
+                        setAudioLevel(0.72f)
+                        setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                        setOnClickCallback {
+                            previewStateIndex = (previewStateIndex + 1) % previewStates.size
+                        }
+                    }
+                },
+                update = { view ->
+                    view.setColors(resolvedColor, resolvedColor)
+                    view.setState(previewState)
+                    view.setAudioLevel(if (previewState == CircularMicButtonView.State.Recording) 0.72f else 0f)
+                    view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                }
+            )
         }
     }
 }

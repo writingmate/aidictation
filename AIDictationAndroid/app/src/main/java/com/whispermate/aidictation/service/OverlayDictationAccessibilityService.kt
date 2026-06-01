@@ -72,7 +72,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
         private const val MIN_RECORDING_MS = 500L
         private const val BUBBLE_SIZE_DP = 55
-        private const val BUBBLE_MARGIN_DP = 8
+        private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_ANIMATION_MS = 140L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
@@ -337,10 +337,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        val focusedNode = resolveFocusedEditableNode(source) ?: return false
         if (recordingStartedByVolumeShortcut && recordingState != RecordingState.Idle) {
             return true
         }
+        if (!isKeyboardVisible()) return false
+        resolveFocusedEditableNode(source) ?: return false
         if (isBubbleSuppressed()) return false
         if (isVolumeShortcutEnabled() && recordingState == RecordingState.Idle) {
             return false
@@ -928,13 +929,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val estimatedHeight = actions.height.takeIf { it > 0 } ?: dp(COMMAND_ACTION_ESTIMATED_HEIGHT_DP)
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
+        val bubbleWidth = currentBubbleWidthPx()
+        val bubbleHeight = currentBubbleHeightPx()
 
         val leftX = bubble.x - estimatedWidth - margin
-        val rightX = bubble.x + dp(BUBBLE_SIZE_DP) + margin
+        val rightX = bubble.x + bubbleWidth + margin
         val maxX = (screenWidth - estimatedWidth - margin).coerceAtLeast(margin)
         val targetX = if (leftX >= margin) leftX else rightX
 
-        val centeredY = bubble.y + (dp(BUBBLE_SIZE_DP) - estimatedHeight) / 2
+        val centeredY = bubble.y + (bubbleHeight - estimatedHeight) / 2
         val maxY = (screenHeight - estimatedHeight - margin).coerceAtLeast(margin)
 
         params.x = targetX.coerceIn(margin, maxX)
@@ -1006,7 +1009,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         }
                     } else {
                         hideDismissActions()
-                        onBubbleTapped()
+                        val circularBubble = bubble as? CircularMicButtonView
+                        when {
+                            circularBubble?.isCancelHit(event.x, event.y) == true -> stopRecording(discard = true)
+                            circularBubble?.isAcceptHit(event.x, event.y) == true -> stopRecording(discard = false)
+                            recordingState == RecordingState.Recording -> Unit
+                            else -> onBubbleTapped()
+                        }
                     }
                     true
                 }
@@ -1045,12 +1054,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun snapBubbleToNearestHorizontalEdge(currentX: Int, currentY: Int) {
         val screenWidth = resources.displayMetrics.widthPixels
         val margin = dp(BUBBLE_MARGIN_DP)
-        val bubbleSize = dp(BUBBLE_SIZE_DP)
+        val bubbleWidth = currentBubbleWidthPx()
+        val bubbleHeight = currentBubbleHeightPx()
         val leftX = margin
-        val rightX = (screenWidth - bubbleSize - margin).coerceAtLeast(leftX)
-        val bubbleCenterX = currentX + bubbleSize / 2
+        val rightX = (screenWidth - bubbleWidth - margin).coerceAtLeast(leftX)
+        val bubbleCenterX = currentX + bubbleWidth / 2
         val targetX = if (bubbleCenterX < screenWidth / 2) leftX else rightX
-        val maxY = (keyboardTop() - bubbleSize - margin).coerceAtLeast(margin)
+        val maxY = (keyboardTop() - bubbleHeight - margin).coerceAtLeast(margin)
         val targetY = currentY.coerceIn(margin, maxY)
 
         animateBubbleTo(targetX, targetY)
@@ -1124,15 +1134,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldRevealDismissZones(params: WindowManager.LayoutParams): Boolean {
-        val bubbleCenterY = params.y + dp(BUBBLE_SIZE_DP) / 2
+        val bubbleCenterY = params.y + currentBubbleHeightPx() / 2
         val revealTop = (resources.displayMetrics.heightPixels - dp(BUBBLE_DISMISS_DROP_HEIGHT_DP)).coerceAtLeast(0)
         return bubbleCenterY >= revealTop
     }
 
     private fun resolveDismissTarget(params: WindowManager.LayoutParams): BubbleDismissTarget? {
         val screenWidth = resources.displayMetrics.widthPixels
-        val bubbleCenterX = params.x + dp(BUBBLE_SIZE_DP) / 2
-        val bubbleCenterY = params.y + dp(BUBBLE_SIZE_DP) / 2
+        val bubbleCenterX = params.x + currentBubbleWidthPx() / 2
+        val bubbleCenterY = params.y + currentBubbleHeightPx() / 2
 
         if (bubbleCenterY < resources.displayMetrics.heightPixels - dp(DISMISS_ACTION_HEIGHT_DP)) return null
         return if (bubbleCenterX < screenWidth / 2) {
@@ -1421,14 +1431,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun positionBubbleNearVolumeButton() {
         val params = bubbleParams ?: return
         val margin = dp(BUBBLE_MARGIN_DP)
-        val bubbleSize = dp(BUBBLE_SIZE_DP)
+        val bubbleWidth = currentBubbleWidthPx()
+        val bubbleHeight = currentBubbleHeightPx()
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
 
-        params.x = (screenWidth - bubbleSize - margin).coerceAtLeast(margin)
+        params.x = (screenWidth - bubbleWidth - margin).coerceAtLeast(margin)
         params.y = (screenHeight * 0.38f)
             .roundToInt()
-            .coerceIn(margin, (screenHeight - bubbleSize - margin).coerceAtLeast(margin))
+            .coerceIn(margin, (screenHeight - bubbleHeight - margin).coerceAtLeast(margin))
     }
 
     private fun stopRecording(discard: Boolean) {
@@ -1940,16 +1951,52 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             RecordingState.Idle -> {
                 stopBubbleAnimation()
                 bubble.setState(CircularMicButtonView.State.Idle)
+                updateBubbleLayoutSize()
             }
 
             RecordingState.Recording -> {
                 bubble.setState(CircularMicButtonView.State.Recording)
+                updateBubbleLayoutSize()
                 startBubbleAnimation()
             }
 
             RecordingState.Processing -> {
                 stopBubbleAnimation()
                 bubble.setState(CircularMicButtonView.State.Processing)
+                updateBubbleLayoutSize()
+            }
+        }
+    }
+
+    private fun updateBubbleLayoutSize() {
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        val targetWidth = currentBubbleWidthPx()
+        val targetHeight = currentBubbleHeightPx()
+        if (params.width == targetWidth && params.height == targetHeight) return
+
+        val startWidth = params.width.takeIf { it > 0 } ?: dp(BUBBLE_SIZE_DP)
+        val startX = params.x
+        val anchoredRight = startX + (startWidth / 2) >= resources.displayMetrics.widthPixels / 2
+        val anchoredEdgeX = if (anchoredRight) startX + startWidth else startX
+        val margin = dp(BUBBLE_MARGIN_DP)
+        val targetX = if (anchoredRight) {
+            (anchoredEdgeX - targetWidth).coerceIn(margin, maxBubbleX(targetWidth))
+        } else {
+            startX.coerceIn(margin, maxBubbleX(targetWidth))
+        }
+        val targetY = params.y.coerceIn(margin, maxBubbleY(targetHeight))
+
+        params.width = targetWidth
+        params.height = targetHeight
+        params.x = targetX
+        params.y = targetY
+        if (isBubbleAttached) {
+            try {
+                windowManager.updateViewLayout(bubble, params)
+                updateCommandActionsPosition()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update bubble overlay size", e)
             }
         }
     }
@@ -2000,5 +2047,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    private fun currentBubbleWidthPx(): Int {
+        return dp(bubbleView?.preferredWidthDp() ?: BUBBLE_SIZE_DP)
+    }
+
+    private fun currentBubbleHeightPx(): Int {
+        return dp(bubbleView?.preferredHeightDp() ?: BUBBLE_SIZE_DP)
+    }
+
+    private fun maxBubbleX(widthPx: Int = currentBubbleWidthPx()): Int {
+        return (resources.displayMetrics.widthPixels - widthPx - dp(BUBBLE_MARGIN_DP))
+            .coerceAtLeast(dp(BUBBLE_MARGIN_DP))
+    }
+
+    private fun maxBubbleY(heightPx: Int = currentBubbleHeightPx()): Int {
+        return (keyboardTop() - heightPx - dp(BUBBLE_MARGIN_DP))
+            .coerceAtLeast(dp(BUBBLE_MARGIN_DP))
     }
 }

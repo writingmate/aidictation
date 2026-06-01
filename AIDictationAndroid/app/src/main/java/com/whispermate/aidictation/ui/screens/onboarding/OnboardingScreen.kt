@@ -151,8 +151,7 @@ private fun OnboardingHeroIcon(
         modifier = modifier
             .size(72.dp)
             .clip(CircleShape)
-            .background(colors.surface)
-            .border(1.dp, colors.outline, CircleShape),
+            .background(colors.primary.copy(alpha = 0.10f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -175,8 +174,7 @@ private fun OnboardingSmallIcon(
         modifier = modifier
             .size(32.dp)
             .clip(CircleShape)
-            .background(colors.surface)
-            .border(1.dp, colors.outline, CircleShape),
+            .background(colors.primary.copy(alpha = 0.10f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -512,12 +510,7 @@ private fun OnboardingLanguageRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (isSelected) colors.primary.copy(alpha = 0.12f) else colors.surface)
-            .border(
-                width = 1.dp,
-                color = if (isSelected) colors.primary else colors.outline,
-                shape = shape
-            )
+            .background(if (isSelected) colors.primary.copy(alpha = 0.12f) else colors.surfaceVariant.copy(alpha = 0.45f))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -650,8 +643,10 @@ private fun AccessibilityDisclosureStep(
                 .fillMaxWidth()
                 .clip(MaterialTheme.shapes.small)
                 .clickable { onAcceptedChanged(!hasAccepted) }
-                .background(colors.surfaceVariant)
-                .border(1.dp, colors.primary.copy(alpha = 0.42f), MaterialTheme.shapes.small)
+                .background(
+                    if (hasAccepted) colors.primary.copy(alpha = 0.10f)
+                    else colors.surfaceVariant.copy(alpha = 0.55f)
+                )
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -687,8 +682,7 @@ private fun AccessibilityDisclosureHero() {
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(22.dp))
-                .background(colors.surface)
-                .border(1.dp, colors.outline, RoundedCornerShape(22.dp))
+                .background(colors.surfaceVariant.copy(alpha = 0.55f))
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.Center
         ) {
@@ -723,8 +717,7 @@ private fun AccessibilityDisclosureHero() {
                 .align(Alignment.TopEnd)
                 .size(32.dp)
                 .clip(CircleShape)
-                .background(colors.surfaceVariant)
-                .border(1.dp, colors.outline, CircleShape),
+                .background(colors.surface),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -764,8 +757,7 @@ private fun DisclosureVisualCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .background(colors.surface)
-            .border(1.dp, colors.outline, MaterialTheme.shapes.small)
+            .background(colors.surfaceVariant.copy(alpha = 0.45f))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -900,12 +892,7 @@ private fun TranscriptionModeChoice(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) colors.surface else colors.surfaceVariant)
-            .border(
-                width = 1.dp,
-                color = if (selected) colors.primary else colors.outline,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .background(if (selected) colors.primary.copy(alpha = 0.10f) else colors.surfaceVariant.copy(alpha = 0.55f))
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1243,8 +1230,7 @@ private fun OnboardingEditText(
     Box(
         modifier = modifier
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, shape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         AndroidView(

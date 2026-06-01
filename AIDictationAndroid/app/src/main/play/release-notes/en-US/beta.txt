@@ -1,1 +1,1 @@
-Restores the updated overlay button visual with a rounded-square logo style.
+Restores the three-part active overlay bubble with cancel, recording, and accept controls.

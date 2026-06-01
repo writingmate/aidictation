@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,6 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -38,8 +41,9 @@ import kotlin.math.sqrt
 import kotlin.math.sin
 import kotlin.random.Random
 
-private val activeColor = Color(0xFFFF6300) // Brand orange
+private val activeColor = Color(0xFFFF6300)
 private val idleColor = activeColor
+private val barColor = Color.White
 private const val minActiveBars = 3
 private const val waveformLevelGain = 1.7f
 private const val waveformLevelMix = 0.28f
@@ -53,7 +57,7 @@ enum class MicButtonState {
 }
 
 /**
- * Circular mic button with iOS-style audio bars inside.
+ * Logo-style mic button with iOS-style audio bars inside.
  * - Smooth spring animations for bouncy feel (matches iOS .easeOut)
  * - Random organic variation per bar
  * - Idle: frozen sine wave pattern
@@ -129,8 +133,16 @@ fun CircularMicButton(
     Box(
         modifier = modifier
             .size(size)
-            .clip(CircleShape)
-            .background(backgroundColor)
+            .clip(RoundedCornerShape(size * 0.24f))
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        backgroundColor.blend(Color.White, 0.18f),
+                        backgroundColor,
+                        backgroundColor.blend(Color.Black, 0.20f)
+                    )
+                )
+            )
             .clickable(enabled = state != MicButtonState.Processing) { onClick() },
         contentAlignment = Alignment.Center
     ) {
@@ -189,12 +201,31 @@ fun CircularMicButton(
                     modifier = Modifier
                         .width(barWidth)
                         .height(animatedHeight.dp)
+                        .drawBehind {
+                            val offset = 2.dp.toPx() * scale
+                            drawRoundRect(
+                                color = Color.Black.copy(alpha = 0.28f),
+                                topLeft = Offset(0f, offset),
+                                size = Size(this.size.width, this.size.height),
+                                cornerRadius = CornerRadius(this.size.width / 2f, this.size.width / 2f)
+                            )
+                        }
                         .clip(RoundedCornerShape(barWidth / 2))
-                        .background(Color.White)
+                        .background(barColor)
                 )
             }
         }
     }
+}
+
+private fun Color.blend(target: Color, amount: Float): Color {
+    val ratio = amount.coerceIn(0f, 1f)
+    return Color(
+        red = red + (target.red - red) * ratio,
+        green = green + (target.green - green) * ratio,
+        blue = blue + (target.blue - blue) * ratio,
+        alpha = alpha
+    )
 }
 
 private fun boostWaveformLevel(level: Float, overallLevel: Float = level): Float {

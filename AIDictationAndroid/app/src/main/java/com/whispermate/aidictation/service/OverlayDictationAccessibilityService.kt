@@ -11,6 +11,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -37,6 +38,7 @@ import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
+import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
@@ -66,11 +68,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     companion object {
         const val ACTION_START_DICTATION = "com.aidictation.app.action.START_DICTATION"
         private const val TAG = "OverlayDictationSvc"
-        private const val BUBBLE_PREFS = "overlay_bubble"
-        private const val BUBBLE_X_KEY = "bubble_x"
-        private const val BUBBLE_Y_KEY = "bubble_y"
-        private const val BUBBLE_HIDDEN_KEY = "bubble_hidden"
-        private const val BUBBLE_SNOOZE_UNTIL_MS_KEY = "bubble_snooze_until_ms"
         private const val SHORTCUT_PREFS = "dictation_shortcuts"
         private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
         private const val MIN_RECORDING_MS = 500L
@@ -171,10 +168,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var fixGrammarButton: TextView? = null
     private var rewriteButton: TextView? = null
 
-    private var bubbleIdleColor: Int = 0xFF120B00.toInt()
-    private var bubbleDictationActiveColor: Int = 0xFFFF6300.toInt()
-    private var bubbleRewriteActiveColor: Int = 0xFFFF6300.toInt()
-    private var bubbleFixActiveColor: Int = 0xFFFF6300.toInt()
+    private var bubbleIdleColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
+    private var bubbleDictationActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
+    private var bubbleRewriteActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
+    private var bubbleFixActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
     private var commandChipIdleTextColor: Int = Color.WHITE
     private var commandChipIdleBackgroundColor: Int = 0x24FFFFFF
     private var commandChipFixTextColor: Int = Color.WHITE
@@ -187,12 +184,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var volumeDownPressCount = 0
     private var lastVolumeDownPressAtMs = 0L
 
-    private val bubblePrefs by lazy { getSharedPreferences(BUBBLE_PREFS, Context.MODE_PRIVATE) }
+    private val bubblePrefs by lazy { OverlayBubblePreferences.prefs(this) }
+    private var bubblePrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private val shortcutPrefs by lazy { getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE) }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        registerBubblePreferenceListener()
 
         serviceScope.launch {
             appPreferences.autoStopOnSilenceEnabled.collectLatest { enabled ->
@@ -231,6 +230,34 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         hideDismissActions()
         stopBubbleAnimation()
         stopBubbleSnapAnimation()
+    }
+
+    private fun registerBubblePreferenceListener() {
+        if (bubblePrefsListener != null) return
+
+        bubblePrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == OverlayBubblePreferences.COLOR_KEY) {
+                serviceScope.launch {
+                    refreshBubbleBrandColor()
+                    updateBubbleUi()
+                }
+            }
+        }
+        bubblePrefs.registerOnSharedPreferenceChangeListener(bubblePrefsListener)
+    }
+
+    private fun unregisterBubblePreferenceListener() {
+        val listener = bubblePrefsListener ?: return
+        bubblePrefs.unregisterOnSharedPreferenceChangeListener(listener)
+        bubblePrefsListener = null
+    }
+
+    private fun refreshBubbleBrandColor() {
+        val color = OverlayBubblePreferences.getBubbleColor(this)
+        bubbleIdleColor = color
+        bubbleDictationActiveColor = color
+        bubbleRewriteActiveColor = color
+        bubbleFixActiveColor = color
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -277,6 +304,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         hideDismissActions()
         stopBubbleAnimation()
         stopBubbleSnapAnimation()
+        unregisterBubblePreferenceListener()
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
@@ -357,27 +385,27 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun isBubbleSuppressed(): Boolean {
-        if (bubblePrefs.getBoolean(BUBBLE_HIDDEN_KEY, false)) return true
+        if (bubblePrefs.getBoolean(OverlayBubblePreferences.HIDDEN_KEY, false)) return true
 
-        val snoozeUntil = bubblePrefs.getLong(BUBBLE_SNOOZE_UNTIL_MS_KEY, 0L)
+        val snoozeUntil = bubblePrefs.getLong(OverlayBubblePreferences.SNOOZE_UNTIL_MS_KEY, 0L)
         if (snoozeUntil <= 0L) return false
         if (System.currentTimeMillis() < snoozeUntil) return true
 
-        bubblePrefs.edit().remove(BUBBLE_SNOOZE_UNTIL_MS_KEY).apply()
+        bubblePrefs.edit().remove(OverlayBubblePreferences.SNOOZE_UNTIL_MS_KEY).apply()
         return false
     }
 
     private fun hideBubblePermanently() {
         bubblePrefs.edit()
-            .putBoolean(BUBBLE_HIDDEN_KEY, true)
-            .remove(BUBBLE_SNOOZE_UNTIL_MS_KEY)
+            .putBoolean(OverlayBubblePreferences.HIDDEN_KEY, true)
+            .remove(OverlayBubblePreferences.SNOOZE_UNTIL_MS_KEY)
             .apply()
         suppressBubbleNow(R.string.overlay_hidden_permanently)
     }
 
     private fun snoozeBubble() {
         bubblePrefs.edit()
-            .putLong(BUBBLE_SNOOZE_UNTIL_MS_KEY, System.currentTimeMillis() + BUBBLE_SNOOZE_MS)
+            .putLong(OverlayBubblePreferences.SNOOZE_UNTIL_MS_KEY, System.currentTimeMillis() + BUBBLE_SNOOZE_MS)
             .apply()
         suppressBubbleNow(R.string.overlay_snoozed)
     }
@@ -512,19 +540,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (bubbleView != null) return
 
         val size = dp(BUBBLE_SIZE_DP)
-        bubbleIdleColor = resolveThemeColor(
-            android.R.attr.colorPrimary,
-            0xFF120B00.toInt()
-        )
-        bubbleDictationActiveColor = resolveThemeColor(
-            android.R.attr.colorSecondary,
-            0xFFFF6300.toInt()
-        )
-        bubbleRewriteActiveColor = resolveThemeColor(
-            android.R.attr.colorAccent,
-            0xFFFF6300.toInt()
-        )
-        bubbleFixActiveColor = bubbleDictationActiveColor
+        refreshBubbleBrandColor()
 
         bubbleView = CircularMicButtonView(this).apply {
             elevation = dp(8).toFloat()
@@ -534,8 +550,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             setState(CircularMicButtonView.State.Idle)
         }
 
-        val startX = bubblePrefs.getInt(BUBBLE_X_KEY, defaultBubbleX())
-        val startY = bubblePrefs.getInt(BUBBLE_Y_KEY, defaultBubbleY())
+        val startX = bubblePrefs.getInt(OverlayBubblePreferences.X_KEY, defaultBubbleX())
+        val startY = bubblePrefs.getInt(OverlayBubblePreferences.Y_KEY, defaultBubbleY())
 
         bubbleParams = WindowManager.LayoutParams(
             size,
@@ -580,8 +596,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         commandChipFixTextColor = preferredOnColor(commandChipFixBackgroundColor)
         commandChipRewriteBackgroundColor = withAlpha(rewriteAccent, 0.9f)
         commandChipRewriteTextColor = preferredOnColor(commandChipRewriteBackgroundColor)
-        bubbleFixActiveColor = fixAccent
-        bubbleRewriteActiveColor = rewriteAccent
+        bubbleFixActiveColor = bubbleDictationActiveColor
+        bubbleRewriteActiveColor = bubbleDictationActiveColor
 
         fixGrammarButton = createCommandActionButton(
             label = getString(R.string.overlay_action_fix_grammar),
@@ -1128,8 +1144,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun persistBubblePosition(x: Int, y: Int) {
         bubblePrefs.edit()
-            .putInt(BUBBLE_X_KEY, x)
-            .putInt(BUBBLE_Y_KEY, y)
+            .putInt(OverlayBubblePreferences.X_KEY, x)
+            .putInt(OverlayBubblePreferences.Y_KEY, y)
             .apply()
     }
 

@@ -470,7 +470,7 @@ object TranscriptionClient {
                     0,
                     sampleSize,
                     max(0L, sampleTimeUs - startUs),
-                    extractor.sampleFlags
+                    mediaCodecBufferFlags(extractor.sampleFlags)
                 )
                 muxer.writeSampleData(outputTrackIndex, buffer, bufferInfo)
                 extractor.advance()
@@ -482,6 +482,17 @@ object TranscriptionClient {
             runCatching { muxer?.release() }
             extractor.release()
         }
+    }
+
+    private fun mediaCodecBufferFlags(sampleFlags: Int): Int {
+        var flags = 0
+        if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+            flags = flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
+        }
+        if (sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
+            flags = flags or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
+        }
+        return flags
     }
 
     private fun readAudioMetadata(audioFile: File): AudioMetadata {

@@ -5,8 +5,10 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.OvershootInterpolator
@@ -18,13 +20,13 @@ import kotlin.math.sqrt
 import kotlin.math.sin
 
 /**
- * Custom View version of CircularMicButton for use in XML layouts.
- * Displays a circular button with animated audio bars inside.
+ * Custom View version of the logo-style mic button for overlay layouts.
+ * Displays a rounded-square button with animated audio bars inside.
  *
  * States:
- * - Idle: black background, frozen sine wave pattern
- * - Recording: brand orange background, bars respond to audio/frequency bands
- * - Processing: brand orange background, animated sine wave
+ * - Idle: brand background, frozen sine wave pattern
+ * - Recording: brand background, bars respond to audio/frequency bands
+ * - Processing: brand background, animated sine wave
  */
 class CircularMicButtonView @JvmOverloads constructor(
     context: Context,
@@ -35,8 +37,8 @@ class CircularMicButtonView @JvmOverloads constructor(
     enum class State { Idle, Recording, Processing }
 
     // Configuration
-    private var idleColor: Int = 0xFF120B00.toInt()
-    private var activeColor: Int = 0xFFFF6300.toInt() // Brand orange
+    private var idleColor: Int = 0xFFFF6300.toInt()
+    private var activeColor: Int = 0xFFFF6300.toInt()
 
     // State
     private var state: State = State.Idle
@@ -59,6 +61,9 @@ class CircularMicButtonView @JvmOverloads constructor(
     }
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val barShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+    private val buttonRect = RectF()
+    private val shadowRect = RectF()
     private val barRect = RectF()
 
     // Click handling
@@ -256,25 +261,43 @@ class CircularMicButtonView @JvmOverloads constructor(
         val size = min(width, height).toFloat()
         val centerX = width / 2f
         val centerY = height / 2f
-        val radius = size / 2f
+        val inset = size * 0.06f
+        val buttonSize = size - (inset * 2f)
+        val cornerRadius = buttonSize * 0.24f
+        buttonRect.set(
+            centerX - buttonSize / 2f,
+            centerY - buttonSize / 2f,
+            centerX + buttonSize / 2f,
+            centerY + buttonSize / 2f
+        )
 
-        // Draw a subtle shadow under the button for better depth on all backgrounds.
-        shadowPaint.alpha = if (state == State.Idle) 58 else 72
-        canvas.drawCircle(centerX, centerY + (radius * 0.08f), radius * 1.03f, shadowPaint)
+        shadowPaint.alpha = if (state == State.Idle) 70 else 82
+        shadowRect.set(buttonRect)
+        shadowRect.offset(0f, buttonSize * 0.07f)
+        canvas.drawRoundRect(shadowRect, cornerRadius, cornerRadius, shadowPaint)
 
-        // Draw circular background
-        backgroundPaint.color = currentBackgroundColor
-        canvas.drawCircle(centerX, centerY, radius, backgroundPaint)
+        backgroundPaint.shader = LinearGradient(
+            0f,
+            buttonRect.top,
+            0f,
+            buttonRect.bottom,
+            intArrayOf(
+                blendColor(currentBackgroundColor, Color.WHITE, 0.18f),
+                currentBackgroundColor,
+                blendColor(currentBackgroundColor, Color.BLACK, 0.20f)
+            ),
+            floatArrayOf(0f, 0.48f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRoundRect(buttonRect, cornerRadius, cornerRadius, backgroundPaint)
+        backgroundPaint.shader = null
 
-        // Calculate bar dimensions (scaled from 100dp design)
-        val scale = size / (100 * resources.displayMetrics.density)
-        val barWidth = 8 * resources.displayMetrics.density * scale
-        val barSpacing = 2 * resources.displayMetrics.density * scale
-        val maxBarHeight = 58 * resources.displayMetrics.density * scale
-        val dotSize = 8 * resources.displayMetrics.density * scale
+        val barWidth = buttonSize * 0.085f
+        val barSpacing = buttonSize * 0.035f
+        val maxBarHeight = buttonSize * 0.58f
+        val dotSize = barWidth
         val barCornerRadius = barWidth / 2
 
-        // Calculate total width of all bars
         val totalBarsWidth = (barWidth * TOTAL_BARS) + (barSpacing * (TOTAL_BARS - 1))
         val startX = centerX - (totalBarsWidth / 2) + (barWidth / 2)
 
@@ -299,9 +322,25 @@ class CircularMicButtonView @JvmOverloads constructor(
             val right = barCenterX + barWidth / 2
             val bottom = centerY + barHeight / 2
 
+            barShadowPaint.alpha = if (state == State.Idle) 72 else 58
+            val barShadowOffset = buttonSize * 0.045f
+            barRect.set(left, top + barShadowOffset, right, bottom + barShadowOffset)
+            canvas.drawRoundRect(barRect, barCornerRadius, barCornerRadius, barShadowPaint)
+
             barRect.set(left, top, right, bottom)
             canvas.drawRoundRect(barRect, barCornerRadius, barCornerRadius, barPaint)
         }
+    }
+
+    private fun blendColor(from: Int, to: Int, amount: Float): Int {
+        val ratio = amount.coerceIn(0f, 1f)
+        val inverse = 1f - ratio
+        return Color.argb(
+            Color.alpha(from),
+            (Color.red(from) * inverse + Color.red(to) * ratio).toInt(),
+            (Color.green(from) * inverse + Color.green(to) * ratio).toInt(),
+            (Color.blue(from) * inverse + Color.blue(to) * ratio).toInt()
+        )
     }
 
     override fun onDetachedFromWindow() {

@@ -90,6 +90,8 @@
     <string name="settings_overlay_access">Overlay Accessibility</string>
     <string name="settings_volume_button_shortcut">Triple-press Volume Down</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_bubble_color">Floating bubble color</string>
     <string name="settings_account">Account</string>
     <string name="account_sign_in">Sign in</string>
     <string name="account_sign_out">Sign out</string>

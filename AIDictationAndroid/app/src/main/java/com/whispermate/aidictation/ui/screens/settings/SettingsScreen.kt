@@ -7,8 +7,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +23,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -47,11 +53,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -61,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
@@ -89,8 +98,9 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showClearHistoryDialog by remember { mutableStateOf(false) }
-    var overlayBubbleSuppressed by remember { mutableStateOf(isOverlayBubbleSuppressed(context)) }
+    var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
+    var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
 
     val hasMicPermission = ContextCompat.checkSelfPermission(
         context,
@@ -164,7 +174,7 @@ fun SettingsScreen(
                     icon = Icons.Default.Mic,
                     title = stringResource(R.string.settings_show_overlay_bubble),
                     onClick = {
-                        restoreOverlayBubble(context)
+                        OverlayBubblePreferences.restore(context)
                         overlayBubbleSuppressed = false
                         Toast.makeText(
                             context,
@@ -176,6 +186,24 @@ fun SettingsScreen(
                     titleColor = MaterialTheme.colorScheme.primary
                 )
             }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        SectionHeader(stringResource(R.string.settings_appearance))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            BubbleColorSelector(
+                selectedColor = selectedBubbleColor,
+                onColorSelected = { color ->
+                    selectedBubbleColor = color
+                    OverlayBubblePreferences.setBubbleColor(context, color)
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -392,31 +420,8 @@ fun SettingsScreen(
     }
 }
 
-private const val OVERLAY_BUBBLE_PREFS = "overlay_bubble"
-private const val OVERLAY_BUBBLE_HIDDEN_KEY = "bubble_hidden"
-private const val OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY = "bubble_snooze_until_ms"
 private const val SHORTCUT_PREFS = "dictation_shortcuts"
 private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
-
-private fun isOverlayBubbleSuppressed(context: Context): Boolean {
-    val prefs = context.getSharedPreferences(OVERLAY_BUBBLE_PREFS, Context.MODE_PRIVATE)
-    if (prefs.getBoolean(OVERLAY_BUBBLE_HIDDEN_KEY, false)) return true
-
-    val snoozeUntil = prefs.getLong(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY, 0L)
-    if (snoozeUntil <= 0L) return false
-    if (System.currentTimeMillis() < snoozeUntil) return true
-
-    prefs.edit().remove(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY).apply()
-    return false
-}
-
-private fun restoreOverlayBubble(context: Context) {
-    context.getSharedPreferences(OVERLAY_BUBBLE_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .remove(OVERLAY_BUBBLE_HIDDEN_KEY)
-        .remove(OVERLAY_BUBBLE_SNOOZE_UNTIL_MS_KEY)
-        .apply()
-}
 
 private fun isVolumeShortcutEnabled(context: Context): Boolean {
     return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
@@ -428,6 +433,102 @@ private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {
         .edit()
         .putBoolean(VOLUME_SHORTCUT_ENABLED_KEY, enabled)
         .apply()
+}
+
+@Composable
+private fun BubbleColorSelector(
+    selectedColor: Int,
+    onColorSelected: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.settings_bubble_color),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OverlayBubblePreferences.PRESET_COLORS.forEach { color ->
+                BubbleLogoSwatch(
+                    color = color,
+                    selected = color == selectedColor,
+                    onClick = { onColorSelected(color) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BubbleLogoSwatch(
+    color: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(12.dp)
+    val composeColor = Color(color)
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+    val barHeights = listOf(16.dp, 25.dp, 32.dp, 32.dp, 25.dp, 16.dp)
+
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(shape)
+            .background(composeColor)
+            .border(
+                BorderStroke(if (selected) 3.dp else 1.dp, borderColor),
+                shape
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            barHeights.forEach { height ->
+                Box(
+                    modifier = Modifier
+                        .width(4.dp)
+                        .height(height)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White)
+                )
+            }
+        }
+
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.94f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = composeColor,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+        }
+    }
 }
 
 @Composable

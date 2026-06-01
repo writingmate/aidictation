@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
@@ -76,6 +77,7 @@ import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
+import com.whispermate.aidictation.ui.views.CircularMicButtonView
 
 @Composable
 fun SettingsScreen(
@@ -209,6 +211,8 @@ fun SettingsScreen(
                     OverlayBubblePreferences.setBubbleColor(context, color)
                 }
             )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            OverlayPreviewCard(selectedColor = selectedBubbleColor)
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -630,6 +634,76 @@ private fun BubbleLogoSwatch(
                     modifier = Modifier.size(11.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun OverlayPreviewCard(selectedColor: Int) {
+    var previewStateIndex by remember { mutableIntStateOf(0) }
+    val previewStates = remember {
+        listOf(
+            CircularMicButtonView.State.Idle,
+            CircularMicButtonView.State.Recording,
+            CircularMicButtonView.State.Processing
+        )
+    }
+    val previewState = previewStates[previewStateIndex]
+    val resolvedColor = when (selectedColor) {
+        OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
+        else -> selectedColor
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Overlay preview",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "Tap the control to switch states.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                .clickable {
+                    previewStateIndex = (previewStateIndex + 1) % previewStates.size
+                },
+            contentAlignment = Alignment.CenterEnd
+        ) {
+            AndroidView(
+                modifier = Modifier
+                    .width(250.dp)
+                    .height(55.dp)
+                    .padding(end = 10.dp),
+                factory = { context ->
+                    CircularMicButtonView(context).apply {
+                        setColors(resolvedColor, resolvedColor)
+                        setState(previewState)
+                        setAudioLevel(0.72f)
+                        setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                        setOnClickCallback {
+                            previewStateIndex = (previewStateIndex + 1) % previewStates.size
+                        }
+                    }
+                },
+                update = { view ->
+                    view.setColors(resolvedColor, resolvedColor)
+                    view.setState(previewState)
+                    view.setAudioLevel(if (previewState == CircularMicButtonView.State.Recording) 0.72f else 0f)
+                    view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                }
+            )
         }
     }
 }

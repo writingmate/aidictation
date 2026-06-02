@@ -12,9 +12,14 @@
     <string name="onboarding_mic_title">Microphone Access</string>
     <string name="onboarding_mic_subtitle">We need microphone access to transcribe your voice</string>
     <string name="onboarding_mic_enable">Enable Microphone</string>
+    <string name="onboarding_color_title">Pick your bubble color</string>
+    <string name="onboarding_color_subtitle">Make the floating mic easy to spot before we ask for access.</string>
     <string name="onboarding_languages_title">Choose your languages</string>
     <string name="onboarding_languages_subtitle">Select the languages you speak to improve transcription.</string>
     <string name="onboarding_languages_change_later">You can change this later in Settings.</string>
+    <string name="onboarding_button_demo_title">Meet the floating mic</string>
+    <string name="onboarding_button_demo_subtitle">This is the button you will use to start, cancel, and confirm dictation.</string>
+    <string name="onboarding_button_demo_hint">Tap the preview to cycle through its states.</string>
     <string name="onboarding_overlay_title">Turn on the floating mic</string>
     <string name="onboarding_overlay_subtitle">A small mic appears when you tap into a place where you can type.</string>
     <string name="onboarding_accessibility_disclosure_title">Accessibility disclosure</string>

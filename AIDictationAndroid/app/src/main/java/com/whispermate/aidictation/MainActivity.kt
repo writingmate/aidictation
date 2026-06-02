@@ -60,6 +60,11 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        appAccentColor = OverlayBubblePreferences.getResolvedBubbleColor(this)
+    }
+
     override fun onDestroy() {
         overlayPreferenceListener?.let {
             OverlayBubblePreferences.prefs(this).unregisterOnSharedPreferenceChangeListener(it)

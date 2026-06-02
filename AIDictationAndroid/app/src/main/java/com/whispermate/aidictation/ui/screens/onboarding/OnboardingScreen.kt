@@ -8,11 +8,6 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
-import android.text.Editable
-import android.text.InputType
-import android.text.TextWatcher
-import android.view.ViewGroup
-import android.widget.EditText
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -74,7 +69,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -97,7 +91,6 @@ import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 
-private val BrandOrange = Color(0xFFFF6300)
 private val OnboardingSupportedLanguageCodes = listOf(
     // Mirrors the macOS app's Language enum. Empty selection means auto-detect.
     "en",
@@ -134,7 +127,7 @@ private data class OnboardingColors(
 
 @Composable
 private fun onboardingColors() = OnboardingColors(
-    primary = BrandOrange,
+    primary = MaterialTheme.colorScheme.primary,
     onPrimary = Color.White,
     background = MaterialTheme.colorScheme.background,
     surface = MaterialTheme.colorScheme.surface,
@@ -218,11 +211,9 @@ fun OnboardingScreen(
     var currentStep by remember { mutableIntStateOf(0) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
-    var testInputText by remember { mutableStateOf("") }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var hasAcceptedAccessibilityDisclosure by remember { mutableStateOf(false) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
-    val hasTestedDictation = testInputText.isNotBlank()
     val colors = onboardingColors()
 
     OnboardingSystemBars()
@@ -342,8 +333,6 @@ fun OnboardingScreen(
                     )
                     OnboardingStep.Overlay -> OverlaySetupStep(
                         isEnabled = isOverlayServiceEnabled,
-                        testInputText = testInputText,
-                        onTestInputChanged = { testInputText = it },
                         onOpenSettings = { openAccessibilitySettings(context) }
                     )
                     OnboardingStep.OnDeviceTranscription -> OnDeviceTranscriptionStep(
@@ -379,7 +368,7 @@ fun OnboardingScreen(
                     OnboardingStep.Overlay -> {
                         if (!isOverlayServiceEnabled) {
                             openAccessibilitySettings(context)
-                        } else if (hasTestedDictation) {
+                        } else {
                             goToNextStep()
                         }
                     }
@@ -396,7 +385,6 @@ fun OnboardingScreen(
                 .height(56.dp),
             enabled = when (currentOnboardingStep) {
                 OnboardingStep.AccessibilityDisclosure -> hasAcceptedAccessibilityDisclosure
-                OnboardingStep.Overlay -> !isOverlayServiceEnabled || hasTestedDictation
                 OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
                 else -> true
             },
@@ -421,8 +409,7 @@ fun OnboardingScreen(
                     OnboardingStep.ButtonDemo -> stringResource(R.string.onboarding_continue)
                     OnboardingStep.Overlay -> when {
                         !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
-                        hasTestedDictation -> stringResource(R.string.onboarding_continue)
-                        else -> stringResource(R.string.onboarding_try_dictation)
+                        else -> stringResource(R.string.onboarding_continue)
                     }
                     OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
                     OnboardingStep.VolumeShortcut -> stringResource(R.string.onboarding_get_started)
@@ -643,15 +630,12 @@ private fun OnboardingBubbleColorSwatch(
 private fun ButtonDemoStep(selectedColor: Int) {
     val colors = onboardingColors()
     val context = LocalContext.current
-    var previewStateIndex by remember { mutableIntStateOf(0) }
-    val previewStates = remember {
-        listOf(
-            OverlayMicButtonView.State.Idle,
-            OverlayMicButtonView.State.Recording,
-            OverlayMicButtonView.State.Processing
-        )
+    var demoStage by remember { mutableIntStateOf(0) }
+    val previewState = when (demoStage) {
+        2 -> OverlayMicButtonView.State.Recording
+        3 -> OverlayMicButtonView.State.Processing
+        else -> OverlayMicButtonView.State.Idle
     }
-    val previewState = previewStates[previewStateIndex]
     val resolvedColor = when (selectedColor) {
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(context)
         else -> selectedColor
@@ -685,14 +669,37 @@ private fun ButtonDemoStep(selectedColor: Int) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(92.dp)
+                .height(176.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(colors.surfaceVariant.copy(alpha = 0.45f))
-                .clickable { previewStateIndex = (previewStateIndex + 1) % previewStates.size },
-            contentAlignment = Alignment.Center
+                .clickable { demoStage = (demoStage + 1) % 4 }
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.surface)
+                    .padding(14.dp)
+            ) {
+                Text(
+                    text = when (demoStage) {
+                        0 -> stringResource(R.string.onboarding_button_demo_tap_area)
+                        1 -> stringResource(R.string.onboarding_button_demo_mic_appears)
+                        2 -> stringResource(R.string.onboarding_button_demo_speak)
+                        else -> stringResource(R.string.onboarding_button_demo_result)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (demoStage == 3) colors.onSurface else colors.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+            }
+
+            if (demoStage >= 1) {
             AndroidView(
                 modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
                     .width(if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp)
                     .height(55.dp),
                 factory = { androidContext ->
@@ -710,6 +717,7 @@ private fun ButtonDemoStep(selectedColor: Int) {
                     view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
                 }
             )
+            }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -1426,8 +1434,6 @@ private fun ContextRulesStep(
 @Composable
 private fun OverlaySetupStep(
     isEnabled: Boolean,
-    testInputText: String,
-    onTestInputChanged: (String) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Column(
@@ -1466,17 +1472,9 @@ private fun OverlaySetupStep(
 
         SetupStepItem(
             number = "2",
-            text = stringResource(R.string.onboarding_overlay_step2),
+            text = stringResource(R.string.onboarding_overlay_permission_step2),
             isCompleted = isEnabled,
             onClick = if (!isEnabled) onOpenSettings else null
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        SetupStepItem(
-            number = "3",
-            text = stringResource(R.string.onboarding_overlay_step3),
-            isCompleted = testInputText.isNotBlank()
         )
 
         if (!isEnabled) {
@@ -1487,80 +1485,7 @@ private fun OverlaySetupStep(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
-        } else {
-            Spacer(modifier = Modifier.height(12.dp))
-            OnboardingEditText(
-                text = testInputText,
-                hint = stringResource(R.string.onboarding_overlay_test_placeholder),
-                onTextChanged = onTestInputChanged,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(128.dp)
-            )
         }
-    }
-}
-
-@Composable
-private fun OnboardingEditText(
-    text: String,
-    hint: String,
-    onTextChanged: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
-    val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
-    val containerColor = MaterialTheme.colorScheme.surface.toArgb()
-    val shape = RoundedCornerShape(12.dp)
-
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                EditText(context).apply {
-                    minLines = 3
-                    setSingleLine(false)
-                    gravity = android.view.Gravity.TOP or android.view.Gravity.START
-                    inputType = InputType.TYPE_CLASS_TEXT or
-                        InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                        InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                    background = null
-                    includeFontPadding = false
-                    setPadding(0, 0, 0, 0)
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    setTextColor(textColor)
-                    setHintTextColor(hintColor)
-                    setBackgroundColor(containerColor)
-                    this.hint = hint
-                    setText(text)
-                    addTextChangedListener(object : TextWatcher {
-                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                            onTextChanged(s?.toString().orEmpty())
-                        }
-                        override fun afterTextChanged(s: Editable?) = Unit
-                    })
-                }
-            },
-            update = { editText ->
-                editText.hint = hint
-                editText.setTextColor(textColor)
-                editText.setHintTextColor(hintColor)
-                editText.setBackgroundColor(containerColor)
-                if (editText.text.toString() != text) {
-                    editText.setText(text)
-                    editText.setSelection(editText.text.length)
-                }
-            }
-        )
     }
 }
 

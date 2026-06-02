@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
@@ -187,11 +188,10 @@ private enum class OnboardingStep {
     Welcome,
     Color,
     Languages,
+    OnDeviceTranscription,
     Microphone,
     ButtonDemo,
     AccessibilityDisclosure,
-    Overlay,
-    OnDeviceTranscription,
     VolumeShortcut
 }
 
@@ -223,11 +223,10 @@ fun OnboardingScreen(
             add(OnboardingStep.Welcome)
             add(OnboardingStep.Color)
             add(OnboardingStep.Languages)
+            add(OnboardingStep.OnDeviceTranscription)
             add(OnboardingStep.Microphone)
             add(OnboardingStep.ButtonDemo)
             add(OnboardingStep.AccessibilityDisclosure)
-            add(OnboardingStep.Overlay)
-            add(OnboardingStep.OnDeviceTranscription)
             add(OnboardingStep.VolumeShortcut)
         }
     }
@@ -247,7 +246,14 @@ fun OnboardingScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasMicPermission = hasMicrophonePermission(context)
-                isOverlayServiceEnabled = isOverlayAccessibilityEnabled(context)
+                val overlayEnabled = isOverlayAccessibilityEnabled(context)
+                isOverlayServiceEnabled = overlayEnabled
+                if (
+                    currentOnboardingStep == OnboardingStep.AccessibilityDisclosure &&
+                    overlayEnabled
+                ) {
+                    currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -325,20 +331,16 @@ fun OnboardingScreen(
                         selectedLanguageCodes = selectedLanguageCodes,
                         onToggleLanguage = onToggleLanguage
                     )
+                    OnboardingStep.OnDeviceTranscription -> OnDeviceTranscriptionStep(
+                        enabled = onDeviceTranscriptionEnabled,
+                        state = onDeviceModelState,
+                        onEnabledChanged = onSetOnDeviceTranscriptionEnabled
+                    )
                     OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
                     OnboardingStep.ButtonDemo -> ButtonDemoStep(selectedColor = selectedBubbleColor)
                     OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep(
                         hasAccepted = hasAcceptedAccessibilityDisclosure,
                         onAcceptedChanged = { hasAcceptedAccessibilityDisclosure = it }
-                    )
-                    OnboardingStep.Overlay -> OverlaySetupStep(
-                        isEnabled = isOverlayServiceEnabled,
-                        onOpenSettings = { openAccessibilitySettings(context) }
-                    )
-                    OnboardingStep.OnDeviceTranscription -> OnDeviceTranscriptionStep(
-                        enabled = onDeviceTranscriptionEnabled,
-                        state = onDeviceModelState,
-                        onEnabledChanged = onSetOnDeviceTranscriptionEnabled
                     )
                     OnboardingStep.VolumeShortcut -> VolumeShortcutStep(
                         isEnabled = volumeShortcutEnabled,
@@ -356,6 +358,7 @@ fun OnboardingScreen(
                     OnboardingStep.Welcome -> goToNextStep()
                     OnboardingStep.Color -> goToNextStep()
                     OnboardingStep.Languages -> goToNextStep()
+                    OnboardingStep.OnDeviceTranscription -> goToNextStep()
                     OnboardingStep.Microphone -> {
                         if (hasMicPermission) {
                             goToNextStep()
@@ -364,15 +367,13 @@ fun OnboardingScreen(
                         }
                     }
                     OnboardingStep.ButtonDemo -> goToNextStep()
-                    OnboardingStep.AccessibilityDisclosure -> goToNextStep()
-                    OnboardingStep.Overlay -> {
+                    OnboardingStep.AccessibilityDisclosure -> {
                         if (!isOverlayServiceEnabled) {
                             openAccessibilitySettings(context)
                         } else {
                             goToNextStep()
                         }
                     }
-                    OnboardingStep.OnDeviceTranscription -> goToNextStep()
                     OnboardingStep.VolumeShortcut -> {
                         setVolumeShortcutEnabled(context, volumeShortcutEnabled)
                         onSaveContextRules(contextRulesEnabled.toList())
@@ -404,13 +405,13 @@ fun OnboardingScreen(
                         stringResource(R.string.onboarding_mic_enable)
                     }
                     OnboardingStep.AccessibilityDisclosure -> {
-                        stringResource(R.string.onboarding_accessibility_disclosure_continue)
+                        if (isOverlayServiceEnabled) {
+                            stringResource(R.string.onboarding_continue)
+                        } else {
+                            stringResource(R.string.onboarding_accessibility_disclosure_continue)
+                        }
                     }
                     OnboardingStep.ButtonDemo -> stringResource(R.string.onboarding_continue)
-                    OnboardingStep.Overlay -> when {
-                        !isOverlayServiceEnabled -> stringResource(R.string.onboarding_open_settings)
-                        else -> stringResource(R.string.onboarding_continue)
-                    }
                     OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
                     OnboardingStep.VolumeShortcut -> stringResource(R.string.onboarding_get_started)
                 },
@@ -672,7 +673,6 @@ private fun ButtonDemoStep(selectedColor: Int) {
                 .height(176.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(colors.surfaceVariant.copy(alpha = 0.45f))
-                .clickable { demoStage = (demoStage + 1) % 4 }
         ) {
             Column(
                 modifier = Modifier
@@ -680,6 +680,11 @@ private fun ButtonDemoStep(selectedColor: Int) {
                     .padding(16.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(colors.surface)
+                    .clickable {
+                        if (demoStage == 0) {
+                            demoStage = 1
+                        }
+                    }
                     .padding(14.dp)
             ) {
                 Text(
@@ -696,27 +701,36 @@ private fun ButtonDemoStep(selectedColor: Int) {
             }
 
             if (demoStage >= 1) {
-            AndroidView(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(16.dp)
-                    .width(if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp)
-                    .height(55.dp),
-                factory = { androidContext ->
-                    OverlayMicButtonView(androidContext).apply {
-                        setColors(resolvedColor, resolvedColor)
-                        setState(previewState)
-                        setAudioLevel(0.72f)
-                        setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                AndroidView(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                        .width(if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp)
+                        .height(55.dp),
+                    factory = { androidContext ->
+                        OverlayMicButtonView(androidContext).apply {
+                            setOnClickCallback {
+                                demoStage = when (demoStage) {
+                                    1 -> 2
+                                    2 -> 3
+                                    3 -> 1
+                                    else -> demoStage
+                                }
+                            }
+                            isHapticFeedbackEnabled = true
+                            setColors(resolvedColor, resolvedColor)
+                            setState(previewState)
+                            setAudioLevel(0.72f)
+                            setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                        }
+                    },
+                    update = { view ->
+                        view.setColors(resolvedColor, resolvedColor)
+                        view.setState(previewState)
+                        view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
+                        view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
                     }
-                },
-                update = { view ->
-                    view.setColors(resolvedColor, resolvedColor)
-                    view.setState(previewState)
-                    view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
-                    view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
-                }
-            )
+                )
             }
         }
 
@@ -1123,6 +1137,8 @@ private fun OnDeviceTranscriptionStep(
         TranscriptionModeChoice(
             title = stringResource(R.string.onboarding_transcription_cloud_title),
             body = stringResource(R.string.onboarding_transcription_cloud_body),
+            accuracyStars = 5,
+            speedStars = 5,
             selected = !enabled && !state.isDownloading,
             enabled = !state.isDownloading,
             onClick = { onEnabledChanged(false) }
@@ -1139,6 +1155,8 @@ private fun OnDeviceTranscriptionStep(
             } else {
                 stringResource(R.string.onboarding_transcription_offline_body)
             },
+            accuracyStars = 3,
+            speedStars = 4,
             selected = enabled || state.isDownloading,
             enabled = !state.isDownloading,
             onClick = { onEnabledChanged(true) }
@@ -1176,6 +1194,8 @@ private fun OnDeviceTranscriptionStep(
 private fun TranscriptionModeChoice(
     title: String,
     body: String,
+    accuracyStars: Int,
+    speedStars: Int,
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit
@@ -1227,6 +1247,38 @@ private fun TranscriptionModeChoice(
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSurfaceVariant
             )
+            Spacer(modifier = Modifier.height(10.dp))
+            RatingRow(label = stringResource(R.string.onboarding_transcription_accuracy), stars = accuracyStars)
+            Spacer(modifier = Modifier.height(4.dp))
+            RatingRow(label = stringResource(R.string.onboarding_transcription_speed), stars = speedStars)
+        }
+    }
+}
+
+@Composable
+private fun RatingRow(
+    label: String,
+    stars: Int
+) {
+    val colors = onboardingColors()
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        repeat(5) { index ->
+            Icon(
+                imageVector = Icons.Default.Star,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = if (index < stars.coerceIn(0, 5)) colors.primary else colors.outline
+            )
+            if (index < 4) {
+                Spacer(modifier = Modifier.width(2.dp))
+            }
         }
     }
 }
@@ -1432,64 +1484,6 @@ private fun ContextRulesStep(
 }
 
 @Composable
-private fun OverlaySetupStep(
-    isEnabled: Boolean,
-    onOpenSettings: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        OnboardingHeroIcon(icon = if (isEnabled) Icons.Default.Check else Icons.Default.Security)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_overlay_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_overlay_subtitle),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        SetupStepItem(
-            number = "1",
-            text = stringResource(R.string.onboarding_overlay_step1),
-            isCompleted = isEnabled,
-            onClick = if (!isEnabled) onOpenSettings else null
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        SetupStepItem(
-            number = "2",
-            text = stringResource(R.string.onboarding_overlay_permission_step2),
-            isCompleted = isEnabled,
-            onClick = if (!isEnabled) onOpenSettings else null
-        )
-
-        if (!isEnabled) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = stringResource(R.string.onboarding_overlay_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
-    }
-}
-
-@Composable
 private fun FeatureItem(icon: ImageVector, text: String) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -1500,65 +1494,6 @@ private fun FeatureItem(icon: ImageVector, text: String) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-@Composable
-private fun SetupStepItem(
-    number: String,
-    text: String,
-    isCompleted: Boolean = false,
-    onClick: (() -> Unit)? = null
-) {
-    val colors = onboardingColors()
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                if (isCompleted) colors.primary.copy(alpha = 0.16f)
-                else colors.surfaceVariant,
-                shape = MaterialTheme.shapes.small
-            )
-            .then(
-                if (onClick != null) Modifier.clickable(onClick = onClick)
-                else Modifier
-            )
-            .padding(12.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isCompleted) colors.primary
-                    else MaterialTheme.colorScheme.outline
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isCompleted) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = colors.onPrimary
-                )
-            } else {
-                Text(
-                    text = number,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.surface
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (isCompleted) colors.primary else colors.onSurface,
-            modifier = Modifier.weight(1f)
         )
     }
 }

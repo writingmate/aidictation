@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -34,7 +35,6 @@ import kotlin.math.max
 import kotlin.math.sqrt
 import kotlin.math.sin
 
-private val activeColor = Color(0xFFFF6300)
 private const val minActiveBars = 3
 private const val waveformLevelGain = 1.35f
 private const val waveformLevelMix = 0.08f
@@ -67,6 +67,7 @@ fun CircularMicButton(
     modifier: Modifier = Modifier,
     size: Dp = 100.dp
 ) {
+    val activeColor = MaterialTheme.colorScheme.primary
     val totalBars = 5
     val scale = size.value / 100f
     val barWidth = 9.2.dp * scale

@@ -63,8 +63,8 @@ class OverlayMicButtonView @JvmOverloads constructor(
         private const val TOTAL_BARS = 5
         private const val MIN_ACTIVE_BARS = 3
         private const val BACKGROUND_ALPHA = 0.82f
-        private const val PRIMARY_BUTTON_ALPHA = 0.88f
-        private const val SECONDARY_SURFACE_ALPHA = 0.22f
+        private const val PRIMARY_BUTTON_ALPHA = 1f
+        private const val SECONDARY_SURFACE_ALPHA = 0.16f
         private const val WAVEFORM_LEVEL_GAIN = 1.35f
         private const val WAVEFORM_LEVEL_MIX = 0.08f
         private const val WAVEFORM_CONTRAST = 0.8f

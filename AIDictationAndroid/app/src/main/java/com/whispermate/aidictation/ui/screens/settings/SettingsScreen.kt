@@ -401,7 +401,7 @@ private fun AccountSettingsSection(
                 email = usageStatus.email ?: stringResource(R.string.account_signed_in),
                 tierName = usageStatus.tierName
             )
-        } else {
+        } else if (usageStatus.isPro) {
             SettingsItem(
                 icon = Icons.Default.AccountCircle,
                 title = stringResource(R.string.account_sign_in),
@@ -420,7 +420,11 @@ private fun AccountSettingsSection(
         if (!usageStatus.isPro) {
             SettingsItem(
                 icon = Icons.Default.Star,
-                title = stringResource(R.string.account_upgrade),
+                title = if (usageStatus.isAuthenticated) {
+                    stringResource(R.string.account_upgrade)
+                } else {
+                    stringResource(R.string.account_sign_in_or_upgrade)
+                },
                 onClick = onUpgrade,
                 iconTint = MaterialTheme.colorScheme.primary,
                 titleColor = MaterialTheme.colorScheme.primary
@@ -864,13 +868,7 @@ private fun OnDeviceTranscriptionItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(
-                    if (!state.isDownloading) {
-                        Modifier.clickable { onToggle(!enabled) }
-                    } else {
-                        Modifier
-                    }
-                )
+                .clickable { onToggle(if (state.isDownloading) false else !enabled) }
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -906,8 +904,14 @@ private fun OnDeviceTranscriptionItem(
             Spacer(modifier = Modifier.width(12.dp))
             Switch(
                 checked = enabled || state.isDownloading,
-                enabled = !state.isDownloading,
-                onCheckedChange = onToggle
+                enabled = true,
+                onCheckedChange = { checked ->
+                    if (state.isDownloading) {
+                        onToggle(false)
+                    } else {
+                        onToggle(checked)
+                    }
+                }
             )
         }
 

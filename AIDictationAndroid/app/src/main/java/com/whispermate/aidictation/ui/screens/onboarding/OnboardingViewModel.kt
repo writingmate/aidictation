@@ -19,12 +19,19 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 data class OnboardingOnDeviceModelState(
     val isInstalled: Boolean = false,
     val isDownloading: Boolean = false,
     val downloadProgress: Float? = null,
+    val errorMessage: String? = null
+)
+
+data class OnboardingDemoUiState(
+    val isProcessing: Boolean = false,
+    val resultText: String? = null,
     val errorMessage: String? = null
 )
 
@@ -39,6 +46,7 @@ class OnboardingViewModel @Inject constructor(
     }
 
     private val parakeetRuntime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
+    private var onDeviceSetupRequestId = 0
 
     val hasCompletedOnboarding: StateFlow<Boolean> = appPreferences.hasCompletedOnboarding
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -51,6 +59,9 @@ class OnboardingViewModel @Inject constructor(
 
     private val _onDeviceModelState = MutableStateFlow(OnboardingOnDeviceModelState())
     val onDeviceModelState: StateFlow<OnboardingOnDeviceModelState> = _onDeviceModelState.asStateFlow()
+
+    private val _demoState = MutableStateFlow(OnboardingDemoUiState())
+    val demoState: StateFlow<OnboardingDemoUiState> = _demoState.asStateFlow()
 
     init {
         refreshOnDeviceModelState()
@@ -88,9 +99,14 @@ class OnboardingViewModel @Inject constructor(
 
     fun setOnDeviceTranscriptionEnabled(enabled: Boolean) {
         viewModelScope.launch {
+            val requestId = ++onDeviceSetupRequestId
             if (!enabled) {
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
-                refreshOnDeviceModelState()
+                _onDeviceModelState.value = _onDeviceModelState.value.copy(
+                    isDownloading = false,
+                    downloadProgress = null,
+                    errorMessage = null
+                )
                 return@launch
             }
 
@@ -104,6 +120,7 @@ class OnboardingViewModel @Inject constructor(
                 )
                 withContext(Dispatchers.IO) {
                     parakeetModelAssets.ensureModelDirectory(parakeetRuntime) { progress ->
+                        if (requestId != onDeviceSetupRequestId) return@ensureModelDirectory
                         _onDeviceModelState.value = _onDeviceModelState.value.copy(
                             isDownloading = true,
                             downloadProgress = progress.coerceIn(0f, 1f),
@@ -111,10 +128,12 @@ class OnboardingViewModel @Inject constructor(
                         )
                     }
                 }
+                if (requestId != onDeviceSetupRequestId) return@launch
                 appPreferences.setOnDeviceTranscriptionEnabled(true)
                 _onDeviceModelState.value = OnboardingOnDeviceModelState(isInstalled = true)
                 prewarmOnDeviceTranscriber()
             } catch (error: Throwable) {
+                if (requestId != onDeviceSetupRequestId) return@launch
                 Log.w(TAG, "Unable to enable on-device transcription during onboarding", error)
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
                 _onDeviceModelState.value = OnboardingOnDeviceModelState(
@@ -124,6 +143,28 @@ class OnboardingViewModel @Inject constructor(
                     errorMessage = error.message ?: "Offline transcription setup failed"
                 )
             }
+        }
+    }
+
+    fun transcribeDemo(audioFile: File?, durationMs: Long) {
+        if (audioFile == null || durationMs < 300) {
+            _demoState.value = OnboardingDemoUiState(errorMessage = "Try speaking for a little longer.")
+            return
+        }
+
+        viewModelScope.launch {
+            _demoState.value = OnboardingDemoUiState(isProcessing = true)
+            val prompt = transcriptionRepository.buildPrompt()
+            val result = transcriptionRepository.transcribe(audioFile, prompt.ifEmpty { null })
+            audioFile.delete()
+            _demoState.value = result.fold(
+                onSuccess = { text ->
+                    OnboardingDemoUiState(resultText = text.ifBlank { "I did not catch that. Try again." })
+                },
+                onFailure = { error ->
+                    OnboardingDemoUiState(errorMessage = error.message ?: "Transcription failed. Try again.")
+                }
+            )
         }
     }
 

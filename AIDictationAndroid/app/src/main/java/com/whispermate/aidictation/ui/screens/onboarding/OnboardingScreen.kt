@@ -60,10 +60,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
@@ -91,6 +93,9 @@ import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
+import com.whispermate.aidictation.util.AudioRecorder
+import java.io.File
+import kotlinx.coroutines.launch
 
 private val OnboardingSupportedLanguageCodes = listOf(
     // Mirrors the macOS app's Language enum. Empty selection means auto-detect.
@@ -203,7 +208,9 @@ fun OnboardingScreen(
     onToggleLanguage: (String) -> Unit = {},
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnboardingOnDeviceModelState = OnboardingOnDeviceModelState(),
-    onSetOnDeviceTranscriptionEnabled: (Boolean) -> Unit = {}
+    onSetOnDeviceTranscriptionEnabled: (Boolean) -> Unit = {},
+    demoState: OnboardingDemoUiState = OnboardingDemoUiState(),
+    onTranscribeDemo: (File?, Long) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -212,7 +219,6 @@ fun OnboardingScreen(
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
-    var hasAcceptedAccessibilityDisclosure by remember { mutableStateOf(false) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     val colors = onboardingColors()
 
@@ -337,11 +343,12 @@ fun OnboardingScreen(
                         onEnabledChanged = onSetOnDeviceTranscriptionEnabled
                     )
                     OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
-                    OnboardingStep.ButtonDemo -> ButtonDemoStep(selectedColor = selectedBubbleColor)
-                    OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep(
-                        hasAccepted = hasAcceptedAccessibilityDisclosure,
-                        onAcceptedChanged = { hasAcceptedAccessibilityDisclosure = it }
+                    OnboardingStep.ButtonDemo -> ButtonDemoStep(
+                        selectedColor = selectedBubbleColor,
+                        demoState = demoState,
+                        onTranscribeDemo = onTranscribeDemo
                     )
+                    OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep()
                     OnboardingStep.VolumeShortcut -> VolumeShortcutStep(
                         isEnabled = volumeShortcutEnabled,
                         onEnabledChanged = { volumeShortcutEnabled = it }
@@ -385,7 +392,6 @@ fun OnboardingScreen(
                 .fillMaxWidth()
                 .height(56.dp),
             enabled = when (currentOnboardingStep) {
-                OnboardingStep.AccessibilityDisclosure -> hasAcceptedAccessibilityDisclosure
                 OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
                 else -> true
             },
@@ -628,18 +634,59 @@ private fun OnboardingBubbleColorSwatch(
 }
 
 @Composable
-private fun ButtonDemoStep(selectedColor: Int) {
+private fun ButtonDemoStep(
+    selectedColor: Int,
+    demoState: OnboardingDemoUiState,
+    onTranscribeDemo: (File?, Long) -> Unit
+) {
     val colors = onboardingColors()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var demoStage by remember { mutableIntStateOf(0) }
+    var audioRecorder by remember { mutableStateOf<AudioRecorder?>(null) }
+    val audioLevel by (audioRecorder?.audioLevel ?: remember { kotlinx.coroutines.flow.MutableStateFlow(0f) }).collectAsState()
+    val frequencyBands by (audioRecorder?.frequencyBands ?: remember { kotlinx.coroutines.flow.MutableStateFlow(FloatArray(6) { 0f }) }).collectAsState()
+    val isRecording = audioRecorder != null
     val previewState = when (demoStage) {
-        2 -> OverlayMicButtonView.State.Recording
+        2 -> if (demoState.isProcessing) OverlayMicButtonView.State.Processing else OverlayMicButtonView.State.Recording
         3 -> OverlayMicButtonView.State.Processing
         else -> OverlayMicButtonView.State.Idle
     }
     val resolvedColor = when (selectedColor) {
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(context)
         else -> selectedColor
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            audioRecorder?.release()
+        }
+    }
+
+    fun stopDemoRecording() {
+        scope.launch {
+            val result = audioRecorder?.stop()
+            audioRecorder = null
+            demoStage = 3
+            onTranscribeDemo(result?.first, result?.second ?: 0L)
+        }
+    }
+
+    fun handleDemoMicTap() {
+        when {
+            demoState.isProcessing -> Unit
+            isRecording -> stopDemoRecording()
+            demoStage >= 1 -> {
+                val recorder = AudioRecorder(context)
+                val file = recorder.start()
+                if (file != null) {
+                    audioRecorder = recorder
+                    demoStage = 2
+                } else {
+                    recorder.release()
+                }
+            }
+        }
     }
 
     Column(
@@ -691,11 +738,20 @@ private fun ButtonDemoStep(selectedColor: Int) {
                     text = when (demoStage) {
                         0 -> stringResource(R.string.onboarding_button_demo_tap_area)
                         1 -> stringResource(R.string.onboarding_button_demo_mic_appears)
-                        2 -> stringResource(R.string.onboarding_button_demo_speak)
-                        else -> stringResource(R.string.onboarding_button_demo_result)
+                        2 -> if (isRecording) {
+                            stringResource(R.string.onboarding_button_demo_stop)
+                        } else {
+                            stringResource(R.string.onboarding_button_demo_speak)
+                        }
+                        else -> when {
+                            demoState.isProcessing -> stringResource(R.string.processing)
+                            demoState.resultText != null -> demoState.resultText
+                            demoState.errorMessage != null -> demoState.errorMessage
+                            else -> stringResource(R.string.onboarding_button_demo_result)
+                        }
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (demoStage == 3) colors.onSurface else colors.onSurfaceVariant
+                    color = if (demoStage == 3 || isRecording) colors.onSurface else colors.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(32.dp))
             }
@@ -709,26 +765,20 @@ private fun ButtonDemoStep(selectedColor: Int) {
                         .height(55.dp),
                     factory = { androidContext ->
                         OverlayMicButtonView(androidContext).apply {
-                            setOnClickCallback {
-                                demoStage = when (demoStage) {
-                                    1 -> 2
-                                    2 -> 3
-                                    3 -> 1
-                                    else -> demoStage
-                                }
-                            }
+                            setOnClickCallback { handleDemoMicTap() }
                             isHapticFeedbackEnabled = true
                             setColors(resolvedColor, resolvedColor)
                             setState(previewState)
-                            setAudioLevel(0.72f)
-                            setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                            setAudioLevel(audioLevel)
+                            setFrequencyBands(frequencyBands)
                         }
                     },
                     update = { view ->
+                        view.setOnClickCallback { handleDemoMicTap() }
                         view.setColors(resolvedColor, resolvedColor)
                         view.setState(previewState)
-                        view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
-                        view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
+                        view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) audioLevel else 0f)
+                        view.setFrequencyBands(frequencyBands)
                     }
                 )
             }
@@ -878,10 +928,7 @@ private fun OnboardingLanguageRow(
 }
 
 @Composable
-private fun AccessibilityDisclosureStep(
-    hasAccepted: Boolean,
-    onAcceptedChanged: (Boolean) -> Unit
-) {
+private fun AccessibilityDisclosureStep() {
     val colors = onboardingColors()
 
     Column(
@@ -934,47 +981,6 @@ private fun AccessibilityDisclosureStep(
             body = stringResource(R.string.onboarding_accessibility_visual_processing_body)
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_next),
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.primary,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(MaterialTheme.shapes.small)
-                .clickable { onAcceptedChanged(!hasAccepted) }
-                .background(
-                    if (hasAccepted) colors.primary.copy(alpha = 0.10f)
-                    else colors.surfaceVariant.copy(alpha = 0.55f)
-                )
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Checkbox(
-                checked = hasAccepted,
-                onCheckedChange = onAcceptedChanged,
-                colors = androidx.compose.material3.CheckboxDefaults.colors(
-                    checkedColor = colors.primary,
-                    uncheckedColor = colors.onSurfaceVariant,
-                    checkmarkColor = colors.onPrimary
-                )
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = stringResource(R.string.onboarding_accessibility_disclosure_consent),
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-        }
     }
 }
 
@@ -1140,7 +1146,7 @@ private fun OnDeviceTranscriptionStep(
             accuracyStars = 5,
             speedStars = 5,
             selected = !enabled && !state.isDownloading,
-            enabled = !state.isDownloading,
+            enabled = true,
             onClick = { onEnabledChanged(false) }
         )
 
@@ -1262,22 +1268,24 @@ private fun RatingRow(
 ) {
     val colors = onboardingColors()
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = colors.onSurfaceVariant
+            color = colors.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
         )
-        Spacer(modifier = Modifier.width(8.dp))
-        repeat(5) { index ->
-            Icon(
-                imageVector = Icons.Default.Star,
-                contentDescription = null,
-                modifier = Modifier.size(13.dp),
-                tint = if (index < stars.coerceIn(0, 5)) colors.primary else colors.outline
-            )
-            if (index < 4) {
-                Spacer(modifier = Modifier.width(2.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            repeat(5) { index ->
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                    tint = if (index < stars.coerceIn(0, 5)) colors.primary else colors.outline
+                )
             }
         }
     }

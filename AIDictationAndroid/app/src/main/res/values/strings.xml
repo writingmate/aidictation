@@ -23,6 +23,7 @@
     <string name="onboarding_button_demo_tap_area">Tap a text area</string>
     <string name="onboarding_button_demo_mic_appears">The floating mic appears</string>
     <string name="onboarding_button_demo_speak">Tap the mic and speak</string>
+    <string name="onboarding_button_demo_stop">Listening. Tap the mic again when you are done.</string>
     <string name="onboarding_button_demo_result">“Send the meeting notes when you can.”</string>
     <string name="onboarding_accessibility_disclosure_title">Accessibility disclosure</string>
     <string name="onboarding_accessibility_disclosure_intro">AIDictation uses Android AccessibilityService to show the floating microphone when a text field is focused and to insert your dictated text at the cursor.</string>
@@ -34,11 +35,9 @@
     <string name="onboarding_accessibility_visual_private_body">Does not read passwords, payment fields, or secure screens.</string>
     <string name="onboarding_accessibility_visual_processing_title">Process only on action</string>
     <string name="onboarding_accessibility_visual_processing_body">Cloud transcription or AI cleanup may send recorded audio and relevant text to complete your request. Offline transcription is available where supported.</string>
-    <string name="onboarding_accessibility_next">Next: Android will ask you to enable AIDictation in Accessibility settings.</string>
     <string name="onboarding_accessibility_disclosure_use">AccessibilityService lets AIDictation detect editable text fields, read the current text and cursor position in the active field, and replace or insert text only when you start dictation or apply a command.</string>
     <string name="onboarding_accessibility_disclosure_data">Text from the active field may be processed for dictation insertion, grammar fixes, rewrites, shortcuts, and cleanup. It is not used to read passwords, payment fields, or secure screens.</string>
     <string name="onboarding_accessibility_disclosure_cloud">If cloud transcription or AI cleanup is enabled, your recorded audio and relevant text may be sent to the AIDictation transcription and AI providers to complete the requested action. You can use offline transcription where available.</string>
-    <string name="onboarding_accessibility_disclosure_consent">I understand and agree to this AccessibilityService use.</string>
     <string name="onboarding_accessibility_disclosure_continue">Agree and Continue</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
@@ -104,6 +103,7 @@
     <string name="account_sign_out">Sign out</string>
     <string name="account_signed_in">Signed in</string>
     <string name="account_upgrade">Upgrade</string>
+    <string name="account_sign_in_or_upgrade">Sign in or upgrade</string>
     <string name="account_usage_words">%1$d / %2$d words used this month</string>
     <string name="account_usage_unlimited">Unlimited words</string>
     <string name="account_anonymous_hint">Sign in only when you need more words or want to purchase.</string>

@@ -44,6 +44,7 @@ fun AIDictationNavHost(
     val onboardingOnDeviceTranscriptionEnabled by onboardingViewModel.onDeviceTranscriptionEnabled.collectAsState()
     val onboardingOnDeviceModelState by onboardingViewModel.onDeviceModelState.collectAsState()
     val onboardingSelectedLanguages by onboardingViewModel.selectedLanguages.collectAsState()
+    val onboardingDemoState by onboardingViewModel.demoState.collectAsState()
 
     val startDestination = if (hasCompletedOnboarding) Screen.Main.route else Screen.Onboarding.route
 
@@ -79,7 +80,9 @@ fun AIDictationNavHost(
                     onToggleLanguage = onboardingViewModel::toggleLanguage,
                     onDeviceTranscriptionEnabled = onboardingOnDeviceTranscriptionEnabled,
                     onDeviceModelState = onboardingOnDeviceModelState,
-                    onSetOnDeviceTranscriptionEnabled = onboardingViewModel::setOnDeviceTranscriptionEnabled
+                    onSetOnDeviceTranscriptionEnabled = onboardingViewModel::setOnDeviceTranscriptionEnabled,
+                    demoState = onboardingDemoState,
+                    onTranscribeDemo = onboardingViewModel::transcribeDemo
                 )
             }
         }

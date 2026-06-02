@@ -52,6 +52,7 @@ class MainViewModel @Inject constructor(
     }
 
     private val parakeetRuntime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
+    private var onDeviceSetupRequestId = 0
 
     val recordings: StateFlow<List<Recording>> = recordingRepository.recordings
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -97,9 +98,13 @@ class MainViewModel @Inject constructor(
 
     fun setOnDeviceTranscriptionEnabled(enabled: Boolean) {
         viewModelScope.launch {
+            val requestId = ++onDeviceSetupRequestId
             if (!enabled) {
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
-                refreshOnDeviceModelState()
+                _onDeviceModelState.value = _onDeviceModelState.value.copy(
+                    isDownloading = false,
+                    downloadProgress = null
+                )
                 return@launch
             }
 
@@ -112,16 +117,19 @@ class MainViewModel @Inject constructor(
                 )
                 withContext(Dispatchers.IO) {
                     parakeetModelAssets.ensureModelDirectory(parakeetRuntime) { progress ->
+                        if (requestId != onDeviceSetupRequestId) return@ensureModelDirectory
                         _onDeviceModelState.value = _onDeviceModelState.value.copy(
                             isDownloading = true,
                             downloadProgress = progress
                         )
                     }
                 }
+                if (requestId != onDeviceSetupRequestId) return@launch
                 appPreferences.setOnDeviceTranscriptionEnabled(true)
                 _onDeviceModelState.value = OnDeviceModelUiState(isInstalled = true)
                 prewarmOnDeviceTranscriber()
             } catch (error: Throwable) {
+                if (requestId != onDeviceSetupRequestId) return@launch
                 appPreferences.setOnDeviceTranscriptionEnabled(false)
                 _onDeviceModelState.value = OnDeviceModelUiState(
                     isInstalled = withContext(Dispatchers.IO) {

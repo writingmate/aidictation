@@ -521,7 +521,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ensureBubbleCreated() {
         if (bubbleView != null) return
 
-        val size = dp(BUBBLE_SIZE_DP)
         refreshBubbleBrandColor()
 
         bubbleView = OverlayMicButtonView(this).apply {
@@ -532,6 +531,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             setState(OverlayMicButtonView.State.Idle)
         }
 
+        val size = dp(BUBBLE_SIZE_DP)
         val startX = bubblePrefs.getInt(OverlayBubblePreferences.X_KEY, defaultBubbleX())
         val startY = bubblePrefs.getInt(OverlayBubblePreferences.Y_KEY, defaultBubbleY())
 
@@ -1934,7 +1934,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         params.y = targetY
         if (isBubbleAttached) {
             try {
-                windowManager.updateViewLayout(bubble, params)
+                windowManager.removeViewImmediate(bubble)
+                windowManager.addView(bubble, params)
                 updateCommandActionsPosition()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to update bubble overlay size", e)

@@ -614,12 +614,10 @@ private fun OnboardingBubbleColorSwatch(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        OnboardingSwatchMicLogo()
         if (selected) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(16.dp)
+                    .size(18.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.94f)),
                 contentAlignment = Alignment.Center
@@ -628,29 +626,9 @@ private fun OnboardingBubbleColorSwatch(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     tint = composeColor,
-                    modifier = Modifier.size(11.dp)
+                    modifier = Modifier.size(13.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun OnboardingSwatchMicLogo() {
-    val heights = listOf(16.dp, 24.dp, 18.dp, 22.dp, 14.dp)
-
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        heights.forEach { height ->
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .height(height)
-                    .clip(RoundedCornerShape(100.dp))
-                    .background(Color.White.copy(alpha = 0.94f))
-            )
         }
     }
 }

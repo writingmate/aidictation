@@ -102,11 +102,11 @@
     <string name="account_sign_in">Sign in</string>
     <string name="account_sign_out">Sign out</string>
     <string name="account_signed_in">Signed in</string>
-    <string name="account_upgrade">Upgrade</string>
-    <string name="account_sign_in_or_upgrade">Sign in or upgrade</string>
+    <string name="account_upgrade">Upgrade to Pro</string>
+    <string name="account_sign_in_or_upgrade">Sign in to upgrade</string>
     <string name="account_usage_words">%1$d / %2$d words used this month</string>
     <string name="account_usage_unlimited">Unlimited words</string>
-    <string name="account_anonymous_hint">Sign in only when you need more words or want to purchase.</string>
+    <string name="account_anonymous_hint">Free to try. Sign in when you want more words or Pro.</string>
     <string name="account_authenticated_hint">Your word usage and purchases are linked to this account.</string>
     <string name="referral_title">Invite friends for more words</string>
     <string name="referral_description">Get 2,000 extra words when a friend joins.</string>

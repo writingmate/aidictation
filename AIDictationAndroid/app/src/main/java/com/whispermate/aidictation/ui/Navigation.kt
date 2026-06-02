@@ -26,7 +26,9 @@ import com.whispermate.aidictation.ui.screens.transcription.TranscriptionSetting
 sealed class Screen(val route: String) {
     data object Onboarding : Screen("onboarding")
     data object Main : Screen("main")
-    data object PostProcessingSettings : Screen("post_processing_settings")
+    data object PostProcessingSettings : Screen("post_processing_settings/{page}") {
+        fun createRoute(page: Int) = "post_processing_settings/${page.coerceIn(0, 2)}"
+    }
     data object LanguageSettings : Screen("language_settings")
     data object RecordingDetail : Screen("recording_detail/{recordingId}") {
         fun createRoute(recordingId: String) = "recording_detail/$recordingId"
@@ -89,8 +91,8 @@ fun AIDictationNavHost(
 
         composable(Screen.Main.route) {
             MainScreen(
-                onNavigateToPostProcessingSettings = {
-                    navController.navigate(Screen.PostProcessingSettings.route)
+                onNavigateToPostProcessingSettings = { page ->
+                    navController.navigate(Screen.PostProcessingSettings.createRoute(page))
                 },
                 onNavigateToLanguageSettings = {
                     navController.navigate(Screen.LanguageSettings.route)
@@ -104,8 +106,13 @@ fun AIDictationNavHost(
             )
         }
 
-        composable(Screen.PostProcessingSettings.route) {
+        composable(
+            route = Screen.PostProcessingSettings.route,
+            arguments = listOf(navArgument("page") { type = NavType.IntType })
+        ) { backStackEntry ->
+            val page = backStackEntry.arguments?.getInt("page") ?: 0
             TranscriptionSettingsScreen(
+                initialPage = page,
                 onNavigateBack = { navController.popBackStack() }
             )
         }

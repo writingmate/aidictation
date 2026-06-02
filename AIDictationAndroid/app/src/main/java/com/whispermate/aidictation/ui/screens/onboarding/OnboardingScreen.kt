@@ -649,7 +649,7 @@ private fun ButtonDemoStep(
     val isRecording = audioRecorder != null
     val previewState = when (demoStage) {
         2 -> if (demoState.isProcessing) OverlayMicButtonView.State.Processing else OverlayMicButtonView.State.Recording
-        3 -> OverlayMicButtonView.State.Processing
+        3 -> if (demoState.isProcessing) OverlayMicButtonView.State.Processing else OverlayMicButtonView.State.Idle
         else -> OverlayMicButtonView.State.Idle
     }
     val resolvedColor = when (selectedColor) {

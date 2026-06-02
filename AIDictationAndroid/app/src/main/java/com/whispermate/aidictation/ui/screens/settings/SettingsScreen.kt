@@ -83,10 +83,8 @@ import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 fun SettingsScreen(
     recordings: List<Recording>,
     onClearHistory: () -> Unit,
-    onNavigateToPostProcessingSettings: () -> Unit,
+    onNavigateToPostProcessingSettings: (Int) -> Unit,
     onNavigateToLanguageSettings: () -> Unit,
-    multilingualEnabled: Boolean = true,
-    onMultilingualToggled: (Boolean) -> Unit = {},
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
@@ -260,29 +258,14 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             SettingsItem(
-                icon = Icons.Default.Translate,
-                title = stringResource(R.string.settings_multilingual_mode),
-                trailingContent = {
-                    Switch(
-                        checked = multilingualEnabled,
-                        onCheckedChange = onMultilingualToggled
-                    )
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
                 icon = Icons.Default.Language,
                 title = stringResource(R.string.settings_languages),
                 onClick = onNavigateToLanguageSettings,
-                enabled = multilingualEnabled,
                 trailingContent = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = if (multilingualEnabled) MaterialTheme.colorScheme.onSurfaceVariant
-                               else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             )
@@ -291,12 +274,42 @@ fun SettingsScreen(
 
             SettingsItem(
                 icon = Icons.Default.Settings,
-                title = if (onDeviceTranscriptionEnabled) {
-                    stringResource(R.string.settings_post_processing_cloud_only)
-                } else {
-                    stringResource(R.string.settings_post_processing)
-                },
-                onClick = onNavigateToPostProcessingSettings,
+                title = stringResource(R.string.transcription_dictionary),
+                onClick = { onNavigateToPostProcessingSettings(0) },
+                enabled = !onDeviceTranscriptionEnabled,
+                trailingContent = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                               else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    )
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsItem(
+                icon = Icons.Default.AutoAwesome,
+                title = stringResource(R.string.transcription_tone_style),
+                onClick = { onNavigateToPostProcessingSettings(1) },
+                enabled = !onDeviceTranscriptionEnabled,
+                trailingContent = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                               else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    )
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Translate,
+                title = stringResource(R.string.transcription_shortcuts),
+                onClick = { onNavigateToPostProcessingSettings(2) },
                 enabled = !onDeviceTranscriptionEnabled,
                 trailingContent = {
                     Icon(
@@ -389,6 +402,8 @@ private fun AccountSettingsSection(
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit
 ) {
+    val showsIdentityRow = usageStatus.isAuthenticated || usageStatus.isPro
+
     SectionHeader(stringResource(R.string.settings_account))
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -411,7 +426,9 @@ private fun AccountSettingsSection(
             )
         }
 
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        if (showsIdentityRow) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
 
         UsageSummary(usageStatus = usageStatus)
 
@@ -419,7 +436,7 @@ private fun AccountSettingsSection(
 
         if (!usageStatus.isPro) {
             SettingsItem(
-                icon = Icons.Default.Star,
+                icon = Icons.Default.AutoAwesome,
                 title = if (usageStatus.isAuthenticated) {
                     stringResource(R.string.account_upgrade)
                 } else {
@@ -787,7 +804,7 @@ private fun ReferralInviteItem(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Default.Star,
+                imageVector = Icons.Default.AccountCircle,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(24.dp)

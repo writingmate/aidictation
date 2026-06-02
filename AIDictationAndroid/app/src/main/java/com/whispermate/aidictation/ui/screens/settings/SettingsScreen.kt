@@ -87,8 +87,6 @@ fun SettingsScreen(
     onNavigateToLanguageSettings: () -> Unit,
     multilingualEnabled: Boolean = true,
     onMultilingualToggled: (Boolean) -> Unit = {},
-    postProcessingEnabled: Boolean = true,
-    onPostProcessingToggled: (Boolean) -> Unit = {},
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
@@ -292,28 +290,19 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             SettingsItem(
-                icon = Icons.Default.AutoAwesome,
-                title = stringResource(R.string.settings_post_processing),
-                trailingContent = {
-                    Switch(
-                        checked = postProcessingEnabled,
-                        onCheckedChange = onPostProcessingToggled
-                    )
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
                 icon = Icons.Default.Settings,
-                title = stringResource(R.string.settings_post_processing_settings),
+                title = if (onDeviceTranscriptionEnabled) {
+                    stringResource(R.string.settings_post_processing_cloud_only)
+                } else {
+                    stringResource(R.string.settings_post_processing)
+                },
                 onClick = onNavigateToPostProcessingSettings,
-                enabled = postProcessingEnabled,
+                enabled = !onDeviceTranscriptionEnabled,
                 trailingContent = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = if (postProcessingEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     )
                 }

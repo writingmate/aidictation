@@ -80,7 +80,6 @@ fun MainScreen(
     val recordingState by viewModel.recordingState.collectAsState()
     val error by viewModel.error.collectAsState()
     val multilingualEnabled by viewModel.multilingualEnabled.collectAsState()
-    val postProcessingEnabled by viewModel.postProcessingEnabled.collectAsState()
     val onDeviceTranscriptionEnabled by viewModel.onDeviceTranscriptionEnabled.collectAsState()
     val autoStopOnSilenceEnabled by viewModel.autoStopOnSilenceEnabled.collectAsState()
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
@@ -243,8 +242,6 @@ fun MainScreen(
                 onNavigateToLanguageSettings = onNavigateToLanguageSettings,
                 multilingualEnabled = multilingualEnabled,
                 onMultilingualToggled = { viewModel.setMultilingualEnabled(it) },
-                postProcessingEnabled = postProcessingEnabled,
-                onPostProcessingToggled = { viewModel.setPostProcessingEnabled(it) },
                 onDeviceTranscriptionEnabled = onDeviceTranscriptionEnabled,
                 onDeviceModelState = onDeviceModelState,
                 onOnDeviceTranscriptionToggled = { viewModel.setOnDeviceTranscriptionEnabled(it) },

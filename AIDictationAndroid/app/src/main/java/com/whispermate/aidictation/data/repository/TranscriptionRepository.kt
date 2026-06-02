@@ -36,8 +36,8 @@ class TranscriptionRepository @Inject constructor(
     ): Result<String> {
         val languages = appPreferences.selectedLanguages.first()
         val multilingual = appPreferences.multilingualEnabled.first()
-        val postProcess = appPreferences.postProcessingEnabled.first()
         val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
+        val postProcess = !onDeviceTranscription
         val requiresCloud = languages.any { WhisperLanguages.requiresCloudTranscription(it) }
         if (requiresCloud) {
             appPreferences.setOnDeviceTranscriptionEnabled(false)

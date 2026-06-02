@@ -84,6 +84,7 @@
     <string name="settings_languages">Languages</string>
     <string name="settings_multilingual_mode">Multilingual mode</string>
     <string name="settings_post_processing">Post-processing</string>
+    <string name="settings_post_processing_cloud_only">Post-processing unavailable in offline mode</string>
     <string name="language_search_hint">Search languages…</string>
     <string name="language_selection_hint">Select languages you speak. Limits transcription to only those languages.</string>
     <string name="language_no_results">No languages found</string>

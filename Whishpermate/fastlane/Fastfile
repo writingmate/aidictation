@@ -144,7 +144,12 @@ platform :ios do
         code_sign_identity: "Apple Distribution"
       )
 
-      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} #{auth_args}".strip
+      gym_options[:xcargs] = [
+        "DEVELOPMENT_TEAM=#{team_id}",
+        "CODE_SIGN_STYLE=Manual",
+        "CODE_SIGN_IDENTITY=\"Apple Distribution\"",
+        auth_args
+      ].reject(&:empty?).join(" ")
       gym_options[:export_options] = {
         teamID: team_id,
         signingStyle: "manual",
@@ -161,10 +166,11 @@ platform :ios do
       live_activity_profile = ENV["IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME"].to_s
       UI.user_error!("IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME is required to export the Live Activity extension") if live_activity_profile.empty?
 
-      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual"
+      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=\"Apple Distribution\""
       gym_options[:export_options] = {
         teamID: team_id,
         signingStyle: "manual",
+        signingCertificate: "Apple Distribution",
         provisioningProfiles: {
           "com.whispermate.ios" => app_profile,
           "com.whispermate.ios.keyboard" => keyboard_profile,

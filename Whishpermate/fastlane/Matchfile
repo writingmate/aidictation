@@ -5,7 +5,7 @@ storage_mode("git")
 
 type("appstore") # Can be: appstore, adhoc, development, enterprise
 
-app_identifier(["com.whispermate.ios", "com.whispermate.ios.keyboard"])
+app_identifier(["com.whispermate.ios", "com.whispermate.ios.keyboard", "com.whispermate.ios.liveactivity"])
 team_id("G7DJ6P37KU")
 
 # Don't set username - we'll use API key authentication via Fastfile before_all

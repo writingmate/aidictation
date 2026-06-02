@@ -3,6 +3,7 @@ package com.whispermate.aidictation.data.preferences
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.TypedValue
+import com.whispermate.aidictation.util.LauncherIconSwitcher
 
 object OverlayBubblePreferences {
     const val PREFS_NAME = "overlay_bubble"
@@ -65,6 +66,7 @@ object OverlayBubblePreferences {
     fun setBubbleColor(context: Context, color: Int) {
         val value = if (color == SYSTEM_COLOR) color else color.withOpaqueAlpha()
         prefs(context).edit().putInt(COLOR_KEY, value).apply()
+        LauncherIconSwitcher.applyColor(context, value)
     }
 
     fun isSuppressed(context: Context): Boolean {

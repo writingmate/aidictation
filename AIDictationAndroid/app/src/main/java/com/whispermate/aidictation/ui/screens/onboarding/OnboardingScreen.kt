@@ -623,9 +623,7 @@ private fun OnboardingBubbleColorSwatch(
         if (selected) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(3.dp)
-                    .size(16.dp)
+                    .size(18.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.94f)),
                 contentAlignment = Alignment.Center
@@ -634,7 +632,7 @@ private fun OnboardingBubbleColorSwatch(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     tint = composeColor,
-                    modifier = Modifier.size(11.dp)
+                    modifier = Modifier.size(13.dp)
                 )
             }
         }

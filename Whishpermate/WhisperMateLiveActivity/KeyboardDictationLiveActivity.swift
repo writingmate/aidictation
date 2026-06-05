@@ -83,8 +83,8 @@ private struct KeyboardDictationLiveActivityView: View {
 
 @available(iOSApplicationExtension 17.0, *)
 struct StopKeyboardDictationIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "Stop Listening"
-    static var description = IntentDescription("Stops AI Dictation from listening in the background.")
+    static var title: LocalizedStringResource = "Finish Recording"
+    static var description = IntentDescription("Finishes recording and transcribes your dictation.")
 
     @Parameter(title: "Session")
     var sessionID: String
@@ -98,9 +98,8 @@ struct StopKeyboardDictationIntent: LiveActivityIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        KeyboardDictationHandoff.publish(command: .shutdown, sessionID: sessionID.isEmpty ? nil : sessionID)
-        KeyboardDictationHandoff.clearActiveSession()
-        KeyboardDictationHandoff.appendDiagnostic("live activity requested shutdown sessionID=\(sessionID)")
+        KeyboardDictationHandoff.publish(command: .stop, sessionID: sessionID.isEmpty ? nil : sessionID)
+        KeyboardDictationHandoff.appendDiagnostic("live activity requested stop sessionID=\(sessionID)")
         return .result()
     }
 }

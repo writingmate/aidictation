@@ -198,6 +198,28 @@ jobs:
         working-directory: Whishpermate
         run: fastlane ios build
 
+      - name: Validate IPA signing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp_dir="$(mktemp -d)"
+          unzip -q Whishpermate/build/WhisperMate.ipa -d "${tmp_dir}"
+          app_path="${tmp_dir}/Payload/WhisperMateIOS.app"
+
+          if [ ! -d "${app_path}" ]; then
+            echo "::error::WhisperMateIOS.app was not found in the exported IPA"
+            exit 1
+          fi
+
+          authority="$(codesign -dvv "${app_path}" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')"
+          echo "Signing authority: ${authority}"
+
+          if [[ "${authority}" != Apple\ Distribution:* ]]; then
+            echo "::error::IPA must be signed with an Apple Distribution certificate for App Store upload"
+            exit 1
+          fi
+
       - name: Upload IPA to App Store Connect
         shell: bash
         run: |

@@ -215,8 +215,8 @@ jobs:
           authority="$(codesign -dvv "${app_path}" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')"
           echo "Signing authority: ${authority}"
 
-          if [[ "${authority}" != Apple\ Distribution:* ]]; then
-            echo "::error::IPA must be signed with an Apple Distribution certificate for App Store upload"
+          if [[ "${authority}" != Apple\ Distribution:* && "${authority}" != iPhone\ Distribution:* ]]; then
+            echo "::error::IPA must be signed with an Apple/iPhone Distribution certificate for App Store upload"
             exit 1
           fi
 

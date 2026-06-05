@@ -12,8 +12,8 @@ class KeyboardViewController: UIInputViewController {
 
     // MARK: - Properties
 
-    private var hostingController: UIHostingController<KeyboardRecordingView>!
-    private var statusLabel: UILabel!
+    private var hostingController: UIHostingController<KeyboardRecordingView>?
+    private var statusLabel: UILabel?
     private let recordingViewModel = KeyboardRecordingViewModel()
     private var keyboardState: KeyboardRecordingState = .idle
     private var displayedAudioLevel: Float = 0.0
@@ -24,6 +24,7 @@ class KeyboardViewController: UIInputViewController {
     private var startFallbackTimer: Timer?
     private var activeHandoffSessionID: String?
     private var keyboardHeightConstraint: NSLayoutConstraint?
+    private var didSetupUI = false
 
     private let keyboardHeight: CGFloat = 260
 
@@ -42,7 +43,7 @@ class KeyboardViewController: UIInputViewController {
 
         DebugLog.info("viewDidLoad fullAccess=\(hasFullAccess) bundle=\(Bundle.main.bundleIdentifier ?? "nil")", context: "KEYBOARD_DIAG")
         KeyboardDictationHandoff.appendDiagnostic("keyboard viewDidLoad fullAccess=\(hasFullAccess) bundle=\(Bundle.main.bundleIdentifier ?? "nil")")
-        setupUI()
+        ensureKeyboardUI()
         checkInitialPermissions()
         checkForPendingDictationText()
         restoreActiveRecordingIfNeeded()
@@ -51,6 +52,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        ensureKeyboardUI()
         checkForPendingDictationText()
         restoreActiveRecordingIfNeeded()
         startPendingTextTimer()
@@ -58,9 +60,15 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        ensureKeyboardUI()
         checkForPendingDictationText()
         restoreActiveRecordingIfNeeded()
         startPendingTextTimer()
+    }
+
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        ensureKeyboardUI()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -71,13 +79,32 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func checkInitialPermissions() {
-        statusLabel.text = ""
-        statusLabel.isHidden = true
+        statusLabel?.text = ""
+        statusLabel?.isHidden = true
     }
 
     // MARK: - Setup
 
+    private func ensureKeyboardUI() {
+        guard didSetupUI else {
+            setupUI()
+            return
+        }
+
+        guard hostingController?.view.superview === view,
+              statusLabel?.superview === view
+        else {
+            teardownUI()
+            setupUI()
+            return
+        }
+
+        keyboardHeightConstraint?.constant = keyboardHeight
+    }
+
     private func setupUI() {
+        guard !didSetupUI else { return }
+
         view.backgroundColor = .clear
         view.isOpaque = false
 
@@ -112,25 +139,27 @@ class KeyboardViewController: UIInputViewController {
         )
 
         // Host it in a UIHostingController
-        hostingController = UIHostingController(rootView: recordingView)
-        hostingController.view.backgroundColor = .clear
-        hostingController.view.isOpaque = false
-        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        let host = UIHostingController(rootView: recordingView)
+        host.view.backgroundColor = .clear
+        host.view.isOpaque = false
+        host.view.translatesAutoresizingMaskIntoConstraints = false
 
-        addChild(hostingController)
-        view.addSubview(hostingController.view)
-        hostingController.didMove(toParent: self)
+        addChild(host)
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+        hostingController = host
 
         // Create status label for transcription status (overlay)
-        statusLabel = UILabel()
-        statusLabel.text = ""
-        statusLabel.font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        statusLabel.textColor = UIColor.label
-        statusLabel.textAlignment = .center
-        statusLabel.numberOfLines = 2
-        statusLabel.isHidden = true
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(statusLabel)
+        let label = UILabel()
+        label.text = ""
+        label.font = UIFont.systemFont(ofSize: 13, weight: .medium)
+        label.textColor = UIColor.label
+        label.textAlignment = .center
+        label.numberOfLines = 2
+        label.isHidden = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        statusLabel = label
 
         // Layout constraints
         let heightConstraint = view.heightAnchor.constraint(equalToConstant: keyboardHeight)
@@ -140,17 +169,32 @@ class KeyboardViewController: UIInputViewController {
 
         NSLayoutConstraint.activate([
             // Hosting controller fills the view
-            hostingController.view.topAnchor.constraint(equalTo: view.topAnchor),
-            hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            hostingController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            hostingController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             // Status label at bottom
-            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            statusLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
-            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            label.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
         ])
+        didSetupUI = true
+    }
+
+    private func teardownUI() {
+        keyboardHeightConstraint?.isActive = false
+        keyboardHeightConstraint = nil
+
+        statusLabel?.removeFromSuperview()
+        statusLabel = nil
+
+        hostingController?.willMove(toParent: nil)
+        hostingController?.view.removeFromSuperview()
+        hostingController?.removeFromParent()
+        hostingController = nil
+        didSetupUI = false
     }
 
     private func insertKey(_ text: String) {
@@ -167,7 +211,8 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func refreshKeyboardRootView() {
-        hostingController.rootView = KeyboardRecordingView(
+        ensureKeyboardUI()
+        hostingController?.rootView = KeyboardRecordingView(
             model: recordingViewModel,
             isShifted: isShifted,
             onPrimaryAction: { [weak self] in self?.handlePrimaryAction() },
@@ -220,8 +265,8 @@ class KeyboardViewController: UIInputViewController {
         activeHandoffSessionID = sessionID
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-        statusLabel.text = ""
-        statusLabel.isHidden = true
+        statusLabel?.text = ""
+        statusLabel?.isHidden = true
 
         if !openAppIfNeeded {
             DebugLog.info("startRecording using ready app bridge sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
@@ -398,14 +443,14 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func showError(_ message: String) {
-        statusLabel.text = message
-        statusLabel.textColor = UIColor.systemRed
-        statusLabel.isHidden = false
+        statusLabel?.text = message
+        statusLabel?.textColor = UIColor.systemRed
+        statusLabel?.isHidden = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            self.statusLabel.text = ""
-            self.statusLabel.isHidden = true
-            self.statusLabel.textColor = UIColor.label
+            self.statusLabel?.text = ""
+            self.statusLabel?.isHidden = true
+            self.statusLabel?.textColor = UIColor.label
         }
     }
 
@@ -422,8 +467,8 @@ class KeyboardViewController: UIInputViewController {
         stopRecordingMeter()
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-        statusLabel.text = ""
-        statusLabel.isHidden = true
+        statusLabel?.text = ""
+        statusLabel?.isHidden = true
         updateKeyboardView(animated: true)
     }
 
@@ -442,8 +487,8 @@ class KeyboardViewController: UIInputViewController {
         keyboardState = .recording
         displayedAudioLevel = 0
         displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-        statusLabel.text = ""
-        statusLabel.isHidden = true
+        statusLabel?.text = ""
+        statusLabel?.isHidden = true
         DebugLog.info("restoring active keyboard recording sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
         KeyboardDictationHandoff.appendDiagnostic("restoring active keyboard recording sessionID=\(sessionID)")
         updateKeyboardView(animated: true)

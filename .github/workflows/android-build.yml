@@ -98,7 +98,9 @@ jobs:
           }
           wm_key=$(extract CustomTranscriptionKey)
           wm_endpoint=$(extract CustomTranscriptionEndpoint)
+          wm_realtime_endpoint=$(extract CustomTranscriptionRealtimeEndpoint)
           wm_model=$(extract CustomTranscriptionModel)
+          wm_realtime_model=$(extract CustomTranscriptionRealtimeModel)
           pp_key=$(extract AIDictationPostProcessingKey)
           pp_endpoint=$(extract AIDictationPostProcessingEndpoint)
           pp_model=$(extract AIDictationPostProcessingModel)
@@ -112,10 +114,14 @@ jobs:
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
-          if [ -z "$TRANSCRIPTION_ENDPOINT" ] && [ -n "$wm_endpoint" ]; then
+          if [ -z "$TRANSCRIPTION_ENDPOINT" ] && [ -n "$wm_realtime_endpoint" ]; then
+            echo "TRANSCRIPTION_ENDPOINT=$wm_realtime_endpoint" >> "$GITHUB_ENV"
+          elif [ -z "$TRANSCRIPTION_ENDPOINT" ] && [ -n "$wm_endpoint" ]; then
             echo "TRANSCRIPTION_ENDPOINT=$wm_endpoint" >> "$GITHUB_ENV"
           fi
-          if [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_model" ]; then
+          if [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_realtime_model" ]; then
+            echo "TRANSCRIPTION_MODEL=$wm_realtime_model" >> "$GITHUB_ENV"
+          elif [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_model" ]; then
             echo "TRANSCRIPTION_MODEL=$wm_model" >> "$GITHUB_ENV"
           fi
           if [ -z "$AIDICTATION_POST_PROCESSING_KEY" ] && [ -n "$pp_key" ]; then
@@ -360,7 +366,9 @@ jobs:
           }
           wm_key=$(extract CustomTranscriptionKey)
           wm_endpoint=$(extract CustomTranscriptionEndpoint)
+          wm_realtime_endpoint=$(extract CustomTranscriptionRealtimeEndpoint)
           wm_model=$(extract CustomTranscriptionModel)
+          wm_realtime_model=$(extract CustomTranscriptionRealtimeModel)
           pp_key=$(extract AIDictationPostProcessingKey)
           pp_endpoint=$(extract AIDictationPostProcessingEndpoint)
           pp_model=$(extract AIDictationPostProcessingModel)
@@ -374,10 +382,14 @@ jobs:
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
-          if [ -z "$TRANSCRIPTION_ENDPOINT" ] && [ -n "$wm_endpoint" ]; then
+          if [ -z "$TRANSCRIPTION_ENDPOINT" ] && [ -n "$wm_realtime_endpoint" ]; then
+            echo "TRANSCRIPTION_ENDPOINT=$wm_realtime_endpoint" >> "$GITHUB_ENV"
+          elif [ -z "$TRANSCRIPTION_ENDPOINT" ] && [ -n "$wm_endpoint" ]; then
             echo "TRANSCRIPTION_ENDPOINT=$wm_endpoint" >> "$GITHUB_ENV"
           fi
-          if [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_model" ]; then
+          if [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_realtime_model" ]; then
+            echo "TRANSCRIPTION_MODEL=$wm_realtime_model" >> "$GITHUB_ENV"
+          elif [ -z "$TRANSCRIPTION_MODEL" ] && [ -n "$wm_model" ]; then
             echo "TRANSCRIPTION_MODEL=$wm_model" >> "$GITHUB_ENV"
           fi
           if [ -z "$AIDICTATION_POST_PROCESSING_KEY" ] && [ -n "$pp_key" ]; then

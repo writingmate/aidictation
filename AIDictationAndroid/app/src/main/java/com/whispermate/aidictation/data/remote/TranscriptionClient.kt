@@ -89,6 +89,23 @@ object TranscriptionClient {
                 return@withContext Result.failure(Exception("API key not configured"))
             }
 
+            if (isBasetenRealtimeEndpoint(endpoint)) {
+                val realtime = BasetenRealtimeTranscriptionClient.transcribe(
+                    audioFile = audioFile,
+                    config = BasetenRealtimeTranscriptionClient.Config(
+                        endpoint = endpoint,
+                        apiKey = apiKey,
+                        language = language
+                    )
+                )
+                val rawText = realtime.getOrElse { return@withContext Result.failure(it) }
+                return@withContext if (!postProcessingPrompt.isNullOrBlank()) {
+                    refineMergedTranscript(rawText, postProcessingPrompt)
+                } else {
+                    Result.success(rawText)
+                }
+            }
+
             if (shouldUseChunkedUpload(endpoint) && audioFile.length() > MAX_SINGLE_UPLOAD_AUDIO_BYTES) {
                 return@withContext transcribeInChunks(
                     audioFile = audioFile,
@@ -528,6 +545,11 @@ object TranscriptionClient {
     private fun shouldUseChunkedUpload(endpoint: String): Boolean {
         return endpoint.contains("://writingmate.ai/", ignoreCase = true) ||
             endpoint.contains(".writingmate.ai/", ignoreCase = true)
+    }
+
+    private fun isBasetenRealtimeEndpoint(endpoint: String): Boolean {
+        return endpoint.startsWith("wss://", ignoreCase = true) &&
+            endpoint.contains(".api.baseten.co", ignoreCase = true)
     }
 
     private fun isPayloadTooLarge(error: Throwable?): Boolean {

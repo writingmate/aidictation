@@ -797,7 +797,8 @@
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = WhisperMateLiveActivity/WhisperMateLiveActivity.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 92;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -811,6 +812,7 @@
 				MARKETING_VERSION = 0.0.92;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1246,7 +1248,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = WhisperMateIOS/WhisperMateIOS.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 92;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				ENABLE_PREVIEWS = YES;
@@ -1265,6 +1268,7 @@
 				MARKETING_VERSION = 0.0.92;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_APPSTORE_PROFILE_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1314,7 +1318,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WhisperMateKeyboard/WhisperMateKeyboard.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 92;
 				DEVELOPMENT_TEAM = G7DJ6P37KU;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1330,6 +1335,7 @@
 				MARKETING_VERSION = 0.0.92;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_KEYBOARD_APPSTORE_PROFILE_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

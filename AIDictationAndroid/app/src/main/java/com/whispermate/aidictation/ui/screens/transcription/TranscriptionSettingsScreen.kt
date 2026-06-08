@@ -71,20 +71,21 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TranscriptionSettingsScreen(
+    initialPage: Int = 0,
     onNavigateBack: () -> Unit,
     viewModel: TranscriptionSettingsViewModel = hiltViewModel()
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
-    val pagerState = rememberPagerState(pageCount = { 3 })
+    val selectedPage = initialPage.coerceIn(0, 2)
 
     val dictionaryEntries by viewModel.dictionaryEntries.collectAsState()
     val toneStyles by viewModel.toneStyles.collectAsState()
     val shortcuts by viewModel.shortcuts.collectAsState()
     var selectedDetail by remember { mutableStateOf<PostProcessingDetail?>(null) }
 
-    val tabs = listOf(
+    val titles = listOf(
         stringResource(R.string.transcription_dictionary),
         stringResource(R.string.transcription_tone_style),
         stringResource(R.string.transcription_shortcuts)
@@ -94,7 +95,7 @@ fun TranscriptionSettingsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_post_processing_settings)) },
+                title = { Text(titles[selectedPage]) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
@@ -106,33 +107,13 @@ fun TranscriptionSettingsScreen(
             )
         }
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            TabRow(
-                selectedTabIndex = pagerState.currentPage
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = pagerState.currentPage == index,
-                        onClick = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(index)
-                            }
-                        },
-                        text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    )
-                }
-            }
-
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize()
-            ) { page ->
-                when (page) {
-                    0 -> DictionaryTab(
+            when (selectedPage) {
+                0 -> DictionaryTab(
                         entries = dictionaryEntries,
                         onAdd = { trigger, replacement ->
                             viewModel.addDictionaryEntry(trigger, replacement.ifEmpty { null })
@@ -153,7 +134,7 @@ fun TranscriptionSettingsScreen(
                         onDetail = { selectedDetail = PostProcessingDetail.Dictionary(it) },
                         onRestoreDefaults = { viewModel.restoreDefaultDictionaryEntries() }
                     )
-                    1 -> ToneStyleTab(
+                1 -> ToneStyleTab(
                         styles = toneStyles,
                         onAdd = { name, packages, instructions ->
                             viewModel.addToneStyle(name, packages, instructions)
@@ -174,7 +155,7 @@ fun TranscriptionSettingsScreen(
                         onDetail = { selectedDetail = PostProcessingDetail.ToneStyle(it) },
                         onRestoreDefaults = { viewModel.restoreDefaultToneStyles() }
                     )
-                    2 -> ShortcutsTab(
+                2 -> ShortcutsTab(
                         shortcuts = shortcuts,
                         onAdd = { trigger, expansion ->
                             viewModel.addShortcut(trigger, expansion)
@@ -195,7 +176,6 @@ fun TranscriptionSettingsScreen(
                         onDetail = { selectedDetail = PostProcessingDetail.Shortcut(it) },
                         onRestoreDefaults = { viewModel.restoreDefaultShortcuts() }
                     )
-                }
             }
         }
     }

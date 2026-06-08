@@ -1,7 +1,6 @@
 package com.whispermate.aidictation.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -19,36 +18,31 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 import kotlin.math.sin
 
-private val activeColor = Color(0xFFFF6300)
-private val idleColor = activeColor
-private val barColor = Color.White
 private const val minActiveBars = 3
 private const val waveformLevelGain = 1.35f
 private const val waveformLevelMix = 0.08f
 private const val waveformContrast = 0.8f
 private const val waveformFloorThreshold = 0.045f
 private const val waveformActiveFloor = 0.16f
+private val frozenHeights = listOf(0.56f, 1f, 0.56f, 1f, 0.56f)
+private val circleEnvelopeHeights = listOf(0.72f, 0.94f, 1f, 0.94f, 0.72f)
 
 enum class MicButtonState {
     Idle,       // Frozen sine wave pattern (like app logo)
@@ -57,7 +51,7 @@ enum class MicButtonState {
 }
 
 /**
- * Logo-style mic button with iOS-style audio bars inside.
+ * Circular mic button with the same five-bar waveform language as the overlay bubble.
  * - Smooth spring animations for bouncy feel (matches iOS .easeOut)
  * - Random organic variation per bar
  * - Idle: frozen sine wave pattern
@@ -73,21 +67,13 @@ fun CircularMicButton(
     modifier: Modifier = Modifier,
     size: Dp = 100.dp
 ) {
-    // Bar configuration matches the launcher logo: five pill bars.
+    val activeColor = MaterialTheme.colorScheme.primary
     val totalBars = 5
     val scale = size.value / 100f
     val barWidth = 9.2.dp * scale
     val barSpacing = 4.4.dp * scale
     val maxBarHeight = 49.6.dp * scale
     val dotSize = barWidth
-
-    // Short, tall, short, tall, short: same rhythm as ic_launcher_foreground.png.
-    val frozenHeights = remember {
-        listOf(0.56f, 1f, 0.56f, 1f, 0.56f)
-    }
-    val circleEnvelopeHeights = remember {
-        listOf(0.72f, 0.94f, 1f, 0.94f, 0.72f)
-    }
 
     // For processing animation
     val infiniteTransition = rememberInfiniteTransition(label = "processing")
@@ -104,7 +90,7 @@ fun CircularMicButton(
     // Animated color transition
     val backgroundColor by animateColorAsState(
         targetValue = when (state) {
-            MicButtonState.Idle -> idleColor
+            MicButtonState.Idle -> activeColor
             MicButtonState.Recording -> activeColor
             MicButtonState.Processing -> activeColor
         },
@@ -123,23 +109,11 @@ fun CircularMicButton(
         MicButtonState.Processing -> totalBars
     }
 
-    // Calculate viz size for debug circle
-    val vizWidth = barWidth * totalBars + barSpacing * (totalBars - 1)  // 60dp
-    val vizHeight = maxBarHeight  // 60dp
-
     Box(
         modifier = modifier
             .size(size)
-            .clip(RoundedCornerShape(size * 0.24f))
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        backgroundColor.blend(Color.White, 0.18f),
-                        backgroundColor,
-                        backgroundColor.blend(Color.Black, 0.20f)
-                    )
-                )
-            )
+            .clip(CircleShape)
+            .background(backgroundColor)
             .clickable(enabled = state != MicButtonState.Processing) { onClick() },
         contentAlignment = Alignment.Center
     ) {
@@ -148,9 +122,6 @@ fun CircularMicButton(
             verticalAlignment = Alignment.CenterVertically
         ) {
             repeat(totalBars) { index ->
-                val center = (totalBars - 1) / 2.0
-                val distanceFromCenter = abs(index - center) / center
-
                 // Check if bar is active
                 val barsFromEdge = (totalBars - activeBarCount) / 2
                 val minDistance = minOf(index, totalBars - 1 - index)
@@ -200,31 +171,12 @@ fun CircularMicButton(
                     modifier = Modifier
                         .width(barWidth)
                         .height(animatedHeight.dp)
-                        .drawBehind {
-                            val offset = 2.dp.toPx() * scale
-                            drawRoundRect(
-                                color = Color.Black.copy(alpha = 0.28f),
-                                topLeft = Offset(0f, offset),
-                                size = Size(this.size.width, this.size.height),
-                                cornerRadius = CornerRadius(this.size.width / 2f, this.size.width / 2f)
-                            )
-                        }
                         .clip(RoundedCornerShape(barWidth / 2))
-                        .background(barColor)
+                        .background(Color.White)
                 )
             }
         }
     }
-}
-
-private fun Color.blend(target: Color, amount: Float): Color {
-    val ratio = amount.coerceIn(0f, 1f)
-    return Color(
-        red = red + (target.red - red) * ratio,
-        green = green + (target.green - green) * ratio,
-        blue = blue + (target.blue - blue) * ratio,
-        alpha = alpha
-    )
 }
 
 private fun recordingBandValue(

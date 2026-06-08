@@ -1,19 +1,33 @@
 package com.whispermate.aidictation.ui.views
 
+import android.animation.ArgbEvaluator
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.OvershootInterpolator
 import com.whispermate.aidictation.R
+import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
+import kotlin.math.sin
 
+/**
+ * Custom View version of the logo-style mic button for overlay layouts.
+ * Displays a rounded-square button with animated audio bars inside.
+ *
+ * States:
+ * - Idle: brand background, frozen sine wave pattern
+ * - Recording: brand background, bars respond to audio/frequency bands
+ * - Processing: brand background, animated sine wave
+ */
 class CircularMicButtonView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -22,44 +36,43 @@ class CircularMicButtonView @JvmOverloads constructor(
 
     enum class State { Idle, Recording, Processing }
 
+    // Configuration
     private var idleColor: Int = 0xFFFF6300.toInt()
     private var activeColor: Int = 0xFFFF6300.toInt()
+
+    // State
     private var state: State = State.Idle
     private var audioLevel: Float = 0f
     private var frequencyBands: FloatArray? = null
 
+    // Animation values
+    private var currentBackgroundColor: Int = idleColor
     private val barHeights = FloatArray(TOTAL_BARS) { FROZEN_HEIGHTS[it] }
-    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    private val spinnerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
+    private var processingPhase: Float = 0f
 
-    private val tempRect = RectF()
-    private val cancelRect = RectF()
-    private val acceptRect = RectF()
-    private val pillRect = RectF()
+    // Animators
+    private var colorAnimator: ValueAnimator? = null
+    private val barAnimators = arrayOfNulls<ValueAnimator>(TOTAL_BARS)
+    private var processingAnimator: ValueAnimator? = null
+
+    // Paint objects
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val barShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+    private val buttonRect = RectF()
+    private val shadowRect = RectF()
     private val barRect = RectF()
 
-    private val barAnimators = arrayOfNulls<ValueAnimator>(TOTAL_BARS)
+    // Click handling
+    private var onClickCallback: (() -> Unit)? = null
 
-    private val springInterpolator = OvershootInterpolator(1.2f)
+    // Spring-like interpolator (overshoot simulates bounce)
+    private val springInterpolator = OvershootInterpolator(1.5f)
 
     companion object {
         private const val TOTAL_BARS = 5
         private const val MIN_ACTIVE_BARS = 3
-        private const val BACKGROUND_ALPHA = 0.82f
-        private const val PRIMARY_BUTTON_ALPHA = 0.88f
-        private const val SECONDARY_SURFACE_ALPHA = 0.34f
         private const val WAVEFORM_LEVEL_GAIN = 1.35f
         private const val WAVEFORM_LEVEL_MIX = 0.08f
         private const val WAVEFORM_CONTRAST = 0.8f
@@ -70,6 +83,7 @@ class CircularMicButtonView @JvmOverloads constructor(
     }
 
     init {
+        // Read custom attributes
         context.theme.obtainStyledAttributes(attrs, R.styleable.CircularMicButtonView, 0, 0).apply {
             try {
                 idleColor = getColor(R.styleable.CircularMicButtonView_idleColor, idleColor)
@@ -78,28 +92,18 @@ class CircularMicButtonView @JvmOverloads constructor(
                 recycle()
             }
         }
+
+        currentBackgroundColor = idleColor
         isClickable = true
         isFocusable = true
     }
 
-    fun preferredWidthDp(): Int = when (state) {
-        State.Idle -> 55
-        State.Recording, State.Processing -> 250
-    }
-
-    fun preferredHeightDp(): Int = 55
-
-    fun isCancelHit(x: Float, y: Float): Boolean {
-        return state == State.Recording && cancelRect.contains(x, y)
-    }
-
-    fun isAcceptHit(x: Float, y: Float): Boolean {
-        return state == State.Recording && acceptRect.contains(x, y)
-    }
-
     fun setOnClickCallback(callback: () -> Unit) {
+        onClickCallback = callback
         setOnClickListener {
-            if (state != State.Processing) callback()
+            if (state != State.Processing) {
+                callback()
+            }
         }
     }
 
@@ -111,27 +115,62 @@ class CircularMicButtonView @JvmOverloads constructor(
     fun setState(newState: State) {
         if (state == newState) return
         state = newState
-        updateBarHeights(animate = false)
-        invalidate()
+
+        // Animate color
+        val targetColor = when (state) {
+            State.Idle -> idleColor
+            State.Recording, State.Processing -> activeColor
+        }
+        animateColorTo(targetColor)
+
+        // Handle processing animation
+        when (state) {
+            State.Processing -> startProcessingAnimation()
+            else -> stopProcessingAnimation()
+        }
+
+        // Update bar heights
+        updateBarHeights()
     }
 
     fun setAudioLevel(level: Float) {
         audioLevel = level.coerceIn(0f, 1f)
-        if (state == State.Recording) updateBarHeights()
+        if (state == State.Recording) {
+            updateBarHeights()
+        }
     }
 
     fun setFrequencyBands(bands: FloatArray?) {
         frequencyBands = bands
-        if (state == State.Recording) updateBarHeights()
+        if (state == State.Recording) {
+            updateBarHeights()
+        }
     }
 
     fun setColors(idle: Int, active: Int) {
         idleColor = idle
         activeColor = active
+        val targetColor = when (state) {
+            State.Idle -> idleColor
+            State.Recording, State.Processing -> activeColor
+        }
+        currentBackgroundColor = targetColor
         invalidate()
     }
 
-    private fun updateBarHeights(animate: Boolean = state == State.Recording) {
+    private fun animateColorTo(targetColor: Int) {
+        colorAnimator?.cancel()
+        colorAnimator = ValueAnimator.ofObject(ArgbEvaluator(), currentBackgroundColor, targetColor).apply {
+            duration = 300
+            addUpdateListener { animator ->
+                currentBackgroundColor = animator.animatedValue as Int
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun updateBarHeights() {
         val activeBarCount = when (state) {
             State.Idle -> TOTAL_BARS
             State.Recording -> {
@@ -148,21 +187,23 @@ class CircularMicButtonView @JvmOverloads constructor(
                 State.Recording -> {
                     val barsFromEdge = (TOTAL_BARS - activeBarCount) / 2
                     val minDistance = minOf(i, TOTAL_BARS - 1 - i)
-                    if (minDistance < barsFromEdge) {
-                        0f
+                    val isActive = minDistance >= barsFromEdge
+
+                    if (!isActive) {
+                        0f // Dot size (will be scaled in onDraw)
                     } else {
-                        boostWaveformLevel(recordingBandValue(i), audioLevel) * CIRCLE_ENVELOPE_HEIGHTS[i]
+                        val bandValue = recordingBandValue(i)
+                        boostWaveformLevel(bandValue, audioLevel) * CIRCLE_ENVELOPE_HEIGHTS[i]
                     }
                 }
-                State.Processing -> CIRCLE_ENVELOPE_HEIGHTS[i]
-            }
-            if (state != State.Processing) {
-                if (animate) {
-                    animateBarTo(i, targetHeight)
-                } else {
-                    barAnimators[i]?.cancel()
-                    barHeights[i] = targetHeight
+                State.Processing -> {
+                    // Calculated in onDraw based on processingPhase
+                    CIRCLE_ENVELOPE_HEIGHTS[i]
                 }
+            }
+
+            if (state != State.Processing) {
+                animateBarTo(i, targetHeight)
             }
         }
     }
@@ -171,7 +212,11 @@ class CircularMicButtonView @JvmOverloads constructor(
         val bands = frequencyBands
         if (bands == null || bands.isEmpty()) return audioLevel
 
-        val sourcePosition = if (TOTAL_BARS == 1) 0f else index * (bands.lastIndex.toFloat() / (TOTAL_BARS - 1))
+        val sourcePosition = if (TOTAL_BARS == 1) {
+            0f
+        } else {
+            index * (bands.lastIndex.toFloat() / (TOTAL_BARS - 1))
+        }
         val lowerIndex = sourcePosition.toInt().coerceIn(0, bands.lastIndex)
         val upperIndex = (lowerIndex + 1).coerceAtMost(bands.lastIndex)
         val fraction = sourcePosition - lowerIndex
@@ -194,147 +239,135 @@ class CircularMicButtonView @JvmOverloads constructor(
     private fun animateBarTo(index: Int, targetHeight: Float) {
         barAnimators[index]?.cancel()
         barAnimators[index] = ValueAnimator.ofFloat(barHeights[index], targetHeight).apply {
-            duration = 150
+            duration = 170
             interpolator = springInterpolator
-            addUpdateListener {
-                barHeights[index] = it.animatedValue as Float
+            addUpdateListener { animator ->
+                barHeights[index] = animator.animatedValue as Float
                 invalidate()
             }
             start()
         }
     }
 
+    private fun startProcessingAnimation() {
+        stopProcessingAnimation()
+        processingAnimator = ValueAnimator.ofFloat(0f, (2 * PI).toFloat()).apply {
+            duration = 900
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            addUpdateListener { animator ->
+                processingPhase = animator.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun stopProcessingAnimation() {
+        processingAnimator?.cancel()
+        processingAnimator = null
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val desiredWidth = (preferredWidthDp() * resources.displayMetrics.density).toInt()
-        val desiredHeight = (preferredHeightDp() * resources.displayMetrics.density).toInt()
-        setMeasuredDimension(resolveSize(desiredWidth, widthMeasureSpec), resolveSize(desiredHeight, heightMeasureSpec))
+        val desiredSize = (40 * resources.displayMetrics.density).toInt() // 40dp default
+        val width = resolveSize(desiredSize, widthMeasureSpec)
+        val height = resolveSize(desiredSize, heightMeasureSpec)
+        val size = min(width, height)
+        setMeasuredDimension(size, size)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        drawOverlay(canvas)
-    }
 
-    private fun drawOverlay(canvas: Canvas) {
-        val h = height.toFloat()
-        val currentWidth = width.toFloat()
-        val surfaceSize = h * 0.86f
-        val surfaceInset = (h - surfaceSize) / 2f
-        val gap = h * 0.13f
-
-        acceptRect.set(
-            currentWidth - surfaceInset - surfaceSize,
-            surfaceInset,
-            currentWidth - surfaceInset,
-            surfaceInset + surfaceSize
+        val size = min(width, height).toFloat()
+        val centerX = width / 2f
+        val centerY = height / 2f
+        val inset = size * 0.06f
+        val buttonSize = size - (inset * 2f)
+        val cornerRadius = buttonSize * 0.24f
+        buttonRect.set(
+            centerX - buttonSize / 2f,
+            centerY - buttonSize / 2f,
+            centerX + buttonSize / 2f,
+            centerY + buttonSize / 2f
         )
-        cancelRect.set(surfaceInset, surfaceInset, surfaceInset + surfaceSize, surfaceInset + surfaceSize)
-        pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
 
-        val expanded = if (state == State.Idle) 0f else 1f
-        val primaryColor = if (state == State.Idle) idleColor else activeColor
+        shadowPaint.alpha = if (state == State.Idle) 70 else 82
+        shadowRect.set(buttonRect)
+        shadowRect.offset(0f, buttonSize * 0.07f)
+        canvas.drawRoundRect(shadowRect, cornerRadius, cornerRadius, shadowPaint)
 
-        if (pillRect.width() > 0f) {
-            pillPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
-            canvas.drawRoundRect(pillRect, surfaceSize / 2f, surfaceSize / 2f, pillPaint)
-        }
+        backgroundPaint.shader = LinearGradient(
+            0f,
+            buttonRect.top,
+            0f,
+            buttonRect.bottom,
+            intArrayOf(
+                blendColor(currentBackgroundColor, Color.WHITE, 0.18f),
+                currentBackgroundColor,
+                blendColor(currentBackgroundColor, Color.BLACK, 0.20f)
+            ),
+            floatArrayOf(0f, 0.48f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRoundRect(buttonRect, cornerRadius, cornerRadius, backgroundPaint)
+        backgroundPaint.shader = null
 
-        backgroundPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
-        if (expanded > 0f && state == State.Recording) {
-            canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
-        }
-
-        backgroundPaint.color = withAlpha(primaryColor, PRIMARY_BUTTON_ALPHA)
-        canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
-
-        if (state == State.Processing) {
-            drawBars(canvas, pillRect, CIRCLE_ENVELOPE_HEIGHTS, expanded, circleSpacing = false)
-            drawSpinner(canvas, acceptRect)
-        } else {
-            drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
-            drawX(canvas, cancelRect, expanded)
-            drawCheck(canvas, acceptRect, expanded)
-            if (expanded < 1f) {
-                drawBars(canvas, acceptRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
-            }
-        }
-    }
-
-    private fun drawBars(
-        canvas: Canvas,
-        bounds: RectF,
-        heights: FloatArray,
-        alpha: Float,
-        circleSpacing: Boolean
-    ) {
-        if (alpha <= 0f) return
-        val barWidth = bounds.height() * 0.092f
-        val barSpacing = bounds.height() * if (circleSpacing) 0.044f else 0.14f
-        val maxBarHeight = bounds.height() * if (circleSpacing) 0.496f else 0.48f
+        val barWidth = buttonSize * 0.085f
+        val barSpacing = buttonSize * 0.035f
+        val maxBarHeight = buttonSize * 0.58f
         val dotSize = barWidth
-        val totalBarsWidth = (barWidth * TOTAL_BARS) + (barSpacing * (TOTAL_BARS - 1))
-        val startX = bounds.centerX() - (totalBarsWidth / 2f) + (barWidth / 2f)
-        barPaint.color = withAlpha(Color.WHITE, alpha)
+        val barCornerRadius = barWidth / 2
 
+        val totalBarsWidth = (barWidth * TOTAL_BARS) + (barSpacing * (TOTAL_BARS - 1))
+        val startX = centerX - (totalBarsWidth / 2) + (barWidth / 2)
+
+        // Draw each bar
         for (i in 0 until TOTAL_BARS) {
-            val heightFraction = heights[i].coerceIn(0f, 1f)
-            val barHeight = dotSize + (maxBarHeight - dotSize) * heightFraction
             val barCenterX = startX + i * (barWidth + barSpacing)
-            barRect.set(
-                barCenterX - barWidth / 2f,
-                bounds.centerY() - barHeight / 2f,
-                barCenterX + barWidth / 2f,
-                bounds.centerY() + barHeight / 2f
-            )
-            canvas.drawRoundRect(barRect, barWidth / 2f, barWidth / 2f, barPaint)
+
+            // Calculate height based on state
+            val heightFraction = if (state == State.Processing) {
+                val normalizedIndex = i.toFloat() / (TOTAL_BARS - 1)
+                val wavePosition = normalizedIndex * 2f * PI.toFloat() - processingPhase
+                val sineValue = (sin(wavePosition) + 1f) / 2f
+                sineValue * CIRCLE_ENVELOPE_HEIGHTS[i]
+            } else {
+                barHeights[i]
+            }
+
+            val barHeight = dotSize + (maxBarHeight - dotSize) * heightFraction
+
+            val left = barCenterX - barWidth / 2
+            val top = centerY - barHeight / 2
+            val right = barCenterX + barWidth / 2
+            val bottom = centerY + barHeight / 2
+
+            barShadowPaint.alpha = if (state == State.Idle) 72 else 58
+            val barShadowOffset = buttonSize * 0.045f
+            barRect.set(left, top + barShadowOffset, right, bottom + barShadowOffset)
+            canvas.drawRoundRect(barRect, barCornerRadius, barCornerRadius, barShadowPaint)
+
+            barRect.set(left, top, right, bottom)
+            canvas.drawRoundRect(barRect, barCornerRadius, barCornerRadius, barPaint)
         }
     }
 
-    private fun drawX(canvas: Canvas, bounds: RectF, alpha: Float) {
-        iconPaint.color = withAlpha(Color.WHITE, alpha)
-        iconPaint.strokeWidth = bounds.width() * 0.052f
-        val inset = bounds.width() * 0.41f
-        canvas.drawLine(bounds.left + inset, bounds.top + inset, bounds.right - inset, bounds.bottom - inset, iconPaint)
-        canvas.drawLine(bounds.right - inset, bounds.top + inset, bounds.left + inset, bounds.bottom - inset, iconPaint)
-    }
-
-    private fun drawCheck(canvas: Canvas, bounds: RectF, alpha: Float) {
-        iconPaint.color = withAlpha(Color.WHITE, alpha)
-        iconPaint.strokeWidth = bounds.width() * 0.056f
-        canvas.drawLine(
-            bounds.left + bounds.width() * 0.37f,
-            bounds.top + bounds.height() * 0.54f,
-            bounds.left + bounds.width() * 0.46f,
-            bounds.top + bounds.height() * 0.63f,
-            iconPaint
+    private fun blendColor(from: Int, to: Int, amount: Float): Int {
+        val ratio = amount.coerceIn(0f, 1f)
+        val inverse = 1f - ratio
+        return Color.argb(
+            Color.alpha(from),
+            (Color.red(from) * inverse + Color.red(to) * ratio).toInt(),
+            (Color.green(from) * inverse + Color.green(to) * ratio).toInt(),
+            (Color.blue(from) * inverse + Color.blue(to) * ratio).toInt()
         )
-        canvas.drawLine(
-            bounds.left + bounds.width() * 0.46f,
-            bounds.top + bounds.height() * 0.63f,
-            bounds.left + bounds.width() * 0.65f,
-            bounds.top + bounds.height() * 0.42f,
-            iconPaint
-        )
-    }
-
-    private fun drawSpinner(canvas: Canvas, bounds: RectF) {
-        spinnerPaint.strokeWidth = bounds.width() * 0.056f
-        tempRect.set(
-            bounds.left + bounds.width() * 0.34f,
-            bounds.top + bounds.height() * 0.34f,
-            bounds.right - bounds.width() * 0.34f,
-            bounds.bottom - bounds.height() * 0.34f
-        )
-        canvas.drawArc(tempRect, -90f, 260f, false, spinnerPaint)
-    }
-
-    private fun withAlpha(color: Int, alphaFraction: Float): Int {
-        val alpha = (alphaFraction.coerceIn(0f, 1f) * 255).toInt()
-        return (color and 0x00FFFFFF) or (alpha shl 24)
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        colorAnimator?.cancel()
+        processingAnimator?.cancel()
         barAnimators.forEach { it?.cancel() }
     }
 }

@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -54,6 +55,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,11 +67,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
@@ -77,18 +83,14 @@ import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
-import com.whispermate.aidictation.ui.views.CircularMicButtonView
+import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 
 @Composable
 fun SettingsScreen(
     recordings: List<Recording>,
     onClearHistory: () -> Unit,
-    onNavigateToPostProcessingSettings: () -> Unit,
+    onNavigateToPostProcessingSettings: (Int) -> Unit,
     onNavigateToLanguageSettings: () -> Unit,
-    multilingualEnabled: Boolean = true,
-    onMultilingualToggled: (Boolean) -> Unit = {},
-    postProcessingEnabled: Boolean = true,
-    onPostProcessingToggled: (Boolean) -> Unit = {},
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
@@ -103,18 +105,39 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
     var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     var referralCodeInput by remember { mutableStateOf("") }
+    var showTranscriptionModeScreen by remember { mutableStateOf(false) }
+    var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
+    var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
 
-    val hasMicPermission = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasMicPermission = hasMicrophonePermission(context)
+                hasOverlayPermission = isOverlayAccessibilityEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
-    val hasOverlayPermission = isOverlayAccessibilityEnabled(context)
+    if (showTranscriptionModeScreen) {
+        TranscriptionModeSettingsScreen(
+            enabled = onDeviceTranscriptionEnabled,
+            state = onDeviceModelState,
+            onBack = { showTranscriptionModeScreen = false },
+            onModeSelected = onOnDeviceTranscriptionToggled,
+            modifier = modifier
+        )
+        return
+    }
 
     Column(
         modifier = modifier
@@ -240,10 +263,10 @@ fun SettingsScreen(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
-            OnDeviceTranscriptionItem(
+            TranscriptionModeSettingsItem(
                 enabled = onDeviceTranscriptionEnabled,
                 state = onDeviceModelState,
-                onToggle = onOnDeviceTranscriptionToggled
+                onClick = { showTranscriptionModeScreen = true }
             )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -262,12 +285,14 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             SettingsItem(
-                icon = Icons.Default.Translate,
-                title = stringResource(R.string.settings_multilingual_mode),
+                icon = Icons.Default.Language,
+                title = stringResource(R.string.settings_languages),
+                onClick = onNavigateToLanguageSettings,
                 trailingContent = {
-                    Switch(
-                        checked = multilingualEnabled,
-                        onCheckedChange = onMultilingualToggled
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             )
@@ -275,15 +300,15 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             SettingsItem(
-                icon = Icons.Default.Language,
-                title = stringResource(R.string.settings_languages),
-                onClick = onNavigateToLanguageSettings,
-                enabled = multilingualEnabled,
+                icon = Icons.Default.Settings,
+                title = stringResource(R.string.transcription_dictionary),
+                onClick = { onNavigateToPostProcessingSettings(0) },
+                enabled = !onDeviceTranscriptionEnabled,
                 trailingContent = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = if (multilingualEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     )
                 }
@@ -293,11 +318,15 @@ fun SettingsScreen(
 
             SettingsItem(
                 icon = Icons.Default.AutoAwesome,
-                title = stringResource(R.string.settings_post_processing),
+                title = stringResource(R.string.transcription_tone_style),
+                onClick = { onNavigateToPostProcessingSettings(1) },
+                enabled = !onDeviceTranscriptionEnabled,
                 trailingContent = {
-                    Switch(
-                        checked = postProcessingEnabled,
-                        onCheckedChange = onPostProcessingToggled
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                               else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     )
                 }
             )
@@ -305,15 +334,15 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             SettingsItem(
-                icon = Icons.Default.Settings,
-                title = stringResource(R.string.settings_post_processing_settings),
-                onClick = onNavigateToPostProcessingSettings,
-                enabled = postProcessingEnabled,
+                icon = Icons.Default.Translate,
+                title = stringResource(R.string.transcription_shortcuts),
+                onClick = { onNavigateToPostProcessingSettings(2) },
+                enabled = !onDeviceTranscriptionEnabled,
                 trailingContent = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = if (postProcessingEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     )
                 }
@@ -400,6 +429,8 @@ private fun AccountSettingsSection(
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit
 ) {
+    val showsIdentityRow = usageStatus.isAuthenticated || usageStatus.isPro
+
     SectionHeader(stringResource(R.string.settings_account))
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -412,7 +443,7 @@ private fun AccountSettingsSection(
                 email = usageStatus.email ?: stringResource(R.string.account_signed_in),
                 tierName = usageStatus.tierName
             )
-        } else {
+        } else if (usageStatus.isPro) {
             SettingsItem(
                 icon = Icons.Default.AccountCircle,
                 title = stringResource(R.string.account_sign_in),
@@ -422,7 +453,9 @@ private fun AccountSettingsSection(
             )
         }
 
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        if (showsIdentityRow) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
 
         UsageSummary(usageStatus = usageStatus)
 
@@ -430,8 +463,12 @@ private fun AccountSettingsSection(
 
         if (!usageStatus.isPro) {
             SettingsItem(
-                icon = Icons.Default.Star,
-                title = stringResource(R.string.account_upgrade),
+                icon = Icons.Default.AutoAwesome,
+                title = if (usageStatus.isAuthenticated) {
+                    stringResource(R.string.account_upgrade)
+                } else {
+                    stringResource(R.string.account_sign_in_or_upgrade)
+                },
                 onClick = onUpgrade,
                 iconTint = MaterialTheme.colorScheme.primary,
                 titleColor = MaterialTheme.colorScheme.primary
@@ -445,8 +482,7 @@ private fun AccountSettingsSection(
             referralCodeInput = referralCodeInput,
             onReferralCodeChange = onReferralCodeChange,
             onShareInvite = onShareInvite,
-            onRedeemInvite = onRedeemInvite,
-            onSignIn = onSignIn
+            onRedeemInvite = onRedeemInvite
         )
 
         if (usageStatus.isAuthenticated) {
@@ -538,7 +574,7 @@ private fun BubbleColorSelector(
                 verticalAlignment = Alignment.Top
             ) {
                 rowOptions.forEach { option ->
-                    BubbleLogoSwatchOption(
+                    BubbleColorSwatchOption(
                         option = option,
                         selected = option.color == selectedColor,
                         onClick = { onColorSelected(option.color) }
@@ -559,7 +595,7 @@ private data class BubbleColorOption(
 )
 
 @Composable
-private fun BubbleLogoSwatchOption(
+private fun BubbleColorSwatchOption(
     option: BubbleColorOption,
     selected: Boolean,
     onClick: () -> Unit
@@ -569,7 +605,7 @@ private fun BubbleLogoSwatchOption(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        BubbleLogoSwatch(
+        BubbleColorSwatch(
             color = option.resolvedColor,
             selected = selected,
             onClick = onClick
@@ -589,12 +625,12 @@ private fun BubbleLogoSwatchOption(
 }
 
 @Composable
-private fun BubbleLogoSwatch(
+private fun BubbleColorSwatch(
     color: Int,
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    val shape = RoundedCornerShape(12.dp)
+    val shape = CircleShape
     val composeColor = Color(color)
     val borderColor = if (selected) {
         if (color == OverlayBubblePreferences.BLACK_COLOR) {
@@ -605,7 +641,6 @@ private fun BubbleLogoSwatch(
     } else {
         MaterialTheme.colorScheme.outlineVariant
     }
-    val barHeights = listOf(16.dp, 30.dp, 16.dp, 30.dp, 16.dp)
 
     Box(
         modifier = Modifier
@@ -619,27 +654,10 @@ private fun BubbleLogoSwatch(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(2.2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            barHeights.forEach { height ->
-                Box(
-                    modifier = Modifier
-                        .width(4.6.dp)
-                        .height(height)
-                        .clip(RoundedCornerShape(2.3.dp))
-                        .background(Color.White)
-                )
-            }
-        }
-
         if (selected) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(3.dp)
-                    .size(16.dp)
+                    .size(18.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.94f)),
                 contentAlignment = Alignment.Center
@@ -648,7 +666,7 @@ private fun BubbleLogoSwatch(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     tint = composeColor,
-                    modifier = Modifier.size(11.dp)
+                    modifier = Modifier.size(13.dp)
                 )
             }
         }
@@ -660,12 +678,13 @@ private fun OverlayPreviewCard(selectedColor: Int) {
     var previewStateIndex by remember { mutableIntStateOf(0) }
     val previewStates = remember {
         listOf(
-            CircularMicButtonView.State.Idle,
-            CircularMicButtonView.State.Recording,
-            CircularMicButtonView.State.Processing
+            OverlayMicButtonView.State.Idle,
+            OverlayMicButtonView.State.Recording,
+            OverlayMicButtonView.State.Processing
         )
     }
     val previewState = previewStates[previewStateIndex]
+    val previewWidth = if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp
     val resolvedColor = when (selectedColor) {
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
         else -> selectedColor
@@ -700,11 +719,11 @@ private fun OverlayPreviewCard(selectedColor: Int) {
         ) {
             AndroidView(
                 modifier = Modifier
-                    .width(250.dp)
+                    .width(previewWidth)
                     .height(55.dp)
                     .padding(end = 10.dp),
                 factory = { context ->
-                    CircularMicButtonView(context).apply {
+                    OverlayMicButtonView(context).apply {
                         setColors(resolvedColor, resolvedColor)
                         setState(previewState)
                         setAudioLevel(0.72f)
@@ -717,7 +736,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
                 update = { view ->
                     view.setColors(resolvedColor, resolvedColor)
                     view.setState(previewState)
-                    view.setAudioLevel(if (previewState == CircularMicButtonView.State.Recording) 0.72f else 0f)
+                    view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
                     view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
                 }
             )
@@ -804,8 +823,7 @@ private fun ReferralInviteItem(
     referralCodeInput: String,
     onReferralCodeChange: (String) -> Unit,
     onShareInvite: () -> Unit,
-    onRedeemInvite: () -> Unit,
-    onSignIn: () -> Unit
+    onRedeemInvite: () -> Unit
 ) {
     Column(
         modifier = Modifier.padding(16.dp),
@@ -813,7 +831,7 @@ private fun ReferralInviteItem(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Default.Star,
+                imageVector = Icons.Default.AccountCircle,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(24.dp)
@@ -837,19 +855,19 @@ private fun ReferralInviteItem(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = if (usageStatus.isAuthenticated) onShareInvite else onSignIn,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(stringResource(if (usageStatus.isAuthenticated) R.string.referral_share else R.string.referral_sign_in))
-            }
-        }
-
         if (usageStatus.isAuthenticated) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onShareInvite,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.referral_share))
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -874,13 +892,234 @@ private fun ReferralInviteItem(
 }
 
 @Composable
-private fun OnDeviceTranscriptionItem(
+private fun TranscriptionModeSettingsItem(
     enabled: Boolean,
     state: OnDeviceModelUiState,
-    onToggle: (Boolean) -> Unit
+    onClick: () -> Unit
+) {
+    val status = transcriptionModeStatus(enabled, state)
+
+    SettingsItem(
+        icon = Icons.Default.Mic,
+        title = stringResource(R.string.settings_on_device_transcription),
+        onClick = onClick,
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun TranscriptionModeSettingsScreen(
+    enabled: Boolean,
+    state: OnDeviceModelUiState,
+    onBack: () -> Unit,
+    onModeSelected: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val progress = state.downloadProgress?.coerceIn(0f, 1f)
-    val status = when {
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.settings_on_device_transcription),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        Text(
+            text = stringResource(R.string.onboarding_on_device_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        TranscriptionModeChoiceCard(
+            title = stringResource(R.string.onboarding_transcription_cloud_title),
+            body = stringResource(R.string.onboarding_transcription_cloud_body),
+            accuracyStars = 5,
+            speedStars = 5,
+            selected = !enabled && !state.isDownloading,
+            onClick = { onModeSelected(false) }
+        )
+
+        TranscriptionModeChoiceCard(
+            title = stringResource(R.string.onboarding_transcription_offline_title),
+            body = when {
+                state.isDownloading -> transcriptionModeStatus(enabled = true, state = state)
+                state.isInstalled -> stringResource(R.string.settings_on_device_ready)
+                else -> stringResource(R.string.onboarding_transcription_offline_body)
+            },
+            accuracyStars = 3,
+            speedStars = 4,
+            selected = enabled || state.isDownloading,
+            onClick = { onModeSelected(true) }
+        )
+
+        if (state.isDownloading) {
+            LinearProgressIndicator(
+                progress = { progress ?: 0f },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun TranscriptionModeChoiceCard(
+    title: String,
+    body: String,
+    accuracyStars: Int,
+    speedStars: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            )
+            .border(
+                BorderStroke(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                ),
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .border(
+                    width = 2.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            SettingsRatingRow(
+                label = stringResource(R.string.onboarding_transcription_accuracy),
+                stars = accuracyStars
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            SettingsRatingRow(
+                label = stringResource(R.string.onboarding_transcription_speed),
+                stars = speedStars
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsRatingRow(
+    label: String,
+    stars: Int
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            repeat(5) { index ->
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                    tint = if (index < stars.coerceIn(0, 5)) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun transcriptionModeStatus(
+    enabled: Boolean,
+    state: OnDeviceModelUiState
+): String {
+    val progress = state.downloadProgress?.coerceIn(0f, 1f)
+    return when {
         state.isDownloading && progress != null -> {
             stringResource(R.string.settings_on_device_downloading, (progress * 100).toInt())
         }
@@ -888,67 +1127,6 @@ private fun OnDeviceTranscriptionItem(
         enabled -> stringResource(R.string.settings_on_device_local)
         state.isInstalled -> stringResource(R.string.settings_on_device_ready)
         else -> stringResource(R.string.settings_on_device_cloud)
-    }
-
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (!state.isDownloading) {
-                        Modifier.clickable { onToggle(!enabled) }
-                    } else {
-                        Modifier
-                    }
-                )
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = stringResource(R.string.settings_on_device_transcription),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = status,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = enabled || state.isDownloading,
-                enabled = !state.isDownloading,
-                onCheckedChange = onToggle
-            )
-        }
-
-        if (state.isDownloading) {
-            LinearProgressIndicator(
-                progress = { progress ?: 0f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 56.dp, end = 16.dp, bottom = 16.dp)
-            )
-        }
     }
 }
 
@@ -1025,6 +1203,13 @@ private fun openAccessibilitySettings(context: Context) {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
     }
     context.startActivity(intent)
+}
+
+private fun hasMicrophonePermission(context: Context): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
 }
 
 private fun isOverlayAccessibilityEnabled(context: Context): Boolean {

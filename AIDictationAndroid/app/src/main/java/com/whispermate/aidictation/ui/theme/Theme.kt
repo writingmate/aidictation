@@ -126,9 +126,16 @@ private val AIDictationTypography = Typography(
 @Composable
 fun AIDictationTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    accentColor: Color = BrandOrange,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val baseColorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val colorScheme = baseColorScheme.copy(
+        primary = accentColor,
+        primaryContainer = if (darkTheme) accentColor.copy(alpha = 0.72f) else accentColor.copy(alpha = 0.12f),
+        inversePrimary = accentColor,
+        surfaceTint = accentColor
+    )
 
     MaterialTheme(
         colorScheme = colorScheme,

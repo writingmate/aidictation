@@ -40,7 +40,7 @@ import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
-import com.whispermate.aidictation.ui.views.CircularMicButtonView
+import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 import com.whispermate.aidictation.util.AudioRecorder
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -70,7 +70,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val MIN_RECORDING_MS = 500L
         private const val BUBBLE_SIZE_DP = 55
         private const val BUBBLE_MARGIN_DP = 20
-        private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val VOLUME_SHORTCUT_WINDOW_MS = 1_200L
         private const val VOLUME_SHORTCUT_PRESS_COUNT = 3
@@ -134,7 +133,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     private lateinit var windowManager: WindowManager
 
-    private var bubbleView: CircularMicButtonView? = null
+    private var bubbleView: OverlayMicButtonView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var isBubbleAttached = false
     private var bubbleShouldBeVisible = false
@@ -155,8 +154,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var volumeShortcutNoSpeechJob: Job? = null
     private var recordingStartedByVolumeShortcut = false
     private var bubbleAnimationJob: Job? = null
-    private var bubbleHideJob: Job? = null
-
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
     private var fixGrammarButton: TextView? = null
@@ -301,8 +298,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
         if (!shouldKeepBubbleVisibleWithoutKeyboard() && !isKeyboardVisible()) {
-            bubbleHideJob?.cancel()
-            bubbleHideJob = null
             bubbleShouldBeVisible = false
             if (recordingState == RecordingState.Recording) {
                 stopRecording(discard = true)
@@ -313,31 +308,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         if (shouldShowBubble(source)) {
-            bubbleHideJob?.cancel()
-            bubbleHideJob = null
             bubbleShouldBeVisible = true
             showBubble()
             updateCommandActionsVisibility(source)
             return
         }
 
-        bubbleHideJob?.cancel()
-        bubbleHideJob = serviceScope.launch {
-            delay(BUBBLE_HIDE_DEBOUNCE_MS)
-            if (shouldShowBubble(null)) {
-                bubbleShouldBeVisible = true
-                showBubble()
-                updateCommandActionsVisibility(null)
-                return@launch
-            }
-
-            bubbleShouldBeVisible = false
-            if (recordingState == RecordingState.Recording) {
-                stopRecording(discard = true)
-            }
-            hideBubble()
-            hideCommandActions()
+        bubbleShouldBeVisible = false
+        if (recordingState == RecordingState.Recording) {
+            stopRecording(discard = true)
         }
+        hideBubble()
+        hideCommandActions()
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
@@ -436,8 +418,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun suppressBubbleNow(messageRes: Int) {
-        bubbleHideJob?.cancel()
-        bubbleHideJob = null
         hideDismissActions()
         if (recordingState == RecordingState.Recording) {
             stopRecording(discard = true)
@@ -517,8 +497,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun hideBubble() {
-        bubbleHideJob?.cancel()
-        bubbleHideJob = null
         bubbleShouldBeVisible = false
         if (!isBubbleAttached) return
 
@@ -543,17 +521,17 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ensureBubbleCreated() {
         if (bubbleView != null) return
 
-        val size = dp(BUBBLE_SIZE_DP)
         refreshBubbleBrandColor()
 
-        bubbleView = CircularMicButtonView(this).apply {
+        bubbleView = OverlayMicButtonView(this).apply {
             elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isHapticFeedbackEnabled = true
             setColors(bubbleIdleColor, resolveBubbleActiveColor())
-            setState(CircularMicButtonView.State.Idle)
+            setState(OverlayMicButtonView.State.Idle)
         }
 
+        val size = dp(BUBBLE_SIZE_DP)
         val startX = bubblePrefs.getInt(OverlayBubblePreferences.X_KEY, defaultBubbleX())
         val startY = bubblePrefs.getInt(OverlayBubblePreferences.Y_KEY, defaultBubbleY())
 
@@ -1004,12 +982,21 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         }
                     } else {
                         hideDismissActions()
-                        val circularBubble = bubble as? CircularMicButtonView
+                        val circularBubble = bubble as? OverlayMicButtonView
                         when {
-                            circularBubble?.isCancelHit(event.x, event.y) == true -> stopRecording(discard = true)
-                            circularBubble?.isAcceptHit(event.x, event.y) == true -> stopRecording(discard = false)
+                            circularBubble?.isCancelHit(event.x, event.y) == true -> {
+                                performClickHaptic()
+                                stopRecording(discard = true)
+                            }
+                            circularBubble?.isAcceptHit(event.x, event.y) == true -> {
+                                performClickHaptic()
+                                stopRecording(discard = false)
+                            }
                             recordingState == RecordingState.Recording -> Unit
-                            else -> onBubbleTapped()
+                            else -> {
+                                performClickHaptic()
+                                onBubbleTapped()
+                            }
                         }
                     }
                     true
@@ -1035,6 +1022,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             HapticFeedbackConstants.CONTEXT_CLICK
         }
         bubbleView?.performHapticFeedback(effect)
+    }
+
+    private fun performClickHaptic() {
+        bubbleView?.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
     }
 
     private fun onBubbleTapped() {
@@ -1543,15 +1534,21 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         if (transcription.text.isBlank()) return
 
-        val applied = if (transcription.executedCommand != null) {
-            applyCommandResult(transcription.text)
+        val finalText = if (transcription.executedCommand != null) {
+            transcription.text
         } else {
-            insertDictationText(transcription.text)
+            transcriptionRepository.applyPostProcessing(transcription.text)
+        }
+
+        val applied = if (transcription.executedCommand != null) {
+            applyCommandResult(finalText)
+        } else {
+            insertDictationText(finalText)
         }
 
         if (applied) {
-            lastDictatedText = transcription.text
-            subscriptionRepository.recordWords(transcription.text)
+            lastDictatedText = finalText
+            subscriptionRepository.recordWords(finalText)
         }
     }
 
@@ -1900,19 +1897,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         when (recordingState) {
             RecordingState.Idle -> {
                 stopBubbleAnimation()
-                bubble.setState(CircularMicButtonView.State.Idle)
+                bubble.setState(OverlayMicButtonView.State.Idle)
                 updateBubbleLayoutSize()
             }
 
             RecordingState.Recording -> {
-                bubble.setState(CircularMicButtonView.State.Recording)
+                bubble.setState(OverlayMicButtonView.State.Recording)
                 updateBubbleLayoutSize()
                 startBubbleAnimation()
             }
 
             RecordingState.Processing -> {
                 stopBubbleAnimation()
-                bubble.setState(CircularMicButtonView.State.Processing)
+                bubble.setState(OverlayMicButtonView.State.Processing)
                 updateBubbleLayoutSize()
             }
         }
@@ -1943,7 +1940,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         params.y = targetY
         if (isBubbleAttached) {
             try {
-                windowManager.updateViewLayout(bubble, params)
+                windowManager.removeViewImmediate(bubble)
+                windowManager.addView(bubble, params)
                 updateCommandActionsPosition()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to update bubble overlay size", e)

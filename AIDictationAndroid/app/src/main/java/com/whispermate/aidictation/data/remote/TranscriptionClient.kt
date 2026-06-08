@@ -9,8 +9,6 @@ import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.preferences.ApiConfigManager
 import com.whispermate.aidictation.domain.model.Command
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -561,43 +559,6 @@ object TranscriptionClient {
         val statusCode: Int,
         val errorBody: String
     ) : Exception("Transcription failed: $statusCode - $errorBody")
-
-    /**
-     * Transcribes the audio once per language in parallel.
-     * Each call forces Whisper to a specific language, yielding the best possible
-     * transcription for that language. Returns a map of languageCode → transcription
-     * for successful calls only.
-     */
-    suspend fun transcribeForLanguages(
-        audioFile: File,
-        languages: List<String>,
-        prompt: String? = null,
-        sttPrompt: String? = null,
-        postProcessingPrompt: String? = null
-    ): Map<String, String> = coroutineScope {
-        Log.d(TAG, "=== Parallel transcription for languages: $languages ===")
-        val deferred = languages.map { lang ->
-            lang to async(Dispatchers.IO) {
-                transcribe(
-                    audioFile = audioFile,
-                    prompt = prompt,
-                    language = lang,
-                    sttPrompt = sttPrompt,
-                    postProcessingPrompt = postProcessingPrompt
-                )
-            }
-        }
-        val results = deferred.mapNotNull { (lang, job) ->
-            job.await().getOrNull()?.let { lang to it }
-        }.toMap()
-        Log.d(TAG, "Parallel results: ${results.entries.joinToString { (lang, text) -> "$lang → \"$text\"" }}")
-
-        if (results.values.all { it.isBlank() }) {
-            Log.d(TAG, "All forced-language results empty")
-        }
-
-        results
-    }
 
     /**
      * Detects voice command triggers in already-transcribed text and executes the matched command.

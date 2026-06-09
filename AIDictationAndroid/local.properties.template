@@ -5,13 +5,13 @@
 sdk.dir=/path/to/Android/Sdk
 
 # Optional local version overrides. Tagged Android releases use these defaults.
-VERSION_CODE=1023
-VERSION_NAME=0.0.26
+VERSION_CODE=1025
+VERSION_NAME=0.0.28
 
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here
-TRANSCRIPTION_ENDPOINT=wss://model-qel41xr3.api.baseten.co/environments/production/websocket
-TRANSCRIPTION_MODEL=qel41xr3
+TRANSCRIPTION_ENDPOINT=https://writingmate.ai/api/openai/v1/audio/transcriptions
+TRANSCRIPTION_MODEL=groq/whisper-large-v3-turbo
 
 # Optional local Parakeet runtime. Leave empty for cloud transcription.
 # Use `litert` only with converted `.tflite` files in parakeetpack.

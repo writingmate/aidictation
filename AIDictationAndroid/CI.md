@@ -16,9 +16,11 @@ asset pack.
 
 `.github/workflows/android-play-release.yml` publishes the signed release
 AAB to Google Play from the same `android-v<versionName>` tag. Tag pushes ship
-to the Google Play `production` track by default with a `completed` release
+to the Google Play `alpha` track by default with a `completed` release
 status. Set repository variable `ANDROID_PLAY_TRACK` to `internal`, `alpha`,
-`beta`, or `production` if a different automatic target is needed. Set
+`beta`, or `production` if a different automatic target is needed; use
+`production` only after the Play Console production track preconditions are
+cleared for this app. Set
 `ANDROID_PLAY_RELEASE_STATUS` to `draft`, `inProgress`, `halted`, or
 `completed` to override the default. The workflow uses the checked-in
 `versionName` and `versionCode`, and rejects tags that do not point at a commit
@@ -81,7 +83,7 @@ Optional repository variables:
 
 | Variable | Purpose |
 |---|---|
-| `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `production`; supported values are `internal`, `alpha`, `beta`, and `production`. |
+| `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `alpha`; supported values are `internal`, `alpha`, `beta`, and `production`. |
 | `ANDROID_PLAY_RELEASE_STATUS` | Automatic tagged release status. Defaults to `completed`; supported values are `draft`, `inProgress`, `halted`, and `completed`. |
 
 Before the workflow can publish, create the app once in Play Console and

@@ -100,8 +100,8 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var showAccessibilityDisclosureDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
-    var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     var referralCodeInput by remember { mutableStateOf("") }
 
@@ -154,7 +154,13 @@ fun SettingsScreen(
             SettingsItem(
                 icon = Icons.Default.Security,
                 title = stringResource(R.string.settings_overlay_access),
-                onClick = { openAccessibilitySettings(context) },
+                onClick = {
+                    if (hasOverlayPermission) {
+                        openAccessibilitySettings(context)
+                    } else {
+                        showAccessibilityDisclosureDialog = true
+                    }
+                },
                 trailingContent = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusIcon(isEnabled = hasOverlayPermission)
@@ -165,24 +171,6 @@ fun SettingsScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.Mic,
-                title = stringResource(R.string.settings_volume_button_shortcut),
-                enabled = hasOverlayPermission,
-                trailingContent = {
-                    Switch(
-                        checked = volumeShortcutEnabled,
-                        enabled = hasOverlayPermission,
-                        onCheckedChange = { enabled ->
-                            setVolumeShortcutEnabled(context, enabled)
-                            volumeShortcutEnabled = enabled
-                        }
-                    )
                 }
             )
 
@@ -389,6 +377,37 @@ fun SettingsScreen(
             }
         )
     }
+
+    if (showAccessibilityDisclosureDialog) {
+        AlertDialog(
+            onDismissRequest = { showAccessibilityDisclosureDialog = false },
+            title = { Text(stringResource(R.string.onboarding_accessibility_disclosure_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_intro))
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_use))
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_data))
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_cloud))
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_settings))
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showAccessibilityDisclosureDialog = false
+                        openAccessibilitySettings(context)
+                    }
+                ) {
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_accept))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAccessibilityDisclosureDialog = false }) {
+                    Text(stringResource(R.string.onboarding_accessibility_disclosure_decline))
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -467,21 +486,6 @@ private fun AccountSettingsSection(
             )
         }
     }
-}
-
-private const val SHORTCUT_PREFS = "dictation_shortcuts"
-private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
-
-private fun isVolumeShortcutEnabled(context: Context): Boolean {
-    return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
-        .getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, false)
-}
-
-private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putBoolean(VOLUME_SHORTCUT_ENABLED_KEY, enabled)
-        .apply()
 }
 
 @Composable

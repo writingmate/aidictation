@@ -46,19 +46,10 @@
             android:launchMode="standard"
             android:theme="@android:style/Theme.NoDisplay" />
 
-        <receiver
-            android:name=".ShortcutReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.aidictation.app.action.TOGGLE_DICTATION" />
-            </intent-filter>
-        </receiver>
-
         <!-- Color Debug Activity -->
         <activity
             android:name=".ui.ColorDebugActivity"
-            android:exported="true"
+            android:exported="false"
             android:theme="@style/Theme.AIDictation" />
 
         <service
@@ -73,20 +64,6 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/dictation_accessibility_service" />
-        </service>
-
-        <!-- Speech Recognition Service (Whisper-based) -->
-        <service
-            android:name=".service.WhisperRecognitionService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.RECORD_AUDIO">
-            <intent-filter>
-                <action android:name="android.speech.RecognitionService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.speech"
-                android:resource="@xml/recognition_service" />
         </service>
 
     </application>

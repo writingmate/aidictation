@@ -55,7 +55,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -196,8 +196,7 @@ private enum class OnboardingStep {
     OnDeviceTranscription,
     Microphone,
     ButtonDemo,
-    AccessibilityDisclosure,
-    VolumeShortcut
+    AccessibilityDisclosure
 }
 
 @Composable
@@ -218,7 +217,6 @@ fun OnboardingScreen(
     var currentStep by remember { mutableIntStateOf(0) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
-    var volumeShortcutEnabled by remember { mutableStateOf(isVolumeShortcutEnabled(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     val colors = onboardingColors()
 
@@ -233,7 +231,6 @@ fun OnboardingScreen(
             add(OnboardingStep.Microphone)
             add(OnboardingStep.ButtonDemo)
             add(OnboardingStep.AccessibilityDisclosure)
-            add(OnboardingStep.VolumeShortcut)
         }
     }
     val currentOnboardingStep = onboardingSteps[currentStep.coerceAtMost(onboardingSteps.lastIndex)]
@@ -349,80 +346,95 @@ fun OnboardingScreen(
                         onTranscribeDemo = onTranscribeDemo
                     )
                     OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep()
-                    OnboardingStep.VolumeShortcut -> VolumeShortcutStep(
-                        isEnabled = volumeShortcutEnabled,
-                        onEnabledChanged = { volumeShortcutEnabled = it }
-                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(
-            onClick = {
-                when (currentOnboardingStep) {
-                    OnboardingStep.Welcome -> goToNextStep()
-                    OnboardingStep.Color -> goToNextStep()
-                    OnboardingStep.Languages -> goToNextStep()
-                    OnboardingStep.OnDeviceTranscription -> goToNextStep()
-                    OnboardingStep.Microphone -> {
-                        if (hasMicPermission) {
-                            goToNextStep()
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
-                    OnboardingStep.ButtonDemo -> goToNextStep()
-                    OnboardingStep.AccessibilityDisclosure -> {
-                        if (!isOverlayServiceEnabled) {
-                            openAccessibilitySettings(context)
-                        } else {
-                            goToNextStep()
-                        }
-                    }
-                    OnboardingStep.VolumeShortcut -> {
-                        setVolumeShortcutEnabled(context, volumeShortcutEnabled)
-                        onSaveContextRules(contextRulesEnabled.toList())
-                        onComplete()
-                    }
+        if (currentOnboardingStep == OnboardingStep.AccessibilityDisclosure && !isOverlayServiceEnabled) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { goToNextStep() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.onboarding_accessibility_disclosure_decline),
+                        style = MaterialTheme.typography.titleMedium
+                    )
                 }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            enabled = when (currentOnboardingStep) {
-                OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
-                else -> true
-            },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = colors.primary,
-                contentColor = colors.onPrimary
-            )
-        ) {
-            Text(
-                text = when (currentOnboardingStep) {
-                    OnboardingStep.Welcome -> stringResource(R.string.onboarding_continue)
-                    OnboardingStep.Color -> stringResource(R.string.onboarding_continue)
-                    OnboardingStep.Languages -> stringResource(R.string.onboarding_continue)
-                    OnboardingStep.Microphone -> if (hasMicPermission) {
-                        stringResource(R.string.onboarding_continue)
-                    } else {
-                        stringResource(R.string.onboarding_mic_enable)
+                Button(
+                    onClick = { openAccessibilitySettings(context) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primary,
+                        contentColor = colors.onPrimary
+                    )
+                ) {
+                    Text(
+                        text = stringResource(R.string.onboarding_accessibility_disclosure_accept),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
+        } else {
+            Button(
+                onClick = {
+                    when (currentOnboardingStep) {
+                        OnboardingStep.Welcome -> goToNextStep()
+                        OnboardingStep.Color -> goToNextStep()
+                        OnboardingStep.Languages -> goToNextStep()
+                        OnboardingStep.OnDeviceTranscription -> goToNextStep()
+                        OnboardingStep.Microphone -> {
+                            if (hasMicPermission) {
+                                goToNextStep()
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        }
+                        OnboardingStep.ButtonDemo -> goToNextStep()
+                        OnboardingStep.AccessibilityDisclosure -> {
+                            onSaveContextRules(contextRulesEnabled.toList())
+                            onComplete()
+                        }
                     }
-                    OnboardingStep.AccessibilityDisclosure -> {
-                        if (isOverlayServiceEnabled) {
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = when (currentOnboardingStep) {
+                    OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
+                    else -> true
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
+            ) {
+                Text(
+                    text = when (currentOnboardingStep) {
+                        OnboardingStep.Welcome -> stringResource(R.string.onboarding_continue)
+                        OnboardingStep.Color -> stringResource(R.string.onboarding_continue)
+                        OnboardingStep.Languages -> stringResource(R.string.onboarding_continue)
+                        OnboardingStep.Microphone -> if (hasMicPermission) {
                             stringResource(R.string.onboarding_continue)
                         } else {
-                            stringResource(R.string.onboarding_accessibility_disclosure_continue)
+                            stringResource(R.string.onboarding_mic_enable)
                         }
-                    }
-                    OnboardingStep.ButtonDemo -> stringResource(R.string.onboarding_continue)
-                    OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
-                    OnboardingStep.VolumeShortcut -> stringResource(R.string.onboarding_get_started)
-                },
-                style = MaterialTheme.typography.titleMedium
-            )
+                        OnboardingStep.ButtonDemo -> stringResource(R.string.onboarding_continue)
+                        OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
+                        OnboardingStep.AccessibilityDisclosure -> stringResource(R.string.onboarding_get_started)
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
         }
     }
 }
@@ -980,6 +992,34 @@ private fun AccessibilityDisclosureStep() {
             title = stringResource(R.string.onboarding_accessibility_visual_processing_title),
             body = stringResource(R.string.onboarding_accessibility_visual_processing_body)
         )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_disclosure_use),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_disclosure_data),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_disclosure_cloud),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.onboarding_accessibility_disclosure_settings),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
 
     }
 }
@@ -1292,67 +1332,6 @@ private fun RatingRow(
 }
 
 @Composable
-private fun VolumeShortcutStep(
-    isEnabled: Boolean,
-    onEnabledChanged: (Boolean) -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        OnboardingHeroIcon(icon = Icons.Default.Mic)
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_volume_shortcut_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_volume_shortcut_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable { onEnabledChanged(!isEnabled) }
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.onboarding_volume_shortcut_toggle),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.onboarding_volume_shortcut_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = isEnabled,
-                onCheckedChange = onEnabledChanged
-            )
-        }
-    }
-}
-
-@Composable
 private fun WelcomeStep() {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1538,21 +1517,6 @@ private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
     return enabledServices.split(':').any { serviceId ->
         ComponentName.unflattenFromString(serviceId) == expected
     }
-}
-
-private const val SHORTCUT_PREFS = "dictation_shortcuts"
-private const val VOLUME_SHORTCUT_ENABLED_KEY = "volume_shortcut_enabled"
-
-private fun isVolumeShortcutEnabled(context: Context): Boolean {
-    return context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
-        .getBoolean(VOLUME_SHORTCUT_ENABLED_KEY, false)
-}
-
-private fun setVolumeShortcutEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(SHORTCUT_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putBoolean(VOLUME_SHORTCUT_ENABLED_KEY, enabled)
-        .apply()
 }
 
 private tailrec fun Context.findActivity(): Activity? {

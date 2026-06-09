@@ -25,8 +25,8 @@
     <string name="onboarding_button_demo_speak">Tap the mic and speak</string>
     <string name="onboarding_button_demo_stop">Listening. Tap the mic again when you are done.</string>
     <string name="onboarding_button_demo_result">“Send the meeting notes when you can.”</string>
-    <string name="onboarding_accessibility_disclosure_title">Accessibility disclosure</string>
-    <string name="onboarding_accessibility_disclosure_intro">AIDictation uses Android AccessibilityService to show the floating microphone when a text field is focused and to insert your dictated text at the cursor.</string>
+    <string name="onboarding_accessibility_disclosure_title">Allow text field access?</string>
+    <string name="onboarding_accessibility_disclosure_intro">AIDictation uses Android AccessibilityService only so you can dictate into text fields in other apps.</string>
     <string name="onboarding_accessibility_visual_find_title">Find text fields</string>
     <string name="onboarding_accessibility_visual_find_body">Detects when an editable field is focused so the floating mic can appear.</string>
     <string name="onboarding_accessibility_visual_insert_title">Insert your words</string>
@@ -35,10 +35,12 @@
     <string name="onboarding_accessibility_visual_private_body">Does not read passwords, payment fields, or secure screens.</string>
     <string name="onboarding_accessibility_visual_processing_title">Process only on action</string>
     <string name="onboarding_accessibility_visual_processing_body">Cloud transcription or AI cleanup may send recorded audio and relevant text to complete your request. Offline transcription is available where supported.</string>
-    <string name="onboarding_accessibility_disclosure_use">AccessibilityService lets AIDictation detect editable text fields, read the current text and cursor position in the active field, and replace or insert text only when you start dictation or apply a command.</string>
-    <string name="onboarding_accessibility_disclosure_data">Text from the active field may be processed for dictation insertion, grammar fixes, rewrites, shortcuts, and cleanup. It is not used to read passwords, payment fields, or secure screens.</string>
-    <string name="onboarding_accessibility_disclosure_cloud">If cloud transcription or AI cleanup is enabled, your recorded audio and relevant text may be sent to the AIDictation transcription and AI providers to complete the requested action. You can use offline transcription where available.</string>
-    <string name="onboarding_accessibility_disclosure_continue">Agree and Continue</string>
+    <string name="onboarding_accessibility_disclosure_use">With your consent, AIDictation can detect editable text fields, read the current text and cursor position in the active field, and replace or insert text only when you start dictation or apply a command.</string>
+    <string name="onboarding_accessibility_disclosure_data">Text from the active field may be processed for dictation insertion, grammar fixes, rewrites, shortcuts, and cleanup. AIDictation does not read passwords, payment fields, or secure screens.</string>
+    <string name="onboarding_accessibility_disclosure_cloud">If cloud mode or AI cleanup is enabled, your recorded audio and relevant text may be sent to AIDictation transcription and AI services to complete the action you requested. Offline mode is available where supported.</string>
+    <string name="onboarding_accessibility_disclosure_accept">I agree</string>
+    <string name="onboarding_accessibility_disclosure_decline">Not now</string>
+    <string name="onboarding_accessibility_disclosure_settings">After you agree, Android settings will open so you can turn on AIDictation.</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
     <string name="onboarding_on_device_title">Choose transcription mode</string>
@@ -50,10 +52,6 @@
     <string name="onboarding_transcription_accuracy">Accuracy</string>
     <string name="onboarding_transcription_speed">Speed</string>
     <string name="onboarding_on_device_note">You can change this later in Settings.</string>
-    <string name="onboarding_volume_shortcut_title">Volume button shortcut</string>
-    <string name="onboarding_volume_shortcut_subtitle">Optionally start dictation by triple-pressing Volume Down while a text field is focused.</string>
-    <string name="onboarding_volume_shortcut_toggle">Enable triple-press Volume Down</string>
-    <string name="onboarding_volume_shortcut_note">You can turn this on or off later in Settings.</string>
 
     <!-- Main -->
     <string name="tab_history">History</string>
@@ -86,8 +84,7 @@
     <string name="language_no_results">No languages found</string>
     <string name="settings_permissions">Permissions</string>
     <string name="settings_microphone">Microphone Access</string>
-    <string name="settings_overlay_access">Overlay Accessibility</string>
-    <string name="settings_volume_button_shortcut">Triple-press Volume Down</string>
+    <string name="settings_overlay_access">Floating mic access</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_bubble_color">Floating bubble color</string>
@@ -155,7 +152,7 @@
     <string name="usage_limit_reached">Word limit reached</string>
 
     <!-- Accessibility -->
-    <string name="accessibility_service_description">Shows a dictation bubble when a text field is focused, then inserts speech at cursor.</string>
+    <string name="accessibility_service_description">Shows a dictation bubble for active text fields and inserts dictated text only when you start dictation.</string>
     <string name="overlay_action_fix_grammar">Fix grammar</string>
     <string name="overlay_action_rewrite_ai">Rewrite with AI</string>
     <string name="overlay_command_unavailable">Command unavailable</string>

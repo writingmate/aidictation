@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"git add AIDictation.Windows .github/workflows/windows-ui-validation.yml && git commit -m \\\"Make settings sidebar selection two-way bound\\n\\nSelectionItemPattern (UIA, keyboard) checks the ...",
+  "error": "Exit code 128\nfatal: pathspec 'AIDictation.Windows' did not match any files",
+  "timestamp": "2026-06-10T20:57:53.933Z",
+  "retry_count": 1
+}

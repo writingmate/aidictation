@@ -83,7 +83,15 @@ jobs:
           response_format = "text"
         }
         $headers = @{ Authorization = "Bearer $env:TRANSCRIPTION_API_KEY" }
-        $response = Invoke-RestMethod -Uri $endpoint -Method Post -Form $form -Headers $headers
+        try {
+          $response = Invoke-RestMethod -Uri $endpoint -Method Post -Form $form -Headers $headers
+        }
+        catch {
+          $status = $_.Exception.Response.StatusCode.value__
+          $body = ""
+          try { $body = $_.ErrorDetails.Message } catch { }
+          throw "Transcription request failed with HTTP ${status}: $body"
+        }
         Write-Host "Transcription response: $response"
 
         if ("$response" -notmatch "(?i)hello") {

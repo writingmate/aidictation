@@ -220,7 +220,7 @@
         <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
             <StackPanel Margin="0,16,0,0">
                 <RadioButton Style="{StaticResource SidebarButtonStyle}" 
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=0, Mode=OneWay}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=0, Mode=TwoWay}"
                            Command="{Binding SelectSectionCommand}"
                            CommandParameter="0"
                            GroupName="Sections">
@@ -230,7 +230,7 @@
                     </StackPanel>
                 </RadioButton>
                 <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=1, Mode=OneWay}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=1, Mode=TwoWay}"
                            Command="{Binding SelectSectionCommand}"
                            CommandParameter="1"
                            GroupName="Sections">
@@ -240,7 +240,7 @@
                     </StackPanel>
                 </RadioButton>
                 <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=2, Mode=OneWay}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=2, Mode=TwoWay}"
                            Command="{Binding SelectSectionCommand}"
                            CommandParameter="2"
                            GroupName="Sections">
@@ -250,7 +250,7 @@
                     </StackPanel>
                 </RadioButton>
                 <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=3, Mode=OneWay}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=3, Mode=TwoWay}"
                            Command="{Binding SelectSectionCommand}"
                            CommandParameter="3"
                            GroupName="Sections">
@@ -260,7 +260,7 @@
                     </StackPanel>
                 </RadioButton>
                 <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=4, Mode=OneWay}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=4, Mode=TwoWay}"
                            Command="{Binding SelectSectionCommand}"
                            CommandParameter="4"
                            GroupName="Sections">

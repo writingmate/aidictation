@@ -163,9 +163,14 @@ public partial class SettingsViewModel : ObservableObject
     // MARK: - Commands
 
     [RelayCommand]
-    private void SelectSection(int section)
+    private void SelectSection(string? section)
     {
-        SelectedSection = section;
+        // XAML CommandParameter arrives as a string; RelayCommand<int> would
+        // throw during XAML parse and blank the whole window.
+        if (int.TryParse(section, out var index))
+        {
+            SelectedSection = index;
+        }
     }
 
     [RelayCommand]

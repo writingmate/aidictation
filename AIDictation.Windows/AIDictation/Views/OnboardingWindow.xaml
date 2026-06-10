@@ -120,6 +120,21 @@
             </Style.Triggers>
         </Style>
 
+        <!-- Bare card button: no chrome, content renders its own border -->
+        <Style x:Key="CardButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <ContentPresenter/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Hotkey recorder style -->
         <Style x:Key="HotkeyRecorder" TargetType="Border">
             <Setter Property="Background" Value="#FAFAFA"/>
@@ -272,9 +287,9 @@
                                 You can change this anytime in Settings.
                             </TextBlock>
 
-                            <Button Command="{Binding SelectCloudModeCommand}" Cursor="Hand"
-                                    Background="Transparent" BorderThickness="0" Padding="0"
-                                    HorizontalContentAlignment="Stretch" Margin="0,0,0,12">
+                            <Button Style="{StaticResource CardButton}"
+                                    Command="{Binding SelectCloudModeCommand}"
+                                    Margin="0,0,0,12">
                                 <Border CornerRadius="10" Padding="16" MaxWidth="420" HorizontalAlignment="Left" MinWidth="420">
                                     <Border.Style>
                                         <Style TargetType="Border">
@@ -298,9 +313,8 @@
                                 </Border>
                             </Button>
 
-                            <Button Command="{Binding SelectOfflineModeCommand}" Cursor="Hand"
-                                    Background="Transparent" BorderThickness="0" Padding="0"
-                                    HorizontalContentAlignment="Stretch">
+                            <Button Style="{StaticResource CardButton}"
+                                    Command="{Binding SelectOfflineModeCommand}">
                                 <Border CornerRadius="10" Padding="16" MaxWidth="420" HorizontalAlignment="Left" MinWidth="420">
                                     <Border.Style>
                                         <Style TargetType="Border">

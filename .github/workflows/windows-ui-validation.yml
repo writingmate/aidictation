@@ -7,7 +7,7 @@ on:
       - codex/windows-actions-smoke
     paths:
       - '.github/workflows/windows-ui-validation.yml'
-      - 'AIDictation.Windows/scripts/validate-ui.ps1'
+      - 'AIDictation.Windows/**'
 
 env:
   DOTNET_VERSION: '8.0.x'

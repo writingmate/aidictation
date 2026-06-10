@@ -533,6 +533,7 @@
                     <!-- 0: Windows 11 consent dialog -->
                     <Border Width="250" Background="#F9F9F9" CornerRadius="8" Padding="20,22,20,18"
                             BorderBrush="#17000000" BorderThickness="1"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
                             Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=0}">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="40" ShadowDepth="14" Opacity="0.25" Direction="270"/>
@@ -579,6 +580,7 @@
 
                     <!-- 2: Mode emblem -->
                     <Border Background="White" CornerRadius="16" Padding="32"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
                             Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=2}">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="40" ShadowDepth="14" Opacity="0.22" Direction="270"/>
@@ -594,6 +596,7 @@
 
                     <!-- 3: Color pill preview (mac overlayColorPreview) -->
                     <Border Background="White" CornerRadius="16" Padding="28,30"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
                             Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=3}">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="40" ShadowDepth="14" Opacity="0.22" Direction="270"/>
@@ -632,7 +635,8 @@
                     </Border>
 
                     <!-- 4: Keyboard crop, F8 hot -->
-                    <Grid Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=4}">
+                    <Grid HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=4}">
                         <Border Background="#EDEAE6" CornerRadius="18" Padding="16" RenderTransformOrigin="0.5,0.5">
                             <Border.RenderTransform>
                                 <RotateTransform Angle="-2"/>
@@ -693,6 +697,7 @@
 
                     <!-- 6: Account emblem -->
                     <Border Background="White" CornerRadius="16" Padding="32"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
                             Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=6}">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="40" ShadowDepth="14" Opacity="0.22" Direction="270"/>

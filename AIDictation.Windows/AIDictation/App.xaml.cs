@@ -223,7 +223,10 @@ public partial class App : Application
                 _ = Dispatcher.InvokeAsync(async () =>
                 {
                     var success = await AuthService.Instance.HandleOAuthCallbackAsync(uri);
-                    if (success)
+
+                    // During onboarding the wizard reflects the signed-in state itself;
+                    // only surface Settings once setup is done.
+                    if (success && SettingsService.Instance.Settings.OnboardingCompleted)
                     {
                         ShowSettingsWindow();
                     }

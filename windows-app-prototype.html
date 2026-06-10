@@ -6,7 +6,7 @@
 <title>AIDictation for Windows — UI Prototype</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=Albert+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
 /* ============================================================
    AIDictation Windows — Design Tokens
@@ -44,13 +44,26 @@
   --r-card:       12px;
   --r-pill:       999px;
 
-  --font-display: "Bricolage Grotesque", sans-serif;
-  --font-body:    "Albert Sans", sans-serif;
+  --font-display: "Figtree", sans-serif;   /* brand font */
+  --font-body:    "Figtree", sans-serif;
   --font-mono:    "JetBrains Mono", monospace;
 }
 
 *{margin:0;padding:0;box-sizing:border-box}
 [hidden]{display:none !important}
+.ic{
+  width:1em;height:1em;stroke:currentColor;fill:none;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round;vertical-align:-.12em;flex:none;
+}
+.cc{
+  font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:.06em;
+  border-radius:5px;padding:2.5px 5px;line-height:1;flex:none;
+  background:rgba(0,0,0,.08);color:inherit;opacity:.75;
+}
+.lang .cc{background:#fff;border:1px solid var(--lt-stroke);color:#8A8077}
+.lang.on .cc{border-color:#F0B27E;color:#B85800}
+.dlang .cc{background:var(--bg2);border:1px solid var(--stroke);color:var(--ink-3)}
+.dlang.on .cc{border-color:rgba(241,110,0,.5);color:#FFB070}
 html{scroll-behavior:smooth}
 body{
   font-family:var(--font-body);
@@ -166,7 +179,7 @@ section{margin-top:90px}
    1 — ONBOARDING  (900 × 580)
    ============================================================ */
 .onb{width:900px;height:580px;display:flex;flex-direction:column}
-.onb-body{flex:1;display:flex;min-height:0}
+.onb-body{flex:1;display:flex;min-height:0;position:relative}
 .onb-left{flex:1;display:flex;flex-direction:column;padding:6px 44px 30px;position:relative}
 .onb-right{
   width:350px;flex:none;position:relative;overflow:hidden;
@@ -215,11 +228,11 @@ section{margin-top:90px}
 }
 .mode:hover{transform:translateY(-1px)}
 .mode.on{background:var(--brand-soft);border-color:var(--brand);box-shadow:0 8px 26px rgba(241,110,0,.16)}
-.mode .ic{
-  width:38px;height:38px;flex:none;border-radius:11px;display:grid;place-items:center;font-size:17px;
-  background:#fff;border:1px solid var(--lt-stroke);
+.mode .mic{
+  width:38px;height:38px;flex:none;border-radius:11px;display:grid;place-items:center;
+  background:#fff;border:1px solid var(--lt-stroke);color:#8A8077;
 }
-.mode.on .ic{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 4px 12px rgba(241,110,0,.4)}
+.mode.on .mic{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 4px 12px rgba(241,110,0,.4)}
 .mode b{font-size:14.5px;color:var(--lt-ink);display:flex;align-items:center;gap:8px}
 .mode b .tag{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand);background:#fff;border:1px solid var(--brand);border-radius:99px;padding:2px 8px}
 .mode p{font-size:12.5px;color:var(--lt-sub);margin-top:4px;line-height:1.55}
@@ -284,23 +297,43 @@ section{margin-top:90px}
 .kk.fn{background:var(--brand);color:#fff;animation:pressKey 1.8s ease-in-out infinite;box-shadow:0 6px 0 rgba(154,52,0,.55)}
 @keyframes pressKey{0%,100%{transform:translateY(0)}12%{transform:translateY(5px);box-shadow:0 1px 0 rgba(154,52,0,.55)}24%{transform:translateY(0)}}
 
-/* complete step (full gradient) */
-.onb-complete{
-  width:900px;height:580px;display:grid;place-items:center;position:relative;overflow:hidden;
+/* ---- Finale: gradient panel expands over the whole window (mac parity) ----
+   Phases mirror macOS OnboardingView: 1 panel expands (spring .5/.8),
+   2 card scales in (+0.4s), 3 checkmark pops (+0.3s), 4 button (+0.3s). */
+.finale{
+  position:absolute;top:0;right:0;bottom:0;width:350px;z-index:5;
   background:linear-gradient(168deg,var(--grad-a),#FFB45E 45%,var(--grad-b));
+  display:grid;place-items:center;pointer-events:none;opacity:0;visibility:hidden;
+  transition:width .55s cubic-bezier(.3,1.18,.35,1);
 }
-.onb-complete .card{
-  position:relative;z-index:2;background:#fff;border-radius:22px;padding:46px 56px;text-align:center;max-width:400px;
+.finale.armed{opacity:1;visibility:visible;pointer-events:auto}
+.finale.p1{width:100%}
+.finale .card{
+  background:#fff;border-radius:22px;padding:44px 54px;text-align:center;max-width:400px;
   box-shadow:0 34px 90px rgba(120,40,0,.3);
+  opacity:0;transform:scale(.8);
+  transition:all .42s cubic-bezier(.32,1.25,.4,1);
 }
-.onb-complete .ok-ring{
-  width:68px;height:68px;border-radius:50%;background:var(--ok);margin:0 auto 20px;display:grid;place-items:center;
-  color:#fff;font-size:30px;font-weight:700;box-shadow:0 0 0 10px rgba(59,196,90,.18);
+.finale.p2 .card{opacity:1;transform:scale(1)}
+.finale .ok-ring{
+  width:72px;height:72px;border-radius:50%;background:var(--ok);margin:0 auto 20px;display:grid;place-items:center;
+  color:#fff;box-shadow:0 0 0 10px rgba(59,196,90,.18);
+  transform:scale(0);transition:transform .45s cubic-bezier(.3,1.6,.4,1);
 }
-.onb-complete h1{font-family:var(--font-display);font-size:29px;font-weight:800;color:var(--lt-ink);letter-spacing:-.03em}
-.onb-complete p{color:var(--lt-sub);font-size:13.5px;margin:12px 0 26px;line-height:1.6}
-.confetti i{position:absolute;width:9px;height:14px;border-radius:3px;opacity:.85;animation:conf 4.5s linear infinite}
-@keyframes conf{from{transform:translateY(-40px) rotate(0)}to{transform:translateY(640px) rotate(540deg)}}
+.finale.p3 .ok-ring{transform:scale(1)}
+.finale h1{
+  font-family:var(--font-display);font-size:29px;font-weight:800;color:var(--lt-ink);letter-spacing:-.03em;
+  opacity:0;transition:opacity .35s ease .05s;
+}
+.finale p{color:var(--lt-sub);font-size:13.5px;margin:12px 0 26px;line-height:1.6;opacity:0;transition:opacity .35s ease .1s}
+.finale.p3 h1,.finale.p3 p{opacity:1}
+.finale .btn{opacity:0;transform:scale(.9);transition:all .3s ease-out}
+.finale.p4 .btn{opacity:1;transform:scale(1)}
+.finale .replay{
+  position:absolute;bottom:14px;right:16px;font-family:var(--font-mono);font-size:10px;color:rgba(120,40,0,.55);
+  cursor:pointer;letter-spacing:.08em;text-transform:uppercase;opacity:0;transition:opacity .3s ease 1.4s;
+}
+.finale.p4 .replay{opacity:1}
 
 /* ============================================================
    2 — SETTINGS  (650 × 550)
@@ -455,24 +488,42 @@ section{margin-top:90px}
 }
 .desktop .wall{position:absolute;inset:0;background:radial-gradient(500px 240px at 70% 10%,rgba(120,170,255,.25),transparent 60%)}
 .desktop .cap3{position:absolute;top:12px;left:16px;font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,.4);letter-spacing:.1em;text-transform:uppercase}
-.pill{
-  position:relative;z-index:2;display:flex;align-items:center;gap:11px;
-  background:rgba(20,16,12,.92);border:1px solid rgba(255,255,255,.12);border-radius:var(--r-pill);
-  padding:10px 20px;backdrop-filter:blur(10px);
-  box-shadow:0 14px 40px rgba(0,0,0,.5);
+/* Morphing pill — mirrors macOS RecordingOverlayView:
+   collapsed idle strip ⇄ accent capsule; morph cubic-bezier(.2,.8,.2,1) .26s,
+   content fades .14s. No text labels — pure graphic. */
+.mpill{
+  position:relative;z-index:2;display:flex;align-items:center;justify-content:center;
+  width:118px;height:32px;border-radius:99px;background:var(--brand);
+  box-shadow:0 4px 16px rgba(0,0,0,.35),0 1px 4px rgba(0,0,0,.3);cursor:pointer;
+  transition:width .26s cubic-bezier(.2,.8,.2,1),height .26s cubic-bezier(.2,.8,.2,1),
+             background .2s ease,box-shadow .2s ease;
 }
-.pill .st{font-size:12px;font-weight:600;color:var(--ink-2)}
-.pill .tmr{font-family:var(--font-mono);font-size:11.5px;color:var(--ink);font-weight:500}
-.pill.rec{border-color:rgba(241,110,0,.6);box-shadow:0 14px 44px rgba(241,110,0,.3),0 0 0 1px rgba(241,110,0,.2)}
-.idots{display:flex;gap:3.5px;align-items:center;height:18px}
-.idots i{width:4px;height:4px;border-radius:99px;background:var(--brand);opacity:.5}
-.bars{display:flex;gap:2.5px;align-items:center;height:20px}
-.bars i{width:3px;border-radius:99px;background:linear-gradient(180deg,var(--grad-a),var(--brand));animation:eq 1s ease-in-out infinite}
+.mpill.collapsed{
+  width:53px;height:7px;background:rgba(120,110,97,.94);
+  box-shadow:0 1px 3px rgba(0,0,0,.35),inset 0 0 0 .75px rgba(255,255,255,.24);
+}
+.mpill.wide{width:160px;justify-content:space-between;padding:0 5px}
+.mpill.cmd{background:#2F6BFF}
+.mpill .inner{display:flex;align-items:center;justify-content:center;gap:6px;opacity:1;transition:opacity .14s ease .1s}
+.mpill.collapsed .inner{opacity:0;transition-delay:0s}
+.idots{display:flex;gap:4px;align-items:center}
+.idots i{width:4px;height:4px;border-radius:99px;background:rgba(255,255,255,.92)}
+.bars{display:flex;gap:2.5px;align-items:center;height:22px}
+.bars i{width:3px;border-radius:99px;background:rgba(255,255,255,.95);animation:eq 1s ease-in-out infinite}
 @keyframes eq{0%,100%{height:4px}50%{height:var(--h,16px)}}
-.spin{display:flex;gap:4px}
-.spin i{width:5px;height:5px;border-radius:50%;background:var(--brand);animation:bnc .9s ease-in-out infinite}
-@keyframes bnc{0%,100%{transform:translateY(0);opacity:.4}50%{transform:translateY(-5px);opacity:1}}
-.okk{width:17px;height:17px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;font-size:10px;font-weight:800}
+.ldots{display:flex;gap:5px}
+.ldots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.72);animation:bnc .9s ease-in-out infinite}
+@keyframes bnc{0%,100%{transform:translateY(0);opacity:.45}50%{transform:translateY(-4px);opacity:1}}
+.cbtn{
+  width:22px;height:22px;flex:none;border-radius:50%;display:grid;place-items:center;color:#fff;cursor:pointer;
+  transition:.12s;
+}
+.cbtn.cancel{background:rgba(255,255,255,.18)}
+.cbtn.cancel:hover{background:rgba(255,255,255,.28);transform:scale(1.06)}
+.cbtn.stop{background:rgba(0,0,0,.28)}
+.cbtn.stop:hover{background:rgba(0,0,0,.4);transform:scale(1.06)}
+.cbtn .sq{width:8px;height:8px;border-radius:2px;background:#fff}
+.cbtn .xx{font-size:10px;font-weight:800;line-height:1}
 
 /* footer */
 .foot{margin-top:110px;border-top:1px solid rgba(255,255,255,.07);padding-top:26px;display:flex;justify-content:space-between;color:var(--ink-3);font-size:11.5px}
@@ -483,9 +534,28 @@ section{margin-top:90px}
 </head>
 <body>
 
+<!-- Icon sprite — Lucide-style 24×24 strokes -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19a4.5 4.5 0 1 0-.42-8.98 6 6 0 1 0-11.06 3.1A3.5 3.5 0 0 0 7 19h10.5z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></symbol>
+    <symbol id="i-type" viewBox="0 0 24 24"><path d="M4 7V5h16v2"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="9" y1="19" x2="15" y2="19"/></symbol>
+    <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 13h0M10 13h0M14 13h0M18 13h0M8 16h8"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="4 12.5 9.5 18 20 6"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a13.5 13.5 0 0 1 0 18 13.5 13.5 0 0 1 0-18z"/></symbol>
+  </defs>
+</svg>
+
 <aside class="rail">
   <div class="logo">
-    <div class="dot">🎙️</div>
+    <div class="dot"><svg class="ic" style="color:#fff;font-size:15px"><use href="#i-mic"/></svg></div>
     <div><b>AIDictation</b><span>Windows · UI Spec</span></div>
   </div>
   <nav>
@@ -530,8 +600,8 @@ section{margin-top:90px}
       <div class="tok"><div class="sw" style="background:#E5484D"></div><div class="nm">Error</div><div class="hx">#E5484D</div></div>
     </div>
     <div class="type-row">
-      <div class="t-display">Bricolage Grotesque — titles</div>
-      <div class="t-body">Albert Sans — body & controls (Segoe UI Variable on Windows)</div>
+      <div class="t-display">Figtree — brand font, titles &amp; UI</div>
+      <div class="t-body">Figtree 400/500 — body &amp; controls (ship the font with the app)</div>
       <div class="t-mono">JetBrains Mono — hotkeys · timers · meta</div>
     </div>
   </section>
@@ -570,12 +640,12 @@ section{margin-top:90px}
                 <p class="sub">You can change this anytime in Settings.</p>
                 <div class="modes">
                   <div class="mode on" data-mode="cloud">
-                    <div class="ic">☁️</div>
+                    <div class="mic"><svg class="ic" style="font-size:18px"><use href="#i-cloud"/></svg></div>
                     <div><b>Cloud <span class="tag">Recommended</span></b>
                     <p>Fast and most accurate. All languages, smart cleanup included.</p></div>
                   </div>
                   <div class="mode" data-mode="offline">
-                    <div class="ic">🔒</div>
+                    <div class="mic"><svg class="ic" style="font-size:18px"><use href="#i-lock"/></svg></div>
                     <div><b>Offline</b>
                     <p>100% private — audio never leaves this PC. One-time speech model download (~470&nbsp;MB).</p></div>
                   </div>
@@ -600,7 +670,7 @@ section{margin-top:90px}
                 <p class="sub">Free account includes cloud transcription and keeps your plan in sync across devices. Opens in your browser.</p>
                 <div style="margin-top:26px"><button class="btn btn-brand" id="signinBtn">Sign In with Browser</button></div>
                 <div class="signin-card" id="signinCard">
-                  <div class="ck">✓</div>
+                  <div class="ck"><svg class="ic" style="font-size:14px;stroke-width:3"><use href="#i-check"/></svg></div>
                   <div><b>Signed in</b><span>hello@writingmate.ai</span></div>
                 </div>
                 <p class="tip">You can also do this later from Settings → Account.</p>
@@ -615,7 +685,7 @@ section{margin-top:90px}
             <div class="onb-right">
               <!-- per-step right panel -->
               <div class="illus" data-illu="0">
-                <div class="card"><div class="micring">🎙️</div><div class="cap2" style="margin-top:22px">“AIDictation would like to<br>access the Microphone”</div></div>
+                <div class="card"><div class="micring"><svg class="ic" style="font-size:40px;stroke-width:1.8"><use href="#i-mic"/></svg></div><div class="cap2" style="margin-top:22px">“AIDictation would like to<br>access the Microphone”</div></div>
               </div>
               <div class="illus" data-illu="1" hidden>
                 <div class="bubbles">
@@ -627,7 +697,7 @@ section{margin-top:90px}
                 </div>
               </div>
               <div class="illus" data-illu="2" hidden>
-                <div class="card"><div class="big" id="modeEmoji">☁️</div><div class="cap2">Your voice, your choice</div></div>
+                <div class="card"><div class="big" style="color:var(--brand)"><svg class="ic" style="font-size:54px;stroke-width:1.6" id="modeIcon"><use href="#i-cloud"/></svg></div><div class="cap2">Your voice, your choice</div></div>
               </div>
               <div class="illus" data-illu="3" hidden>
                 <div class="kbd-illu">
@@ -637,29 +707,23 @@ section{margin-top:90px}
                 </div>
               </div>
               <div class="illus" data-illu="4" hidden>
-                <div class="card"><div class="big">👤</div><div class="cap2">One account,<br>every device</div></div>
+                <div class="card"><div class="big" style="color:var(--brand)"><svg class="ic" style="font-size:54px;stroke-width:1.6"><use href="#i-user"/></svg></div><div class="cap2">One account,<br>every device</div></div>
               </div>
+            </div>
+
+            <!-- Finale: the gradient panel grows over the whole window, mac-style -->
+            <div class="finale" id="finale">
+              <div class="card">
+                <div class="ok-ring"><svg class="ic" style="font-size:32px;stroke-width:3"><use href="#i-check"/></svg></div>
+                <h1>You're ready</h1>
+                <p>Press <b style="font-family:var(--font-mono);font-size:12px">F8</b> in any app to start dictating. AIDictation lives in your system tray.</p>
+                <button class="btn btn-brand" style="padding:13px 38px">Let's Go!</button>
+              </div>
+              <span class="replay" id="finaleReplay">↻ replay</span>
             </div>
           </div>
         </div>
-        <span class="cap">steps 0–4 · 900 × 580 · <b>interactive</b></span>
-      </div>
-
-      <div class="stack">
-        <div class="window light onb-complete">
-          <div class="confetti">
-            <i style="left:8%;background:#FFED46;animation-delay:0s"></i><i style="left:22%;background:#F16E00;animation-delay:1.2s"></i>
-            <i style="left:38%;background:#FF7EC7;animation-delay:.5s"></i><i style="left:55%;background:#3BC45A;animation-delay:1.9s"></i>
-            <i style="left:70%;background:#FFED46;animation-delay:.9s"></i><i style="left:86%;background:#FF7EC7;animation-delay:1.5s"></i>
-          </div>
-          <div class="card">
-            <div class="ok-ring">✓</div>
-            <h1>You're all set!</h1>
-            <p>Press <b style="font-family:var(--font-mono);font-size:12px">F8</b> anywhere on your PC to start dictating. AIDictation lives in your system tray.</p>
-            <button class="btn btn-brand" style="padding:13px 38px">Get Started</button>
-          </div>
-        </div>
-        <span class="cap">step 5 · complete · full gradient</span>
+        <span class="cap">steps 0–5 · 900 × 580 · <b>interactive — click Finish on the last step</b></span>
       </div>
     </div>
   </section>
@@ -676,11 +740,11 @@ section{margin-top:90px}
             <div class="caption"><span>—</span><span>▢</span><span class="x">✕</span></div></div>
           <div class="set-body">
             <div class="set-side" id="setSide">
-              <div class="set-item on" data-sec="audio"><span class="ico">🎙️</span>Audio</div>
-              <div class="set-item" data-sec="rules"><span class="ico">📝</span>Text Rules</div>
-              <div class="set-item" data-sec="hotkeys"><span class="ico">⌨️</span>Hotkeys</div>
-              <div class="set-item" data-sec="overlay"><span class="ico">●</span>Overlay</div>
-              <div class="set-item" data-sec="account"><span class="ico">👤</span>Account</div>
+              <div class="set-item on" data-sec="audio"><svg class="ic"><use href="#i-mic"/></svg>Audio</div>
+              <div class="set-item" data-sec="rules"><svg class="ic"><use href="#i-type"/></svg>Text Rules</div>
+              <div class="set-item" data-sec="hotkeys"><svg class="ic"><use href="#i-kbd"/></svg>Hotkeys</div>
+              <div class="set-item" data-sec="overlay"><svg class="ic"><use href="#i-dot"/></svg>Overlay</div>
+              <div class="set-item" data-sec="account"><svg class="ic"><use href="#i-user"/></svg>Account</div>
               <div class="grow"></div>
               <div class="ver">v0.0.1 · win-x64</div>
             </div>
@@ -706,17 +770,17 @@ section{margin-top:90px}
                 <div class="f-label">Languages</div>
                 <div class="f-desc">Select one or more — auto-detect works well for most people.</div>
                 <div class="dlangs">
-                  <span class="dlang"><span>🌐</span>Auto</span>
-                  <span class="dlang on"><span>🇬🇧</span>English</span>
-                  <span class="dlang on"><span>🇪🇸</span>Spanish</span>
-                  <span class="dlang"><span>🇩🇪</span>German</span>
-                  <span class="dlang"><span>🇫🇷</span>French</span>
-                  <span class="dlang"><span>🇺🇦</span>Ukrainian</span>
-                  <span class="dlang"><span>🇷🇺</span>Russian</span>
-                  <span class="dlang"><span>🇯🇵</span>Japanese</span>
-                  <span class="dlang"><span>🇨🇳</span>Chinese</span>
-                  <span class="dlang"><span>🇮🇹</span>Italian</span>
-                  <span class="dlang"><span>🇵🇱</span>Polish</span>
+                  <span class="dlang"><svg class="ic" style="font-size:12px"><use href="#i-globe"/></svg>Auto</span>
+                  <span class="dlang on"><span class="cc">EN</span>English</span>
+                  <span class="dlang on"><span class="cc">ES</span>Spanish</span>
+                  <span class="dlang"><span class="cc">DE</span>German</span>
+                  <span class="dlang"><span class="cc">FR</span>French</span>
+                  <span class="dlang"><span class="cc">UK</span>Ukrainian</span>
+                  <span class="dlang"><span class="cc">RU</span>Russian</span>
+                  <span class="dlang"><span class="cc">JA</span>Japanese</span>
+                  <span class="dlang"><span class="cc">ZH</span>Chinese</span>
+                  <span class="dlang"><span class="cc">IT</span>Italian</span>
+                  <span class="dlang"><span class="cc">PL</span>Polish</span>
                   <span class="dlang" style="border-style:dashed">+ 48 more</span>
                 </div>
               </div>
@@ -726,20 +790,20 @@ section{margin-top:90px}
                 <h3>Text Rules</h3>
                 <div class="f-label">Dictionary</div>
                 <div class="f-desc">Words the transcriber should recognize — with optional replacements.</div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>WritingMate</b><span>fixes “writing mate”, “riding mate”</span></div><span class="del">🗑</span></div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>Supabase</b></div><span class="del">🗑</span></div>
+                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>WritingMate</b><span>fixes “writing mate”, “riding mate”</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>Supabase</b></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
                 <div class="addrow"><input placeholder="Word or phrase…"><input placeholder="Replacement (optional)"><button class="btn btn-brand">Add</button></div>
                 <div class="hr"></div>
                 <div class="f-label">Shortcuts</div>
                 <div class="f-desc">Say the trigger — it expands into the full text.</div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>“my email”</b><span>→ hello@writingmate.ai</span></div><span class="del">🗑</span></div>
-                <div class="rule"><span class="check" style="padding:0"><span class="bx"></span></span><div class="tx"><b>“signature”</b><span>→ Best regards, Artem — WritingMate</span></div><span class="del">🗑</span></div>
+                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>“my email”</b><span>→ hello@writingmate.ai</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                <div class="rule"><span class="check" style="padding:0"><span class="bx"></span></span><div class="tx"><b>“signature”</b><span>→ Best regards, Artem — WritingMate</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
                 <div class="addrow"><input placeholder="Voice trigger…"><input placeholder="Expansion text…"><button class="btn btn-brand">Add</button></div>
                 <div class="hr"></div>
                 <div class="f-label">Context Rules</div>
                 <div class="f-desc">Extra instructions that apply only in matching apps or window titles.</div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>Slack — casual</b><span>app: slack · lowercase, keep it short, emoji ok</span></div><span class="del">🗑</span></div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>VS Code — technical</b><span>app: code · preserve identifiers, no autocorrect of camelCase</span></div><span class="del">🗑</span></div>
+                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>Slack — casual</b><span>app: slack · lowercase, keep it short, emoji ok</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>VS Code — technical</b><span>app: code · preserve identifiers, no autocorrect of camelCase</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
                 <div class="addrow"><input placeholder="Rule name…"><input placeholder="Instructions…"><button class="btn btn-brand">Add</button></div>
               </div>
 
@@ -818,7 +882,7 @@ section{margin-top:90px}
           <div class="titlebar"><div class="app-ico"></div><span class="t">History — AIDictation</span>
             <div class="caption"><span>—</span><span>▢</span><span class="x">✕</span></div></div>
           <div class="h-tools">
-            <div class="search">🔍<input placeholder="Search transcriptions…"></div>
+            <div class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search transcriptions…"></div>
             <button class="btn btn-dark-ghost" style="font-size:12px;padding:9px 16px">Export</button>
           </div>
           <div class="h-list">
@@ -826,28 +890,28 @@ section{margin-top:90px}
             <div class="h-row">
               <div class="h-meta"><div class="tm">4:32 PM</div><div class="du">12.4s · <b>38 words</b></div></div>
               <div class="h-txt">Hey team, quick update on the Windows build — onboarding is fully validated on the runner, all twelve screenshots came back clean, and the backend smoke test returned the phrase verbatim.</div>
-              <div class="h-acts"><span>📋</span><span class="d">🗑</span></div>
+              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
             </div>
             <div class="h-row">
               <div class="h-meta"><div class="tm">2:18 PM</div><div class="du">5.1s · <b>16 words</b></div></div>
               <div class="h-txt">Remind me to push the release branch after the installer finishes notarizing tomorrow morning.</div>
-              <div class="h-acts"><span>📋</span><span class="d">🗑</span></div>
+              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
             </div>
             <div class="h-row">
               <div class="h-meta"><div class="tm">11:03 AM</div><div class="du"><span class="fail-dot"></span>failed</div></div>
               <div class="h-txt" style="color:var(--ink-3);font-style:italic">Network error — recording kept, tap to retry transcription.</div>
-              <div class="h-acts"><span>↻</span><span class="d">🗑</span></div>
+              <div class="h-acts"><span><svg class="ic"><use href="#i-retry"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
             </div>
             <div class="h-date">Yesterday</div>
             <div class="h-row">
               <div class="h-meta"><div class="tm">6:47 PM</div><div class="du">28.0s · <b>84 words</b></div></div>
               <div class="h-txt">Draft for the launch post: AIDictation now ships on Windows with full parity — offline mode that keeps your audio on device, voice shortcuts, a personal dictionary, and context rules that adapt the tone to whatever app you're typing into…</div>
-              <div class="h-acts"><span>📋</span><span class="d">🗑</span></div>
+              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
             </div>
             <div class="h-row">
               <div class="h-meta"><div class="tm">9:12 AM</div><div class="du">3.3s · <b>9 words</b></div></div>
               <div class="h-txt">Buenos días equipo, la demo empieza en diez minutos.</div>
-              <div class="h-acts"><span>📋</span><span class="d">🗑</span></div>
+              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
             </div>
           </div>
           <div class="h-foot">
@@ -863,40 +927,73 @@ section{margin-top:90px}
   <!-- ================= 04 OVERLAY ================= -->
   <section id="overlay">
     <div class="sec-head"><span class="num">04</span><h2>Recording overlay</h2></div>
-    <p class="sec-sub">The always-on pill at the bottom of the desktop. Four states; recording gets a live waveform and a brand glow. The accent follows the Overlay color setting.</p>
+    <p class="sec-sub">Ported 1:1 from the macOS <code>RecordingOverlayView</code>: a hairline strip when idle that morphs — <code>cubic-bezier(.2,.8,.2,1) · 260ms</code> — into the accent capsule. No text, ever. Content fades in 140ms after the morph; collapse takes 150ms.</p>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px">
-      <div class="stack">
-        <div class="desktop"><div class="wall"></div><span class="cap3">state · idle</span>
-          <div class="pill"><div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="st">Ready</span><span class="tmr" style="color:var(--ink-3)">F8</span></div>
-        </div>
-        <span class="cap">idle — dimmed dots, hotkey hint</span>
-      </div>
-      <div class="stack">
-        <div class="desktop"><div class="wall"></div><span class="cap3">state · recording</span>
-          <div class="pill rec">
-            <div class="bars">
-              <i style="--h:8px;animation-delay:0s"></i><i style="--h:15px;animation-delay:.1s"></i><i style="--h:19px;animation-delay:.2s"></i>
-              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:17px;animation-delay:.25s"></i><i style="--h:9px;animation-delay:.15s"></i>
-              <i style="--h:20px;animation-delay:.3s"></i><i style="--h:13px;animation-delay:.12s"></i><i style="--h:16px;animation-delay:.22s"></i>
-              <i style="--h:8px;animation-delay:.08s"></i>
-            </div>
-            <span class="st" style="color:#FFC093">Listening…</span><span class="tmr">0:07.4</span>
+    <div class="stack" style="margin-bottom:22px">
+      <div class="desktop" style="height:170px"><div class="wall"></div><span class="cap3">live demo · hover to expand · click to record → stop → processing</span>
+        <div class="mpill collapsed" id="demoPill">
+          <div class="inner" id="demoInner">
+            <div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
           </div>
         </div>
-        <span class="cap">recording — live waveform + glow</span>
+      </div>
+      <span class="cap"><b>interactive</b> — full state machine with the mac morph timing</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px">
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">idle · collapsed</span>
+          <div class="mpill collapsed"></div>
+        </div>
+        <span class="cap">hairline strip — 53×7, muted, 0.75px border</span>
       </div>
       <div class="stack">
-        <div class="desktop"><div class="wall"></div><span class="cap3">state · processing</span>
-          <div class="pill"><div class="spin"><i style="animation-delay:0s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.3s"></i></div><span class="st">Transcribing…</span></div>
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">idle · hover</span>
+          <div class="mpill"><div class="inner"><div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
         </div>
-        <span class="cap">processing — bouncing dots</span>
+        <span class="cap">expanded — idle dots on accent, click to record</span>
       </div>
       <div class="stack">
-        <div class="desktop"><div class="wall"></div><span class="cap3">state · inserted</span>
-          <div class="pill"><span class="okk">✓</span><span class="st" style="color:var(--ink)">Inserted · 38 words</span></div>
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">recording</span>
+          <div class="mpill"><div class="inner">
+            <div class="bars">
+              <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+              <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i>
+            </div>
+          </div></div>
         </div>
-        <span class="cap">result — confirmation, auto-fades to idle</span>
+        <span class="cap">live waveform — white on accent</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">recording · controls</span>
+          <div class="mpill wide"><div class="cbtn cancel"><span class="xx">✕</span></div>
+            <div class="bars">
+              <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+              <i style="--h:12px;animation-delay:.12s"></i>
+            </div>
+            <div class="cbtn stop"><span class="sq"></span></div></div>
+        </div>
+        <span class="cap">hover while recording — cancel ✕ / stop ■</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">processing</span>
+          <div class="mpill"><div class="inner"><div class="ldots"><i style="animation-delay:0s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.3s"></i></div></div></div>
+        </div>
+        <span class="cap">loading dots at 72% white</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">command mode</span>
+          <div class="mpill cmd"><div class="inner">
+            <div class="bars">
+              <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+              <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i>
+            </div>
+          </div></div>
+        </div>
+        <span class="cap">system blue — AI rewrites selection</span>
       </div>
     </div>
   </section>
@@ -925,20 +1022,41 @@ function show(n){
   steps.find(s=>!s.hidden).style.animation='none';
   requestAnimationFrame(()=>{steps.find(s=>!s.hidden).style.animation=''});
 }
-document.getElementById('nextBtn').onclick=()=>show(cur+1);
+document.getElementById('nextBtn').onclick=()=>{ if(cur===4){runFinale()} else show(cur+1) };
 document.getElementById('backBtn').onclick=()=>show(cur-1);
 show(0);
 
-/* languages (onboarding) */
-const LANGS=[["🌐","Auto-detect"],["🇬🇧","English"],["🇪🇸","Spanish"],["🇩🇪","German"],["🇫🇷","French"],["🇺🇦","Ukrainian"],["🇷🇺","Russian"],["🇮🇹","Italian"],["🇵🇱","Polish"],["🇵🇹","Portuguese"],["🇳🇱","Dutch"],["🇯🇵","Japanese"],["🇨🇳","Chinese"],["🇰🇷","Korean"],["🇹🇷","Turkish"],["🇸🇪","Swedish"],["🇨🇿","Czech"],["🇬🇷","Greek"]];
+/* ---------- Finale: mac-style 4-phase completion ---------- */
+const finale=document.getElementById('finale');
+let finaleTimers=[];
+function runFinale(){
+  finaleTimers.forEach(clearTimeout);finaleTimers=[];
+  finale.classList.add('armed');
+  finaleTimers.push(
+    setTimeout(()=>finale.classList.add('p1'),100),   // panel expands (spring .5/.8)
+    setTimeout(()=>finale.classList.add('p2'),500),   // card scales in
+    setTimeout(()=>finale.classList.add('p3'),800),   // checkmark pops
+    setTimeout(()=>finale.classList.add('p4'),1100)   // button reveals
+  );
+}
+document.getElementById('finaleReplay').onclick=()=>{
+  finaleTimers.forEach(clearTimeout);finaleTimers=[];
+  finale.classList.remove('p1','p2','p3','p4');
+  finaleTimers.push(setTimeout(runFinale,600));
+};
+
+/* languages (onboarding) — code badges, not flags (flag emoji don't render on Windows) */
+const LANGS=[["auto","Auto-detect"],["EN","English"],["ES","Spanish"],["DE","German"],["FR","French"],["UK","Ukrainian"],["RU","Russian"],["IT","Italian"],["PL","Polish"],["PT","Portuguese"],["NL","Dutch"],["JA","Japanese"],["ZH","Chinese"],["KO","Korean"],["TR","Turkish"],["SV","Swedish"],["CS","Czech"],["EL","Greek"]];
 const langsEl=document.getElementById('langs');
-LANGS.forEach(([f,n],i)=>{
+LANGS.forEach(([c,n],i)=>{
   const el=document.createElement('span');el.className='lang'+(i===0?' on':'');
-  el.innerHTML=`<span class="fl">${f}</span>${n}`;
+  el.innerHTML=i===0
+    ?`<svg class="ic" style="font-size:13px"><use href="#i-globe"/></svg>${n}`
+    :`<span class="cc">${c}</span>${n}`;
   el.onclick=()=>{
-    if(i===0){[...langsEl.children].forEach((c,j)=>c.classList.toggle('on',j===0));return}
+    if(i===0){[...langsEl.children].forEach((x,j)=>x.classList.toggle('on',j===0));return}
     el.classList.toggle('on');
-    const any=[...langsEl.children].some((c,j)=>j>0&&c.classList.contains('on'));
+    const any=[...langsEl.children].some((x,j)=>j>0&&x.classList.contains('on'));
     langsEl.children[0].classList.toggle('on',!any);
   };
   langsEl.appendChild(el);
@@ -950,7 +1068,7 @@ document.querySelectorAll('.mode').forEach(m=>m.onclick=()=>{
   m.classList.add('on');
   const off=m.dataset.mode==='offline';
   document.getElementById('dl').classList.toggle('show',off);
-  document.getElementById('modeEmoji').textContent=off?'🔒':'☁️';
+  document.getElementById('modeIcon').querySelector('use').setAttribute('href',off?'#i-lock':'#i-cloud');
 });
 
 /* sign-in demo */
@@ -981,6 +1099,39 @@ document.getElementById('signOutBtn').onclick=()=>{
 document.getElementById('signInBtn2').onclick=()=>{
   document.getElementById('acctIn').hidden=false;document.getElementById('acctOut').hidden=true;
 };
+
+/* ---------- Overlay live demo: collapsed ⇄ idle ⇄ recording(+controls) ⇄ processing ---------- */
+const demoPill=document.getElementById('demoPill');
+const demoInner=document.getElementById('demoInner');
+const WAVE=`<div class="bars">
+  <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+  <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+  <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i></div>`;
+const WAVE_S=WAVE.replace(/--h:20px[^<]*<\/i>/,'</i>'); // slightly narrower for controls
+const IDLE=`<div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
+const LOAD=`<div class="ldots"><i style="animation-delay:0s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.3s"></i></div>`;
+let demoState='collapsed'; // collapsed | idle | rec | proc
+function setDemo(state){
+  demoState=state;
+  demoPill.classList.toggle('collapsed',state==='collapsed');
+  demoPill.classList.toggle('wide',state==='rec');
+  if(state==='idle') demoInner.innerHTML=IDLE;
+  if(state==='rec') demoInner.innerHTML=
+    `<div style="display:flex;align-items:center;justify-content:space-between;width:150px">
+       <span class="cbtn cancel"><span class="xx">✕</span></span>${WAVE_S}<span class="cbtn stop"><span class="sq"></span></span>
+     </div>`;
+  if(state==='proc') demoInner.innerHTML=LOAD;
+}
+demoPill.addEventListener('mouseenter',()=>{ if(demoState==='collapsed') setDemo('idle') });
+demoPill.addEventListener('mouseleave',()=>{ if(demoState==='idle') setDemo('collapsed') });
+demoPill.addEventListener('click',e=>{
+  if(demoState==='idle'||demoState==='collapsed'){ setDemo('rec'); return }
+  if(demoState==='rec'){
+    if(e.target.closest('.cancel')){ setDemo('collapsed'); return }
+    setDemo('proc');
+    setTimeout(()=>setDemo('collapsed'),2200);
+  }
+});
 </script>
 </body>
 </html>

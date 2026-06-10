@@ -23,7 +23,7 @@ function Take-Screenshot([string]$Name) {
     Write-Host "Captured $path"
 }
 
-function Wait-Window([string]$TitleContains, [int]$TimeoutSec = 30) {
+function Wait-Window([string]$TitleContains, [int]$TimeoutSec = 30, [int]$OwnerPid = 0) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -31,11 +31,14 @@ function Wait-Window([string]$TitleContains, [int]$TimeoutSec = 30) {
             [System.Windows.Automation.TreeScope]::Children,
             [System.Windows.Automation.Condition]::TrueCondition)
         foreach ($w in $windows) {
-            if ($w.Current.Name -like "*$TitleContains*") { return $w }
+            if ($w.Current.Name -like "*$TitleContains*") {
+                if ($OwnerPid -ne 0 -and $w.Current.ProcessId -ne $OwnerPid) { continue }
+                return $w
+            }
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "Window containing '$TitleContains' not found within ${TimeoutSec}s"
+    throw "Window containing '$TitleContains' (pid $OwnerPid) not found within ${TimeoutSec}s"
 }
 
 function Find-ByText($Root, [string]$Text, $ControlType) {
@@ -127,41 +130,70 @@ Invoke-ByText $onboarding "Get Started"
 Start-Sleep -Seconds 3
 Take-Screenshot "07-after-onboarding-tray-overlay"
 
-# --- 2. Second launch activates the running instance and opens Settings ---
-Write-Host "Launching second instance to open Settings via single-instance pipe"
-Start-Process -FilePath $ExePath
-Start-Sleep -Seconds 6
-
-$settings = Wait-Window "Settings" 30
-Take-Screenshot "08-settings-audio"
-
-Select-RadioByText $settings "Text Rules"
-Take-Screenshot "09-settings-text-rules"
-
-Select-RadioByText $settings "Hotkeys"
-Take-Screenshot "10-settings-hotkeys"
-
-Select-RadioByText $settings "Overlay"
-Take-Screenshot "11-settings-overlay"
-
-Select-RadioByText $settings "Account"
-Take-Screenshot "12-settings-account"
-
-# --- 3. Sanity: app state files and no crash log ---
-$appData = Join-Path $env:APPDATA "AIDictation"
-Write-Host "App data dir contents:"
-Get-ChildItem $appData -ErrorAction SilentlyContinue | ForEach-Object { Write-Host " - $($_.Name) ($($_.Length) bytes)" }
-
-$errorLog = Join-Path $appData "error.log"
-if (Test-Path $errorLog) {
-    Write-Host "::warning::error.log exists:"
-    Get-Content $errorLog | Select-Object -First 40 | Write-Host
-    Copy-Item $errorLog (Join-Path $ShotDir "error.log")
+function Dump-UiaTree($Root, [string]$Path) {
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $sb = New-Object System.Text.StringBuilder
+    function Walk($el, $depth) {
+        if ($null -eq $el -or $depth -gt 12) { return }
+        $indent = "  " * $depth
+        [void]$sb.AppendLine("$indent$($el.Current.ControlType.ProgrammaticName) '$($el.Current.Name)'")
+        $child = $walker.GetFirstChild($el)
+        while ($null -ne $child) {
+            Walk $child ($depth + 1)
+            $child = $walker.GetNextSibling($child)
+        }
+    }
+    Walk $Root 0
+    $sb.ToString() | Set-Content -Path $Path
+    Write-Host "UIA tree dumped to $Path"
 }
 
-$settingsJson = Get-ChildItem $appData -Filter "*.json" -ErrorAction SilentlyContinue
-foreach ($f in $settingsJson) {
-    Copy-Item $f.FullName (Join-Path $ShotDir $f.Name)
+function Collect-AppState {
+    $appData = Join-Path $env:APPDATA "AIDictation"
+    Write-Host "App data dir contents:"
+    Get-ChildItem $appData -ErrorAction SilentlyContinue | ForEach-Object { Write-Host " - $($_.Name) ($($_.Length) bytes)" }
+
+    $errorLog = Join-Path $appData "error.log"
+    if (Test-Path $errorLog) {
+        Write-Host "::warning::error.log exists:"
+        Get-Content $errorLog | Select-Object -First 60 | Write-Host
+        Copy-Item $errorLog (Join-Path $ShotDir "error.log")
+    }
+
+    Get-ChildItem $appData -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $ShotDir $_.Name)
+    }
+}
+
+# --- 2. Second launch activates the running instance and opens Settings ---
+try {
+    # Close the Windows Settings app if the mic consent flow opened it
+    Stop-Process -Name "SystemSettings" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+
+    Write-Host "Launching second instance to open Settings via single-instance pipe"
+    Start-Process -FilePath $ExePath
+    Start-Sleep -Seconds 6
+
+    $settings = Wait-Window "Settings" 30 $proc.Id
+    Take-Screenshot "08-settings-audio"
+    Dump-UiaTree $settings (Join-Path $ShotDir "settings-uia-tree.txt")
+
+    Select-RadioByText $settings "Text Rules"
+    Take-Screenshot "09-settings-text-rules"
+
+    Select-RadioByText $settings "Hotkeys"
+    Take-Screenshot "10-settings-hotkeys"
+
+    Select-RadioByText $settings "Overlay"
+    Take-Screenshot "11-settings-overlay"
+
+    Select-RadioByText $settings "Account"
+    Take-Screenshot "12-settings-account"
+}
+finally {
+    # --- 3. Always collect app state files and crash log ---
+    Collect-AppState
 }
 
 if ($proc.HasExited) { throw "App is no longer running (exit code $($proc.ExitCode))" }

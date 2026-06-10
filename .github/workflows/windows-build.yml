@@ -17,6 +17,17 @@ env:
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
   PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
   INSTALLER_DIR: 'AIDictation.Windows/artifacts/installer'
+  # Backend configuration baked into the build via AssemblyMetadata (see csproj).
+  # MSBuild reads these environment variables as properties.
+  TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
+  TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
+  TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
+  AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+  AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+  AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+  STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
 
 jobs:
   build:

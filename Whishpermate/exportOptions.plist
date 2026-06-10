@@ -15,9 +15,11 @@
     <key>provisioningProfiles</key>
     <dict>
         <key>com.whispermate.ios</key>
-        <string>vood</string>
+        <string>$(IOS_APPSTORE_PROFILE_NAME)</string>
         <key>com.whispermate.ios.keyboard</key>
-        <string>vood keyboard</string>
+        <string>$(IOS_KEYBOARD_APPSTORE_PROFILE_NAME)</string>
+        <key>com.whispermate.ios.liveactivity</key>
+        <string>$(IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME)</string>
     </dict>
 </dict>
 </plist>

@@ -62,51 +62,30 @@ class TranscriptionRepository @Inject constructor(
         }
 
         val language = apiLanguageFor(multilingual, languages)
-        val forcedLanguages = apiLanguagesFor(multilingual, languages)
+        val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
+        val transcriptionPrompt = buildLanguageAwarePrompt(prompt, languageNames)
+        val postProcessingPrompt = if (postProcess) {
+            buildPostProcessingPrompt(transcriptionPrompt, contextRules)
+        } else {
+            null
+        }
         if (provider == ApiProvider.WRITINGMATE) {
-            if (forcedLanguages.size > 1) {
-                val candidates = TranscriptionClient.transcribeForLanguages(
-                    audioFile = audioFile,
-                    languages = forcedLanguages,
-                    prompt = prompt,
-                    sttPrompt = prompt,
-                    postProcessingPrompt = if (postProcess) {
-                        buildPostProcessingPrompt(prompt, contextRules)
-                    } else {
-                        null
-                    }
-                )
-                val namedCandidates = candidates.withLanguageNames()
-                val languageNames = forcedLanguages.mapNotNull { WhisperLanguages.getName(it) }
-                return Result.success(LanguagePostProcessClient.postProcess(namedCandidates, languageNames, contextRules))
-            }
             return TranscriptionClient.transcribe(
                 audioFile = audioFile,
-                prompt = prompt,
+                prompt = transcriptionPrompt,
                 language = language,
-                sttPrompt = prompt,
-                postProcessingPrompt = if (postProcess) {
-                    buildPostProcessingPrompt(prompt, contextRules)
-                } else {
-                    null
-                }
+                sttPrompt = transcriptionPrompt,
+                postProcessingPrompt = postProcessingPrompt
             )
         }
 
-        return if (forcedLanguages.size > 1) {
-            val candidates = TranscriptionClient.transcribeForLanguages(audioFile, forcedLanguages, prompt)
-            val namedCandidates = candidates.withLanguageNames()
-            val languageNames = forcedLanguages.mapNotNull { WhisperLanguages.getName(it) }
-            Result.success(LanguagePostProcessClient.postProcess(namedCandidates, languageNames, contextRules))
-        } else if (postProcess) {
-            val raw = TranscriptionClient.transcribe(audioFile, prompt, language)
+        return if (postProcess) {
+            val raw = TranscriptionClient.transcribe(audioFile, transcriptionPrompt, language, sttPrompt = transcriptionPrompt)
                 .getOrElse { return Result.failure(it) }
-            val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
-                .takeIf { multilingual && it.isNotEmpty() }
-                ?: listOf("auto")
-            Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), languageNames, contextRules))
+            val postProcessLanguageNames = languageNames.takeIf { multilingual && it.isNotEmpty() } ?: listOf("auto")
+            Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), postProcessLanguageNames, contextRules))
         } else {
-            TranscriptionClient.transcribe(audioFile, prompt, language)
+            TranscriptionClient.transcribe(audioFile, transcriptionPrompt, language, sttPrompt = transcriptionPrompt)
         }
     }
 
@@ -116,18 +95,10 @@ class TranscriptionRepository @Inject constructor(
         return validLanguages.singleOrNull()
     }
 
-    private fun apiLanguagesFor(multilingual: Boolean, languages: List<String>): List<String> {
-        if (!multilingual) return emptyList()
-        return languages.filter { WhisperLanguages.getLanguage(it) != null }.distinct()
-    }
-
-    private fun Map<String, String>.withLanguageNames(): Map<String, String> =
-        mapKeys { (code, _) -> WhisperLanguages.getName(code) ?: code }
-
     suspend fun buildPrompt(): String {
         val dictionary = appPreferences.dictionaryEntries.first()
             .filter { it.isEnabled }
-            .map { it.trigger }
+            .map { it.replacement?.takeIf { replacement -> replacement.isNotBlank() } ?: it.trigger }
 
         val shortcuts = appPreferences.shortcuts.first()
             .filter { it.isEnabled }
@@ -153,27 +124,24 @@ class TranscriptionRepository @Inject constructor(
         ).joinToString("\n").ifBlank { null }
     }
 
+    private fun buildLanguageAwarePrompt(prompt: String?, languageNames: List<String>): String? {
+        val languageHint = languageNames
+            .takeIf { it.size > 1 }
+            ?.joinToString(", ")
+            ?.let { "The speaker will use one of these selected languages: $it. Detect the spoken language from the audio and transcribe it in that same language." }
+
+        return listOfNotNull(
+            languageHint,
+            prompt?.takeIf { it.isNotBlank() }
+        ).joinToString("\n").ifBlank { null }
+    }
+
     suspend fun applyPostProcessing(text: String): String {
-        if (appPreferences.onDeviceTranscriptionEnabled.first()) {
-            return applyLocalTextExpansions(text)
-        }
-
-        val provider = ApiConfigManager.instance?.getTranscriptionConfig()?.provider ?: ApiProvider.WRITINGMATE
-        if (provider == ApiProvider.WRITINGMATE) return text
-
         return applyLocalTextExpansions(text)
     }
 
     private suspend fun applyLocalTextExpansions(text: String): String {
         var result = text
-        val dictionary = appPreferences.dictionaryEntries.first()
-            .filter { it.isEnabled && it.replacement != null }
-            .sortedByDescending { it.trigger.length }
-
-        for (entry in dictionary) {
-            result = result.replace(entry.trigger, entry.replacement!!, ignoreCase = true)
-        }
-
         val shortcuts = appPreferences.shortcuts.first()
             .filter { it.isEnabled }
             .sortedByDescending { it.voiceTrigger.length }

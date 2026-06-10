@@ -1534,15 +1534,21 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         if (transcription.text.isBlank()) return
 
-        val applied = if (transcription.executedCommand != null) {
-            applyCommandResult(transcription.text)
+        val finalText = if (transcription.executedCommand != null) {
+            transcription.text
         } else {
-            insertDictationText(transcription.text)
+            transcriptionRepository.applyPostProcessing(transcription.text)
+        }
+
+        val applied = if (transcription.executedCommand != null) {
+            applyCommandResult(finalText)
+        } else {
+            insertDictationText(finalText)
         }
 
         if (applied) {
-            lastDictatedText = transcription.text
-            subscriptionRepository.recordWords(transcription.text)
+            lastDictatedText = finalText
+            subscriptionRepository.recordWords(finalText)
         }
     }
 

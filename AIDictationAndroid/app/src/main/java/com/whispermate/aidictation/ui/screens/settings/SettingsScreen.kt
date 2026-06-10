@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -54,6 +55,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,11 +67,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
@@ -99,18 +105,39 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showAccessibilityDisclosureDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     var referralCodeInput by remember { mutableStateOf("") }
+    var showTranscriptionModeScreen by remember { mutableStateOf(false) }
+    var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
+    var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
 
-    val hasMicPermission = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasMicPermission = hasMicrophonePermission(context)
+                hasOverlayPermission = isOverlayAccessibilityEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
-    val hasOverlayPermission = isOverlayAccessibilityEnabled(context)
+    if (showTranscriptionModeScreen) {
+        TranscriptionModeSettingsScreen(
+            enabled = onDeviceTranscriptionEnabled,
+            state = onDeviceModelState,
+            onBack = { showTranscriptionModeScreen = false },
+            onModeSelected = onOnDeviceTranscriptionToggled,
+            modifier = modifier
+        )
+        return
+    }
 
     Column(
         modifier = modifier
@@ -224,10 +251,10 @@ fun SettingsScreen(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
-            OnDeviceTranscriptionItem(
+            TranscriptionModeSettingsItem(
                 enabled = onDeviceTranscriptionEnabled,
                 state = onDeviceModelState,
-                onToggle = onOnDeviceTranscriptionToggled
+                onClick = { showTranscriptionModeScreen = true }
             )
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -869,13 +896,234 @@ private fun ReferralInviteItem(
 }
 
 @Composable
-private fun OnDeviceTranscriptionItem(
+private fun TranscriptionModeSettingsItem(
     enabled: Boolean,
     state: OnDeviceModelUiState,
-    onToggle: (Boolean) -> Unit
+    onClick: () -> Unit
+) {
+    val status = transcriptionModeStatus(enabled, state)
+
+    SettingsItem(
+        icon = Icons.Default.Mic,
+        title = stringResource(R.string.settings_on_device_transcription),
+        onClick = onClick,
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun TranscriptionModeSettingsScreen(
+    enabled: Boolean,
+    state: OnDeviceModelUiState,
+    onBack: () -> Unit,
+    onModeSelected: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val progress = state.downloadProgress?.coerceIn(0f, 1f)
-    val status = when {
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.settings_on_device_transcription),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        Text(
+            text = stringResource(R.string.onboarding_on_device_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        TranscriptionModeChoiceCard(
+            title = stringResource(R.string.onboarding_transcription_cloud_title),
+            body = stringResource(R.string.onboarding_transcription_cloud_body),
+            accuracyStars = 5,
+            speedStars = 5,
+            selected = !enabled && !state.isDownloading,
+            onClick = { onModeSelected(false) }
+        )
+
+        TranscriptionModeChoiceCard(
+            title = stringResource(R.string.onboarding_transcription_offline_title),
+            body = when {
+                state.isDownloading -> transcriptionModeStatus(enabled = true, state = state)
+                state.isInstalled -> stringResource(R.string.settings_on_device_ready)
+                else -> stringResource(R.string.onboarding_transcription_offline_body)
+            },
+            accuracyStars = 3,
+            speedStars = 4,
+            selected = enabled || state.isDownloading,
+            onClick = { onModeSelected(true) }
+        )
+
+        if (state.isDownloading) {
+            LinearProgressIndicator(
+                progress = { progress ?: 0f },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun TranscriptionModeChoiceCard(
+    title: String,
+    body: String,
+    accuracyStars: Int,
+    speedStars: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            )
+            .border(
+                BorderStroke(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                ),
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .border(
+                    width = 2.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            SettingsRatingRow(
+                label = stringResource(R.string.onboarding_transcription_accuracy),
+                stars = accuracyStars
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            SettingsRatingRow(
+                label = stringResource(R.string.onboarding_transcription_speed),
+                stars = speedStars
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsRatingRow(
+    label: String,
+    stars: Int
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            repeat(5) { index ->
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                    tint = if (index < stars.coerceIn(0, 5)) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun transcriptionModeStatus(
+    enabled: Boolean,
+    state: OnDeviceModelUiState
+): String {
+    val progress = state.downloadProgress?.coerceIn(0f, 1f)
+    return when {
         state.isDownloading && progress != null -> {
             stringResource(R.string.settings_on_device_downloading, (progress * 100).toInt())
         }
@@ -883,67 +1131,6 @@ private fun OnDeviceTranscriptionItem(
         enabled -> stringResource(R.string.settings_on_device_local)
         state.isInstalled -> stringResource(R.string.settings_on_device_ready)
         else -> stringResource(R.string.settings_on_device_cloud)
-    }
-
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onToggle(if (state.isDownloading) false else !enabled) }
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = stringResource(R.string.settings_on_device_transcription),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = status,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = enabled || state.isDownloading,
-                enabled = true,
-                onCheckedChange = { checked ->
-                    if (state.isDownloading) {
-                        onToggle(false)
-                    } else {
-                        onToggle(checked)
-                    }
-                }
-            )
-        }
-
-        if (state.isDownloading) {
-            LinearProgressIndicator(
-                progress = { progress ?: 0f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 56.dp, end = 16.dp, bottom = 16.dp)
-            )
-        }
     }
 }
 
@@ -1020,6 +1207,13 @@ private fun openAccessibilitySettings(context: Context) {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
     }
     context.startActivity(intent)
+}
+
+private fun hasMicrophonePermission(context: Context): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
 }
 
 private fun isOverlayAccessibilityEnabled(context: Context): Boolean {

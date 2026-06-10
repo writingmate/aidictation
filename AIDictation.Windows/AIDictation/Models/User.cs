@@ -1,12 +1,12 @@
 using System;
 using Newtonsoft.Json;
-using Supabase.Postgrest.Attributes;
-using Supabase.Postgrest.Models;
 
 namespace AIDictation.Models;
 
-[Table("users")]
-public class User : BaseModel
+/// <summary>
+/// User profile from the Supabase "profiles" table, matching the Android/macOS schema.
+/// </summary>
+public class User
 {
     [JsonProperty("id")]
     public Guid Id { get; set; }
@@ -39,7 +39,7 @@ public class User : BaseModel
     public DateTime? WordCountResetAt { get; set; }
 
     [JsonIgnore]
-    public SubscriptionTier SubscriptionTier => 
+    public SubscriptionTier SubscriptionTier =>
         SubscriptionStatus == "pro" ? SubscriptionTier.Pro : SubscriptionTier.Free;
 
     [JsonIgnore]
@@ -56,8 +56,8 @@ public class User : BaseModel
     }
 
     [JsonIgnore]
-    public bool HasReachedLimit => 
-        SubscriptionTier.GetWordLimit() != int.MaxValue && 
+    public bool HasReachedLimit =>
+        SubscriptionTier.GetWordLimit() != int.MaxValue &&
         MonthlyWordCount >= SubscriptionTier.GetWordLimit();
 
     [JsonIgnore]

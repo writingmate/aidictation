@@ -1,36 +1,34 @@
 using System;
 using System.Diagnostics;
-using System.Net;
-using System.Threading;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Threading.Tasks;
+using System.Web;
 using AIDictation.Helpers;
-using AIDictation.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Supabase;
-using Supabase.Gotrue;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UserProfile = AIDictation.Models.User;
-using Supabase.Gotrue.Interfaces;
-using static Supabase.Gotrue.Constants;
 
 namespace AIDictation.Services;
 
 /// <summary>
-/// Manages authentication with Supabase including email/password and OAuth login,
-/// session persistence, and token refresh
+/// Manages authentication against the WritingMate Supabase backend using the same
+/// browser-based web auth flow as the Android and macOS apps: the system browser opens
+/// AUTH_WEB_URL with redirect_to=aidictation://auth-callback, and the callback carries
+/// access/refresh tokens which are stored in Windows Credential Manager.
 /// </summary>
 public partial class AuthService : ObservableObject
 {
     // MARK: - Constants
 
-    private static class Config
+    private static class Constants
     {
-        // TODO: Replace with actual values or load from environment
-        public const string SupabaseUrl = "YOUR_SUPABASE_URL";
-        public const string SupabaseKey = "YOUR_SUPABASE_ANON_KEY";
-        public const string OAuthRedirectScheme = "aidictation";
-        public const string OAuthCallbackPath = "auth/callback";
+        public const string CallbackScheme = "aidictation";
+        public const string CallbackHost = "auth-callback";
         public const int TokenRefreshBufferMinutes = 5;
-        public const int OAuthListenerPort = 8234;
+        public const int HttpTimeoutSeconds = 30;
     }
 
     // MARK: - Singleton
@@ -54,9 +52,7 @@ public partial class AuthService : ObservableObject
 
     // MARK: - Private Properties
 
-    private Supabase.Client? _supabaseClient;
-    private HttpListener? _oauthListener;
-    private CancellationTokenSource? _oauthCts;
+    private readonly HttpClient _httpClient;
 
     // MARK: - Events
 
@@ -66,33 +62,28 @@ public partial class AuthService : ObservableObject
 
     private AuthService()
     {
-        InitializeSupabase();
-    }
-
-    private void InitializeSupabase()
-    {
-        var url = Environment.GetEnvironmentVariable("SUPABASE_URL") ?? Config.SupabaseUrl;
-        var key = Environment.GetEnvironmentVariable("SUPABASE_KEY") ?? Config.SupabaseKey;
-
-        var options = new SupabaseOptions
+        _httpClient = new HttpClient
         {
-            AutoRefreshToken = true,
-            AutoConnectRealtime = false
+            Timeout = TimeSpan.FromSeconds(Constants.HttpTimeoutSeconds)
         };
-
-        _supabaseClient = new Supabase.Client(url, key, options);
-        
-        // Subscribe to auth state changes
-        _supabaseClient.Auth.AddStateChangedListener(OnAuthStateChanged);
     }
 
     // MARK: - Public API
 
+    public static bool IsAuthConfigured => BuildConfig.IsAuthConfigured;
+
     /// <summary>
-    /// Initializes authentication on app startup - loads stored session and validates it
+    /// Initializes authentication on app startup: loads the stored session,
+    /// refreshes it when stale, and fetches the user profile.
     /// </summary>
     public async Task InitializeAsync()
     {
+        if (!IsAuthConfigured)
+        {
+            IsAuthenticated = false;
+            return;
+        }
+
         IsLoading = true;
         ErrorMessage = null;
 
@@ -101,40 +92,47 @@ public partial class AuthService : ObservableObject
             var storedSession = CredentialHelper.LoadSession();
             if (storedSession == null)
             {
-                Debug.WriteLine("[AuthService] No stored session found");
                 IsAuthenticated = false;
                 return;
             }
 
             var (accessToken, refreshToken, expiresAt) = storedSession.Value;
 
-            // Check if token needs refresh
-            if (DateTimeOffset.UtcNow.AddMinutes(Config.TokenRefreshBufferMinutes) >= expiresAt)
+            if (DateTimeOffset.UtcNow.AddMinutes(Constants.TokenRefreshBufferMinutes) >= expiresAt)
             {
-                Debug.WriteLine("[AuthService] Token expired or expiring soon, refreshing...");
-                await RefreshSessionAsync(refreshToken);
+                accessToken = await RefreshTokensAsync(refreshToken) ?? string.Empty;
+            }
+
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                ClearSessionState();
+                return;
+            }
+
+            var profile = await FetchProfileAsync(accessToken);
+            if (profile == null)
+            {
+                // Access token may be stale despite the expiry timestamp - try one refresh.
+                accessToken = await RefreshTokensAsync(refreshToken) ?? string.Empty;
+                profile = string.IsNullOrEmpty(accessToken) ? null : await FetchProfileAsync(accessToken);
+            }
+
+            if (profile != null)
+            {
+                CurrentUser = profile;
+                IsAuthenticated = true;
+                AuthStateChanged?.Invoke(this, EventArgs.Empty);
             }
             else
             {
-                // Set the session directly
-                var session = await _supabaseClient!.Auth.SetSession(accessToken, refreshToken);
-                if (session != null)
-                {
-                    await OnSessionEstablished(session);
-                }
-                else
-                {
-                    Debug.WriteLine("[AuthService] Failed to restore session, attempting refresh");
-                    await RefreshSessionAsync(refreshToken);
-                }
+                ClearSessionState();
             }
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[AuthService] Initialize error: {ex.Message}");
             ErrorMessage = "Failed to restore session";
-            CredentialHelper.ClearSession();
-            IsAuthenticated = false;
+            ClearSessionState();
         }
         finally
         {
@@ -143,474 +141,311 @@ public partial class AuthService : ObservableObject
     }
 
     /// <summary>
-    /// Signs in with email and password
+    /// Opens the WritingMate web auth page in the default browser.
+    /// The page redirects back via aidictation://auth-callback with tokens.
     /// </summary>
-    public async Task<bool> SignInWithEmailAsync(string email, string password)
+    public void OpenLogin()
     {
-        IsLoading = true;
-        ErrorMessage = null;
+        if (!IsAuthConfigured)
+        {
+            ErrorMessage = "Sign-in is not configured in this build";
+            return;
+        }
 
-        try
-        {
-            var session = await _supabaseClient!.Auth.SignIn(email, password);
-            if (session != null)
-            {
-                await OnSessionEstablished(session);
-                return true;
-            }
+        var redirectTo = $"{Constants.CallbackScheme}://{Constants.CallbackHost}";
+        var separator = BuildConfig.AuthWebUrl.Contains('?') ? "&" : "?";
+        var authUrl = $"{BuildConfig.AuthWebUrl}{separator}redirect_to={Uri.EscapeDataString(redirectTo)}";
 
-            ErrorMessage = "Invalid email or password";
-            return false;
-        }
-        catch (Exception ex)
+        Process.Start(new ProcessStartInfo
         {
-            Debug.WriteLine($"[AuthService] SignIn error: {ex.Message}");
-            ErrorMessage = GetUserFriendlyError(ex);
-            return false;
-        }
-        finally
-        {
-            IsLoading = false;
-        }
+            FileName = authUrl,
+            UseShellExecute = true
+        });
     }
 
     /// <summary>
-    /// Signs up with email and password
+    /// Opens the Stripe upgrade page, pre-filled with the signed-in user's email.
     /// </summary>
-    public async Task<bool> SignUpWithEmailAsync(string email, string password)
+    public void OpenUpgrade()
     {
-        IsLoading = true;
-        ErrorMessage = null;
+        var link = BuildConfig.StripePaymentLink;
+        if (string.IsNullOrWhiteSpace(link))
+        {
+            return;
+        }
 
-        try
+        if (CurrentUser == null)
         {
-            var session = await _supabaseClient!.Auth.SignUp(email, password);
-            if (session != null)
-            {
-                await OnSessionEstablished(session);
-                return true;
-            }
+            OpenLogin();
+            return;
+        }
 
-            // Sign up may return null if email confirmation is required
-            ErrorMessage = "Please check your email to confirm your account";
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[AuthService] SignUp error: {ex.Message}");
-            ErrorMessage = GetUserFriendlyError(ex);
-            return false;
-        }
-        finally
-        {
-            IsLoading = false;
-        }
+        var separator = link.Contains('?') ? "&" : "?";
+        var url = $"{link}{separator}prefilled_email={Uri.EscapeDataString(CurrentUser.Email)}";
+        Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
     }
 
     /// <summary>
-    /// Signs in with Google OAuth
-    /// </summary>
-    public async Task<bool> SignInWithGoogleAsync()
-    {
-        IsLoading = true;
-        ErrorMessage = null;
-
-        try
-        {
-            // Start local HTTP listener for OAuth callback
-            var redirectUri = await StartOAuthListenerAsync();
-            
-            // Get OAuth URL from Supabase
-            var signInUrl = await _supabaseClient!.Auth.SignIn(
-                Provider.Google,
-                new SignInOptions
-                {
-                    RedirectTo = redirectUri
-                }
-            );
-
-            if (signInUrl == null)
-            {
-                ErrorMessage = "Failed to start Google sign-in";
-                return false;
-            }
-
-            // Open browser for authentication
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = signInUrl.Uri?.ToString(),
-                UseShellExecute = true
-            });
-
-            // Wait for callback
-            var result = await WaitForOAuthCallbackAsync();
-            return result;
-        }
-        catch (OperationCanceledException)
-        {
-            Debug.WriteLine("[AuthService] OAuth cancelled");
-            ErrorMessage = "Sign-in was cancelled";
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[AuthService] Google SignIn error: {ex.Message}");
-            ErrorMessage = GetUserFriendlyError(ex);
-            return false;
-        }
-        finally
-        {
-            StopOAuthListener();
-            IsLoading = false;
-        }
-    }
-
-    /// <summary>
-    /// Handles OAuth callback from custom URL scheme (aidictation://auth/callback)
+    /// Handles the aidictation://auth-callback URL with access/refresh tokens
+    /// in the query string or fragment.
     /// </summary>
     public async Task<bool> HandleOAuthCallbackAsync(Uri callbackUri)
     {
         try
         {
-            // Parse the callback URL for tokens
-            var query = System.Web.HttpUtility.ParseQueryString(callbackUri.Query);
-            var fragment = callbackUri.Fragment.TrimStart('#');
-            var fragmentParams = System.Web.HttpUtility.ParseQueryString(fragment);
+            var query = HttpUtility.ParseQueryString(callbackUri.Query);
+            var fragment = HttpUtility.ParseQueryString(callbackUri.Fragment.TrimStart('#'));
 
-            var accessToken = fragmentParams["access_token"] ?? query["access_token"];
-            var refreshToken = fragmentParams["refresh_token"] ?? query["refresh_token"];
+            var accessToken = fragment["access_token"] ?? query["access_token"];
+            var refreshToken = fragment["refresh_token"] ?? query["refresh_token"];
 
-            if (string.IsNullOrEmpty(accessToken) || string.IsNullOrEmpty(refreshToken))
+            if (string.IsNullOrEmpty(accessToken))
             {
-                ErrorMessage = "Invalid callback - missing tokens";
+                ErrorMessage = "Authentication callback did not include a session";
                 return false;
             }
 
-            var session = await _supabaseClient!.Auth.SetSession(accessToken, refreshToken);
-            if (session != null)
+            SaveTokens(accessToken, refreshToken ?? string.Empty);
+
+            IsLoading = true;
+            var profile = await FetchProfileAsync(accessToken);
+            if (profile != null)
             {
-                await OnSessionEstablished(session);
+                CurrentUser = profile;
+                IsAuthenticated = true;
+                ErrorMessage = null;
+                AuthStateChanged?.Invoke(this, EventArgs.Empty);
                 return true;
             }
 
-            ErrorMessage = "Failed to establish session";
+            ErrorMessage = "Failed to load your profile";
             return false;
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[AuthService] OAuth callback error: {ex.Message}");
-            ErrorMessage = GetUserFriendlyError(ex);
+            ErrorMessage = "Sign-in failed. Please try again";
             return false;
+        }
+        finally
+        {
+            IsLoading = false;
         }
     }
 
     /// <summary>
-    /// Signs out the current user
+    /// Signs out the current user and clears stored tokens.
     /// </summary>
-    public async Task SignOutAsync()
+    public Task SignOutAsync()
     {
-        IsLoading = true;
+        ClearSessionState();
+        return Task.CompletedTask;
+    }
 
-        try
+    /// <summary>
+    /// Returns a valid access token for API calls, refreshing it when close to expiry.
+    /// </summary>
+    public async Task<string?> GetValidAccessTokenAsync()
+    {
+        var storedSession = CredentialHelper.LoadSession();
+        if (storedSession == null) return null;
+
+        var (accessToken, refreshToken, expiresAt) = storedSession.Value;
+        if (DateTimeOffset.UtcNow.AddMinutes(Constants.TokenRefreshBufferMinutes) >= expiresAt)
         {
-            await _supabaseClient!.Auth.SignOut();
+            return await RefreshTokensAsync(refreshToken);
         }
-        catch (Exception ex)
+
+        return accessToken;
+    }
+
+    /// <summary>
+    /// Refreshes the user profile (word counts, subscription status) from the backend.
+    /// </summary>
+    public async Task RefreshUserAsync()
+    {
+        var token = await GetValidAccessTokenAsync();
+        if (token == null)
         {
-            Debug.WriteLine($"[AuthService] SignOut error: {ex.Message}");
+            ClearSessionState();
+            return;
         }
-        finally
+
+        var profile = await FetchProfileAsync(token);
+        if (profile != null)
         {
-            CredentialHelper.ClearSession();
-            CurrentUser = null;
-            IsAuthenticated = false;
-            IsLoading = false;
+            CurrentUser = profile;
+            IsAuthenticated = true;
             AuthStateChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
     /// <summary>
-    /// Sends password reset email
+    /// Adds transcribed words to the user's monthly usage counter.
     /// </summary>
-    public async Task<bool> SendPasswordResetAsync(string email)
+    public async Task UpdateWordCountAsync(int wordsToAdd)
     {
-        IsLoading = true;
-        ErrorMessage = null;
+        if (wordsToAdd <= 0 || CurrentUser == null) return;
+
+        var token = await GetValidAccessTokenAsync();
+        if (token == null) return;
 
         try
         {
-            await _supabaseClient!.Auth.ResetPasswordForEmail(email);
-            return true;
+            var updatedCount = CurrentUser.MonthlyWordCount + wordsToAdd;
+            var body = new JObject
+            {
+                ["monthly_word_count"] = updatedCount,
+                ["updated_at"] = DateTime.UtcNow.ToString("o")
+            };
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Patch,
+                $"{BuildConfig.SupabaseUrl}/rest/v1/profiles?user_id=eq.{CurrentUser.UserId}&select=*");
+            AddSupabaseHeaders(request, token);
+            request.Headers.Add("Prefer", "return=representation");
+            request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(request);
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                var profiles = JsonConvert.DeserializeObject<UserProfile[]>(json);
+                if (profiles is { Length: > 0 })
+                {
+                    CurrentUser = profiles[0];
+                }
+                else
+                {
+                    CurrentUser.MonthlyWordCount = updatedCount;
+                }
+                OnPropertyChanged(nameof(CurrentUser));
+            }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[AuthService] Password reset error: {ex.Message}");
-            ErrorMessage = GetUserFriendlyError(ex);
-            return false;
-        }
-        finally
-        {
-            IsLoading = false;
+            Debug.WriteLine($"[AuthService] UpdateWordCount error: {ex.Message}");
         }
     }
-
-    /// <summary>
-    /// Refreshes the current session
-    /// </summary>
-    public async Task<bool> RefreshSessionAsync()
-    {
-        var storedSession = CredentialHelper.LoadSession();
-        if (storedSession == null) return false;
-
-        await RefreshSessionAsync(storedSession.Value.RefreshToken);
-        return IsAuthenticated;
-    }
-
-    /// <summary>
-    /// Gets the current access token for API calls
-    /// </summary>
-    public string? GetAccessToken()
-    {
-        return _supabaseClient?.Auth.CurrentSession?.AccessToken;
-    }
-
-    /// <summary>
-    /// Gets the Supabase client for direct database access
-    /// </summary>
-    public Supabase.Client? GetSupabaseClient() => _supabaseClient;
 
     // MARK: - Private Methods
 
-    private async Task RefreshSessionAsync(string refreshToken)
+    private void ClearSessionState()
     {
+        CredentialHelper.ClearSession();
+        CurrentUser = null;
+        IsAuthenticated = false;
+        AuthStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static void SaveTokens(string accessToken, string refreshToken)
+    {
+        // Access tokens from GoTrue last one hour; the exact expiry is refreshed lazily.
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(55);
+        CredentialHelper.SaveSession(accessToken, refreshToken, expiresAt);
+    }
+
+    private async Task<string?> RefreshTokensAsync(string refreshToken)
+    {
+        if (string.IsNullOrEmpty(refreshToken)) return null;
+
         try
         {
-            var session = await _supabaseClient!.Auth.RefreshSession();
-            if (session != null)
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"{BuildConfig.SupabaseUrl}/auth/v1/token?grant_type=refresh_token");
+            request.Headers.Add("apikey", BuildConfig.SupabaseAnonKey);
+            var body = new JObject { ["refresh_token"] = refreshToken };
+            request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
             {
-                await OnSessionEstablished(session);
+                Debug.WriteLine($"[AuthService] Session refresh failed: {(int)response.StatusCode}");
+                return null;
             }
-            else
-            {
-                Debug.WriteLine("[AuthService] Session refresh returned null");
-                CredentialHelper.ClearSession();
-                IsAuthenticated = false;
-            }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var accessToken = json["access_token"]?.ToString();
+            var newRefreshToken = json["refresh_token"]?.ToString() ?? refreshToken;
+
+            if (string.IsNullOrEmpty(accessToken)) return null;
+
+            var expiresIn = json["expires_in"]?.Value<int>() ?? 3600;
+            CredentialHelper.SaveSession(
+                accessToken,
+                newRefreshToken,
+                DateTimeOffset.UtcNow.AddSeconds(expiresIn));
+
+            return accessToken;
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[AuthService] Refresh error: {ex.Message}");
-            CredentialHelper.ClearSession();
-            IsAuthenticated = false;
-            throw;
+            return null;
         }
     }
 
-    private async Task OnSessionEstablished(Session session)
+    private async Task<UserProfile?> FetchProfileAsync(string accessToken)
     {
-        // Save tokens to credential manager
-        if (!string.IsNullOrEmpty(session.AccessToken) && !string.IsNullOrEmpty(session.RefreshToken))
-        {
-            var expiresAt = DateTimeOffset.UtcNow.AddSeconds(session.ExpiresIn);
-            CredentialHelper.SaveSession(session.AccessToken, session.RefreshToken, expiresAt);
-        }
-
-        // Fetch user profile from database
-        await FetchUserProfileAsync(session.User?.Id);
-
-        IsAuthenticated = true;
-        AuthStateChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private async Task FetchUserProfileAsync(string? userId)
-    {
-        if (string.IsNullOrEmpty(userId) || _supabaseClient == null)
-        {
-            CurrentUser = null;
-            return;
-        }
-
         try
         {
-            var response = await _supabaseClient
-                .From<UserProfile>()
-                .Where(u => u.UserId == Guid.Parse(userId))
-                .Single();
+            // First resolve the auth user (id + email) ...
+            using var userRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{BuildConfig.SupabaseUrl}/auth/v1/user");
+            AddSupabaseHeaders(userRequest, accessToken);
 
-            CurrentUser = response;
+            var userResponse = await _httpClient.SendAsync(userRequest);
+            if (!userResponse.IsSuccessStatusCode)
+            {
+                Debug.WriteLine($"[AuthService] Auth user fetch failed: {(int)userResponse.StatusCode}");
+                return null;
+            }
+
+            var userJson = JObject.Parse(await userResponse.Content.ReadAsStringAsync());
+            var userId = userJson["id"]?.ToString();
+            var email = userJson["email"]?.ToString() ?? string.Empty;
+            if (string.IsNullOrEmpty(userId)) return null;
+
+            // ... then load the profile row with usage and subscription data.
+            using var profileRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{BuildConfig.SupabaseUrl}/rest/v1/profiles?select=*&user_id=eq.{userId}");
+            AddSupabaseHeaders(profileRequest, accessToken);
+
+            var profileResponse = await _httpClient.SendAsync(profileRequest);
+            if (profileResponse.IsSuccessStatusCode)
+            {
+                var json = await profileResponse.Content.ReadAsStringAsync();
+                var profiles = JsonConvert.DeserializeObject<UserProfile[]>(json);
+                if (profiles is { Length: > 0 })
+                {
+                    if (string.IsNullOrEmpty(profiles[0].Email))
+                    {
+                        profiles[0].Email = email;
+                    }
+                    return profiles[0];
+                }
+            }
+
+            // No profile row yet - return a minimal profile from auth data.
+            return new UserProfile
+            {
+                UserId = Guid.Parse(userId),
+                Email = email
+            };
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[AuthService] Fetch user profile error: {ex.Message}");
-            // Create a minimal user object from auth data
-            CurrentUser = new UserProfile
-            {
-                UserId = Guid.Parse(userId),
-                Email = _supabaseClient.Auth.CurrentUser?.Email ?? ""
-            };
+            Debug.WriteLine($"[AuthService] Fetch profile error: {ex.Message}");
+            return null;
         }
     }
 
-    private void OnAuthStateChanged(IGotrueClient<Supabase.Gotrue.User, Session> sender, AuthState state)
+    private static void AddSupabaseHeaders(HttpRequestMessage request, string accessToken)
     {
-        Debug.WriteLine($"[AuthService] Auth state changed: {state}");
-        
-        switch (state)
-        {
-            case AuthState.SignedIn:
-                IsAuthenticated = true;
-                break;
-            case AuthState.SignedOut:
-                IsAuthenticated = false;
-                CurrentUser = null;
-                CredentialHelper.ClearSession();
-                break;
-            case AuthState.TokenRefreshed:
-                var session = _supabaseClient?.Auth.CurrentSession;
-                if (session != null && !string.IsNullOrEmpty(session.AccessToken))
-                {
-                    var expiresAt = DateTimeOffset.UtcNow.AddSeconds(session.ExpiresIn);
-                    CredentialHelper.SaveSession(session.AccessToken, session.RefreshToken!, expiresAt);
-                }
-                break;
-        }
-
-        AuthStateChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private async Task<string> StartOAuthListenerAsync()
-    {
-        StopOAuthListener();
-        
-        _oauthCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        _oauthListener = new HttpListener();
-        
-        var redirectUri = $"http://localhost:{Config.OAuthListenerPort}/";
-        _oauthListener.Prefixes.Add(redirectUri);
-        _oauthListener.Start();
-
-        return redirectUri;
-    }
-
-    private async Task<bool> WaitForOAuthCallbackAsync()
-    {
-        if (_oauthListener == null || _oauthCts == null)
-            return false;
-
-        try
-        {
-            var context = await _oauthListener.GetContextAsync().WaitAsync(_oauthCts.Token);
-            var request = context.Request;
-            var response = context.Response;
-
-            // Parse tokens from the callback
-            var query = request.QueryString;
-            var accessToken = query["access_token"];
-            var refreshToken = query["refresh_token"];
-
-            // If tokens are in fragment, we need to handle it client-side
-            // Send HTML page that extracts fragment and posts back
-            if (string.IsNullOrEmpty(accessToken))
-            {
-                var html = GetOAuthCallbackHtml();
-                var buffer = System.Text.Encoding.UTF8.GetBytes(html);
-                response.ContentType = "text/html";
-                response.ContentLength64 = buffer.Length;
-                await response.OutputStream.WriteAsync(buffer);
-                response.Close();
-
-                // Wait for second request with tokens
-                context = await _oauthListener.GetContextAsync().WaitAsync(_oauthCts.Token);
-                request = context.Request;
-                response = context.Response;
-                query = request.QueryString;
-                accessToken = query["access_token"];
-                refreshToken = query["refresh_token"];
-            }
-
-            // Send success response
-            var successHtml = "<html><body><h1>Sign in successful!</h1><p>You can close this window.</p><script>window.close();</script></body></html>";
-            var successBuffer = System.Text.Encoding.UTF8.GetBytes(successHtml);
-            response.ContentType = "text/html";
-            response.ContentLength64 = successBuffer.Length;
-            await response.OutputStream.WriteAsync(successBuffer);
-            response.Close();
-
-            if (!string.IsNullOrEmpty(accessToken) && !string.IsNullOrEmpty(refreshToken))
-            {
-                var session = await _supabaseClient!.Auth.SetSession(accessToken, refreshToken);
-                if (session != null)
-                {
-                    await OnSessionEstablished(session);
-                    return true;
-                }
-            }
-
-            return false;
-        }
-        catch (OperationCanceledException)
-        {
-            return false;
-        }
-    }
-
-    private void StopOAuthListener()
-    {
-        _oauthCts?.Cancel();
-        _oauthCts?.Dispose();
-        _oauthCts = null;
-
-        try
-        {
-            _oauthListener?.Stop();
-            _oauthListener?.Close();
-        }
-        catch { }
-        
-        _oauthListener = null;
-    }
-
-    private static string GetOAuthCallbackHtml()
-    {
-        return """
-            <!DOCTYPE html>
-            <html>
-            <head><title>Signing in...</title></head>
-            <body>
-                <h1>Completing sign in...</h1>
-                <script>
-                    const hash = window.location.hash.substring(1);
-                    if (hash) {
-                        const params = new URLSearchParams(hash);
-                        const accessToken = params.get('access_token');
-                        const refreshToken = params.get('refresh_token');
-                        if (accessToken && refreshToken) {
-                            window.location.href = window.location.pathname + 
-                                '?access_token=' + encodeURIComponent(accessToken) + 
-                                '&refresh_token=' + encodeURIComponent(refreshToken);
-                        }
-                    }
-                </script>
-            </body>
-            </html>
-            """;
-    }
-
-    private static string GetUserFriendlyError(Exception ex)
-    {
-        var message = ex.Message.ToLowerInvariant();
-
-        if (message.Contains("invalid login credentials") || message.Contains("invalid password"))
-            return "Invalid email or password";
-        if (message.Contains("email not confirmed"))
-            return "Please confirm your email address";
-        if (message.Contains("user already registered"))
-            return "An account with this email already exists";
-        if (message.Contains("rate limit"))
-            return "Too many attempts. Please try again later";
-        if (message.Contains("network") || message.Contains("connection"))
-            return "Network error. Please check your connection";
-
-        return "An error occurred. Please try again";
+        request.Headers.Add("apikey", BuildConfig.SupabaseAnonKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
     }
 }

@@ -25,6 +25,7 @@ public partial class App : Application
     private static class Constants
     {
         public const string MutexName = "AIDictation_SingleInstance_Mutex";
+        public const string PipeName = "AIDictation_SingleInstance_Pipe";
         public const string UrlScheme = "aidictation";
         public const string UrlSchemeDescription = "AIDictation Protocol";
     }
@@ -36,19 +37,25 @@ public partial class App : Application
     private readonly DispatcherTimer _recordingTimer = new();
     private DateTime _recordingStartedAt;
     private bool _isStoppingRecording;
+    private CancellationTokenSource? _pipeCts;
 
     // MARK: - Application Lifecycle
 
     protected override async void OnStartup(StartupEventArgs e)
     {
-        // Single instance enforcement
+        // Single instance enforcement; forward our launch URL (e.g. the
+        // aidictation://auth-callback from the browser) to the running instance.
         if (!EnsureSingleInstance())
         {
+            ForwardArgsToRunningInstance(e.Args);
             Shutdown();
             return;
         }
 
         base.OnStartup(e);
+
+        // Listen for URLs forwarded by subsequent instances
+        StartPipeServer();
 
         // Setup global exception handlers
         SetupExceptionHandling();
@@ -73,6 +80,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _pipeCts?.Cancel();
         SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
         UnsubscribeRuntimeEvents();
 
@@ -208,16 +216,95 @@ public partial class App : Application
             var uri = new Uri(url);
             var path = uri.Host + uri.AbsolutePath;
 
-            // Handle auth callback
-            if (path.StartsWith("auth/callback", StringComparison.OrdinalIgnoreCase))
+            // Handle auth callback (aidictation://auth-callback, legacy auth/callback)
+            if (uri.Host.Equals("auth-callback", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("auth/callback", StringComparison.OrdinalIgnoreCase))
             {
-                // Process OAuth callback
-                _ = AuthService.Instance.HandleOAuthCallbackAsync(uri);
+                _ = Dispatcher.InvokeAsync(async () =>
+                {
+                    var success = await AuthService.Instance.HandleOAuthCallbackAsync(uri);
+                    if (success)
+                    {
+                        ShowSettingsWindow();
+                    }
+                });
             }
         }
         catch
         {
             // Invalid URL format
+        }
+    }
+
+    // MARK: - Single Instance Messaging
+
+    private void StartPipeServer()
+    {
+        _pipeCts = new CancellationTokenSource();
+        var token = _pipeCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await using var server = new System.IO.Pipes.NamedPipeServerStream(
+                        Constants.PipeName,
+                        System.IO.Pipes.PipeDirection.In,
+                        1,
+                        System.IO.Pipes.PipeTransmissionMode.Byte,
+                        System.IO.Pipes.PipeOptions.Asynchronous);
+
+                    await server.WaitForConnectionAsync(token);
+
+                    using var reader = new StreamReader(server);
+                    var message = (await reader.ReadToEndAsync()).Trim();
+
+                    await Dispatcher.InvokeAsync(() => HandleForwardedMessage(message));
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Keep listening; a malformed client connection should not kill the server.
+                }
+            }
+        }, token);
+    }
+
+    private void HandleForwardedMessage(string message)
+    {
+        if (!string.IsNullOrWhiteSpace(message) &&
+            message.StartsWith($"{Constants.UrlScheme}://", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleUrlActivation(new[] { message });
+        }
+        else
+        {
+            // Plain activation - bring the app to the foreground.
+            ShowSettingsWindow();
+        }
+    }
+
+    private static void ForwardArgsToRunningInstance(string[] args)
+    {
+        try
+        {
+            using var client = new System.IO.Pipes.NamedPipeClientStream(
+                ".", Constants.PipeName, System.IO.Pipes.PipeDirection.Out);
+            client.Connect(2000);
+
+            using var writer = new StreamWriter(client);
+            writer.Write(args.Length > 0 ? args[0] : string.Empty);
+            writer.Flush();
+        }
+        catch
+        {
+            // Running instance is not listening; fall back to window activation.
+            BringExistingInstanceToForeground();
         }
     }
 

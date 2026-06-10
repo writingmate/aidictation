@@ -1,0 +1,205 @@
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
+using Whisper.net;
+
+namespace AIDictation.Services;
+
+/// <summary>
+/// On-device transcription using whisper.cpp via Whisper.net, providing the offline
+/// mode that macOS implements with Parakeet. The multilingual ggml model is downloaded
+/// once to local app data and reused across sessions.
+/// </summary>
+public sealed class WhisperLocalService : IDisposable
+{
+    // MARK: - Singleton
+
+    public static WhisperLocalService Instance { get; } = new();
+
+    // MARK: - Constants
+
+    private static class Constants
+    {
+        public const string ModelFileName = "ggml-small.bin";
+        public const string ModelDownloadUrl =
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+        public const int WhisperSampleRate = 16000;
+        public const int DownloadBufferSize = 81920;
+    }
+
+    // MARK: - Public Callbacks
+
+    /// <summary>Reports model download progress from 0.0 to 1.0.</summary>
+    public event EventHandler<double>? ModelDownloadProgress;
+
+    // MARK: - Private Properties
+
+    private readonly SemaphoreSlim _modelLock = new(1, 1);
+    private WhisperFactory? _factory;
+
+    // MARK: - Initialization
+
+    private WhisperLocalService() { }
+
+    // MARK: - Public API
+
+    public static string ModelPath
+    {
+        get
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return Path.Combine(appData, "AIDictation", "models", Constants.ModelFileName);
+        }
+    }
+
+    public bool IsModelDownloaded => File.Exists(ModelPath);
+
+    /// <summary>
+    /// Downloads the whisper model when missing. Safe to call repeatedly.
+    /// </summary>
+    public async Task EnsureModelAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsModelDownloaded) return;
+
+        await _modelLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (IsModelDownloaded) return;
+
+            var modelDir = Path.GetDirectoryName(ModelPath)!;
+            Directory.CreateDirectory(modelDir);
+            var tempPath = ModelPath + ".download";
+
+            using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            using var response = await httpClient.GetAsync(
+                Constants.ModelDownloadUrl,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var totalBytes = response.Content.Headers.ContentLength ?? -1L;
+            long readBytes = 0;
+
+            await using (var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var fileStream = File.Create(tempPath))
+            {
+                var buffer = new byte[Constants.DownloadBufferSize];
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    readBytes += read;
+                    if (totalBytes > 0)
+                    {
+                        ModelDownloadProgress?.Invoke(this, (double)readBytes / totalBytes);
+                    }
+                }
+            }
+
+            File.Move(tempPath, ModelPath, overwrite: true);
+            ModelDownloadProgress?.Invoke(this, 1.0);
+        }
+        catch
+        {
+            try { File.Delete(ModelPath + ".download"); } catch { }
+            throw;
+        }
+        finally
+        {
+            _modelLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Transcribes a WAV file fully on-device. Downloads the model on first use.
+    /// </summary>
+    /// <param name="audioFilePath">Path to the recorded WAV file (any sample rate).</param>
+    /// <param name="languageCode">Whisper language code, or "auto" for detection.</param>
+    public async Task<string> TranscribeAsync(
+        string audioFilePath,
+        string languageCode = "auto",
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureModelAsync(cancellationToken);
+
+        var factory = GetFactory();
+        var whisperLanguage = NormalizeLanguage(languageCode);
+
+        var resampledPath = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation_whisper_{Guid.NewGuid():N}.wav");
+
+        try
+        {
+            ResampleToWhisperFormat(audioFilePath, resampledPath);
+
+            using var processor = factory.CreateBuilder()
+                .WithLanguage(whisperLanguage)
+                .Build();
+
+            var text = new StringBuilder();
+            await using var fileStream = File.OpenRead(resampledPath);
+            await foreach (var segment in processor.ProcessAsync(fileStream, cancellationToken))
+            {
+                text.Append(segment.Text);
+            }
+
+            return text.ToString().Trim();
+        }
+        finally
+        {
+            try { File.Delete(resampledPath); } catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        _factory?.Dispose();
+        _factory = null;
+        _modelLock.Dispose();
+    }
+
+    // MARK: - Private Methods
+
+    private WhisperFactory GetFactory()
+    {
+        _factory ??= WhisperFactory.FromPath(ModelPath);
+        return _factory;
+    }
+
+    private static void ResampleToWhisperFormat(string inputPath, string outputPath)
+    {
+        using var reader = new AudioFileReader(inputPath);
+        ISampleProvider provider = reader;
+
+        if (provider.WaveFormat.Channels > 1)
+        {
+            provider = provider.ToMono();
+        }
+
+        if (provider.WaveFormat.SampleRate != Constants.WhisperSampleRate)
+        {
+            provider = new WdlResamplingSampleProvider(provider, Constants.WhisperSampleRate);
+        }
+
+        WaveFileWriter.CreateWaveFile16(outputPath, provider);
+    }
+
+    private static string NormalizeLanguage(string languageCode)
+    {
+        if (string.IsNullOrWhiteSpace(languageCode) || languageCode == "auto")
+        {
+            return "auto";
+        }
+
+        // Whisper expects bare ISO 639-1 codes ("en-GB" -> "en"); unsupported
+        // regional codes fall back to auto-detection.
+        var bareCode = languageCode.Split('-')[0].ToLowerInvariant();
+        return bareCode.Length == 2 ? bareCode : "auto";
+    }
+}

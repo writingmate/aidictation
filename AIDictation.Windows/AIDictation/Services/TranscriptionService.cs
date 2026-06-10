@@ -4,21 +4,20 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AIDictation.Helpers;
 using AIDictation.Models;
-using CredentialManagement;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace AIDictation.Services;
 
 /// <summary>
-/// Handles audio transcription via AIDictation cloud, with legacy provider code retained for compatibility.
-/// Supports retry logic, dictionary replacements, shortcut expansion, and optional LLM post-processing.
+/// Transcribes recordings via the WritingMate cloud backend (with server-side LLM
+/// post-processing) or fully on-device via Whisper, mirroring the macOS/Android pipeline:
+/// vocabulary prompt, language hints, context rules from the foreground app, then local
+/// dictionary replacements and shortcut expansions.
 /// </summary>
 public sealed class TranscriptionService
 {
@@ -30,19 +29,9 @@ public sealed class TranscriptionService
 
     private static class Constants
     {
-        public const string GroqApiUrl = "https://api.groq.com/openai/v1/audio/transcriptions";
-        public const string AIDictationApiUrl = "https://api.aidictation.com/v1/transcribe";
-        public const string GroqModel = "whisper-large-v3";
         public const int MaxRetryAttempts = 3;
         public const int RetryDelayMs = 1000;
-        public const int HttpTimeoutSeconds = 60;
-    }
-
-    private static class CredentialKeys
-    {
-        public const string GroqApiKey = "AIDictation_Groq_ApiKey";
-        public const string CustomApiKey = "AIDictation_Custom_ApiKey";
-        public const string CustomApiUrl = "AIDictation_Custom_ApiUrl";
+        public const int HttpTimeoutSeconds = 120;
     }
 
     // MARK: - Private Properties
@@ -64,11 +53,8 @@ public sealed class TranscriptionService
     // MARK: - Public API
 
     /// <summary>
-    /// Transcribes an audio file using the configured provider.
+    /// Transcribes an audio file using the configured provider (cloud or on-device).
     /// </summary>
-    /// <param name="audioFilePath">Path to the audio file (WAV, MP3, etc.)</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Transcribed and processed text</returns>
     public async Task<TranscriptionResult> TranscribeAsync(
         string audioFilePath,
         CancellationToken cancellationToken = default)
@@ -78,10 +64,10 @@ public sealed class TranscriptionService
             return TranscriptionResult.Failure("Audio file not found");
         }
 
-        var provider = GetTranscriptionProvider();
-        var language = GetPrimaryLanguage();
+        // Capture the foreground app before any await so context rules match the
+        // window the user dictated into, not this app.
+        var contextInstructions = GetActiveContextInstructions();
 
-        // Attempt transcription with retry logic
         string? rawText = null;
         Exception? lastException = null;
 
@@ -89,13 +75,9 @@ public sealed class TranscriptionService
         {
             try
             {
-                rawText = provider switch
-                {
-                    "groq" => await TranscribeWithGroqAsync(audioFilePath, language, cancellationToken),
-                    "custom" => await TranscribeWithCustomAsync(audioFilePath, language, cancellationToken),
-                    "aidictation" => await TranscribeWithAIDictationAsync(audioFilePath, language, cancellationToken),
-                    _ => await TranscribeWithAIDictationAsync(audioFilePath, language, cancellationToken)
-                };
+                rawText = IsOfflineMode
+                    ? await TranscribeOfflineAsync(audioFilePath, contextInstructions, cancellationToken)
+                    : await TranscribeWithCloudAsync(audioFilePath, contextInstructions, cancellationToken);
 
                 if (rawText != null) break;
             }
@@ -113,111 +95,53 @@ public sealed class TranscriptionService
             }
         }
 
-        if (string.IsNullOrEmpty(rawText))
+        if (string.IsNullOrWhiteSpace(rawText))
         {
             return TranscriptionResult.Failure(
                 lastException?.Message ?? "Transcription failed after multiple attempts");
         }
 
-        // Apply post-processing pipeline
-        var processedText = rawText;
-
-        // Apply dictionary replacements
-        processedText = ApplyDictionaryReplacements(processedText);
-
-        // Apply shortcut expansions
+        var processedText = ApplyDictionaryReplacements(rawText);
         processedText = ApplyShortcutExpansions(processedText);
 
-        // Apply LLM post-processing if enabled
-        if (_settings.Settings.EnableLLMPostProcessing)
-        {
-            try
-            {
-                processedText = await ApplyLLMPostProcessingAsync(processedText, cancellationToken);
-            }
-            catch
-            {
-                // Continue with unprocessed text if LLM fails
-            }
-        }
+        ReportWordUsage(processedText);
 
         return TranscriptionResult.Success(processedText, rawText);
     }
 
     /// <summary>
-    /// Saves API credentials for the specified provider.
+    /// Checks whether the active transcription mode is ready to use.
     /// </summary>
-    public void SaveApiKey(string provider, string apiKey)
-    {
-        var target = provider switch
-        {
-            "groq" => CredentialKeys.GroqApiKey,
-            "custom" => CredentialKeys.CustomApiKey,
-            _ => throw new ArgumentException($"Unknown provider: {provider}")
-        };
+    public bool IsConfigured =>
+        IsOfflineMode || !string.IsNullOrEmpty(BuildConfig.TranscriptionApiKey);
 
-        SaveCredential(target, apiKey);
-    }
+    public bool IsOfflineMode =>
+        _settings.Settings.TranscriptionProvider == AppSettings.LocalTranscriptionProvider;
 
-    /// <summary>
-    /// Saves the custom API endpoint URL.
-    /// </summary>
-    public void SaveCustomApiUrl(string url)
-    {
-        SaveCredential(CredentialKeys.CustomApiUrl, url);
-    }
+    // MARK: - Cloud Pipeline
 
-    /// <summary>
-    /// Gets the API key for the specified provider.
-    /// </summary>
-    public string? GetApiKey(string provider)
-    {
-        var target = provider switch
-        {
-            "groq" => CredentialKeys.GroqApiKey,
-            "custom" => CredentialKeys.CustomApiKey,
-            _ => null
-        };
-
-        return target != null ? LoadCredential(target) : null;
-    }
-
-    /// <summary>
-    /// Gets the custom API endpoint URL.
-    /// </summary>
-    public string? GetCustomApiUrl()
-    {
-        return LoadCredential(CredentialKeys.CustomApiUrl);
-    }
-
-    /// <summary>
-    /// Checks if the specified provider is configured with valid credentials.
-    /// </summary>
-    public bool IsProviderConfigured(string provider)
-    {
-        provider = NormalizeTranscriptionProvider(provider);
-
-        return provider switch
-        {
-            "groq" => !string.IsNullOrEmpty(GetApiKey("groq")),
-            "custom" => !string.IsNullOrEmpty(GetApiKey("custom")) && !string.IsNullOrEmpty(GetCustomApiUrl()),
-            "aidictation" => AuthService.Instance.IsAuthenticated,
-            _ => false
-        };
-    }
-
-    // MARK: - Provider Implementations
-
-    private async Task<string?> TranscribeWithGroqAsync(
+    private async Task<string?> TranscribeWithCloudAsync(
         string audioFilePath,
-        string language,
+        string? contextInstructions,
         CancellationToken cancellationToken)
     {
-        var apiKey = GetApiKey("groq");
+        var apiKey = BuildConfig.TranscriptionApiKey;
         if (string.IsNullOrEmpty(apiKey))
         {
-            throw new InvalidOperationException("Groq API key not configured");
+            throw new InvalidOperationException("Transcription service is not configured in this build");
         }
+
+        var languageCodes = GetSelectedLanguageCodes();
+        var languageNames = GetSelectedLanguageNames(languageCodes);
+        var apiLanguage = languageCodes.Count == 1 && languageCodes[0] != "auto"
+            ? languageCodes[0].Split('-')[0]
+            : null;
+
+        var transcriptionPrompt = BuildLanguageAwarePrompt(BuildVocabularyPrompt(), languageNames);
+        var postProcessingEnabled = _settings.Settings.EnableLLMPostProcessing;
+        var postProcessingPrompt = postProcessingEnabled
+            ? JoinNonEmpty("\n", transcriptionPrompt, contextInstructions)
+            : null;
 
         using var content = new MultipartFormDataContent();
         await using var fileStream = File.OpenRead(audioFilePath);
@@ -225,114 +149,154 @@ public sealed class TranscriptionService
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
 
         content.Add(fileContent, "file", Path.GetFileName(audioFilePath));
-        content.Add(new StringContent(Constants.GroqModel), "model");
+        content.Add(new StringContent(BuildConfig.TranscriptionModel), "model");
+        content.Add(new StringContent("0"), "temperature");
+        content.Add(new StringContent("text"), "response_format");
 
-        if (!string.IsNullOrEmpty(language) && language != "auto")
+        if (!string.IsNullOrEmpty(transcriptionPrompt))
         {
-            content.Add(new StringContent(language), "language");
+            content.Add(new StringContent(transcriptionPrompt), "prompt");
+            content.Add(new StringContent(transcriptionPrompt), "stt_prompt");
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, Constants.GroqApiUrl)
+        if (!string.IsNullOrEmpty(postProcessingPrompt))
+        {
+            content.Add(new StringContent(postProcessingPrompt), "post_processing_prompt");
+        }
+
+        if (!postProcessingEnabled)
+        {
+            content.Add(new StringContent("false"), "post_processing");
+        }
+
+        if (!string.IsNullOrEmpty(apiLanguage))
+        {
+            content.Add(new StringContent(apiLanguage), "language");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildConfig.TranscriptionEndpoint)
         {
             Content = content
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var result = JObject.Parse(json);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"Transcription failed ({(int)response.StatusCode}): {Truncate(body, 200)}");
+        }
 
-        return result["text"]?.ToString();
+        return ParseTranscriptionText(body);
     }
 
-    private async Task<string?> TranscribeWithCustomAsync(
+    // MARK: - Offline Pipeline
+
+    private async Task<string?> TranscribeOfflineAsync(
         string audioFilePath,
-        string language,
+        string? contextInstructions,
         CancellationToken cancellationToken)
     {
-        var apiKey = GetApiKey("custom");
-        var apiUrl = GetCustomApiUrl();
+        var languageCodes = GetSelectedLanguageCodes();
+        var whisperLanguage = languageCodes.Count == 1 ? languageCodes[0] : "auto";
 
-        if (string.IsNullOrEmpty(apiUrl))
+        var rawText = await WhisperLocalService.Instance.TranscribeAsync(
+            audioFilePath, whisperLanguage, cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(rawText)) return rawText;
+
+        if (_settings.Settings.EnableLLMPostProcessing)
         {
-            throw new InvalidOperationException("Custom API URL not configured");
+            var languageNames = GetSelectedLanguageNames(languageCodes);
+            rawText = await LanguagePostProcessService.Instance.PostProcessAsync(
+                rawText,
+                languageNames.Count > 0 ? languageNames : new List<string> { "auto" },
+                contextInstructions,
+                cancellationToken);
         }
 
-        using var content = new MultipartFormDataContent();
-        await using var fileStream = File.OpenRead(audioFilePath);
-        var fileContent = new StreamContent(fileStream);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
-
-        content.Add(fileContent, "file", Path.GetFileName(audioFilePath));
-
-        if (!string.IsNullOrEmpty(language) && language != "auto")
-        {
-            content.Add(new StringContent(language), "language");
-        }
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, apiUrl)
-        {
-            Content = content
-        };
-
-        if (!string.IsNullOrEmpty(apiKey))
-        {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        }
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var result = JObject.Parse(json);
-
-        // Try common response formats
-        return result["text"]?.ToString() 
-               ?? result["transcript"]?.ToString()
-               ?? result["transcription"]?.ToString();
+        return rawText;
     }
 
-    private async Task<string?> TranscribeWithAIDictationAsync(
-        string audioFilePath,
-        string language,
-        CancellationToken cancellationToken)
+    // MARK: - Prompt Building
+
+    private string? BuildVocabularyPrompt()
     {
-        var session = CredentialHelper.LoadSession();
-        if (session == null)
-        {
-            throw new InvalidOperationException("Not authenticated with AIDictation");
-        }
+        var vocabulary = _settings.DictionaryEntries
+            .Where(e => e.IsEnabled && !string.IsNullOrWhiteSpace(e.Trigger))
+            .Select(e => string.IsNullOrWhiteSpace(e.Replacement) ? e.Trigger : e.Replacement!)
+            .ToList();
 
-        using var content = new MultipartFormDataContent();
-        await using var fileStream = File.OpenRead(audioFilePath);
-        var fileContent = new StreamContent(fileStream);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        var phrases = _settings.Shortcuts
+            .Where(s => s.IsEnabled && !string.IsNullOrWhiteSpace(s.VoiceTrigger))
+            .Select(s => s.VoiceTrigger)
+            .ToList();
 
-        content.Add(fileContent, "file", Path.GetFileName(audioFilePath));
+        var parts = new List<string>();
+        if (vocabulary.Count > 0) parts.Add($"Vocabulary: {string.Join(", ", vocabulary)}");
+        if (phrases.Count > 0) parts.Add($"Phrases: {string.Join(", ", phrases)}");
 
-        if (!string.IsNullOrEmpty(language) && language != "auto")
-        {
-            content.Add(new StringContent(language), "language");
-        }
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, Constants.AIDictationApiUrl)
-        {
-            Content = content
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", session.Value.AccessToken);
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var result = JObject.Parse(json);
-
-        return result["text"]?.ToString();
+        return parts.Count > 0 ? string.Join(". ", parts) : null;
     }
 
-    // MARK: - Post-Processing
+    private static string? BuildLanguageAwarePrompt(string? prompt, IReadOnlyList<string> languageNames)
+    {
+        string? languageHint = null;
+        if (languageNames.Count > 1)
+        {
+            languageHint =
+                $"The speaker will use one of these selected languages: {string.Join(", ", languageNames)}. " +
+                "Detect the spoken language from the audio and transcribe it in that same language.";
+        }
+
+        return JoinNonEmpty("\n", languageHint, prompt);
+    }
+
+    private string? GetActiveContextInstructions()
+    {
+        var enabledRules = _settings.ContextRules.Where(r => r.IsEnabled).ToList();
+        if (enabledRules.Count == 0) return null;
+
+        var foregroundApp = ForegroundWindowHelper.GetForegroundApp();
+
+        var instructions = enabledRules
+            .Where(rule => RuleMatches(rule, foregroundApp))
+            .Select(r => r.Instructions)
+            .Where(i => !string.IsNullOrWhiteSpace(i))
+            .ToList();
+
+        return instructions.Count > 0 ? string.Join("\n", instructions) : null;
+    }
+
+    private static bool RuleMatches(ContextRule rule, ForegroundWindowHelper.ForegroundApp? app)
+    {
+        var hasProcessFilter = rule.ProcessNames.Any(p => !string.IsNullOrWhiteSpace(p));
+        var hasTitleFilter = rule.TitlePatterns.Any(p => !string.IsNullOrWhiteSpace(p));
+
+        // Rules without filters apply everywhere.
+        if (!hasProcessFilter && !hasTitleFilter) return true;
+        if (app == null) return false;
+
+        if (hasProcessFilter && rule.ProcessNames.Any(p =>
+                !string.IsNullOrWhiteSpace(p) &&
+                app.Value.ProcessName.Contains(p.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        if (hasTitleFilter && rule.TitlePatterns.Any(p =>
+                !string.IsNullOrWhiteSpace(p) &&
+                app.Value.WindowTitle.Contains(p.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    // MARK: - Local Text Expansion
 
     private string ApplyDictionaryReplacements(string text)
     {
@@ -342,9 +306,8 @@ public sealed class TranscriptionService
 
         foreach (var entry in entries)
         {
-            if (entry.Replacement != null)
+            if (!string.IsNullOrEmpty(entry.Replacement))
             {
-                // Case-insensitive word boundary replacement
                 var pattern = $@"\b{Regex.Escape(entry.Trigger)}\b";
                 text = Regex.Replace(text, pattern, entry.Replacement, RegexOptions.IgnoreCase);
             }
@@ -361,7 +324,6 @@ public sealed class TranscriptionService
 
         foreach (var shortcut in shortcuts)
         {
-            // Case-insensitive replacement for voice triggers
             var pattern = $@"\b{Regex.Escape(shortcut.VoiceTrigger)}\b";
             text = Regex.Replace(text, pattern, shortcut.Expansion, RegexOptions.IgnoreCase);
         }
@@ -369,84 +331,82 @@ public sealed class TranscriptionService
         return text;
     }
 
-    private async Task<string> ApplyLLMPostProcessingAsync(
-        string text,
-        CancellationToken cancellationToken)
-    {
-        // Get applicable context rules based on active window
-        var contextInstructions = GetActiveContextInstructions();
-
-        var provider = _settings.Settings.PostProcessingProvider;
-
-        // Placeholder for LLM post-processing implementation
-        // This would call an LLM API to clean up/format the transcription
-        // For now, return the original text
-        return text;
-    }
-
-    private string GetActiveContextInstructions()
-    {
-        // Placeholder - would integrate with window detection
-        // to find matching context rules
-        var applicableRules = _settings.ContextRules
-            .Where(r => r.IsEnabled)
-            .Select(r => r.Instructions);
-
-        return string.Join("\n", applicableRules);
-    }
-
     // MARK: - Helper Methods
 
-    private string GetPrimaryLanguage()
+    private List<string> GetSelectedLanguageCodes()
     {
         var languages = _settings.Settings.SelectedLanguages;
         if (languages == null || languages.Count == 0)
         {
-            return "auto";
-        }
-        return languages[0];
-    }
-
-    private string GetTranscriptionProvider()
-    {
-        var provider = NormalizeTranscriptionProvider(_settings.Settings.TranscriptionProvider);
-        if (_settings.Settings.TranscriptionProvider != provider)
-        {
-            _settings.Settings.TranscriptionProvider = provider;
-            _settings.SaveSettings();
+            return new List<string> { "auto" };
         }
 
-        return provider;
-    }
+        var codes = languages
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct()
+            .ToList();
 
-    private static string NormalizeTranscriptionProvider(string? _) => AppSettings.CloudTranscriptionProvider;
-
-    private static void SaveCredential(string target, string secret)
-    {
-        using var credential = new Credential
+        // "auto" combined with explicit languages means auto-detect.
+        if (codes.Count != 1 && codes.Contains("auto"))
         {
-            Target = target,
-            Username = "AIDictation",
-            Password = secret,
-            PersistanceType = PersistanceType.LocalComputer
-        };
-        credential.Save();
-    }
-
-    private static string? LoadCredential(string target)
-    {
-        using var credential = new Credential { Target = target };
-        if (credential.Load())
-        {
-            return credential.Password;
+            codes.Remove("auto");
         }
-        return null;
+
+        return codes.Count > 0 ? codes : new List<string> { "auto" };
     }
 
-    private static void DeleteCredential(string target)
+    private static List<string> GetSelectedLanguageNames(IEnumerable<string> codes)
     {
-        using var credential = new Credential { Target = target };
-        credential.Delete();
+        return codes
+            .Where(c => c != "auto")
+            .Select(LanguageExtensions.FromCode)
+            .Where(l => l.HasValue)
+            .Select(l => l!.Value.GetDisplayName())
+            .ToList();
+    }
+
+    private static string? ParseTranscriptionText(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+
+        var trimmed = body.Trim();
+        if (trimmed.StartsWith('{'))
+        {
+            try
+            {
+                var json = JObject.Parse(trimmed);
+                return json["text"]?.ToString()
+                       ?? json["transcript"]?.ToString()
+                       ?? json["transcription"]?.ToString()
+                       ?? trimmed;
+            }
+            catch
+            {
+                return trimmed;
+            }
+        }
+
+        return trimmed;
+    }
+
+    private static void ReportWordUsage(string text)
+    {
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        if (words > 0 && AuthService.Instance.IsAuthenticated)
+        {
+            _ = AuthService.Instance.UpdateWordCountAsync(words);
+        }
+    }
+
+    private static string? JoinNonEmpty(string separator, params string?[] parts)
+    {
+        var nonEmpty = parts.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        return nonEmpty.Count > 0 ? string.Join(separator, nonEmpty) : null;
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        return value.Length <= maxLength ? value : value[..maxLength];
     }
 }
 

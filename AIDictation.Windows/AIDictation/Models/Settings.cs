@@ -7,6 +7,7 @@ namespace AIDictation.Models;
 public class AppSettings
 {
     public const string CloudTranscriptionProvider = "aidictation";
+    public const string LocalTranscriptionProvider = "local";
 
     [JsonProperty("hotkey")]
     public Hotkey? Hotkey { get; set; } = new(Key.F8);

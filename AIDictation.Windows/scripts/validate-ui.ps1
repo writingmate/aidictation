@@ -42,7 +42,6 @@ function Wait-Window([string]$TitleContains, [int]$TimeoutSec = 30, [int]$OwnerP
 }
 
 function Find-ByText($Root, [string]$Text, $ControlType) {
-    # Direct name match (works when WPF derives the automation name from simple content)
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ControlType)
     $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
@@ -50,8 +49,7 @@ function Find-ByText($Root, [string]$Text, $ControlType) {
         if ($el.Current.Name -like "*$Text*") { return $el }
     }
 
-    # Buttons with panel content (flag + label) expose no name; find the inner
-    # text element and walk up to the owning control.
+    # Controls with panel content expose no name; find inner text and walk up.
     $textCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::Text)
@@ -72,63 +70,29 @@ function Find-ByText($Root, [string]$Text, $ControlType) {
 function Invoke-ByText($Root, [string]$Text) {
     $el = Find-ByText $Root $Text ([System.Windows.Automation.ControlType]::Button)
     if (-not $el) { throw "Button '$Text' not found" }
-    $pattern = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $pattern.Invoke()
+    ($el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
     Start-Sleep -Milliseconds 600
+}
+
+function Toggle-ByText($Root, [string]$Text) {
+    # WPF ToggleButtons (language chips) expose TogglePattern.
+    $el = Find-ByText $Root $Text ([System.Windows.Automation.ControlType]::Button)
+    if (-not $el) { Write-Host "Chip '$Text' not found (skipped)"; return }
+    try {
+        ($el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    }
+    catch {
+        try { ($el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke() } catch { }
+    }
+    Start-Sleep -Milliseconds 400
 }
 
 function Select-RadioByText($Root, [string]$Text) {
     $el = Find-ByText $Root $Text ([System.Windows.Automation.ControlType]::RadioButton)
     if (-not $el) { throw "Radio '$Text' not found" }
-    $pattern = $el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-    $pattern.Select()
+    ($el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Start-Sleep -Milliseconds 600
 }
-
-# --- 1. First launch: onboarding wizard ---
-Write-Host "Launching $ExePath"
-$proc = Start-Process -FilePath $ExePath -PassThru
-Start-Sleep -Seconds 8
-
-if ($proc.HasExited) { throw "App exited immediately with code $($proc.ExitCode)" }
-
-$onboarding = Wait-Window "Setup" 30
-Take-Screenshot "01-onboarding-microphone"
-
-# Grant the Windows microphone permission prompt when it appears (best effort)
-try {
-    $desktop = [System.Windows.Automation.AutomationElement]::RootElement
-    $allow = Find-ByText $desktop "Allow" ([System.Windows.Automation.ControlType]::Button)
-    if ($allow -and $allow.Current.Name -notlike "*Don*") {
-        ($allow.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
-        Write-Host "Granted microphone permission prompt"
-        Start-Sleep -Seconds 1
-    }
-} catch {
-    Write-Host "No microphone prompt to dismiss: $_"
-}
-
-Invoke-ByText $onboarding "Next"
-# Select an explicit language to demonstrate multi-select, then add a second one
-Invoke-ByText $onboarding "English"
-Invoke-ByText $onboarding "Spanish"
-Take-Screenshot "02-onboarding-languages"
-
-Invoke-ByText $onboarding "Next"
-Take-Screenshot "03-onboarding-mode"
-
-Invoke-ByText $onboarding "Next"
-Take-Screenshot "04-onboarding-hotkey"
-
-Invoke-ByText $onboarding "Next"
-Take-Screenshot "05-onboarding-signin"
-
-Invoke-ByText $onboarding "Next"
-Take-Screenshot "06-onboarding-complete"
-
-Invoke-ByText $onboarding "Get Started"
-Start-Sleep -Seconds 3
-Take-Screenshot "07-after-onboarding-tray-overlay"
 
 function Dump-UiaTree($Root, [string]$Path) {
     $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
@@ -165,31 +129,91 @@ function Collect-AppState {
     }
 }
 
+# --- 1. First launch: onboarding (7 steps + finale) ---
+Write-Host "Launching $ExePath"
+$proc = Start-Process -FilePath $ExePath -PassThru
+Start-Sleep -Seconds 8
+
+if ($proc.HasExited) { throw "App exited immediately with code $($proc.ExitCode)" }
+
+$onboarding = Wait-Window "Setup" 30
+Take-Screenshot "01-onboarding-permissions"
+
+# Grant the Windows microphone consent prompt when it appears (best effort)
+try {
+    $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+    $allow = Find-ByText $desktop "Allow" ([System.Windows.Automation.ControlType]::Button)
+    if ($allow -and $allow.Current.Name -notlike "*Don*") {
+        ($allow.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+        Write-Host "Granted microphone permission prompt"
+        Start-Sleep -Seconds 1
+    }
+} catch {
+    Write-Host "No microphone prompt to dismiss: $_"
+}
+Stop-Process -Name "SystemSettings" -Force -ErrorAction SilentlyContinue
+
+try {
+    Invoke-ByText $onboarding "Next"
+    Toggle-ByText $onboarding "English"
+    Toggle-ByText $onboarding "Spanish"
+    Take-Screenshot "02-onboarding-languages"
+
+    Invoke-ByText $onboarding "Next"   # mode (Cloud preselected; avoid model download on CI)
+    Take-Screenshot "03-onboarding-mode"
+
+    Invoke-ByText $onboarding "Next"   # color
+    Take-Screenshot "04-onboarding-color"
+
+    Invoke-ByText $onboarding "Next"   # hotkey
+    Take-Screenshot "05-onboarding-hotkey"
+
+    Invoke-ByText $onboarding "Next"   # first recording
+    Take-Screenshot "06-onboarding-test"
+
+    Invoke-ByText $onboarding "Next"   # account
+    Take-Screenshot "07-onboarding-account"
+
+    Invoke-ByText $onboarding "Finish" # finale animation
+    Start-Sleep -Seconds 1.8
+    Take-Screenshot "08-onboarding-finale"
+
+    Invoke-ByText $onboarding "Let's Go!"
+    Start-Sleep -Seconds 3
+    Take-Screenshot "09-after-onboarding-overlay"
+}
+catch {
+    Dump-UiaTree $onboarding (Join-Path $ShotDir "onboarding-uia-tree.txt")
+    throw
+}
+
 # --- 2. Second launch activates the running instance and opens Settings ---
 try {
-    # Close the Windows Settings app if the mic consent flow opened it
-    Stop-Process -Name "SystemSettings" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-
     Write-Host "Launching second instance to open Settings via single-instance pipe"
     Start-Process -FilePath $ExePath
     Start-Sleep -Seconds 6
 
     $settings = Wait-Window "Settings" 30 $proc.Id
-    Take-Screenshot "08-settings-audio"
+    Take-Screenshot "10-settings-account"
     Dump-UiaTree $settings (Join-Path $ShotDir "settings-uia-tree.txt")
 
-    Select-RadioByText $settings "Text Rules"
-    Take-Screenshot "09-settings-text-rules"
+    Select-RadioByText $settings "Audio"
+    Take-Screenshot "11-settings-audio"
 
-    Select-RadioByText $settings "Hotkeys"
-    Take-Screenshot "10-settings-hotkeys"
+    Select-RadioByText $settings "Language"
+    Take-Screenshot "12-settings-language"
 
-    Select-RadioByText $settings "Overlay"
-    Take-Screenshot "11-settings-overlay"
+    Select-RadioByText $settings "Dictionary"
+    Take-Screenshot "13-settings-dictionary"
 
-    Select-RadioByText $settings "Account"
-    Take-Screenshot "12-settings-account"
+    Select-RadioByText $settings "Shortcuts"
+    Take-Screenshot "14-settings-shortcuts"
+
+    Select-RadioByText $settings "Configuration"
+    Take-Screenshot "15-settings-configuration"
+
+    Select-RadioByText $settings "History"
+    Take-Screenshot "16-settings-history"
 }
 finally {
     # --- 3. Always collect app state files and crash log ---

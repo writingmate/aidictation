@@ -37,6 +37,7 @@ public partial class App : Application
     private readonly DispatcherTimer _recordingTimer = new();
     private DateTime _recordingStartedAt;
     private bool _isStoppingRecording;
+    private bool _discardNextRecording;
     private CancellationTokenSource? _pipeCts;
 
     // MARK: - Application Lifecycle
@@ -340,6 +341,7 @@ public partial class App : Application
         AudioRecorderService.Instance.RecordingError += OnRecordingError;
         OverlayService.Shared.RecordingStartRequested += OnOverlayRecordingStartRequested;
         OverlayService.Shared.RecordingStopRequested += OnOverlayRecordingStopRequested;
+        OverlayService.Shared.RecordingCancelRequested += OnOverlayRecordingCancelRequested;
 
         _recordingTimer.Interval = TimeSpan.FromMilliseconds(100);
         _recordingTimer.Tick += OnRecordingTimerTick;
@@ -356,6 +358,7 @@ public partial class App : Application
         AudioRecorderService.Instance.RecordingError -= OnRecordingError;
         OverlayService.Shared.RecordingStartRequested -= OnOverlayRecordingStartRequested;
         OverlayService.Shared.RecordingStopRequested -= OnOverlayRecordingStopRequested;
+        OverlayService.Shared.RecordingCancelRequested -= OnOverlayRecordingCancelRequested;
         _recordingTimer.Tick -= OnRecordingTimerTick;
         _recordingTimer.Stop();
     }
@@ -441,6 +444,18 @@ public partial class App : Application
         StopRecording();
     }
 
+    private void OnOverlayRecordingCancelRequested(object? sender, EventArgs e)
+    {
+        if (!AppState.Shared.IsRecording || _isStoppingRecording) return;
+
+        // Discard the recording: stop capture but skip transcription entirely.
+        _discardNextRecording = true;
+        _isStoppingRecording = true;
+        _recordingTimer.Stop();
+        AudioRecorderService.Instance.StopRecording();
+        AppState.Shared.Reset();
+    }
+
     private void StartRecording(bool isCommandMode)
     {
         if (!AppState.Shared.StartRecording(isCommandMode)) return;
@@ -504,6 +519,14 @@ public partial class App : Application
 
     private async Task CompleteRecordingAsync(string filePath)
     {
+        if (_discardNextRecording)
+        {
+            _discardNextRecording = false;
+            _isStoppingRecording = false;
+            try { File.Delete(filePath); } catch { }
+            return;
+        }
+
         try
         {
             var result = await TranscriptionService.Instance.TranscribeAsync(filePath);

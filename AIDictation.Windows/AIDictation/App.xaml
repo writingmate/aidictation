@@ -15,6 +15,7 @@
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
             <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
             <converters:StepVisibilityConverter x:Key="StepVisibilityConverter"/>
+            <converters:PercentWidthConverter x:Key="PercentWidthConverter"/>
 
             <!-- ================= Design tokens (windows-app-prototype.html) ================= -->
 

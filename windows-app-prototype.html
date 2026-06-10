@@ -762,8 +762,7 @@ section{margin-top:90px}
     <a href="#tokens">Design tokens <small>00</small></a>
     <a href="#onboarding">Onboarding <small>01</small></a>
     <a href="#settings">Settings <small>02</small></a>
-    <a href="#history">History <small>03</small></a>
-    <a href="#overlay">Overlay <small>04</small></a>
+    <a href="#overlay">Overlay <small>03</small></a>
   </nav>
   <div class="sep"></div>
   <p class="note">Every screen is interactive — click through onboarding steps, switch settings sections, hover history rows. Tokens map 1:1 to WPF resource keys.</p>
@@ -777,7 +776,6 @@ section{margin-top:90px}
       <span class="chip">WPF · net8.0-windows</span>
       <span class="chip">Onboarding 900×580</span>
       <span class="chip">Settings 650×550</span>
-      <span class="chip">History 800×560</span>
       <span class="chip">Overlay pill</span>
     </div>
   </div>
@@ -1129,25 +1127,41 @@ section{margin-top:90px}
                 <div class="addrow"><input placeholder="Voice trigger…"><input placeholder="Expansion text…"><button class="btn btn-brand">Add</button></div>
               </div>
 
-              <!-- HISTORY (mac: view and manage transcription history) -->
+              <!-- HISTORY: full history lives here (no separate window) -->
               <div class="sec-pane" data-pane="history" hidden>
                 <h3>History</h3>
-                <div class="srow">
-                  <div class="tx"><b>Hey team, quick update on the Windows build…</b><p>Today 4:32 PM · 12.4s · 38 words</p></div>
-                  <span class="del" style="opacity:1"><svg class="ic"><use href="#i-copy"/></svg></span>
-                  <span class="del" style="opacity:1"><svg class="ic"><use href="#i-trash"/></svg></span>
+                <div style="display:flex;gap:8px;margin-bottom:6px">
+                  <div class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search transcriptions…"></div>
+                  <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 16px">Export</button>
                 </div>
-                <div class="srow">
-                  <div class="tx"><b>Remind me to push the release branch after…</b><p>Today 2:18 PM · 5.1s · 16 words</p></div>
-                  <span class="del" style="opacity:1"><svg class="ic"><use href="#i-copy"/></svg></span>
-                  <span class="del" style="opacity:1"><svg class="ic"><use href="#i-trash"/></svg></span>
+                <div class="h-date" style="padding-left:4px">Today</div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">4:32 PM</div><div class="du">12.4s · <b>38 words</b></div></div>
+                  <div class="h-txt">Hey team, quick update on the Windows build — onboarding is fully validated on the runner, all twelve screenshots came back clean.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
                 </div>
-                <div class="srow">
-                  <div class="tx"><b>Buenos días equipo, la demo empieza en diez…</b><p>Yesterday 9:12 AM · 3.3s · 9 words</p></div>
-                  <span class="del" style="opacity:1"><svg class="ic"><use href="#i-copy"/></svg></span>
-                  <span class="del" style="opacity:1"><svg class="ic"><use href="#i-trash"/></svg></span>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">2:18 PM</div><div class="du">5.1s · <b>16 words</b></div></div>
+                  <div class="h-txt">Remind me to push the release branch after the installer finishes notarizing tomorrow morning.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
                 </div>
-                <div class="srow">
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">11:03 AM</div><div class="du"><span class="fail-dot"></span>failed</div></div>
+                  <div class="h-txt" style="color:var(--ink-3);font-style:italic">Network error — recording kept, click to retry transcription.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-retry"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="h-date" style="padding-left:4px">Yesterday</div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">6:47 PM</div><div class="du">28.0s · <b>84 words</b></div></div>
+                  <div class="h-txt">Draft for the launch post: AIDictation now ships on Windows with full parity — offline mode, voice shortcuts, a personal dictionary…</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">9:12 AM</div><div class="du">3.3s · <b>9 words</b></div></div>
+                  <div class="h-txt">Buenos días equipo, la demo empieza en diez minutos.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="srow" style="margin-top:10px">
                   <div class="tx"><b>217 recordings</b><p>14,302 words dictated</p></div>
                   <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 14px;color:var(--err)">Clear All…</button>
                 </div>
@@ -1192,62 +1206,9 @@ section{margin-top:90px}
     </div>
   </section>
 
-  <!-- ================= 03 HISTORY ================= -->
-  <section id="history">
-    <div class="sec-head"><span class="num">03</span><h2>History</h2></div>
-    <p class="sec-sub">Date-grouped; hover reveals quick copy / delete, and <b>clicking a row</b> opens actions: copy text, re-transcribe with Cloud, or re-transcribe On-device. Word count and duration in the meta column; failed items marked inline.</p>
-
-    <div class="stage">
-      <div class="stack">
-        <div class="window history">
-          <div class="titlebar"><div class="app-ico"></div><span class="t">History — AIDictation</span>
-            <div class="caption"><span>—</span><span>▢</span><span class="x">✕</span></div></div>
-          <div class="h-tools">
-            <div class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search transcriptions…"></div>
-            <button class="btn btn-dark-ghost" style="font-size:12px;padding:9px 16px">Export</button>
-          </div>
-          <div class="h-list">
-            <div class="h-date">Today</div>
-            <div class="h-row">
-              <div class="h-meta"><div class="tm">4:32 PM</div><div class="du">12.4s · <b>38 words</b></div></div>
-              <div class="h-txt">Hey team, quick update on the Windows build — onboarding is fully validated on the runner, all twelve screenshots came back clean, and the backend smoke test returned the phrase verbatim.</div>
-              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-            </div>
-            <div class="h-row">
-              <div class="h-meta"><div class="tm">2:18 PM</div><div class="du">5.1s · <b>16 words</b></div></div>
-              <div class="h-txt">Remind me to push the release branch after the installer finishes notarizing tomorrow morning.</div>
-              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-            </div>
-            <div class="h-row">
-              <div class="h-meta"><div class="tm">11:03 AM</div><div class="du"><span class="fail-dot"></span>failed</div></div>
-              <div class="h-txt" style="color:var(--ink-3);font-style:italic">Network error — recording kept, tap to retry transcription.</div>
-              <div class="h-acts"><span><svg class="ic"><use href="#i-retry"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-            </div>
-            <div class="h-date">Yesterday</div>
-            <div class="h-row">
-              <div class="h-meta"><div class="tm">6:47 PM</div><div class="du">28.0s · <b>84 words</b></div></div>
-              <div class="h-txt">Draft for the launch post: AIDictation now ships on Windows with full parity — offline mode that keeps your audio on device, voice shortcuts, a personal dictionary, and context rules that adapt the tone to whatever app you're typing into…</div>
-              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-            </div>
-            <div class="h-row">
-              <div class="h-meta"><div class="tm">9:12 AM</div><div class="du">3.3s · <b>9 words</b></div></div>
-              <div class="h-txt">Buenos días equipo, la demo empieza en diez minutos.</div>
-              <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-            </div>
-          </div>
-          <div class="h-foot">
-            <span class="ct">217 recordings · 14,302 words dictated</span>
-            <span class="clear">Clear All…</span>
-          </div>
-        </div>
-        <span class="cap">800 × 560 · hover a row for actions</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= 04 OVERLAY ================= -->
+  <!-- ================= 03 OVERLAY ================= -->
   <section id="overlay">
-    <div class="sec-head"><span class="num">04</span><h2>Recording overlay</h2></div>
+    <div class="sec-head"><span class="num">03</span><h2>Recording overlay</h2></div>
     <p class="sec-sub">Ported 1:1 from the macOS <code>RecordingOverlayView</code>: a hairline strip when idle that morphs — <code>cubic-bezier(.2,.8,.2,1) · 260ms</code> — into the accent capsule. No text, ever. Content fades in 140ms after the morph; collapse takes 150ms.</p>
 
     <div class="stack" style="margin-bottom:22px">
@@ -1490,7 +1451,7 @@ const HMENU=`<div class="hmenu">
   <div class="mi"><svg class="ic"><use href="#i-cloud"/></svg>Re-transcribe with Cloud</div>
   <div class="mi"><svg class="ic"><use href="#i-lock"/></svg>Re-transcribe On-device</div>
 </div>`;
-document.querySelectorAll('.history .h-row').forEach(r=>{
+document.querySelectorAll('.h-row').forEach(r=>{
   r.insertAdjacentHTML('beforeend',HMENU);
   r.addEventListener('click',e=>{
     if(e.target.closest('.h-acts')) return;

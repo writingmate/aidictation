@@ -76,23 +76,24 @@ jobs:
         $endpoint = if ($env:TRANSCRIPTION_ENDPOINT) { $env:TRANSCRIPTION_ENDPOINT } else { "https://writingmate.ai/api/openai/v1/audio/transcriptions" }
         $model = if ($env:TRANSCRIPTION_MODEL) { $env:TRANSCRIPTION_MODEL } else { "groq/whisper-large-v3-turbo" }
 
-        $form = @{
-          file = Get-Item $wav
-          model = $model
-          temperature = "0"
-          response_format = "text"
-        }
-        $headers = @{ Authorization = "Bearer $env:TRANSCRIPTION_API_KEY" }
-        try {
-          $response = Invoke-RestMethod -Uri $endpoint -Method Post -Form $form -Headers $headers
-        }
-        catch {
-          $status = $_.Exception.Response.StatusCode.value__
-          $body = ""
-          try { $body = $_.ErrorDetails.Message } catch { }
-          throw "Transcription request failed with HTTP ${status}: $body"
-        }
+        # curl produces standard multipart encoding; PowerShell's -Form is rejected by the backend
+        $raw = & curl.exe -s -X POST $endpoint `
+          -H "Authorization: Bearer $env:TRANSCRIPTION_API_KEY" `
+          -F "file=@$wav;type=audio/wav" `
+          -F "model=$model" `
+          -F "temperature=0" `
+          -F "response_format=text" `
+          -w "`n%{http_code}"
+
+        $lines = $raw -split "`n"
+        $statusCode = $lines[-1].Trim()
+        $response = ($lines[0..($lines.Length - 2)] -join "`n").Trim()
+        Write-Host "HTTP $statusCode"
         Write-Host "Transcription response: $response"
+
+        if ($statusCode -ne "200") {
+          throw "Transcription request failed with HTTP ${statusCode}: $response"
+        }
 
         if ("$response" -notmatch "(?i)hello") {
           throw "Transcription did not contain expected phrase: $response"

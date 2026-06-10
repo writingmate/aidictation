@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using AIDictation.ViewModels;
 
@@ -17,6 +18,12 @@ public partial class SettingsWindow : Window
         ViewModel.CloseRequested += OnCloseRequested;
     }
 
+    /// <summary>Navigates to a settings section (e.g. History from the tray menu).</summary>
+    public void NavigateTo(int section)
+    {
+        ViewModel.NavigateTo(section);
+    }
+
     private void OnCloseRequested(object? sender, System.EventArgs e)
     {
         Close();
@@ -24,18 +31,36 @@ public partial class SettingsWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (ViewModel.IsRecordingDictationHotkey || ViewModel.IsRecordingCommandHotkey)
+        if (ViewModel.IsRecordingDictationHotkey)
         {
             e.Handled = true;
 
-            // Handle escape to cancel
             if (e.Key == Key.Escape)
             {
                 ViewModel.CancelHotkeyRecording();
                 return;
             }
 
-            ViewModel.RecordHotkey(e.Key, Keyboard.Modifiers);
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            ViewModel.RecordHotkey(key, Keyboard.Modifiers);
+        }
+    }
+
+    private void NewWord_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && ViewModel.AddWordCommand.CanExecute(null))
+        {
+            ViewModel.AddWordCommand.Execute(null);
+        }
+    }
+
+    private void HistoryRow_Click(object sender, MouseButtonEventArgs e)
+    {
+        // Left click opens the same action flyout as right click.
+        if (sender is Border border && border.ContextMenu != null)
+        {
+            border.ContextMenu.PlacementTarget = border;
+            border.ContextMenu.IsOpen = true;
         }
     }
 

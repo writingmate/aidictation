@@ -589,7 +589,9 @@ public partial class App : Application
 
     private void ShowHistoryWindow()
     {
-        ShowOrActivateWindow<HistoryWindow>();
+        // History lives inside Settings now.
+        var settings = ShowOrActivateWindow<SettingsWindow>();
+        settings.NavigateTo(ViewModels.SettingsViewModel.Sections.History);
     }
 
     private void OnOnboardingClosed(object? sender, EventArgs e)

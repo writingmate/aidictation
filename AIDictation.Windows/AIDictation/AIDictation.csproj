@@ -47,6 +47,7 @@
     <Resource Include="..\Assets\*.ico" Link="Assets\%(Filename)%(Extension)" />
     <Resource Include="..\Assets\*.png" Link="Assets\%(Filename)%(Extension)" />
     <Resource Include="Resources\Onboarding\*.png" />
+    <Resource Include="Resources\Fonts\*.ttf" />
   </ItemGroup>
 
 </Project>

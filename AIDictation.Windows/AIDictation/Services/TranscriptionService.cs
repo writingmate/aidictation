@@ -53,11 +53,13 @@ public sealed class TranscriptionService
     // MARK: - Public API
 
     /// <summary>
-    /// Transcribes an audio file using the configured provider (cloud or on-device).
+    /// Transcribes an audio file using the configured provider (cloud, on-device, or auto),
+    /// optionally forced to a specific provider (used by history re-transcription).
     /// </summary>
     public async Task<TranscriptionResult> TranscribeAsync(
         string audioFilePath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? providerOverride = null)
     {
         if (!File.Exists(audioFilePath))
         {
@@ -68,6 +70,8 @@ public sealed class TranscriptionService
         // window the user dictated into, not this app.
         var contextInstructions = GetActiveContextInstructions();
 
+        var useOffline = ResolveProvider(providerOverride) == AppSettings.LocalTranscriptionProvider;
+
         string? rawText = null;
         Exception? lastException = null;
 
@@ -75,7 +79,7 @@ public sealed class TranscriptionService
         {
             try
             {
-                rawText = IsOfflineMode
+                rawText = useOffline
                     ? await TranscribeOfflineAsync(audioFilePath, contextInstructions, cancellationToken)
                     : await TranscribeWithCloudAsync(audioFilePath, contextInstructions, cancellationToken);
 
@@ -116,7 +120,27 @@ public sealed class TranscriptionService
         IsOfflineMode || !string.IsNullOrEmpty(BuildConfig.TranscriptionApiKey);
 
     public bool IsOfflineMode =>
-        _settings.Settings.TranscriptionProvider == AppSettings.LocalTranscriptionProvider;
+        ResolveProvider(null) == AppSettings.LocalTranscriptionProvider;
+
+    /// <summary>
+    /// Resolves the effective provider: "auto" uses cloud when the network is
+    /// available and falls back to on-device otherwise.
+    /// </summary>
+    private string ResolveProvider(string? overrideProvider)
+    {
+        var provider = overrideProvider ?? _settings.Settings.TranscriptionProvider;
+
+        if (provider == AppSettings.AutoTranscriptionProvider)
+        {
+            return System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable()
+                ? AppSettings.CloudTranscriptionProvider
+                : AppSettings.LocalTranscriptionProvider;
+        }
+
+        return provider == AppSettings.LocalTranscriptionProvider
+            ? AppSettings.LocalTranscriptionProvider
+            : AppSettings.CloudTranscriptionProvider;
+    }
 
     // MARK: - Cloud Pipeline
 

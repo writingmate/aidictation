@@ -39,11 +39,29 @@ function Wait-Window([string]$TitleContains, [int]$TimeoutSec = 30) {
 }
 
 function Find-ByText($Root, [string]$Text, $ControlType) {
+    # Direct name match (works when WPF derives the automation name from simple content)
     $cond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ControlType)
     $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
     foreach ($el in $all) {
         if ($el.Current.Name -like "*$Text*") { return $el }
+    }
+
+    # Buttons with panel content (flag + label) expose no name; find the inner
+    # text element and walk up to the owning control.
+    $textCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Text)
+    $texts = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    foreach ($t in $texts) {
+        if ($t.Current.Name -like "*$Text*") {
+            $parent = $walker.GetParent($t)
+            while ($parent -ne $null) {
+                if ($parent.Current.ControlType -eq $ControlType) { return $parent }
+                $parent = $walker.GetParent($parent)
+            }
+        }
     }
     return $null
 }
@@ -73,6 +91,19 @@ if ($proc.HasExited) { throw "App exited immediately with code $($proc.ExitCode)
 
 $onboarding = Wait-Window "Setup" 30
 Take-Screenshot "01-onboarding-microphone"
+
+# Grant the Windows microphone permission prompt when it appears (best effort)
+try {
+    $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+    $allow = Find-ByText $desktop "Allow" ([System.Windows.Automation.ControlType]::Button)
+    if ($allow -and $allow.Current.Name -notlike "*Don*") {
+        ($allow.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+        Write-Host "Granted microphone permission prompt"
+        Start-Sleep -Seconds 1
+    }
+} catch {
+    Write-Host "No microphone prompt to dismiss: $_"
+}
 
 Invoke-ByText $onboarding "Next"
 # Select an explicit language to demonstrate multi-select, then add a second one

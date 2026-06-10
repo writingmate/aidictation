@@ -548,6 +548,18 @@ section{margin-top:90px}
   border:1px solid var(--stroke);border-radius:var(--r-pill);padding:6px 12px;background:var(--bg1);transition:.14s;
 }
 .dlang.on{background:rgba(241,110,0,.12);border-color:var(--brand);color:#FFC093}
+/* dictionary word chips */
+.words{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;max-width:460px}
+.word{
+  display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);
+  background:var(--bg1);border:1px solid var(--stroke);border-radius:var(--r-pill);padding:6px 8px 6px 13px;
+}
+.word i{
+  font-style:normal;font-size:9px;color:var(--ink-3);cursor:pointer;width:16px;height:16px;
+  display:grid;place-items:center;border-radius:50%;transition:.12s;
+}
+.word i:hover{background:rgba(229,72,77,.18);color:var(--err)}
+
 /* rules list */
 .rule{
   display:flex;align-items:center;gap:11px;background:var(--bg1);border:1px solid var(--stroke);
@@ -1080,13 +1092,18 @@ section{margin-top:90px}
                 </div>
               </div>
 
-              <!-- DICTIONARY (mac: custom word replacements and corrections) -->
+              <!-- DICTIONARY: a plain list of words the transcriber should know -->
               <div class="sec-pane" data-pane="dictionary" hidden>
                 <h3>Dictionary</h3>
-                <div class="f-desc" style="margin-top:0">Words the transcriber should recognize — with optional replacements.</div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>WritingMate</b><span>fixes “writing mate”, “riding mate”</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>Supabase</b></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
-                <div class="addrow"><input placeholder="Word or phrase…"><input placeholder="Replacement (optional)"><button class="btn btn-brand">Add</button></div>
+                <div class="f-desc" style="margin-top:0">Names and jargon the transcriber should recognize.</div>
+                <div class="words">
+                  <span class="word">WritingMate<i>✕</i></span>
+                  <span class="word">Supabase<i>✕</i></span>
+                  <span class="word">Parakeet<i>✕</i></span>
+                  <span class="word">Vysotsky<i>✕</i></span>
+                  <span class="word">tailnet<i>✕</i></span>
+                </div>
+                <div class="addrow" style="max-width:380px"><input placeholder="Add a word…"><button class="btn btn-brand">Add</button></div>
               </div>
 
               <!-- SHORTCUTS (mac: voice-triggered text expansions) -->

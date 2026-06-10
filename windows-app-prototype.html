@@ -20,32 +20,36 @@
   --grad-a:       #FFED46;   /* BrandGradientTop      */
   --grad-b:       #FF7EC7;   /* BrandGradientBottom   */
 
-  /* Dark surfaces (settings / history / overlay) */
-  --bg0:          #151210;   /* BackgroundBrush       */
-  --bg1:          #1D1916;   /* SurfaceBrush          */
-  --bg2:          #282320;   /* SurfaceHoverBrush     */
-  --stroke:       #38312A;   /* BorderBrush           */
-  --ink:          #F5EFE7;   /* TextPrimaryBrush      */
-  --ink-2:        #A99F92;   /* TextSecondaryBrush    */
-  --ink-3:        #6E6558;   /* TextMutedBrush        */
+  /* Dark surfaces — Windows 11 Fluent (Mica window + layer cards) */
+  --bg0:          #202020;   /* Mica window           */
+  --bg1:          #2B2B2B;   /* Card / layer fill     */
+  --bg2:          #323232;   /* Card hover            */
+  --stroke:       rgba(255,255,255,.084);  /* CardStroke   */
+  --stroke-hi:    rgba(255,255,255,.16);
+  --ink:          #FFFFFF;   /* TextFillPrimary       */
+  --ink-2:        #C9C9C9;   /* TextFillSecondary     */
+  --ink-3:        #8A8A8A;   /* TextFillTertiary      */
 
-  /* Light (onboarding) */
-  --lt-bg:        #FFFFFF;
-  --lt-ink:       #1A1611;
-  --lt-sub:       #8A8077;
-  --lt-card:      #F6F4F1;
-  --lt-stroke:    #E7E2DB;
+  /* Light (onboarding) — Win11 light */
+  --lt-bg:        #FAFAFA;
+  --lt-ink:       #1B1B1B;
+  --lt-sub:       #5F5F5F;
+  --lt-card:      #FFFFFF;
+  --lt-stroke:    #E5E5E5;
 
   /* Status */
   --ok:           #3BC45A;
   --err:          #E5484D;
 
-  --r-win:        10px;
-  --r-card:       12px;
+  /* Win11 geometry: 8px surfaces, 4px controls */
+  --r-win:        8px;
+  --r-card:       8px;
+  --r-ctl:        4px;
   --r-pill:       999px;
 
-  --font-display: "Figtree", sans-serif;   /* brand font */
-  --font-body:    "Figtree", sans-serif;
+  --font-display: "Figtree", sans-serif;   /* brand font — hero/display moments */
+  --font-body:    "Figtree", sans-serif;   /* spec page */
+  --font-ui:      "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif; /* app windows */
   --font-mono:    "JetBrains Mono", monospace;
 }
 
@@ -148,6 +152,7 @@ section{margin-top:90px}
   border:1px solid rgba(255,255,255,.09);
   box-shadow:0 28px 70px rgba(0,0,0,.55),0 4px 14px rgba(0,0,0,.4);
   background:var(--bg0);
+  font-family:var(--font-ui); /* app windows render in Segoe UI */
 }
 .window.light{background:var(--lt-bg)}
 .titlebar{
@@ -198,16 +203,24 @@ section{margin-top:90px}
 @keyframes stepIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 .onb-nav{display:flex;justify-content:space-between;align-items:center;margin-top:auto;padding-top:18px}
 
+/* WinUI buttons: 4px radius, accent fill with darker bottom edge */
 .btn{
-  font-family:var(--font-body);font-weight:700;font-size:13.5px;border:none;cursor:pointer;
-  border-radius:9px;padding:11px 26px;transition:.15s;letter-spacing:.01em;
+  font-family:var(--font-ui);font-weight:600;font-size:13px;cursor:pointer;
+  border-radius:var(--r-ctl);padding:8px 22px;transition:.12s;border:1px solid transparent;
 }
-.btn-brand{background:var(--brand);color:#fff;box-shadow:0 6px 18px rgba(241,110,0,.35)}
-.btn-brand:hover{background:var(--brand-hot);transform:translateY(-1px)}
-.btn-ghost{background:transparent;color:#776E63;padding-left:14px;padding-right:14px}
-.btn-ghost:hover{color:var(--lt-ink)}
-.btn-dark-ghost{background:transparent;color:var(--ink-2);border:1px solid var(--stroke)}
-.btn-dark-ghost:hover{color:var(--ink);border-color:var(--ink-3)}
+.btn-brand{
+  background:var(--brand);color:#fff;
+  border-color:rgba(0,0,0,.12);border-bottom-color:rgba(0,0,0,.35);
+}
+.btn-brand:hover{background:var(--brand-hot)}
+.btn-brand:active{background:#D86200;color:rgba(255,255,255,.8)}
+.btn-ghost{background:transparent;color:#5F5F5F;padding-left:14px;padding-right:14px}
+.btn-ghost:hover{color:var(--lt-ink);background:rgba(0,0,0,.04)}
+.btn-dark-ghost{
+  background:rgba(255,255,255,.06);color:var(--ink);
+  border-color:var(--stroke);border-bottom-color:rgba(0,0,0,.3);
+}
+.btn-dark-ghost:hover{background:rgba(255,255,255,.09)}
 
 /* language chips */
 .langs{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px;max-width:470px;max-height:240px;overflow:auto;padding-right:6px}
@@ -224,7 +237,8 @@ section{margin-top:90px}
 .modes{display:flex;flex-direction:column;gap:12px;margin-top:26px;max-width:440px}
 .mode{
   display:flex;gap:15px;align-items:flex-start;cursor:pointer;user-select:none;
-  border:1.5px solid var(--lt-stroke);border-radius:14px;padding:17px 18px;background:var(--lt-card);transition:.18s;
+  border:1px solid var(--lt-stroke);border-radius:8px;padding:17px 18px;background:var(--lt-card);transition:.18s;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
 }
 .mode:hover{transform:translateY(-1px)}
 .mode.on{background:var(--brand-soft);border-color:var(--brand);box-shadow:0 8px 26px rgba(241,110,0,.16)}
@@ -256,6 +270,31 @@ section{margin-top:90px}
 }
 .hk-rec .x{color:#B6AEA3;font-size:13px}
 .tip{font-size:11.5px;color:var(--lt-sub);margin-top:14px}
+
+/* color theme step (mac onboarding parity) */
+.cpv{
+  border-radius:16px;background:rgba(0,0,0,.05);height:110px;display:grid;place-items:center;
+  max-width:440px;margin-top:24px;
+}
+.cpill{
+  display:flex;align-items:center;gap:7px;padding:9px 14px;border-radius:99px;background:var(--th,#F16E00);
+  box-shadow:0 8px 14px 0 color-mix(in srgb,var(--th,#F16E00) 28%, transparent);
+  transition:background .28s cubic-bezier(.3,1.1,.4,1),box-shadow .28s ease;
+}
+.cpill .cir{width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.95);display:grid;place-items:center}
+.cpill .cir .xx{font-size:9px;font-weight:800;color:var(--th,#F16E00);transition:color .28s}
+.cpill .cir .sq{width:8px;height:8px;border-radius:2px;background:var(--th,#F16E00);transition:background .28s}
+.cpill .cb{width:4px;border-radius:99px;background:rgba(255,255,255,.92)}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px;max-width:440px}
+.copt{
+  display:flex;align-items:center;gap:10px;cursor:pointer;border:1.5px solid var(--lt-stroke);
+  border-radius:10px;padding:10px 12px;background:var(--lt-card);font-size:13px;font-weight:600;color:var(--lt-ink);
+  transition:.16s;
+}
+.copt .sw{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#fff;flex:none}
+.copt .sw svg{opacity:0;transform:scale(.5);transition:.18s}
+.copt.on{border-color:var(--c)}
+.copt.on .sw svg{opacity:1;transform:scale(1)}
 
 /* sign-in */
 .signin-card{
@@ -336,46 +375,79 @@ section{margin-top:90px}
 .finale.p4 .replay{opacity:1}
 
 /* ============================================================
-   2 — SETTINGS  (650 × 550)
+   2 — SETTINGS  (720 × 560) — Windows 11 Settings app pattern:
+   transparent nav on Mica, selection pill with accent bar,
+   content as full-width setting cards (icon · text · control).
    ============================================================ */
-.settings{width:650px;height:550px;display:flex;flex-direction:column}
+.settings{width:720px;height:560px;display:flex;flex-direction:column}
 .set-body{flex:1;display:flex;min-height:0}
 .set-side{
-  width:168px;flex:none;background:var(--bg1);border-right:1px solid var(--stroke);
-  padding:12px 8px;display:flex;flex-direction:column;gap:2px;
+  width:186px;flex:none;background:transparent;
+  padding:8px 6px;display:flex;flex-direction:column;gap:2px;
 }
 .set-item{
-  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;
-  color:var(--ink-2);font-size:13px;font-weight:600;transition:.13s;border-left:2px solid transparent;
+  position:relative;display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:5px;cursor:pointer;
+  color:var(--ink);font-size:13px;font-weight:400;transition:.12s;
 }
-.set-item:hover{background:var(--bg2);color:var(--ink)}
-.set-item.on{background:var(--bg2);color:var(--ink);border-left-color:var(--brand)}
-.set-item .ico{width:17px;text-align:center;font-size:13px;opacity:.9}
+.set-item:hover{background:rgba(255,255,255,.055)}
+.set-item.on{background:rgba(255,255,255,.06)}
+.set-item.on::before{
+  content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:16px;border-radius:2px;background:var(--brand);
+}
+.set-item .ic{font-size:15px;color:var(--ink-2)}
+.set-item.on .ic{color:var(--brand)}
 .set-side .grow{flex:1}
 .set-side .ver{font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3);padding:0 12px 6px}
-.set-main{flex:1;overflow:auto;padding:24px 26px}
-.set-main h3{font-family:var(--font-display);font-weight:700;font-size:20px;letter-spacing:-.02em;margin-bottom:20px}
-.f-label{font-size:13.5px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.set-main{flex:1;overflow:auto;padding:18px 26px 24px 14px}
+.set-main h3{font-family:var(--font-ui);font-weight:600;font-size:24px;letter-spacing:0;margin-bottom:16px}
+/* Win11 setting card row */
+.srow{
+  display:flex;align-items:center;gap:14px;
+  background:var(--bg1);border:1px solid var(--stroke);border-radius:6px;
+  padding:12px 16px;margin-bottom:5px;min-height:54px;
+}
+.srow:hover{background:var(--bg2)}
+.srow .sic{font-size:17px;color:var(--ink-2);flex:none}
+.srow .tx{flex:1;min-width:0}
+.srow .tx b{font-size:13.5px;font-weight:400;display:block;color:var(--ink)}
+.srow .tx p{font-size:11.5px;color:var(--ink-2);margin-top:2px;line-height:1.45}
+.srow.col{flex-direction:column;align-items:stretch;gap:12px}
+.srow.col .head{display:flex;align-items:center;gap:14px}
+.f-label{font-size:13.5px;font-weight:600;color:var(--ink);margin:18px 0 8px}
 .f-desc{font-size:11.5px;color:var(--ink-2);margin-bottom:11px;line-height:1.55}
 .hr{height:1px;background:var(--stroke);margin:20px 0}
 .select{
   display:flex;justify-content:space-between;align-items:center;width:280px;
-  background:var(--bg1);border:1px solid var(--stroke);border-radius:8px;padding:9px 13px;
-  font-size:12.5px;color:var(--ink);cursor:pointer;
+  background:rgba(255,255,255,.06);border:1px solid var(--stroke);border-bottom-color:rgba(0,0,0,.3);
+  border-radius:var(--r-ctl);padding:7px 12px;
+  font-size:13px;color:var(--ink);cursor:pointer;transition:.12s;
 }
+.select:hover{background:rgba(255,255,255,.084)}
 .select span{color:var(--ink-3);font-size:10px}
 /* dark radio cards */
 .dmodes{display:flex;flex-direction:column;gap:8px;max-width:380px}
-.dmode{display:flex;gap:11px;align-items:flex-start;cursor:pointer;border:1px solid var(--stroke);border-radius:10px;padding:11px 13px;transition:.14s;background:var(--bg1)}
-.dmode.on{border-color:var(--brand);background:rgba(241,110,0,.07)}
-.dmode .rb{width:15px;height:15px;flex:none;margin-top:2px;border-radius:50%;border:2px solid var(--ink-3);transition:.14s}
-.dmode.on .rb{border-color:var(--brand);box-shadow:inset 0 0 0 3.5px var(--bg0);background:var(--brand)}
+.dmode{display:flex;gap:11px;align-items:flex-start;cursor:pointer;border:1px solid var(--stroke);border-radius:var(--r-card);padding:11px 13px;transition:.14s;background:var(--bg1)}
+.dmode:hover{background:var(--bg2)}
+.dmode.on{border-color:var(--brand);background:rgba(241,110,0,.08)}
+/* WinUI radio: accent ring, light center dot */
+.dmode .rb{width:16px;height:16px;flex:none;margin-top:2px;border-radius:50%;border:1px solid var(--ink-3);transition:.14s;background:transparent}
+.dmode.on .rb{border:5px solid var(--brand);background:#fff}
 .dmode b{font-size:13px}
 .dmode p{font-size:11px;color:var(--ink-2);margin-top:2px;line-height:1.5}
-/* checkbox */
-.check{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:12.5px;color:var(--ink);padding:5px 0;user-select:none}
-.check .bx{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--ink-3);display:grid;place-items:center;font-size:10px;color:#fff;transition:.13s;flex:none}
+/* Fluent toggle switch (markup unchanged: .check > .bx) */
+.check{display:flex;align-items:center;gap:12px;cursor:pointer;font-size:13px;color:var(--ink);padding:6px 0;user-select:none}
+.check .bx{
+  width:38px;height:19px;border-radius:10px;border:1px solid var(--ink-3);
+  position:relative;flex:none;font-size:0;color:transparent;transition:.15s;background:transparent;
+}
+.check .bx::after{
+  content:"";position:absolute;width:11px;height:11px;border-radius:50%;
+  background:var(--ink-3);left:3px;top:3px;transition:left .15s cubic-bezier(.2,.8,.2,1),background .15s;
+}
+.check:hover .bx::after{transform:scale(1.1)}
 .check.on .bx{background:var(--brand);border-color:var(--brand)}
+.check.on .bx::after{left:22px;background:#fff}
 /* dark lang chips */
 .dlangs{display:flex;flex-wrap:wrap;gap:7px;max-width:420px}
 .dlang{
@@ -396,12 +468,13 @@ section{margin-top:90px}
 .rule .del:hover{color:var(--err);background:rgba(229,72,77,.12)}
 .addrow{display:flex;gap:7px;margin-top:9px}
 .addrow input{
-  flex:1;background:var(--bg1);border:1px solid var(--stroke);border-radius:8px;color:var(--ink);
-  font-family:var(--font-body);font-size:12px;padding:9px 12px;outline:none;
+  flex:1;background:rgba(255,255,255,.06);border:1px solid var(--stroke);border-radius:var(--r-ctl);color:var(--ink);
+  font-family:var(--font-ui);font-size:12.5px;padding:8px 12px;outline:none;
+  border-bottom-color:rgba(255,255,255,.35);
 }
 .addrow input::placeholder{color:var(--ink-3)}
-.addrow input:focus{border-color:var(--brand)}
-.addrow .btn{padding:9px 18px;font-size:12px;border-radius:8px}
+.addrow input:focus{border-bottom:2px solid var(--brand);padding-bottom:7px}
+.addrow .btn{padding:8px 18px;font-size:12.5px}
 /* hotkey rows (dark) */
 .dhk{
   display:flex;align-items:center;gap:10px;background:var(--bg1);border:1px solid var(--stroke);
@@ -506,14 +579,16 @@ section{margin-top:90px}
 .mpill.cmd{background:#2F6BFF}
 .mpill .inner{display:flex;align-items:center;justify-content:center;gap:6px;opacity:1;transition:opacity .14s ease .1s}
 .mpill.collapsed .inner{opacity:0;transition-delay:0s}
-.idots{display:flex;gap:4px;align-items:center}
+/* mac OverlayWaveMetrics: 10 elements, 4px wide, 4.75px gaps, max bar 13.5px */
+.idots{display:flex;gap:4.75px;align-items:center}
 .idots i{width:4px;height:4px;border-radius:99px;background:rgba(255,255,255,.92)}
-.bars{display:flex;gap:2.5px;align-items:center;height:22px}
-.bars i{width:3px;border-radius:99px;background:rgba(255,255,255,.95);animation:eq 1s ease-in-out infinite}
-@keyframes eq{0%,100%{height:4px}50%{height:var(--h,16px)}}
-.ldots{display:flex;gap:5px}
-.ldots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.72);animation:bnc .9s ease-in-out infinite}
-@keyframes bnc{0%,100%{transform:translateY(0);opacity:.45}50%{transform:translateY(-4px);opacity:1}}
+.bars{display:flex;gap:4.75px;align-items:center;height:22px}
+.bars i{width:4px;border-radius:2px;background:rgba(255,255,255,.95);animation:eq 1s ease-in-out infinite}
+@keyframes eq{0%,100%{height:4px}50%{height:var(--h,13px)}}
+/* processing: 10-dot lit-range sweep (driven by JS, mirrors OverlayLoadingDotsView) */
+.ldots{display:flex;gap:4.75px;align-items:center}
+.ldots i{width:4px;height:4px;border-radius:50%;background:rgba(255,255,255,.72);opacity:.28;transition:opacity .1s linear}
+.ldots i.lit{opacity:1}
 .cbtn{
   width:22px;height:22px;flex:none;border-radius:50%;display:grid;place-items:center;color:#fff;cursor:pointer;
   transition:.12s;
@@ -664,8 +739,15 @@ section{margin-top:90px}
                 <p class="tip">Tip: function keys (F1–F12) work best — other apps rarely use them.</p>
               </div>
 
-              <!-- step 4: sign in -->
+              <!-- step 4: overlay color -->
               <div class="step" data-step="4" hidden>
+                <h1>Make it yours</h1>
+                <p class="sub">Pick the accent for the recording pill. You can change it later in Settings → Overlay.</p>
+                <div class="cgrid" id="cgrid"></div>
+              </div>
+
+              <!-- step 5: sign in -->
+              <div class="step" data-step="5" hidden>
                 <h1>Sign in to<br>your account</h1>
                 <p class="sub">Free account includes cloud transcription and keeps your plan in sync across devices. Opens in your browser.</p>
                 <div style="margin-top:26px"><button class="btn btn-brand" id="signinBtn">Sign In with Browser</button></div>
@@ -707,6 +789,21 @@ section{margin-top:90px}
                 </div>
               </div>
               <div class="illus" data-illu="4" hidden>
+                <div class="card" style="padding:30px 26px">
+                  <!-- mac overlayColorPreview: ✕ circle · 10 capsules · ■ circle on theme -->
+                  <div class="cpill" id="cpill">
+                    <span class="cir"><span class="xx">✕</span></span>
+                    <span class="cb" style="height:5px"></span><span class="cb" style="height:12px"></span>
+                    <span class="cb" style="height:17px"></span><span class="cb" style="height:12px"></span>
+                    <span class="cb" style="height:19px"></span><span class="cb" style="height:17px"></span>
+                    <span class="cb" style="height:21px"></span><span class="cb" style="height:20px"></span>
+                    <span class="cb" style="height:12px"></span><span class="cb" style="height:5px"></span>
+                    <span class="cir"><span class="sq"></span></span>
+                  </div>
+                  <div class="cap2" style="margin-top:20px">Lives quietly at the<br>edge of your screen</div>
+                </div>
+              </div>
+              <div class="illus" data-illu="5" hidden>
                 <div class="card"><div class="big" style="color:var(--brand)"><svg class="ic" style="font-size:54px;stroke-width:1.6"><use href="#i-user"/></svg></div><div class="cap2">One account,<br>every device</div></div>
               </div>
             </div>
@@ -731,7 +828,7 @@ section{margin-top:90px}
   <!-- ================= 02 SETTINGS ================= -->
   <section id="settings">
     <div class="sec-head"><span class="num">02</span><h2>Settings</h2></div>
-    <p class="sec-sub">Warm graphite replaces the current flat gray; the purple accent becomes brand orange. Sidebar gets an active rail indicator. Click the sidebar — all five sections are here, plus both account states.</p>
+    <p class="sec-sub">Standard Windows 11 Settings anatomy: Mica window, transparent nav with the accent selection bar, setting cards (icon · label · control), Fluent toggles, 4px controls on 8px surfaces, Segoe UI. Accent stays brand orange. Click through the nav — both account states included.</p>
 
     <div class="stage">
       <div class="stack">
@@ -753,20 +850,29 @@ section{margin-top:90px}
               <!-- AUDIO -->
               <div class="sec-pane" data-pane="audio">
                 <h3>Audio</h3>
-                <div class="f-label">Input device</div>
-                <div class="f-desc">Microphone used for dictation.</div>
-                <div class="select">Default — Realtek HD Audio <span>▼</span></div>
-                <div class="hr"></div>
-                <div class="f-label">Transcription</div>
-                <div class="f-desc">Cloud is fastest and most accurate. Offline keeps everything on this device.</div>
-                <div class="dmodes">
-                  <div class="dmode on" data-dmode="c"><div class="rb"></div><div><b>Cloud (recommended)</b><p>All languages · smart cleanup · fastest</p></div></div>
-                  <div class="dmode" data-dmode="o"><div class="rb"></div><div><b>Offline</b><p>Audio never leaves your computer · downloads a one-time speech model</p></div></div>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-mic"/></svg>
+                  <div class="tx"><b>Input device</b><p>Microphone used for dictation</p></div>
+                  <div class="select" style="width:220px">Default — Realtek HD Audio <span>▼</span></div>
                 </div>
-                <div style="height:12px"></div>
-                <div class="check on"><span class="bx">✓</span>Smart cleanup — AI fixes punctuation, stutters and obvious errors</div>
-                <div class="check on"><span class="bx">✓</span>Start AIDictation when Windows starts</div>
-                <div class="hr"></div>
+                <div class="srow col">
+                  <div class="head">
+                    <svg class="ic sic"><use href="#i-cloud"/></svg>
+                    <div class="tx"><b>Transcription</b><p>Cloud is fastest and most accurate. Offline keeps everything on this device.</p></div>
+                  </div>
+                  <div class="dmodes" style="max-width:none">
+                    <div class="dmode on" data-dmode="c"><div class="rb"></div><div><b>Cloud (recommended)</b><p>All languages · smart cleanup · fastest</p></div></div>
+                    <div class="dmode" data-dmode="o"><div class="rb"></div><div><b>Offline</b><p>Audio never leaves your computer · downloads a one-time speech model</p></div></div>
+                  </div>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Smart cleanup</b><p>AI fixes punctuation, stutters and obvious errors</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Start with Windows</b><p>Launch AIDictation when you sign in</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
                 <div class="f-label">Languages</div>
                 <div class="f-desc">Select one or more — auto-detect works well for most people.</div>
                 <div class="dlangs">
@@ -810,33 +916,40 @@ section{margin-top:90px}
               <!-- HOTKEYS -->
               <div class="sec-pane" data-pane="hotkeys" hidden>
                 <h3>Hotkeys</h3>
-                <div class="f-label">Dictation</div>
-                <div class="f-desc">Hold to talk, release to insert — or tap to toggle.</div>
-                <div class="dhk"><span class="dkey">F8</span><span class="hint">click to change · ✕ reset</span></div>
-                <div class="hr"></div>
-                <div class="f-label">Command mode</div>
-                <div class="f-desc">Speak an instruction — AI rewrites the selected text.</div>
-                <div class="dhk"><span class="dkey">Ctrl</span><span class="dkey">F9</span><span class="hint">click to change · ✕ reset</span></div>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-mic"/></svg>
+                  <div class="tx"><b>Dictation</b><p>Hold to talk, release to insert — or tap to toggle</p></div>
+                  <span class="dkey">F8</span>
+                </div>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-type"/></svg>
+                  <div class="tx"><b>Command mode</b><p>Speak an instruction — AI rewrites the selected text</p></div>
+                  <span class="dkey">Ctrl</span><span class="dkey">F9</span>
+                </div>
               </div>
 
               <!-- OVERLAY -->
               <div class="sec-pane" data-pane="overlay" hidden>
                 <h3>Overlay</h3>
-                <div class="check on"><span class="bx">✓</span>Show overlay when idle</div>
-                <div class="hr"></div>
-                <div class="f-label">Position</div>
-                <div class="f-desc">Where the floating pill sits on screen.</div>
-                <div class="select" style="width:200px">Bottom <span>▼</span></div>
-                <div class="hr"></div>
-                <div class="f-label">Accent color</div>
-                <div class="f-desc">Used by the pill's waveform and glow.</div>
-                <div class="swatches">
-                  <span class="swc on" style="background:#F16E00"></span>
-                  <span class="swc" style="background:#3B82F6"></span>
-                  <span class="swc" style="background:#3BC45A"></span>
-                  <span class="swc" style="background:#A855F7"></span>
-                  <span class="swc" style="background:#FF7EC7"></span>
-                  <span class="swc" style="background:#8A8077"></span>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-dot"/></svg>
+                  <div class="tx"><b>Show when idle</b><p>Keep the pill visible while you're not recording</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Position</b><p>Where the floating pill sits on screen</p></div>
+                  <div class="select" style="width:160px">Bottom <span>▼</span></div>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Accent color</b><p>Used by the pill's waveform and glow</p></div>
+                  <div class="swatches">
+                    <span class="swc on" style="background:#F16E00"></span>
+                    <span class="swc" style="background:#3B82F6"></span>
+                    <span class="swc" style="background:#3BC45A"></span>
+                    <span class="swc" style="background:#A855F7"></span>
+                    <span class="swc" style="background:#FF7EC7"></span>
+                    <span class="swc" style="background:#6E6E6E"></span>
+                  </div>
                 </div>
               </div>
 
@@ -866,7 +979,7 @@ section{margin-top:90px}
             </div>
           </div>
         </div>
-        <span class="cap">650 × 550 · five sections · <b>interactive</b></span>
+        <span class="cap">720 × 560 · win11 settings pattern · <b>interactive</b></span>
       </div>
     </div>
   </section>
@@ -933,7 +1046,7 @@ section{margin-top:90px}
       <div class="desktop" style="height:170px"><div class="wall"></div><span class="cap3">live demo · hover to expand · click to record → stop → processing</span>
         <div class="mpill collapsed" id="demoPill">
           <div class="inner" id="demoInner">
-            <div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
           </div>
         </div>
       </div>
@@ -949,7 +1062,7 @@ section{margin-top:90px}
       </div>
       <div class="stack">
         <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">idle · hover</span>
-          <div class="mpill"><div class="inner"><div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
+          <div class="mpill"><div class="inner"><div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
         </div>
         <span class="cap">expanded — idle dots on accent, click to record</span>
       </div>
@@ -979,9 +1092,9 @@ section{margin-top:90px}
       </div>
       <div class="stack">
         <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">processing</span>
-          <div class="mpill"><div class="inner"><div class="ldots"><i style="animation-delay:0s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.3s"></i></div></div></div>
+          <div class="mpill"><div class="inner"><div class="ldots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
         </div>
-        <span class="cap">loading dots at 72% white</span>
+        <span class="cap">10-dot sweep — fills, drains, refills (2.2s cycle)</span>
       </div>
       <div class="stack">
         <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">command mode</span>
@@ -1010,21 +1123,57 @@ const steps=[...document.querySelectorAll('.step')];
 const illus=[...document.querySelectorAll('.illus')];
 const dotsEl=document.getElementById('dots');
 let cur=0;
-for(let i=0;i<5;i++){const d=document.createElement('i');dotsEl.appendChild(d)}
+const LAST=5;
+for(let i=0;i<=LAST;i++){const d=document.createElement('i');dotsEl.appendChild(d)}
 const dots=[...dotsEl.children];
 function show(n){
-  cur=Math.max(0,Math.min(4,n));
+  cur=Math.max(0,Math.min(LAST,n));
   steps.forEach(s=>s.hidden=+s.dataset.step!==cur);
   illus.forEach(s=>s.hidden=+s.dataset.illu!==cur);
   dots.forEach((d,i)=>d.classList.toggle('on',i===cur));
   document.getElementById('backBtn').style.visibility=cur===0?'hidden':'visible';
-  document.getElementById('nextBtn').textContent=cur===4?'Finish':'Next';
+  document.getElementById('nextBtn').textContent=cur===LAST?'Finish':'Next';
   steps.find(s=>!s.hidden).style.animation='none';
   requestAnimationFrame(()=>{steps.find(s=>!s.hidden).style.animation=''});
 }
-document.getElementById('nextBtn').onclick=()=>{ if(cur===4){runFinale()} else show(cur+1) };
+document.getElementById('nextBtn').onclick=()=>{ if(cur===LAST){runFinale()} else show(cur+1) };
 document.getElementById('backBtn').onclick=()=>show(cur-1);
 show(0);
+
+/* ---------- Overlay color themes (mac onboarding parity) ---------- */
+const THEMES=[["Orange","#F16E00"],["Blue","#3B82F6"],["Green","#3BC45A"],["Purple","#A855F7"],["Pink","#FF7EC7"],["Graphite","#6E6E6E"]];
+const cgrid=document.getElementById('cgrid');
+THEMES.forEach(([name,color],i)=>{
+  const el=document.createElement('div');
+  el.className='copt'+(i===0?' on':'');
+  el.style.setProperty('--c',color);
+  el.innerHTML=`<span class="sw" style="background:${color}"><svg class="ic" style="font-size:11px;stroke-width:3"><use href="#i-check"/></svg></span>${name}`;
+  el.onclick=()=>{
+    [...cgrid.children].forEach(x=>x.classList.remove('on'));
+    el.classList.add('on');
+    document.getElementById('cpill').style.setProperty('--th',color);
+    document.querySelectorAll('.mpill:not(.collapsed):not(.cmd)').forEach(p=>p.style.background=color);
+  };
+  cgrid.appendChild(el);
+});
+
+/* ---------- Processing sweep: exact port of OverlayLoadingDotsView ---------- */
+function easeIO(v){return v<.5?2*v*v:1-Math.pow(-2*v+2,2)/2}
+function litRange(p){
+  const last=9;
+  if(p<.32){const l=easeIO(p/.32);return [0,Math.round(l*last)]}
+  if(p<.5){const l=easeIO((p-.32)/.18);return [Math.round(l*last),last]}
+  if(p<.82){const l=easeIO((p-.5)/.32);return [Math.round((1-l)*last),last]}
+  const l=easeIO((p-.82)/.18);return [0,Math.round((1-l)*last)];
+}
+(function sweep(){
+  const t=(performance.now()/1000)%2.2/2.2;
+  const [a,b]=litRange(t);
+  document.querySelectorAll('.ldots').forEach(g=>{
+    [...g.children].forEach((d,i)=>d.classList.toggle('lit',i>=a&&i<=b));
+  });
+  requestAnimationFrame(sweep);
+})();
 
 /* ---------- Finale: mac-style 4-phase completion ---------- */
 const finale=document.getElementById('finale');
@@ -1108,8 +1257,8 @@ const WAVE=`<div class="bars">
   <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
   <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i></div>`;
 const WAVE_S=WAVE.replace(/--h:20px[^<]*<\/i>/,'</i>'); // slightly narrower for controls
-const IDLE=`<div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
-const LOAD=`<div class="ldots"><i style="animation-delay:0s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.3s"></i></div>`;
+const IDLE=`<div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
+const LOAD=`<div class="ldots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
 let demoState='collapsed'; // collapsed | idle | rec | proc
 function setDemo(state){
   demoState=state;

@@ -321,7 +321,10 @@
                     <CheckBox IsChecked="{Binding EnableLLMPostProcessing, Mode=TwoWay}"
                               Content="Smart cleanup (AI fixes punctuation, stutters and obvious errors)"
                               Foreground="{StaticResource TextPrimaryBrush}"
-                              Margin="0,4,0,0"/>
+                              Margin="0,4,0,8"/>
+                    <CheckBox IsChecked="{Binding LaunchAtStartup, Mode=TwoWay}"
+                              Content="Start AIDictation when Windows starts"
+                              Foreground="{StaticResource TextPrimaryBrush}"/>
 
                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,24"/>
 

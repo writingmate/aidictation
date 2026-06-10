@@ -59,6 +59,9 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _enableLLMPostProcessing = true;
 
+    [ObservableProperty]
+    private bool _launchAtStartup;
+
     // Account
     [ObservableProperty]
     private bool _isAuthenticated;
@@ -405,6 +408,11 @@ public partial class SettingsViewModel : ObservableObject
         settings.SaveSettings();
     }
 
+    partial void OnLaunchAtStartupChanged(bool value)
+    {
+        SettingsService.Instance.SetLaunchAtStartup(value);
+    }
+
     private async Task DownloadWhisperModelAsync()
     {
         IsDownloadingModel = true;
@@ -569,6 +577,7 @@ public partial class SettingsViewModel : ObservableObject
 
         IsOfflineMode = settings.Settings.TranscriptionProvider == AppSettings.LocalTranscriptionProvider;
         EnableLLMPostProcessing = settings.Settings.EnableLLMPostProcessing;
+        LaunchAtStartup = settings.GetLaunchAtStartup();
 
         // Load selected audio device
         var deviceId = settings.Settings.SelectedAudioDeviceId;

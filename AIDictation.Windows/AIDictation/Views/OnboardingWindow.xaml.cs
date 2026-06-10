@@ -96,6 +96,7 @@ public partial class OnboardingWindow : Window
     {
         ViewModel.OnboardingCompleted -= OnOnboardingCompleted;
         ViewModel.OnboardingSkipped -= OnOnboardingSkipped;
+        ViewModel.Cleanup();
         base.OnClosed(e);
     }
 }

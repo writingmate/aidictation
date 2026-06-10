@@ -78,6 +78,22 @@ public class BoolToBrushConverter : IValueConverter
 }
 
 /// <summary>
+/// Inverts a boolean. Supports two-way binding for paired radio buttons.
+/// </summary>
+public class InverseBoolConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return value is bool b ? !b : value;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return value is bool b ? !b : value;
+    }
+}
+
+/// <summary>
 /// Converts null/non-null to Visibility. Non-null = Visible, Null = Collapsed.
 /// </summary>
 public class NullToVisibilityConverter : IValueConverter

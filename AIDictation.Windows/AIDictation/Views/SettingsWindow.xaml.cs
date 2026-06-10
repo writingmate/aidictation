@@ -42,6 +42,7 @@ public partial class SettingsWindow : Window
     protected override void OnClosed(System.EventArgs e)
     {
         ViewModel.CloseRequested -= OnCloseRequested;
+        ViewModel.Cleanup();
         base.OnClosed(e);
     }
 }

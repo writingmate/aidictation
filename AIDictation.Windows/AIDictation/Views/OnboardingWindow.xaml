@@ -132,9 +132,9 @@
     </Window.Resources>
 
     <Grid>
-        <!-- ============================================ -->
-        <!-- SPLIT LAYOUT: Steps 0-2 (Mic, Language, Hotkey) -->
-        <!-- ============================================ -->
+        <!-- ============================================================== -->
+        <!-- SPLIT LAYOUT: Steps 0-4 (Mic, Language, Mode, Hotkey, Sign in) -->
+        <!-- ============================================================== -->
         <Border CornerRadius="12" Background="White" ClipToBounds="True"
                 Visibility="{Binding IsLastStep, Converter={StaticResource InverseBoolToVisibilityConverter}}">
             <Grid>
@@ -192,16 +192,22 @@
                         <Ellipse Width="8" Height="8" Margin="4,0">
                             <Ellipse.Style>
                                 <Style TargetType="Ellipse">
-                                    <Setter Property="Fill" Value="{StaticResource AccentBrush}"/>
+                                    <Setter Property="Fill" Value="{StaticResource DotInactiveBrush}"/>
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding CurrentStep}" Value="0">
-                                            <Setter Property="Fill" Value="{StaticResource DotInactiveBrush}"/>
+                                        <DataTrigger Binding="{Binding CurrentStep}" Value="3">
+                                            <Setter Property="Fill" Value="{StaticResource AccentBrush}"/>
                                         </DataTrigger>
-                                        <DataTrigger Binding="{Binding CurrentStep}" Value="1">
-                                            <Setter Property="Fill" Value="{StaticResource DotInactiveBrush}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding CurrentStep}" Value="2">
-                                            <Setter Property="Fill" Value="{StaticResource DotInactiveBrush}"/>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <Ellipse Width="8" Height="8" Margin="4,0">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="{StaticResource DotInactiveBrush}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CurrentStep}" Value="4">
+                                            <Setter Property="Fill" Value="{StaticResource AccentBrush}"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -257,9 +263,78 @@
                             </ScrollViewer>
                         </StackPanel>
 
-                        <!-- Step 2: Hotkey Setup -->
+                        <!-- Step 2: Transcription Mode -->
                         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Left"
                                     Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=2}">
+                            <TextBlock Text="How should we transcribe?" FontSize="26" FontWeight="Bold" Margin="0,0,0,8"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource SubtextBrush}"
+                                       MaxWidth="420" Margin="0,0,0,24">
+                                You can change this anytime in Settings.
+                            </TextBlock>
+
+                            <Button Command="{Binding SelectCloudModeCommand}" Cursor="Hand"
+                                    Background="Transparent" BorderThickness="0" Padding="0"
+                                    HorizontalContentAlignment="Stretch" Margin="0,0,0,12">
+                                <Border CornerRadius="10" Padding="16" MaxWidth="420" HorizontalAlignment="Left" MinWidth="420">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="#F5F5F5"/>
+                                            <Setter Property="BorderBrush" Value="#E0E0E0"/>
+                                            <Setter Property="BorderThickness" Value="1"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsOfflineMode}" Value="False">
+                                                    <Setter Property="Background" Value="{StaticResource AccentLightBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                                    <Setter Property="BorderThickness" Value="2"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock Text="☁️  Cloud (recommended)" FontSize="15" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Fast and most accurate. Supports all languages and smart cleanup."
+                                                   FontSize="13" Foreground="{StaticResource SubtextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </Button>
+
+                            <Button Command="{Binding SelectOfflineModeCommand}" Cursor="Hand"
+                                    Background="Transparent" BorderThickness="0" Padding="0"
+                                    HorizontalContentAlignment="Stretch">
+                                <Border CornerRadius="10" Padding="16" MaxWidth="420" HorizontalAlignment="Left" MinWidth="420">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="#F5F5F5"/>
+                                            <Setter Property="BorderBrush" Value="#E0E0E0"/>
+                                            <Setter Property="BorderThickness" Value="1"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsOfflineMode}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource AccentLightBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                                    <Setter Property="BorderThickness" Value="2"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock Text="🔒  Offline" FontSize="15" FontWeight="SemiBold"/>
+                                        <TextBlock Text="100% private - audio never leaves your computer. Downloads a one-time speech model (~470 MB)."
+                                                   FontSize="13" Foreground="{StaticResource SubtextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </Button>
+
+                            <StackPanel Visibility="{Binding IsDownloadingModel, Converter={StaticResource BoolToVisibilityConverter}}"
+                                        Margin="0,16,0,0" MaxWidth="420" HorizontalAlignment="Left">
+                                <TextBlock Text="Downloading speech model..." FontSize="12" Foreground="{StaticResource SubtextBrush}" Margin="0,0,0,4"/>
+                                <ProgressBar Height="6" Minimum="0" Maximum="100" Width="420"
+                                             Value="{Binding ModelDownloadProgress, Mode=OneWay}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Step 3: Hotkey Setup -->
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Left"
+                                    Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=3}">
                             <TextBlock Text="Recording Hotkey" FontSize="26" FontWeight="Bold" Margin="0,0,0,10"/>
                             <TextBlock TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource SubtextBrush}"
                                        MaxWidth="420" Margin="0,0,0,28">
@@ -297,6 +372,38 @@
                                        HorizontalAlignment="Left" Margin="0,14,0,0" MaxWidth="350">
                                 Tip: Function keys (F1-F12) work best as they're rarely used by other apps.
                             </TextBlock>
+                        </StackPanel>
+
+                        <!-- Step 4: Sign In -->
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Left"
+                                    Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=4}">
+                            <TextBlock Text="Sign in to your account" FontSize="26" FontWeight="Bold" Margin="0,0,0,10"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource SubtextBrush}"
+                                       MaxWidth="420" Margin="0,0,0,28">
+                                Your free account includes cloud transcription and keeps your subscription in sync across devices. Sign-in opens in your browser.
+                            </TextBlock>
+
+                            <!-- Signed out -->
+                            <StackPanel Visibility="{Binding IsAuthenticated, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                                <Button Style="{StaticResource PrimaryButton}" Content="Sign In with Browser"
+                                        HorizontalAlignment="Left" Command="{Binding SignInCommand}"/>
+                                <TextBlock Text="You can also do this later from Settings → Account."
+                                           FontSize="12" Foreground="{StaticResource SubtextBrush}" Margin="0,14,0,0"/>
+                            </StackPanel>
+
+                            <!-- Signed in -->
+                            <Border Background="#F0FAF2" BorderBrush="#34C759" BorderThickness="1"
+                                    CornerRadius="10" Padding="16" MaxWidth="420" HorizontalAlignment="Left" MinWidth="320"
+                                    Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#x2713;" FontSize="18" FontWeight="Bold" Foreground="#34C759"
+                                               VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <StackPanel>
+                                        <TextBlock Text="Signed in" FontSize="14" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding AccountEmail}" FontSize="13" Foreground="{StaticResource SubtextBrush}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Grid>
 
@@ -349,22 +456,53 @@
                             </Image.Effect>
                         </Image>
 
-                        <!-- Step 2: Keyboard illustration -->
+                        <!-- Step 2: Transcription mode emblem -->
+                        <Border Background="White" CornerRadius="16" Padding="32"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=2}">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="20" Opacity="0.15" ShadowDepth="10"/>
+                            </Border.Effect>
+                            <StackPanel>
+                                <TextBlock Text="☁️" FontSize="56" HorizontalAlignment="Center"
+                                           Visibility="{Binding IsOfflineMode, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                                <TextBlock Text="🔒" FontSize="56" HorizontalAlignment="Center"
+                                           Visibility="{Binding IsOfflineMode, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                <TextBlock Text="Your voice, your choice" FontSize="14" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 3: Keyboard illustration -->
                         <Image Source="/Resources/Onboarding/onboarding_keyboard.png"
                                Stretch="Uniform" MaxWidth="340" MaxHeight="420" Margin="0"
                                HorizontalAlignment="Right" VerticalAlignment="Center"
-                               Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=2}">
+                               Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=3}">
                             <Image.Effect>
                                 <DropShadowEffect BlurRadius="20" Opacity="0.15" ShadowDepth="10"/>
                             </Image.Effect>
                         </Image>
+
+                        <!-- Step 4: Account emblem -->
+                        <Border Background="White" CornerRadius="16" Padding="32"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Visibility="{Binding CurrentStep, Converter={StaticResource StepVisibilityConverter}, ConverterParameter=4}">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="20" Opacity="0.15" ShadowDepth="10"/>
+                            </Border.Effect>
+                            <StackPanel>
+                                <TextBlock Text="👤" FontSize="56" HorizontalAlignment="Center"/>
+                                <TextBlock Text="One account, every device" FontSize="14" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>
         </Border>
 
         <!-- ============================================ -->
-        <!-- FULL-GRADIENT LAYOUT: Step 3 (Complete) -->
+        <!-- FULL-GRADIENT LAYOUT: Step 5 (Complete) -->
         <!-- ============================================ -->
         <Border CornerRadius="12" ClipToBounds="True"
                 Visibility="{Binding IsLastStep, Converter={StaticResource BoolToVisibilityConverter}}">

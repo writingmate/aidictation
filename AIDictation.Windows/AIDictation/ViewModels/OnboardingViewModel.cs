@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -20,7 +23,8 @@ public partial class OnboardingViewModel : ObservableObject
 
     private static class Constants
     {
-        public const int TotalSteps = 4;
+        // 0 Mic, 1 Languages, 2 Transcription mode, 3 Hotkey, 4 Sign in, 5 Complete
+        public const int TotalSteps = 6;
         public const Key DefaultHotkey = Key.F8;
         public const ModifierKeys DefaultModifiers = ModifierKeys.None;
         public const TranscriptionModel CurrentTranscriptionModel = TranscriptionModel.AIDictationCloud;
@@ -45,6 +49,23 @@ public partial class OnboardingViewModel : ObservableObject
 
     public ObservableCollection<LanguageItem> Languages { get; } = new();
 
+    // Transcription mode
+    [ObservableProperty]
+    private bool _isOfflineMode;
+
+    [ObservableProperty]
+    private bool _isDownloadingModel;
+
+    [ObservableProperty]
+    private double _modelDownloadProgress;
+
+    // Account
+    [ObservableProperty]
+    private bool _isAuthenticated;
+
+    [ObservableProperty]
+    private string _accountEmail = string.Empty;
+
     public int TotalSteps => Constants.TotalSteps;
 
     public string HotkeyDisplayText => FormatHotkey(SelectedModifiers, SelectedHotkey);
@@ -64,6 +85,10 @@ public partial class OnboardingViewModel : ObservableObject
     {
         LoadLanguages();
         LoadSavedSettings();
+        LoadAccountState();
+
+        AuthService.Instance.AuthStateChanged += OnAuthStateChanged;
+        WhisperLocalService.Instance.ModelDownloadProgress += OnModelDownloadProgress;
     }
 
     // MARK: - Commands
@@ -138,11 +163,50 @@ public partial class OnboardingViewModel : ObservableObject
         if (item == null) return;
         if (!item.IsSelectable) return;
 
-        foreach (var lang in Languages)
+        // Multi-select like macOS: "Auto" is exclusive with explicit languages.
+        if (item.Language == Language.Auto)
         {
-            lang.IsSelected = lang.Language == item.Language;
+            foreach (var lang in Languages)
+            {
+                lang.IsSelected = lang.Language == Language.Auto;
+            }
         }
-        SelectedLanguage = item.Language;
+        else
+        {
+            item.IsSelected = !item.IsSelected;
+
+            var autoItem = Languages.FirstOrDefault(l => l.Language == Language.Auto);
+            var anyExplicit = Languages.Any(l => l.Language != Language.Auto && l.IsSelected);
+            if (autoItem != null)
+            {
+                autoItem.IsSelected = !anyExplicit;
+            }
+        }
+
+        SelectedLanguage = Languages.FirstOrDefault(l => l.IsSelected)?.Language ?? Language.Auto;
+    }
+
+    [RelayCommand]
+    private void SelectCloudMode()
+    {
+        IsOfflineMode = false;
+    }
+
+    [RelayCommand]
+    private void SelectOfflineMode()
+    {
+        IsOfflineMode = true;
+
+        if (!WhisperLocalService.Instance.IsModelDownloaded)
+        {
+            _ = DownloadWhisperModelAsync();
+        }
+    }
+
+    [RelayCommand]
+    private void SignIn()
+    {
+        AuthService.Instance.OpenLogin();
     }
 
     // MARK: - Public API
@@ -172,6 +236,15 @@ public partial class OnboardingViewModel : ObservableObject
         IsRecordingHotkey = false;
     }
 
+    /// <summary>
+    /// Detaches singleton event subscriptions; call when the owning window closes.
+    /// </summary>
+    public void Cleanup()
+    {
+        AuthService.Instance.AuthStateChanged -= OnAuthStateChanged;
+        WhisperLocalService.Instance.ModelDownloadProgress -= OnModelDownloadProgress;
+    }
+
     // MARK: - Private Methods
 
     private void LoadLanguages()
@@ -195,20 +268,25 @@ public partial class OnboardingViewModel : ObservableObject
     {
         var settings = SettingsService.Instance;
         settings.Load();
-        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
 
-        // Load saved language if any
+        IsOfflineMode = settings.Settings.TranscriptionProvider == AppSettings.LocalTranscriptionProvider;
+
+        // Load saved languages if any (multi-select)
         if (settings.Settings.SelectedLanguages.Count > 0)
         {
-            var langCode = settings.Settings.SelectedLanguages[0];
-            var lang = LanguageExtensions.FromCode(langCode);
-            if (lang.HasValue)
+            var selected = settings.Settings.SelectedLanguages
+                .Select(LanguageExtensions.FromCode)
+                .Where(l => l.HasValue)
+                .Select(l => l!.Value)
+                .ToHashSet();
+
+            if (selected.Count > 0)
             {
-                SelectedLanguage = lang.Value;
                 foreach (var item in Languages)
                 {
-                    item.IsSelected = item.Language == SelectedLanguage;
+                    item.IsSelected = selected.Contains(item.Language);
                 }
+                SelectedLanguage = Languages.FirstOrDefault(l => l.IsSelected)?.Language ?? Language.Auto;
             }
         }
 
@@ -224,11 +302,61 @@ public partial class OnboardingViewModel : ObservableObject
     private void SaveSettings()
     {
         var settings = SettingsService.Instance;
-        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
-        settings.Settings.SelectedLanguages = new List<string> { SelectedLanguage.GetCode() };
+        settings.Settings.TranscriptionProvider = IsOfflineMode
+            ? AppSettings.LocalTranscriptionProvider
+            : AppSettings.CloudTranscriptionProvider;
+
+        var selectedCodes = Languages
+            .Where(l => l.IsSelected)
+            .Select(l => l.Language.GetCode())
+            .ToList();
+        settings.Settings.SelectedLanguages = selectedCodes.Count > 0
+            ? selectedCodes
+            : new List<string> { "auto" };
+
         settings.Settings.Hotkey = new Hotkey(SelectedHotkey, SelectedModifiers);
         settings.Settings.OnboardingCompleted = true;
         settings.SaveSettings();
+    }
+
+    private async Task DownloadWhisperModelAsync()
+    {
+        IsDownloadingModel = true;
+        ModelDownloadProgress = 0;
+
+        try
+        {
+            await WhisperLocalService.Instance.EnsureModelAsync();
+        }
+        catch (Exception)
+        {
+            // Download failed - fall back to cloud so dictation keeps working.
+            IsOfflineMode = false;
+        }
+        finally
+        {
+            IsDownloadingModel = false;
+        }
+    }
+
+    private void OnModelDownloadProgress(object? sender, double progress)
+    {
+        Application.Current?.Dispatcher.Invoke(() =>
+        {
+            ModelDownloadProgress = progress * 100;
+        });
+    }
+
+    private void OnAuthStateChanged(object? sender, EventArgs e)
+    {
+        Application.Current?.Dispatcher.Invoke(LoadAccountState);
+    }
+
+    private void LoadAccountState()
+    {
+        var auth = AuthService.Instance;
+        IsAuthenticated = auth.IsAuthenticated;
+        AccountEmail = auth.CurrentUser?.Email ?? string.Empty;
     }
 
     private void NotifyNavigationChanged()

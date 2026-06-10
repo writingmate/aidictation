@@ -11,6 +11,8 @@
             <converters:EqualityToVisibilityConverter x:Key="EqualityToVisibilityConverter"/>
             <converters:BoolToBrushConverter x:Key="BoolToBrushConverter"/>
             <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
+            <converters:InverseBoolConverter x:Key="InverseBoolConverter"/>
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
             <!-- Dark Theme Colors -->
             <Color x:Key="PrimaryColor">#7C3AED</Color>
             <Color x:Key="PrimaryHoverColor">#8B5CF6</Color>

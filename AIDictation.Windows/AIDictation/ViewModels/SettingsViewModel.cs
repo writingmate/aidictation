@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -42,6 +45,39 @@ public partial class SettingsViewModel : ObservableObject
     private Language _selectedLanguage = Language.Auto;
 
     public ObservableCollection<LanguageItem> Languages { get; } = new();
+
+    // Transcription
+    [ObservableProperty]
+    private bool _isOfflineMode;
+
+    [ObservableProperty]
+    private bool _isDownloadingModel;
+
+    [ObservableProperty]
+    private double _modelDownloadProgress;
+
+    [ObservableProperty]
+    private bool _enableLLMPostProcessing = true;
+
+    // Account
+    [ObservableProperty]
+    private bool _isAuthenticated;
+
+    [ObservableProperty]
+    private string _accountEmail = string.Empty;
+
+    [ObservableProperty]
+    private string _subscriptionLabel = string.Empty;
+
+    [ObservableProperty]
+    private string _usageText = string.Empty;
+
+    [ObservableProperty]
+    private string? _authErrorMessage;
+
+    public bool CanUpgrade => IsAuthenticated &&
+        AuthService.Instance.CurrentUser?.SubscriptionTier == SubscriptionTier.Free &&
+        !string.IsNullOrEmpty(Helpers.BuildConfig.StripePaymentLink);
 
     // Text Rules
     public ObservableCollection<DictionaryEntryItem> DictionaryEntries { get; } = new();
@@ -115,6 +151,10 @@ public partial class SettingsViewModel : ObservableObject
         LoadOverlayOptions();
         LoadSettings();
         LoadTextRules();
+        LoadAccountState();
+
+        AuthService.Instance.AuthStateChanged += OnAuthStateChanged;
+        WhisperLocalService.Instance.ModelDownloadProgress += OnModelDownloadProgress;
     }
 
     // MARK: - Commands
@@ -131,12 +171,46 @@ public partial class SettingsViewModel : ObservableObject
         if (item == null) return;
         if (!item.IsSelectable) return;
 
-        foreach (var lang in Languages)
+        // Multi-select like macOS: "Auto" is exclusive with explicit languages.
+        if (item.Language == Language.Auto)
         {
-            lang.IsSelected = lang.Language == item.Language;
+            foreach (var lang in Languages)
+            {
+                lang.IsSelected = lang.Language == Language.Auto;
+            }
         }
-        SelectedLanguage = item.Language;
+        else
+        {
+            item.IsSelected = !item.IsSelected;
+
+            var autoItem = Languages.FirstOrDefault(l => l.Language == Language.Auto);
+            var anyExplicit = Languages.Any(l => l.Language != Language.Auto && l.IsSelected);
+            if (autoItem != null)
+            {
+                autoItem.IsSelected = !anyExplicit;
+            }
+        }
+
+        SelectedLanguage = Languages.FirstOrDefault(l => l.IsSelected)?.Language ?? Language.Auto;
         SaveLanguageSelection();
+    }
+
+    [RelayCommand]
+    private void SignIn()
+    {
+        AuthService.Instance.OpenLogin();
+    }
+
+    [RelayCommand]
+    private async Task SignOutAsync()
+    {
+        await AuthService.Instance.SignOutAsync();
+    }
+
+    [RelayCommand]
+    private void Upgrade()
+    {
+        AuthService.Instance.OpenUpgrade();
     }
 
     [RelayCommand]
@@ -299,7 +373,95 @@ public partial class SettingsViewModel : ObservableObject
         IsRecordingCommandHotkey = false;
     }
 
+    /// <summary>
+    /// Detaches singleton event subscriptions; call when the owning window closes.
+    /// </summary>
+    public void Cleanup()
+    {
+        AuthService.Instance.AuthStateChanged -= OnAuthStateChanged;
+        WhisperLocalService.Instance.ModelDownloadProgress -= OnModelDownloadProgress;
+    }
+
     // MARK: - Private Methods
+
+    partial void OnIsOfflineModeChanged(bool value)
+    {
+        var settings = SettingsService.Instance;
+        settings.Settings.TranscriptionProvider = value
+            ? AppSettings.LocalTranscriptionProvider
+            : AppSettings.CloudTranscriptionProvider;
+        settings.SaveSettings();
+
+        if (value && !WhisperLocalService.Instance.IsModelDownloaded)
+        {
+            _ = DownloadWhisperModelAsync();
+        }
+    }
+
+    partial void OnEnableLLMPostProcessingChanged(bool value)
+    {
+        var settings = SettingsService.Instance;
+        settings.Settings.EnableLLMPostProcessing = value;
+        settings.SaveSettings();
+    }
+
+    private async Task DownloadWhisperModelAsync()
+    {
+        IsDownloadingModel = true;
+        ModelDownloadProgress = 0;
+
+        try
+        {
+            await WhisperLocalService.Instance.EnsureModelAsync();
+        }
+        catch (Exception)
+        {
+            // Download failed - fall back to cloud so dictation keeps working.
+            IsOfflineMode = false;
+        }
+        finally
+        {
+            IsDownloadingModel = false;
+        }
+    }
+
+    private void OnModelDownloadProgress(object? sender, double progress)
+    {
+        Application.Current?.Dispatcher.Invoke(() =>
+        {
+            ModelDownloadProgress = progress * 100;
+        });
+    }
+
+    private void OnAuthStateChanged(object? sender, EventArgs e)
+    {
+        Application.Current?.Dispatcher.Invoke(LoadAccountState);
+    }
+
+    private void LoadAccountState()
+    {
+        var auth = AuthService.Instance;
+        IsAuthenticated = auth.IsAuthenticated;
+        AuthErrorMessage = auth.ErrorMessage;
+
+        var user = auth.CurrentUser;
+        if (user != null)
+        {
+            AccountEmail = user.Email;
+            SubscriptionLabel = user.SubscriptionTier.GetDisplayName();
+            UsageText = user.SubscriptionTier == SubscriptionTier.Pro
+                ? $"{user.MonthlyWordCount:N0} words this month"
+                : $"{user.MonthlyWordCount:N0} of {SubscriptionTierExtensions.FreeMonthlyWordLimit:N0} words used this month";
+        }
+        else
+        {
+            AccountEmail = string.Empty;
+            SubscriptionLabel = string.Empty;
+            UsageText = string.Empty;
+        }
+
+        OnPropertyChanged(nameof(CanUpgrade));
+    }
 
     partial void OnSelectedAudioDeviceChanged(AudioDeviceItem? value)
     {
@@ -404,7 +566,9 @@ public partial class SettingsViewModel : ObservableObject
     {
         var settings = SettingsService.Instance;
         settings.Load();
-        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
+
+        IsOfflineMode = settings.Settings.TranscriptionProvider == AppSettings.LocalTranscriptionProvider;
+        EnableLLMPostProcessing = settings.Settings.EnableLLMPostProcessing;
 
         // Load selected audio device
         var deviceId = settings.Settings.SelectedAudioDeviceId;
@@ -424,18 +588,22 @@ public partial class SettingsViewModel : ObservableObject
             SelectedAudioDevice = AudioDevices.Count > 0 ? AudioDevices[0] : null;
         }
 
-        // Load selected language
+        // Load selected languages (multi-select)
         if (settings.Settings.SelectedLanguages.Count > 0)
         {
-            var langCode = settings.Settings.SelectedLanguages[0];
-            var lang = LanguageExtensions.FromCode(langCode);
-            if (lang.HasValue)
+            var selected = settings.Settings.SelectedLanguages
+                .Select(LanguageExtensions.FromCode)
+                .Where(l => l.HasValue)
+                .Select(l => l!.Value)
+                .ToHashSet();
+
+            if (selected.Count > 0)
             {
-                SelectedLanguage = lang.Value;
                 foreach (var item in Languages)
                 {
-                    item.IsSelected = item.Language == SelectedLanguage;
+                    item.IsSelected = selected.Contains(item.Language);
                 }
+                SelectedLanguage = Languages.FirstOrDefault(l => l.IsSelected)?.Language ?? Language.Auto;
             }
         }
 
@@ -487,8 +655,14 @@ public partial class SettingsViewModel : ObservableObject
     private void SaveLanguageSelection()
     {
         var settings = SettingsService.Instance;
-        settings.Settings.TranscriptionProvider = AppSettings.CloudTranscriptionProvider;
-        settings.Settings.SelectedLanguages = new List<string> { SelectedLanguage.GetCode() };
+        var selectedCodes = Languages
+            .Where(l => l.IsSelected)
+            .Select(l => l.Language.GetCode())
+            .ToList();
+
+        settings.Settings.SelectedLanguages = selectedCodes.Count > 0
+            ? selectedCodes
+            : new List<string> { "auto" };
         settings.SaveSettings();
     }
 

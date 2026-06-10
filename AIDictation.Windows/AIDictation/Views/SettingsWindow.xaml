@@ -259,6 +259,16 @@
                         <TextBlock Text="Overlay"/>
                     </StackPanel>
                 </RadioButton>
+                <RadioButton Style="{StaticResource SidebarButtonStyle}"
+                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=4, Mode=OneWay}"
+                           Command="{Binding SelectSectionCommand}"
+                           CommandParameter="4"
+                           GroupName="Sections">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="👤" Margin="0,0,10,0"/>
+                        <TextBlock Text="Account"/>
+                    </StackPanel>
+                </RadioButton>
             </StackPanel>
         </Border>
 
@@ -281,9 +291,43 @@
 
                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,24"/>
 
+                    <!-- Transcription Mode -->
+                    <TextBlock Text="Transcription" Style="{StaticResource SubsectionHeaderStyle}"/>
+                    <TextBlock Text="Cloud mode delivers the best accuracy. Offline mode keeps everything on this device." Style="{StaticResource DescriptionStyle}"/>
+                    <StackPanel Margin="0,0,0,8">
+                        <RadioButton GroupName="TranscriptionMode"
+                                     Foreground="{StaticResource TextPrimaryBrush}"
+                                     IsChecked="{Binding IsOfflineMode, Converter={StaticResource InverseBoolConverter}}"
+                                     Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock Text="Cloud (recommended)" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                <TextBlock Text="Fast, most accurate, supports all languages" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton GroupName="TranscriptionMode"
+                                     Foreground="{StaticResource TextPrimaryBrush}"
+                                     IsChecked="{Binding IsOfflineMode}">
+                            <StackPanel>
+                                <TextBlock Text="Offline" FontSize="14" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                <TextBlock Text="Audio never leaves your computer (downloads a one-time speech model)" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                    <StackPanel Visibility="{Binding IsDownloadingModel, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Margin="0,4,0,8">
+                        <TextBlock Text="Downloading speech model..." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                        <ProgressBar Height="6" Minimum="0" Maximum="100" Value="{Binding ModelDownloadProgress, Mode=OneWay}"/>
+                    </StackPanel>
+                    <CheckBox IsChecked="{Binding EnableLLMPostProcessing, Mode=TwoWay}"
+                              Content="Smart cleanup (AI fixes punctuation, stutters and obvious errors)"
+                              Foreground="{StaticResource TextPrimaryBrush}"
+                              Margin="0,4,0,0"/>
+
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,24"/>
+
                     <!-- Language -->
-                    <TextBlock Text="Language" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Select languages for transcription" Style="{StaticResource DescriptionStyle}"/>
+                    <TextBlock Text="Languages" Style="{StaticResource SubsectionHeaderStyle}"/>
+                    <TextBlock Text="Select one or more languages you dictate in. Auto-detect works well for most people." Style="{StaticResource DescriptionStyle}"/>
                     <ItemsControl ItemsSource="{Binding Languages}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -632,6 +676,69 @@
                               DisplayMemberPath="DisplayName"
                               Width="220"
                               HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Account Section -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=4}">
+                    <TextBlock Text="Account" Style="{StaticResource SectionHeaderStyle}"/>
+
+                    <!-- Signed out -->
+                    <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAuthenticated}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <TextBlock Text="Sign in to AIDictation" Style="{StaticResource SubsectionHeaderStyle}"/>
+                        <TextBlock Text="Your account unlocks cloud transcription, syncs your subscription, and tracks your monthly usage. Sign-in opens in your browser."
+                                   Style="{StaticResource DescriptionStyle}"/>
+                        <Button Style="{StaticResource AddButtonStyle}"
+                                Command="{Binding SignInCommand}"
+                                Content="Sign In with Browser"
+                                HorizontalAlignment="Left"
+                                Padding="20,10"/>
+                        <TextBlock Text="{Binding AuthErrorMessage}"
+                                   Foreground="{StaticResource ErrorBrush}"
+                                   FontSize="12"
+                                   Margin="0,12,0,0"
+                                   TextWrapping="Wrap"
+                                   Visibility="{Binding AuthErrorMessage, Converter={StaticResource NullToVisibilityConverter}}"/>
+                    </StackPanel>
+
+                    <!-- Signed in -->
+                    <StackPanel Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Border Background="{StaticResource SurfaceBrush}" CornerRadius="6" Padding="16" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="{Binding AccountEmail}"
+                                           FontSize="15"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                                <TextBlock Text="{Binding SubscriptionLabel}"
+                                           FontSize="13"
+                                           Foreground="{StaticResource PrimaryBrush}"
+                                           Margin="0,4,0,0"/>
+                                <TextBlock Text="{Binding UsageText}"
+                                           FontSize="12"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource AddButtonStyle}"
+                                    Command="{Binding UpgradeCommand}"
+                                    Content="Upgrade to Pro"
+                                    Visibility="{Binding CanUpgrade, Converter={StaticResource BoolToVisibilityConverter}}"
+                                    Margin="0,0,12,0"/>
+                            <Button Style="{StaticResource LanguageButtonStyle}"
+                                    Command="{Binding SignOutCommand}"
+                                    Content="Sign Out"/>
+                        </StackPanel>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using AIDictation.Models;
@@ -14,27 +15,59 @@ using AIDictation.Services;
 namespace AIDictation.ViewModels;
 
 /// <summary>
-/// ViewModel for the onboarding window that guides users through initial setup.
-/// Handles microphone permissions, language selection, and hotkey configuration.
+/// ViewModel for the onboarding wizard. Steps mirror the macOS flow:
+/// permissions, languages, transcription mode, overlay color, hotkey,
+/// first recording, account — then the animated completion finale.
 /// </summary>
 public partial class OnboardingViewModel : ObservableObject
 {
     // MARK: - Constants
 
+    public static class Steps
+    {
+        public const int Permissions = 0;
+        public const int Languages = 1;
+        public const int Mode = 2;
+        public const int Color = 3;
+        public const int Hotkey = 4;
+        public const int FirstRecording = 5;
+        public const int Account = 6;
+        public const int Count = 7;
+    }
+
     private static class Constants
     {
-        // 0 Mic, 1 Languages, 2 Transcription mode, 3 Hotkey, 4 Sign in, 5 Complete
-        public const int TotalSteps = 6;
         public const Key DefaultHotkey = Key.F8;
         public const ModifierKeys DefaultModifiers = ModifierKeys.None;
-        public const TranscriptionModel CurrentTranscriptionModel = TranscriptionModel.AIDictationCloud;
     }
 
     // MARK: - Published Properties
 
     [ObservableProperty]
-    private int _currentStep = 0;
+    private int _currentStep;
 
+    public ObservableCollection<LanguageItem> Languages { get; } = new();
+
+    // Transcription mode (mac parity: cloud / on-device / automatic with status line)
+    [ObservableProperty]
+    private string _selectedModeKey = AppSettings.CloudTranscriptionProvider;
+
+    [ObservableProperty]
+    private string _modelStatusText = "Offline model downloads on first use (~470 MB)";
+
+    [ObservableProperty]
+    private bool _isModelDownloading;
+
+    [ObservableProperty]
+    private bool _isModelReady;
+
+    // Overlay color
+    public ObservableCollection<ThemeOption> ThemeOptions { get; } = new();
+
+    [ObservableProperty]
+    private Brush _previewBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F16E00"));
+
+    // Hotkey
     [ObservableProperty]
     private bool _isRecordingHotkey;
 
@@ -44,20 +77,7 @@ public partial class OnboardingViewModel : ObservableObject
     [ObservableProperty]
     private ModifierKeys _selectedModifiers = Constants.DefaultModifiers;
 
-    [ObservableProperty]
-    private Language _selectedLanguage = Language.Auto;
-
-    public ObservableCollection<LanguageItem> Languages { get; } = new();
-
-    // Transcription mode
-    [ObservableProperty]
-    private bool _isOfflineMode;
-
-    [ObservableProperty]
-    private bool _isDownloadingModel;
-
-    [ObservableProperty]
-    private double _modelDownloadProgress;
+    public string HotkeyDisplayText => FormatHotkey(SelectedModifiers, SelectedHotkey);
 
     // Account
     [ObservableProperty]
@@ -66,29 +86,25 @@ public partial class OnboardingViewModel : ObservableObject
     [ObservableProperty]
     private string _accountEmail = string.Empty;
 
-    public int TotalSteps => Constants.TotalSteps;
-
-    public string HotkeyDisplayText => FormatHotkey(SelectedModifiers, SelectedHotkey);
-
     public bool CanGoBack => CurrentStep > 0;
-    public bool CanSkip => CurrentStep < TotalSteps - 1;
-    public bool IsLastStep => CurrentStep == TotalSteps - 1;
+    public bool IsLastStep => CurrentStep == Steps.Count - 1;
+    public string NextButtonText => IsLastStep ? "Finish" : "Next";
 
     // MARK: - Events
 
     public event EventHandler? OnboardingCompleted;
-    public event EventHandler? OnboardingSkipped;
+    public event EventHandler? FinaleRequested;
 
     // MARK: - Initialization
 
     public OnboardingViewModel()
     {
         LoadLanguages();
+        LoadThemes();
         LoadSavedSettings();
         LoadAccountState();
 
         AuthService.Instance.AuthStateChanged += OnAuthStateChanged;
-        WhisperLocalService.Instance.ModelDownloadProgress += OnModelDownloadProgress;
     }
 
     // MARK: - Commands
@@ -96,11 +112,15 @@ public partial class OnboardingViewModel : ObservableObject
     [RelayCommand]
     private void NextStep()
     {
-        if (CurrentStep < TotalSteps - 1)
+        if (IsLastStep)
         {
-            CurrentStep++;
-            NotifyNavigationChanged();
+            SaveSettings();
+            FinaleRequested?.Invoke(this, EventArgs.Empty);
+            return;
         }
+
+        CurrentStep++;
+        NotifyNavigationChanged();
     }
 
     [RelayCommand]
@@ -111,12 +131,6 @@ public partial class OnboardingViewModel : ObservableObject
             CurrentStep--;
             NotifyNavigationChanged();
         }
-    }
-
-    [RelayCommand]
-    private void Skip()
-    {
-        OnboardingSkipped?.Invoke(this, EventArgs.Empty);
     }
 
     [RelayCommand]
@@ -144,6 +158,64 @@ public partial class OnboardingViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void SelectLanguage(LanguageItem? item)
+    {
+        if (item == null || !item.IsSelectable) return;
+
+        // Multi-select like macOS: "Auto" is exclusive with explicit languages.
+        if (item.Language == Language.Auto)
+        {
+            foreach (var lang in Languages)
+            {
+                lang.IsSelected = lang.Language == Language.Auto;
+            }
+        }
+        else
+        {
+            item.IsSelected = !item.IsSelected;
+            var autoItem = Languages.FirstOrDefault(l => l.Language == Language.Auto);
+            var anyExplicit = Languages.Any(l => l.Language != Language.Auto && l.IsSelected);
+            if (autoItem != null)
+            {
+                autoItem.IsSelected = !anyExplicit;
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void SelectMode(string? key)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        SelectedModeKey = key;
+
+        if (key == AppSettings.CloudTranscriptionProvider)
+        {
+            if (!IsModelDownloading)
+            {
+                ModelStatusText = "Offline model downloads on first use (~470 MB)";
+            }
+            return;
+        }
+
+        if (WhisperLocalService.Instance.IsModelDownloaded)
+        {
+            IsModelReady = true;
+            ModelStatusText = "Offline model ready";
+            return;
+        }
+
+        _ = DownloadModelAsync();
+    }
+
+    [RelayCommand]
+    private void SelectTheme(ThemeOption? option)
+    {
+        if (option == null) return;
+        foreach (var theme in ThemeOptions) theme.IsSelected = theme.Theme == option.Theme;
+        PreviewBrush = option.Brush;
+    }
+
+    [RelayCommand]
     private void StartRecordingHotkey()
     {
         IsRecordingHotkey = true;
@@ -158,52 +230,6 @@ public partial class OnboardingViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SelectLanguage(LanguageItem? item)
-    {
-        if (item == null) return;
-        if (!item.IsSelectable) return;
-
-        // Multi-select like macOS: "Auto" is exclusive with explicit languages.
-        if (item.Language == Language.Auto)
-        {
-            foreach (var lang in Languages)
-            {
-                lang.IsSelected = lang.Language == Language.Auto;
-            }
-        }
-        else
-        {
-            item.IsSelected = !item.IsSelected;
-
-            var autoItem = Languages.FirstOrDefault(l => l.Language == Language.Auto);
-            var anyExplicit = Languages.Any(l => l.Language != Language.Auto && l.IsSelected);
-            if (autoItem != null)
-            {
-                autoItem.IsSelected = !anyExplicit;
-            }
-        }
-
-        SelectedLanguage = Languages.FirstOrDefault(l => l.IsSelected)?.Language ?? Language.Auto;
-    }
-
-    [RelayCommand]
-    private void SelectCloudMode()
-    {
-        IsOfflineMode = false;
-    }
-
-    [RelayCommand]
-    private void SelectOfflineMode()
-    {
-        IsOfflineMode = true;
-
-        if (!WhisperLocalService.Instance.IsModelDownloaded)
-        {
-            _ = DownloadWhisperModelAsync();
-        }
-    }
-
-    [RelayCommand]
     private void SignIn()
     {
         AuthService.Instance.OpenLogin();
@@ -214,13 +240,8 @@ public partial class OnboardingViewModel : ObservableObject
     public void RecordHotkey(Key key, ModifierKeys modifiers)
     {
         if (!IsRecordingHotkey) return;
-
-        // Ignore modifier-only presses
-        if (key == Key.LeftCtrl || key == Key.RightCtrl ||
-            key == Key.LeftShift || key == Key.RightShift ||
-            key == Key.LeftAlt || key == Key.RightAlt ||
-            key == Key.LWin || key == Key.RWin ||
-            key == Key.System)
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift
+            or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin or Key.System)
         {
             return;
         }
@@ -231,120 +252,49 @@ public partial class OnboardingViewModel : ObservableObject
         OnPropertyChanged(nameof(HotkeyDisplayText));
     }
 
-    public void CancelHotkeyRecording()
-    {
-        IsRecordingHotkey = false;
-    }
+    public void CancelHotkeyRecording() => IsRecordingHotkey = false;
 
-    /// <summary>
-    /// Detaches singleton event subscriptions; call when the owning window closes.
-    /// </summary>
+    /// <summary>Detaches singleton event subscriptions; call when the owning window closes.</summary>
     public void Cleanup()
     {
         AuthService.Instance.AuthStateChanged -= OnAuthStateChanged;
-        WhisperLocalService.Instance.ModelDownloadProgress -= OnModelDownloadProgress;
     }
 
     // MARK: - Private Methods
 
-    private void LoadLanguages()
+    partial void OnCurrentStepChanged(int value)
     {
-        Languages.Clear();
-        foreach (var language in LanguageExtensions.GetAll())
+        NotifyNavigationChanged();
+
+        // Make sure the global hotkey works for the first-recording test step.
+        if (value == Steps.FirstRecording)
         {
-            Languages.Add(new LanguageItem
-            {
-                Language = language,
-                DisplayName = language.GetDisplayName(),
-                Flag = language.GetFlag(),
-                IsSelectable = language.SupportsModel(Constants.CurrentTranscriptionModel),
-                SupportText = GetLanguageSupportText(language),
-                IsSelected = language == Language.Auto
-            });
+            var settings = SettingsService.Instance.Settings;
+            HotkeyService.Instance.RegisterHotkeys(
+                new Hotkey(SelectedHotkey, SelectedModifiers),
+                settings.CommandHotkey);
         }
     }
 
-    private void LoadSavedSettings()
+    private async Task DownloadModelAsync()
     {
-        var settings = SettingsService.Instance;
-        settings.Load();
-
-        IsOfflineMode = settings.Settings.TranscriptionProvider == AppSettings.LocalTranscriptionProvider;
-
-        // Load saved languages if any (multi-select)
-        if (settings.Settings.SelectedLanguages.Count > 0)
-        {
-            var selected = settings.Settings.SelectedLanguages
-                .Select(LanguageExtensions.FromCode)
-                .Where(l => l.HasValue)
-                .Select(l => l!.Value)
-                .ToHashSet();
-
-            if (selected.Count > 0)
-            {
-                foreach (var item in Languages)
-                {
-                    item.IsSelected = selected.Contains(item.Language);
-                }
-                SelectedLanguage = Languages.FirstOrDefault(l => l.IsSelected)?.Language ?? Language.Auto;
-            }
-        }
-
-        // Load saved hotkey if any
-        if (settings.Settings.Hotkey != null)
-        {
-            SelectedHotkey = settings.Settings.Hotkey.Key;
-            SelectedModifiers = settings.Settings.Hotkey.Modifiers;
-            OnPropertyChanged(nameof(HotkeyDisplayText));
-        }
-    }
-
-    private void SaveSettings()
-    {
-        var settings = SettingsService.Instance;
-        settings.Settings.TranscriptionProvider = IsOfflineMode
-            ? AppSettings.LocalTranscriptionProvider
-            : AppSettings.CloudTranscriptionProvider;
-
-        var selectedCodes = Languages
-            .Where(l => l.IsSelected)
-            .Select(l => l.Language.GetCode())
-            .ToList();
-        settings.Settings.SelectedLanguages = selectedCodes.Count > 0
-            ? selectedCodes
-            : new List<string> { "auto" };
-
-        settings.Settings.Hotkey = new Hotkey(SelectedHotkey, SelectedModifiers);
-        settings.Settings.OnboardingCompleted = true;
-        settings.SaveSettings();
-    }
-
-    private async Task DownloadWhisperModelAsync()
-    {
-        IsDownloadingModel = true;
-        ModelDownloadProgress = 0;
-
+        IsModelDownloading = true;
+        ModelStatusText = "Downloading offline model…";
         try
         {
             await WhisperLocalService.Instance.EnsureModelAsync();
+            IsModelReady = true;
+            ModelStatusText = "Offline model ready";
         }
         catch (Exception)
         {
-            // Download failed - fall back to cloud so dictation keeps working.
-            IsOfflineMode = false;
+            ModelStatusText = "Download failed — using Cloud for now";
+            SelectedModeKey = AppSettings.CloudTranscriptionProvider;
         }
         finally
         {
-            IsDownloadingModel = false;
+            IsModelDownloading = false;
         }
-    }
-
-    private void OnModelDownloadProgress(object? sender, double progress)
-    {
-        Application.Current?.Dispatcher.Invoke(() =>
-        {
-            ModelDownloadProgress = progress * 100;
-        });
     }
 
     private void OnAuthStateChanged(object? sender, EventArgs e)
@@ -359,74 +309,143 @@ public partial class OnboardingViewModel : ObservableObject
         AccountEmail = auth.CurrentUser?.Email ?? string.Empty;
     }
 
+    private void LoadLanguages()
+    {
+        Languages.Clear();
+        foreach (var language in LanguageExtensions.GetAll())
+        {
+            Languages.Add(new LanguageItem
+            {
+                Language = language,
+                DisplayName = language.GetDisplayName(),
+                Flag = language.GetFlag(),
+                IsSelectable = true,
+                IsSelected = language == Language.Auto
+            });
+        }
+    }
+
+    private void LoadThemes()
+    {
+        ThemeOptions.Clear();
+        ThemeOptions.Add(new ThemeOption(OverlayColorTheme.Orange, "Orange", "#F16E00") { IsSelected = true });
+        ThemeOptions.Add(new ThemeOption(OverlayColorTheme.Blue, "Blue", "#3B82F6"));
+        ThemeOptions.Add(new ThemeOption(OverlayColorTheme.Green, "Green", "#3BC45A"));
+        ThemeOptions.Add(new ThemeOption(OverlayColorTheme.Purple, "Purple", "#A855F7"));
+        ThemeOptions.Add(new ThemeOption(OverlayColorTheme.Pink, "Pink", "#FF7EC7"));
+        ThemeOptions.Add(new ThemeOption(OverlayColorTheme.Graphite, "Graphite", "#6E6E6E"));
+    }
+
+    private void LoadSavedSettings()
+    {
+        var settings = SettingsService.Instance;
+        settings.Load();
+        var s = settings.Settings;
+
+        SelectedModeKey = s.TranscriptionProvider;
+        if (SelectedModeKey != AppSettings.CloudTranscriptionProvider &&
+            WhisperLocalService.Instance.IsModelDownloaded)
+        {
+            IsModelReady = true;
+            ModelStatusText = "Offline model ready";
+        }
+
+        if (s.SelectedLanguages.Count > 0)
+        {
+            var selected = s.SelectedLanguages
+                .Select(LanguageExtensions.FromCode)
+                .Where(l => l.HasValue)
+                .Select(l => l!.Value)
+                .ToHashSet();
+            if (selected.Count > 0)
+            {
+                foreach (var item in Languages)
+                {
+                    item.IsSelected = selected.Contains(item.Language);
+                }
+            }
+        }
+
+        var savedTheme = ThemeOptions.FirstOrDefault(t => t.Theme == s.OverlayColorTheme);
+        if (savedTheme != null)
+        {
+            SelectTheme(savedTheme);
+        }
+
+        if (s.Hotkey != null)
+        {
+            SelectedHotkey = s.Hotkey.Key;
+            SelectedModifiers = s.Hotkey.Modifiers;
+            OnPropertyChanged(nameof(HotkeyDisplayText));
+        }
+    }
+
+    private void SaveSettings()
+    {
+        var settings = SettingsService.Instance;
+        var s = settings.Settings;
+
+        s.TranscriptionProvider = SelectedModeKey;
+
+        var selectedCodes = Languages
+            .Where(l => l.IsSelected)
+            .Select(l => l.Language.GetCode())
+            .ToList();
+        s.SelectedLanguages = selectedCodes.Count > 0 ? selectedCodes : new List<string> { "auto" };
+
+        s.OverlayColorTheme = ThemeOptions.FirstOrDefault(t => t.IsSelected)?.Theme ?? OverlayColorTheme.Orange;
+        s.Hotkey = new Hotkey(SelectedHotkey, SelectedModifiers);
+        s.OnboardingCompleted = true;
+        settings.SaveSettings();
+    }
+
     private void NotifyNavigationChanged()
     {
         OnPropertyChanged(nameof(CanGoBack));
-        OnPropertyChanged(nameof(CanSkip));
         OnPropertyChanged(nameof(IsLastStep));
+        OnPropertyChanged(nameof(NextButtonText));
     }
 
     private static string FormatHotkey(ModifierKeys modifiers, Key key)
     {
-        var parts = new System.Collections.Generic.List<string>();
-
-        if (modifiers.HasFlag(ModifierKeys.Control))
-            parts.Add("Ctrl");
-        if (modifiers.HasFlag(ModifierKeys.Alt))
-            parts.Add("Alt");
-        if (modifiers.HasFlag(ModifierKeys.Shift))
-            parts.Add("Shift");
-        if (modifiers.HasFlag(ModifierKeys.Windows))
-            parts.Add("Win");
-
-        parts.Add(FormatKey(key));
-
+        var parts = new List<string>();
+        if (modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+        if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+        if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+        if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
+        parts.Add(key.ToString());
         return string.Join(" + ", parts);
-    }
-
-    private static string FormatKey(Key key)
-    {
-        return key switch
-        {
-            Key.OemPlus => "+",
-            Key.OemMinus => "-",
-            Key.OemQuestion => "?",
-            Key.OemPeriod => ".",
-            Key.OemComma => ",",
-            Key.OemTilde => "~",
-            Key.OemOpenBrackets => "[",
-            Key.OemCloseBrackets => "]",
-            Key.OemPipe => "|",
-            Key.OemSemicolon => ";",
-            Key.OemQuotes => "'",
-            _ => key.ToString()
-        };
-    }
-
-    private static string GetLanguageSupportText(Language language)
-    {
-        if (language.SupportsModel(Constants.CurrentTranscriptionModel))
-        {
-            return "Available in cloud mode";
-        }
-
-        return language.SupportsModel(TranscriptionModel.Parakeet)
-            ? "Available in offline mode"
-            : "Not available for this mode";
     }
 }
 
-/// <summary>
-/// Represents a language item for display in the language selection grid.
-/// </summary>
+// MARK: - Supporting Types
+
+/// <summary>Language entry in the selection grids.</summary>
 public partial class LanguageItem : ObservableObject
 {
     public Language Language { get; set; }
     public string DisplayName { get; set; } = string.Empty;
     public string Flag { get; set; } = string.Empty;
     public bool IsSelectable { get; set; } = true;
-    public string SupportText { get; set; } = string.Empty;
 
     [ObservableProperty]
     private bool _isSelected;
+}
+
+/// <summary>Overlay color choice with live preview brush.</summary>
+public partial class ThemeOption : ObservableObject
+{
+    public OverlayColorTheme Theme { get; }
+    public string Name { get; }
+    public Brush Brush { get; }
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    public ThemeOption(OverlayColorTheme theme, string name, string hex)
+    {
+        Theme = theme;
+        Name = name;
+        Brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+    }
 }

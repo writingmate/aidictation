@@ -633,8 +633,23 @@ section{margin-top:90px}
 .h-date{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);padding:13px 10px 7px}
 .h-row{
   display:flex;gap:14px;align-items:flex-start;border-radius:10px;padding:12px;transition:.13s;position:relative;
+  cursor:pointer;
 }
 .h-row:hover{background:var(--bg1)}
+.h-row.menu-open{background:var(--bg1)}
+/* click flyout: copy / re-transcribe cloud / on-device */
+.hmenu{
+  position:absolute;right:16px;top:38px;z-index:6;min-width:218px;display:none;
+  background:#2E2E2E;border:1px solid var(--stroke-hi);border-radius:8px;padding:5px;
+  box-shadow:0 14px 36px rgba(0,0,0,.55);
+}
+.h-row.menu-open .hmenu{display:block;animation:stepIn .14s ease}
+.hmenu .mi{
+  display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:5px;
+  font-size:12.5px;color:var(--ink);cursor:pointer;transition:.1s;
+}
+.hmenu .mi:hover{background:rgba(255,255,255,.08)}
+.hmenu .mi svg{color:var(--ink-2);font-size:13px}
 .h-meta{flex:none;width:92px}
 .h-meta .tm{font-size:12px;font-weight:700;color:var(--ink)}
 .h-meta .du{font-family:var(--font-mono);font-size:10px;color:var(--ink-3);margin-top:3px}
@@ -994,22 +1009,21 @@ section{margin-top:90px}
             <div class="caption"><span>—</span><span>▢</span><span class="x">✕</span></div></div>
           <div class="set-body">
             <div class="set-side" id="setSide">
-              <!-- Sections mirror macOS SettingsSection (Permissions dropped on Windows) -->
-              <div class="set-item on" data-sec="general"><svg class="ic"><use href="#i-gear"/></svg>General</div>
-              <div class="set-item" data-sec="account"><svg class="ic"><use href="#i-user"/></svg>Account</div>
+              <div class="set-item on" data-sec="account"><svg class="ic"><use href="#i-user"/></svg>Account</div>
               <div class="set-item" data-sec="audio"><svg class="ic"><use href="#i-mic"/></svg>Audio</div>
               <div class="set-item" data-sec="language"><svg class="ic"><use href="#i-globe"/></svg>Language</div>
               <div class="set-item" data-sec="dictionary"><svg class="ic"><use href="#i-book"/></svg>Dictionary</div>
               <div class="set-item" data-sec="shortcuts"><svg class="ic"><use href="#i-zap"/></svg>Shortcuts</div>
+              <div class="set-item" data-sec="config"><svg class="ic"><use href="#i-gear"/></svg>Configuration</div>
               <div class="set-item" data-sec="history"><svg class="ic"><use href="#i-clock"/></svg>History</div>
               <div class="grow"></div>
               <div class="ver">v0.0.1 · win-x64</div>
             </div>
 
             <div class="set-main">
-              <!-- GENERAL (mac: hotkey, push-to-talk, transcription mode, overlay, startup, updates) -->
-              <div class="sec-pane" data-pane="general">
-                <h3>General</h3>
+              <!-- CONFIGURATION (hotkey, push-to-talk, transcription mode, overlay, startup, updates) -->
+              <div class="sec-pane" data-pane="config" hidden>
+                <h3>Configuration</h3>
                 <div class="srow">
                   <svg class="ic sic"><use href="#i-kbd"/></svg>
                   <div class="tx"><b>Dictation Hotkey</b><p>Shortcut to start and stop dictation</p></div>
@@ -1139,31 +1153,35 @@ section{margin-top:90px}
                 </div>
               </div>
 
-              <!-- ACCOUNT -->
-              <div class="sec-pane" data-pane="account" hidden>
+              <!-- ACCOUNT (default page; word count at the bottom) -->
+              <div class="sec-pane" data-pane="account">
                 <h3>Account</h3>
                 <div class="acct" id="acctIn">
                   <div class="row">
                     <div class="av">A</div>
                     <div><b>hello@writingmate.ai</b><span class="plan">Free Trial</span><div class="em">Member since June 2026</div></div>
                   </div>
-                  <div class="usage">
-                    <div class="lbl"><span>monthly words</span><span>612 / 2,000</span></div>
-                    <div class="track"><div class="fill"></div></div>
-                  </div>
                   <div class="acts">
                     <button class="btn btn-brand">Upgrade to Pro</button>
                     <button class="btn btn-dark-ghost" id="signOutBtn">Sign Out</button>
                   </div>
                 </div>
+                <div class="signed-out" id="acctOut" hidden>
+                  <div class="f-label" style="margin-top:0">Sign in to AIDictation</div>
+                  <div class="f-desc">Unlocks cloud transcription, syncs your subscription, tracks monthly usage. Opens in your browser.</div>
+                  <button class="btn btn-brand" id="signInBtn2">Sign In with Browser</button>
+                </div>
                 <div class="srow" style="margin-top:10px;max-width:400px">
                   <div class="tx"><b>Invite Friends</b><p>Get 2,000 extra words when a friend joins</p></div>
                   <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 14px">Copy Link</button>
                 </div>
-                <div class="signed-out" id="acctOut" hidden>
-                  <div class="f-label">Sign in to AIDictation</div>
-                  <div class="f-desc">Unlocks cloud transcription, syncs your subscription, tracks monthly usage. Opens in your browser.</div>
-                  <button class="btn btn-brand" id="signInBtn2">Sign In with Browser</button>
+                <!-- word count at the bottom -->
+                <div class="srow col" id="usageRow" style="max-width:400px">
+                  <div class="head" style="gap:0">
+                    <div class="tx"><b>Word usage</b><p>Resets July 1</p></div>
+                    <span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-2)">612 / 2,000</span>
+                  </div>
+                  <div class="usage" style="margin-top:0"><div class="track"><div class="fill"></div></div></div>
                 </div>
               </div>
             </div>
@@ -1177,7 +1195,7 @@ section{margin-top:90px}
   <!-- ================= 03 HISTORY ================= -->
   <section id="history">
     <div class="sec-head"><span class="num">03</span><h2>History</h2></div>
-    <p class="sec-sub">Date-grouped, hover reveals copy / delete without layout shift. Word count and duration in the meta column; failed items marked inline.</p>
+    <p class="sec-sub">Date-grouped; hover reveals quick copy / delete, and <b>clicking a row</b> opens actions: copy text, re-transcribe with Cloud, or re-transcribe On-device. Word count and duration in the meta column; failed items marked inline.</p>
 
     <div class="stage">
       <div class="stack">
@@ -1459,10 +1477,33 @@ document.querySelectorAll('.swc').forEach(s=>s.onclick=()=>{
 });
 document.getElementById('signOutBtn').onclick=()=>{
   document.getElementById('acctIn').hidden=true;document.getElementById('acctOut').hidden=false;
+  document.getElementById('usageRow').hidden=true;
 };
 document.getElementById('signInBtn2').onclick=()=>{
   document.getElementById('acctIn').hidden=false;document.getElementById('acctOut').hidden=true;
+  document.getElementById('usageRow').hidden=false;
 };
+
+/* ---------- History rows: click opens actions (copy / re-transcribe) ---------- */
+const HMENU=`<div class="hmenu">
+  <div class="mi"><svg class="ic"><use href="#i-copy"/></svg>Copy text</div>
+  <div class="mi"><svg class="ic"><use href="#i-cloud"/></svg>Re-transcribe with Cloud</div>
+  <div class="mi"><svg class="ic"><use href="#i-lock"/></svg>Re-transcribe On-device</div>
+</div>`;
+document.querySelectorAll('.history .h-row').forEach(r=>{
+  r.insertAdjacentHTML('beforeend',HMENU);
+  r.addEventListener('click',e=>{
+    if(e.target.closest('.h-acts')) return;
+    const wasOpen=r.classList.contains('menu-open');
+    document.querySelectorAll('.h-row.menu-open').forEach(x=>x.classList.remove('menu-open'));
+    if(!wasOpen && !e.target.closest('.hmenu')) r.classList.add('menu-open');
+  });
+});
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.h-row')){
+    document.querySelectorAll('.h-row.menu-open').forEach(x=>x.classList.remove('menu-open'));
+  }
+});
 
 /* ---------- Overlay live demo: collapsed ⇄ idle ⇄ recording(+controls) ⇄ processing ---------- */
 const demoPill=document.getElementById('demoPill');

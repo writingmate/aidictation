@@ -3,6 +3,8 @@ name: Windows Build
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'windows-v*'
     paths:
       - 'AIDictation.Windows/**'
       - '.github/workflows/windows-build.yml'
@@ -11,6 +13,9 @@ on:
     paths:
       - 'AIDictation.Windows/**'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   DOTNET_VERSION: '8.0.x'
@@ -120,7 +125,7 @@ jobs:
   release:
     needs: build
     runs-on: windows-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')
 
     steps:
     - name: Checkout
@@ -135,9 +140,11 @@ jobs:
       id: version
       shell: pwsh
       run: |
-        $xml = [xml](Get-Content ${{ env.PROJECT_PATH }})
-        $version = $xml.Project.PropertyGroup.Version
-        if (-not $version) { $version = "0.0.1" }
+        $tag = "${{ github.ref_name }}"
+        $version = $tag -replace '^windows-v', ''
+        if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+          throw "Windows release tags must look like windows-v0.0.1 or windows-v0.0.1.2"
+        }
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
     - name: Install Inno Setup
@@ -171,3 +178,29 @@ jobs:
         name: AIDictation-Windows-Setup-v${{ steps.version.outputs.VERSION }}
         path: ./installer/AIDictation-Windows-Setup-v${{ steps.version.outputs.VERSION }}.exe
         retention-days: 90
+
+    - name: Publish GitHub Release
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $tag = "${{ github.ref_name }}"
+        $zip = "./AIDictation-Windows-v$version.zip"
+        $installer = "./installer/AIDictation-Windows-Setup-v$version.exe"
+        $notes = @"
+        Classic Windows installer and portable ZIP for AIDictation Windows v$version.
+
+        Built automatically from release tag $tag.
+        "@
+
+        gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+        if ($LASTEXITCODE -eq 0) {
+          gh release upload $tag $installer $zip --clobber --repo $env:GITHUB_REPOSITORY
+          gh release edit $tag --title "AIDictation Windows v$version" --notes $notes --repo $env:GITHUB_REPOSITORY
+        } else {
+          gh release create $tag $installer $zip `
+            --title "AIDictation Windows v$version" `
+            --notes $notes `
+            --repo $env:GITHUB_REPOSITORY
+        }

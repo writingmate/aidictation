@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$ExePath,
-    [Parameter(Mandatory = $true)][string]$ShotDir
+    [Parameter(Mandatory = $true)][string]$ShotDir,
+    [string]$VideoDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +11,96 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
 New-Item -ItemType Directory -Force -Path $ShotDir | Out-Null
+if (-not $VideoDir) {
+    $VideoDir = Join-Path (Split-Path $ShotDir -Parent) "videos"
+}
+New-Item -ItemType Directory -Force -Path $VideoDir | Out-Null
+
+function Get-FfmpegPath {
+    $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+    if ($ffmpeg) { return [string]$ffmpeg.Source }
+
+    $choco = Get-Command choco -ErrorAction SilentlyContinue
+    if ($choco) {
+        & choco install ffmpeg -y --no-progress | Out-Host
+        $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+        if ($ffmpeg) { return [string]$ffmpeg.Source }
+
+        $shim = Join-Path $env:ChocolateyInstall "bin/ffmpeg.exe"
+        if (Test-Path $shim) { return [string]$shim }
+    }
+
+    throw "ffmpeg is required to capture the overlay video"
+}
+
+function Capture-OverlayVideo([string]$AppPath) {
+    $videoPath = Join-Path $VideoDir "overlay-states.mp4"
+    $logPath = Join-Path $VideoDir "ffmpeg-overlay.log"
+    $ffmpeg = Get-FfmpegPath
+    Remove-Item $videoPath, $logPath -Force -ErrorAction SilentlyContinue
+
+    Write-Host "Capturing overlay state video to $videoPath"
+    $args = @(
+        "-y",
+        "-loglevel", "warning",
+        "-f", "gdigrab",
+        "-framerate", "30",
+        "-i", "desktop",
+        "-t", "12",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-pix_fmt", "yuv420p",
+        "-vcodec", "libx264",
+        "-preset", "veryfast",
+        $videoPath
+    )
+
+    $recorder = Start-Process -FilePath $ffmpeg -ArgumentList $args -PassThru -WindowStyle Hidden -RedirectStandardError $logPath
+    Start-Sleep -Milliseconds 1200
+    $demo = Start-Process -FilePath $AppPath -ArgumentList "--validate-overlay" -PassThru
+
+    try {
+        Wait-Process -Id $demo.Id -Timeout 20
+    }
+    catch {
+        Stop-Process -Id $demo.Id -Force -ErrorAction SilentlyContinue
+        throw "Overlay validation run did not exit in time"
+    }
+    $demo.Refresh()
+    if ($demo.ExitCode -ne 0) {
+        throw "Overlay validation run failed with exit code $($demo.ExitCode)"
+    }
+
+    $recorderTimedOut = $false
+    try {
+        $recorder.Refresh()
+        if (-not $recorder.HasExited) {
+            Wait-Process -Id $recorder.Id -Timeout 35
+        }
+    }
+    catch {
+        $stillRunning = Get-Process -Id $recorder.Id -ErrorAction SilentlyContinue
+        if ($stillRunning) {
+            $recorderTimedOut = $true
+            Write-Host "::warning::Overlay video recorder did not exit in time; stopping it after the video file was written"
+            Stop-Process -Id $recorder.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+        }
+    }
+
+    try { $recorder.Refresh() } catch { }
+
+    if (-not (Test-Path $videoPath) -or (Get-Item $videoPath).Length -lt 1000) {
+        if (Test-Path $logPath) { Get-Content $logPath | Write-Host }
+        throw "Overlay video was not created"
+    }
+
+    if (-not $recorderTimedOut -and $recorder.HasExited -and $recorder.ExitCode -ne 0) {
+        if (Test-Path $logPath) { Get-Content $logPath | Write-Host }
+        throw "Overlay video capture failed with exit code $($recorder.ExitCode)"
+    }
+
+    Write-Host "Captured overlay video $videoPath"
+}
 
 function Take-Screenshot([string]$Name) {
     Start-Sleep -Milliseconds 800
@@ -130,6 +221,8 @@ function Collect-AppState {
 }
 
 # --- 1. First launch: onboarding (7 steps + finale) ---
+Capture-OverlayVideo $ExePath
+
 Write-Host "Launching $ExePath"
 $proc = Start-Process -FilePath $ExePath -PassThru
 Start-Sleep -Seconds 8

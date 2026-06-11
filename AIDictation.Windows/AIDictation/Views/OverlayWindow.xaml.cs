@@ -127,6 +127,12 @@ public partial class OverlayWindow : Window
         }
     }
 
+    internal void SetValidationHover(bool hovering)
+    {
+        _isHovering = hovering;
+        SyncToAppState();
+    }
+
     public void ShowOverlay()
     {
         if (!IsVisible) Show();

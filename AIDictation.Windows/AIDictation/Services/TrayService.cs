@@ -157,12 +157,12 @@ public sealed class TrayService : IDisposable
     {
         if (_trayIcon == null) return;
 
-        // Icon resource paths - these should exist in Resources/Icons
+        // Use the packaged app icon until state-specific tray icons are added.
         var iconPath = state switch
         {
-            RecordingState.Recording => "pack://application:,,,/Resources/Icons/tray_recording.ico",
-            RecordingState.Processing => "pack://application:,,,/Resources/Icons/tray_processing.ico",
-            _ => "pack://application:,,,/Resources/Icons/app.ico"
+            RecordingState.Recording => "pack://application:,,,/Assets/app.ico",
+            RecordingState.Processing => "pack://application:,,,/Assets/app.ico",
+            _ => "pack://application:,,,/Assets/app.ico"
         };
 
         try
@@ -175,7 +175,7 @@ public sealed class TrayService : IDisposable
             // Fallback: try to use app icon if state-specific icons don't exist
             try
             {
-                var fallbackUri = new Uri("pack://application:,,,/Resources/Icons/app.ico", UriKind.Absolute);
+                var fallbackUri = new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute);
                 _trayIcon.IconSource = new System.Windows.Media.Imaging.BitmapImage(fallbackUri);
             }
             catch

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using AIDictation.Models;
 using AIDictation.Services;
@@ -38,6 +39,7 @@ public partial class App : Application
     private DateTime _recordingStartedAt;
     private bool _isStoppingRecording;
     private bool _discardNextRecording;
+    private bool _isValidationOnly;
     private CancellationTokenSource? _pipeCts;
 
     // MARK: - Application Lifecycle
@@ -55,11 +57,19 @@ public partial class App : Application
 
         base.OnStartup(e);
 
-        // Listen for URLs forwarded by subsequent instances
-        StartPipeServer();
-
         // Setup global exception handlers
         SetupExceptionHandling();
+        ApplyWindowsAppTheme();
+
+        if (IsOverlayValidationRun(e.Args))
+        {
+            _isValidationOnly = true;
+            await RunOverlayValidationAsync();
+            return;
+        }
+
+        // Listen for URLs forwarded by subsequent instances
+        StartPipeServer();
 
         // Register URL scheme
         RegisterUrlScheme();
@@ -82,20 +92,146 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _pipeCts?.Cancel();
-        SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
-        UnsubscribeRuntimeEvents();
+        if (!_isValidationOnly)
+        {
+            SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
+            UnsubscribeRuntimeEvents();
 
-        // Cleanup system tray
-        _trayIcon?.Dispose();
+            // Cleanup system tray
+            _trayIcon?.Dispose();
 
-        // Cleanup services
-        CleanupServices();
+            // Cleanup services
+            CleanupServices();
+        }
 
         // Release mutex
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
 
         base.OnExit(e);
+    }
+
+    // MARK: - Theme
+
+    private void ApplyWindowsAppTheme()
+    {
+        if (UsesLightWindowsTheme())
+        {
+            SetThemeColor("BackgroundColor", "#F7F7F7");
+            SetThemeColor("SurfaceColor", "#FFFFFF");
+            SetThemeColor("SurfaceHoverColor", "#FAFAFA");
+            SetThemeColor("BorderColor", "#15000000");
+            SetThemeColor("BorderHiColor", "#26000000");
+            SetThemeColor("TextPrimaryColor", "#1A1A1A");
+            SetThemeColor("TextSecondaryColor", "#5F5F5F");
+            SetThemeColor("TextMutedColor", "#7A7A7A");
+            SetThemeColor("SubtleControlColor", "#08000000");
+            SetThemeColor("SubtleControlHoverColor", "#10000000");
+            SetThemeColor("NavHoverColor", "#08000000");
+            SetThemeColor("NavSelectedColor", "#0C000000");
+            SetThemeColor("SelectedChipColor", "#1AF16E00");
+            SetThemeColor("SelectedChipTextColor", "#9A4A00");
+            SetThemeColor("InputBackgroundColor", "#FFFFFF");
+            SetThemeColor("MenuBackgroundColor", "#FFFFFF");
+            SetThemeColor("DangerSoftColor", "#18E5484D");
+            return;
+        }
+
+        SetThemeColor("BackgroundColor", "#202020");
+        SetThemeColor("SurfaceColor", "#2B2B2B");
+        SetThemeColor("SurfaceHoverColor", "#323232");
+        SetThemeColor("BorderColor", "#15FFFFFF");
+        SetThemeColor("BorderHiColor", "#29FFFFFF");
+        SetThemeColor("TextPrimaryColor", "#FFFFFF");
+        SetThemeColor("TextSecondaryColor", "#C9C9C9");
+        SetThemeColor("TextMutedColor", "#8A8A8A");
+        SetThemeColor("SubtleControlColor", "#0FFFFFFF");
+        SetThemeColor("SubtleControlHoverColor", "#17FFFFFF");
+        SetThemeColor("NavHoverColor", "#0EFFFFFF");
+        SetThemeColor("NavSelectedColor", "#0FFFFFFF");
+        SetThemeColor("SelectedChipColor", "#1FF16E00");
+        SetThemeColor("SelectedChipTextColor", "#FFC093");
+        SetThemeColor("InputBackgroundColor", "#0FFFFFFF");
+        SetThemeColor("MenuBackgroundColor", "#2E2E2E");
+        SetThemeColor("DangerSoftColor", "#2EE5484D");
+    }
+
+    private static bool UsesLightWindowsTheme()
+    {
+        try
+        {
+            var value = Registry.GetValue(
+                @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme",
+                1);
+            return value is not int intValue || intValue != 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private void SetThemeColor(string key, string hex)
+    {
+        var color = (Color)ColorConverter.ConvertFromString(hex);
+        Resources[key] = color;
+
+        var brushKey = key.Replace("Color", "Brush", StringComparison.Ordinal);
+        if (Resources[brushKey] is SolidColorBrush brush && !brush.IsFrozen)
+        {
+            brush.Color = color;
+        }
+        else
+        {
+            Resources[brushKey] = new SolidColorBrush(color);
+        }
+    }
+
+    // MARK: - UI Validation
+
+    private static bool IsOverlayValidationRun(string[] args) =>
+        args.Any(arg => arg.Equals("--validate-overlay", StringComparison.OrdinalIgnoreCase));
+
+    private async Task RunOverlayValidationAsync()
+    {
+        var overlay = new OverlayWindow();
+        overlay.SetPosition(OverlayPosition.Top);
+        overlay.SetHideWhenIdle(false);
+        overlay.SetColorTheme(OverlayColorTheme.Orange);
+        overlay.Show();
+
+        await Task.Delay(1100);
+
+        overlay.SetValidationHover(true);
+        await Task.Delay(1500);
+
+        overlay.SetValidationHover(false);
+        AppState.Shared.StartRecording();
+        for (var i = 0; i < 34; i++)
+        {
+            var wave = 0.18f + (float)(Math.Abs(Math.Sin(i * 0.45)) * 0.78);
+            AppState.Shared.UpdateAudioLevel(wave);
+            await Task.Delay(65);
+        }
+
+        overlay.SetValidationHover(true);
+        for (var i = 0; i < 24; i++)
+        {
+            var wave = 0.22f + (float)(Math.Abs(Math.Sin(i * 0.58)) * 0.7);
+            AppState.Shared.UpdateAudioLevel(wave);
+            await Task.Delay(65);
+        }
+
+        overlay.SetValidationHover(false);
+        AppState.Shared.StartProcessing();
+        await Task.Delay(2400);
+
+        AppState.Shared.SetResult("Ready");
+        await Task.Delay(1800);
+
+        overlay.Close();
+        Shutdown();
     }
 
     // MARK: - Single Instance
@@ -607,12 +743,14 @@ public partial class App : Application
 
     private void ShowSettingsWindow()
     {
+        ApplyWindowsAppTheme();
         ShowOrActivateWindow<SettingsWindow>();
     }
 
     private void ShowHistoryWindow()
     {
         // History lives inside Settings now.
+        ApplyWindowsAppTheme();
         var settings = ShowOrActivateWindow<SettingsWindow>();
         settings.NavigateTo(ViewModels.SettingsViewModel.Sections.History);
     }

@@ -14,6 +14,7 @@ env:
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
   PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
   SHOT_DIR: 'AIDictation.Windows/artifacts/screenshots'
+  VIDEO_DIR: 'AIDictation.Windows/artifacts/videos'
   # Same backend configuration as production builds
   TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
   TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
@@ -56,6 +57,7 @@ jobs:
         AIDictation.Windows/scripts/validate-ui.ps1
         -ExePath "${{ env.PUBLISH_DIR }}/AIDictation.exe"
         -ShotDir "${{ env.SHOT_DIR }}"
+        -VideoDir "${{ env.VIDEO_DIR }}"
 
     - name: Backend transcription smoke test
       shell: pwsh
@@ -106,4 +108,12 @@ jobs:
       with:
         name: ui-validation-screenshots
         path: ${{ env.SHOT_DIR }}/
+        retention-days: 14
+
+    - name: Upload overlay video
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: overlay-state-video
+        path: ${{ env.VIDEO_DIR }}/
         retention-days: 14

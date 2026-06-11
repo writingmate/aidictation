@@ -12,6 +12,7 @@
         ResizeMode="NoResize"
         ShowInTaskbar="True"
         WindowStartupLocation="CenterScreen"
+        Icon="/Assets/app.png"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
     
     <Window.Resources>

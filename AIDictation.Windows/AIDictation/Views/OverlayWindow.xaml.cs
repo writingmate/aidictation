@@ -412,6 +412,10 @@ public partial class OverlayWindow : Window
 
     private void UpdateWindowPosition()
     {
+        // Before the first Show() there is no PresentationSource, so the
+        // pixel->DIP transform is unavailable; the Loaded handler repositions.
+        if (!IsLoaded) return;
+
         var workArea = GetActiveMonitorWorkArea();
         Left = workArea.Left + (workArea.Width - Width) / 2;
         Top = _position == OverlayPosition.Top

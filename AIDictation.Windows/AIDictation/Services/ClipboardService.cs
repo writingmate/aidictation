@@ -117,9 +117,10 @@ public sealed class ClipboardService
         var currentThread = GetCurrentThreadId();
         var attached = targetThread != 0 && targetThread != currentThread &&
                        AttachThreadInput(currentThread, targetThread, true);
+        bool requested;
         try
         {
-            SetForegroundWindow(hWnd);
+            requested = SetForegroundWindow(hWnd);
         }
         finally
         {
@@ -128,6 +129,8 @@ public sealed class ClipboardService
                 AttachThreadInput(currentThread, targetThread, false);
             }
         }
+
+        if (!requested) return false;
 
         await Task.Delay(Constants.FocusRestoreDelayMs);
         return GetForegroundWindow() == hWnd;
@@ -168,9 +171,10 @@ public sealed class ClipboardService
             if (selection.Length == 0)
                 return null;
 
-            // Collapse the selection to the caret, then widen one character left.
+            // Collapse the selection to its end (where the caret sits after a
+            // typical selection), then widen one character left.
             var range = selection[0].Clone();
-            range.MoveEndpointByRange(TextPatternRangeEndpoint.End, range, TextPatternRangeEndpoint.Start);
+            range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End);
             range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -1);
             var textBefore = range.GetText(1);
             return textBefore.Length == 1 ? textBefore[0] : null;

@@ -40,6 +40,7 @@ public sealed class WhisperLocalService : IDisposable
     // MARK: - Private Properties
 
     private readonly SemaphoreSlim _modelLock = new(1, 1);
+    private readonly object _factoryLock = new();
     private WhisperFactory? _factory;
 
     // MARK: - Initialization
@@ -79,53 +80,79 @@ public sealed class WhisperLocalService : IDisposable
             long existingBytes = File.Exists(tempPath) ? new FileInfo(tempPath).Length : 0;
 
             using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-            using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, Constants.ModelDownloadUrl);
-            if (existingBytes > 0)
+
+            for (var attempt = 0; ; attempt++)
             {
-                downloadRequest.Headers.Range =
-                    new System.Net.Http.Headers.RangeHeaderValue(existingBytes, null);
-            }
-
-            using var response = await httpClient.SendAsync(
-                downloadRequest,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-
-            if (existingBytes > 0 && response.StatusCode != System.Net.HttpStatusCode.PartialContent)
-            {
-                // The server ignored the range request; start over.
-                existingBytes = 0;
-            }
-            response.EnsureSuccessStatusCode();
-
-            var remainingBytes = response.Content.Headers.ContentLength ?? -1L;
-            var totalBytes = remainingBytes > 0 ? existingBytes + remainingBytes : -1L;
-            long readBytes = existingBytes;
-
-            await using (var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken))
-            await using (var fileStream = new FileStream(
-                tempPath,
-                existingBytes > 0 ? FileMode.Append : FileMode.Create,
-                FileAccess.Write))
-            {
-                var buffer = new byte[Constants.DownloadBufferSize];
-                int read;
-                while ((read = await contentStream.ReadAsync(buffer, cancellationToken)) > 0)
+                using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, Constants.ModelDownloadUrl);
+                if (existingBytes > 0)
                 {
-                    await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                    readBytes += read;
-                    if (totalBytes > 0)
+                    downloadRequest.Headers.Range =
+                        new System.Net.Http.Headers.RangeHeaderValue(existingBytes, null);
+                }
+
+                using var response = await httpClient.SendAsync(
+                    downloadRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+
+                if (existingBytes > 0)
+                {
+                    var rejected = response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable;
+                    var totalLength = response.Content.Headers.ContentRange?.Length;
+                    var oversized = response.StatusCode == System.Net.HttpStatusCode.PartialContent &&
+                                    totalLength.HasValue && existingBytes >= totalLength.Value;
+
+                    if ((rejected || oversized) && attempt == 0)
                     {
-                        ModelDownloadProgress?.Invoke(this, (double)readBytes / totalBytes);
+                        // The partial file is corrupt or from a different model
+                        // version; appending would produce a garbage model.
+                        try { File.Delete(tempPath); } catch { }
+                        existingBytes = 0;
+                        continue;
+                    }
+
+                    if (response.StatusCode != System.Net.HttpStatusCode.PartialContent)
+                    {
+                        // The server ignored the range request; FileMode.Create
+                        // below truncates and starts over.
+                        existingBytes = 0;
                     }
                 }
+                response.EnsureSuccessStatusCode();
+
+                var remainingBytes = response.Content.Headers.ContentLength ?? -1L;
+                var totalBytes = remainingBytes > 0 ? existingBytes + remainingBytes : -1L;
+                long readBytes = existingBytes;
+
+                await using (var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken))
+                await using (var fileStream = new FileStream(
+                    tempPath,
+                    existingBytes > 0 ? FileMode.Append : FileMode.Create,
+                    FileAccess.Write))
+                {
+                    var buffer = new byte[Constants.DownloadBufferSize];
+                    int read;
+                    while ((read = await contentStream.ReadAsync(buffer, cancellationToken)) > 0)
+                    {
+                        await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                        readBytes += read;
+                        if (totalBytes > 0)
+                        {
+                            ModelDownloadProgress?.Invoke(this, (double)readBytes / totalBytes);
+                        }
+                    }
+                }
+                break;
             }
 
             File.Move(tempPath, ModelPath, overwrite: true);
 
             // A factory created from an earlier model file must not survive the swap.
-            _factory?.Dispose();
-            _factory = null;
+            lock (_factoryLock)
+            {
+                _factory?.Dispose();
+                _factory = null;
+            }
 
             ModelDownloadProgress?.Invoke(this, 1.0);
         }
@@ -189,8 +216,13 @@ public sealed class WhisperLocalService : IDisposable
 
     private WhisperFactory GetFactory()
     {
-        _factory ??= WhisperFactory.FromPath(ModelPath);
-        return _factory;
+        // EnsureModelAsync disposes the factory after a model swap; without the
+        // lock a concurrent transcription could grab a disposed instance.
+        lock (_factoryLock)
+        {
+            _factory ??= WhisperFactory.FromPath(ModelPath);
+            return _factory;
+        }
     }
 
     private static void ResampleToWhisperFormat(string inputPath, string outputPath)

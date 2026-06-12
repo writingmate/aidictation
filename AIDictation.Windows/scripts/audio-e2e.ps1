@@ -154,28 +154,53 @@ try {
     Take-Screenshot "04-after-transcription"
 
     # --- 8. Read the Notepad buffer via UI Automation ---
-    $notepadText = ""
-    try {
-        $root = [System.Windows.Automation.AutomationElement]::FromHandle($script:notepadProc.MainWindowHandle)
-        foreach ($ct in @([System.Windows.Automation.ControlType]::Document, [System.Windows.Automation.ControlType]::Edit)) {
-            $cond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ct)
-            $el = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
-            if ($el) {
-                try {
-                    $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
-                    $notepadText = $tp.DocumentRange.GetText(100000)
-                } catch {
+    function Read-NotepadText {
+        $text = ""
+        try {
+            $root = [System.Windows.Automation.AutomationElement]::FromHandle($script:notepadProc.MainWindowHandle)
+            foreach ($ct in @([System.Windows.Automation.ControlType]::Document, [System.Windows.Automation.ControlType]::Edit)) {
+                $cond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ct)
+                $el = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+                if ($el) {
                     try {
-                        $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                        $notepadText = $vp.Current.Value
-                    } catch { }
+                        $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+                        $text = $tp.DocumentRange.GetText(100000)
+                    } catch {
+                        try {
+                            $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                            $text = $vp.Current.Value
+                        } catch { }
+                    }
+                    if ($text) { break }
                 }
-                if ($notepadText) { break }
             }
-        }
-    } catch { Write-Host "Notepad UIA read failed: $_" }
+        } catch { Write-Host "Notepad UIA read failed: $_" }
+        return $text
+    }
+    $notepadText = Read-NotepadText
     Write-Host "Notepad content: '$notepadText'"
+
+    # --- 8b. Diagnostics: where did the pipeline stop? ---
+    $clipText = ""
+    try { $clipText = Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch { }
+    Write-Host "Clipboard after transcription: '$clipText'"
+
+    if ($notepadText -notmatch "(?i)hello" -and "$clipText" -match "(?i)hello") {
+        Write-Host "App paste missing but clipboard holds transcript - probing manual Ctrl+V via keybd_event"
+        [E2ENative]::SetForegroundWindow($script:notepadProc.MainWindowHandle) | Out-Null
+        Start-Sleep -Milliseconds 600
+        $VK_CONTROL = 0x11; $VK_V = 0x56
+        [E2ENative]::keybd_event($VK_CONTROL, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 50
+        [E2ENative]::keybd_event($VK_V, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 50
+        [E2ENative]::keybd_event($VK_V, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+        [E2ENative]::keybd_event($VK_CONTROL, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+        Start-Sleep -Seconds 1
+        $manualPaste = Read-NotepadText
+        Write-Host "Notepad after manual Ctrl+V: '$manualPaste'"
+    }
 
     # --- 9. Find the captured WAV and verify it is non-silent ---
     $wav = Get-ChildItem $appData -Recurse -Filter "*.wav" -ErrorAction SilentlyContinue |

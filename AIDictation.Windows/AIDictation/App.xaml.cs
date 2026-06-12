@@ -45,6 +45,7 @@ public partial class App : Application
     private bool _isStoppingRecording;
     private bool _discardNextRecording;
     private bool _awaitingStopCallback;
+    private bool _mutedSystemAudioForRecording;
     private IntPtr _dictationTargetWindow;
     private bool _isValidationOnly;
     private CancellationTokenSource? _pipeCts;
@@ -515,13 +516,14 @@ public partial class App : Application
         _stopWatchdog.Stop();
     }
 
-    private static void CleanupServices()
+    private void CleanupServices()
     {
         // Stop any active recording
         if (AppState.Shared.IsRecording)
         {
             AudioRecorderService.Instance.StopRecording();
         }
+        RestoreSystemAudioAfterRecording();
 
         // Cleanup hotkey service
         HotkeyService.Instance.UnregisterAllHotkeys();
@@ -656,6 +658,53 @@ public partial class App : Application
         {
             _recordingTimer.Stop();
             AppState.Shared.SetError("Unable to start recording");
+            return;
+        }
+
+        MuteSystemAudioForRecording();
+    }
+
+    /// <summary>
+    /// Mutes the default playback device while recording (when enabled) so
+    /// speaker output does not bleed into the dictation. A device the user
+    /// muted themselves is left alone.
+    /// </summary>
+    private void MuteSystemAudioForRecording()
+    {
+        if (!SettingsService.Instance.Settings.MuteAudioWhenRecording) return;
+
+        try
+        {
+            using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(
+                NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
+            if (!device.AudioEndpointVolume.Mute)
+            {
+                device.AudioEndpointVolume.Mute = true;
+                _mutedSystemAudioForRecording = true;
+            }
+        }
+        catch
+        {
+            // No render device or access denied - recording proceeds unmuted.
+        }
+    }
+
+    private void RestoreSystemAudioAfterRecording()
+    {
+        if (!_mutedSystemAudioForRecording) return;
+        _mutedSystemAudioForRecording = false;
+
+        try
+        {
+            using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(
+                NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
+            device.AudioEndpointVolume.Mute = false;
+        }
+        catch
+        {
+            // Device gone; nothing to restore.
         }
     }
 
@@ -689,6 +738,7 @@ public partial class App : Application
         _awaitingStopCallback = false;
         _isStoppingRecording = false;
         _discardNextRecording = false;
+        RestoreSystemAudioAfterRecording();
         AudioRecorderService.Instance.AbortRecording();
         AppState.Shared.SetError("The audio device did not stop cleanly. Please try again.");
     }
@@ -721,6 +771,7 @@ public partial class App : Application
             _awaitingStopCallback = false;
             _isStoppingRecording = false;
             _discardNextRecording = false;
+            RestoreSystemAudioAfterRecording();
             AppState.Shared.SetError(message);
             HistoryService.Instance.Add(new Recording
             {
@@ -741,6 +792,7 @@ public partial class App : Application
     {
         _stopWatchdog.Stop();
         _awaitingStopCallback = false;
+        RestoreSystemAudioAfterRecording();
 
         if (_discardNextRecording)
         {

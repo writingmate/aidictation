@@ -156,6 +156,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var recordingStartedByVolumeShortcut = false
     private var bubbleAnimationJob: Job? = null
     private var pendingHideJob: Job? = null
+    private var stickyEditableFocusArmed = false
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
     private var fixGrammarButton: TextView? = null
@@ -346,12 +347,37 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return true
         }
         if (!isKeyboardVisible()) return false
-        resolveFocusedEditableNode(source) ?: return false
+        if (!hasEditableDictationTarget(source)) return false
         if (isBubbleSuppressed()) return false
         if (isVolumeShortcutEnabled() && recordingState == RecordingState.Idle) {
             return false
         }
         return true
+    }
+
+    /**
+     * Editable-focus check with a sticky fallback. WebView-backed fields (LinkedIn,
+     * Chrome, in-app browsers) drop FOCUS_INPUT for seconds while their virtual
+     * accessibility tree rebuilds, so a failed lookup is not evidence the field was
+     * left. Once an eligible field has been seen with the keyboard up, the target is
+     * considered present until the keyboard closes or a password field takes focus.
+     */
+    private fun hasEditableDictationTarget(source: AccessibilityNodeInfo?): Boolean {
+        if (resolveFocusedEditableNode(source) != null) {
+            stickyEditableFocusArmed = true
+            return true
+        }
+        if (isPasswordFieldFocused(source)) {
+            stickyEditableFocusArmed = false
+            return false
+        }
+        return stickyEditableFocusArmed
+    }
+
+    private fun isPasswordFieldFocused(source: AccessibilityNodeInfo?): Boolean {
+        val focused = source?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        return focused?.isPassword == true
     }
 
     private fun shouldKeepBubbleVisibleWithoutKeyboard(): Boolean {
@@ -518,6 +544,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun hideBubble() {
         cancelPendingHide()
+        stickyEditableFocusArmed = false
         bubbleShouldBeVisible = false
         if (!isBubbleAttached) return
 

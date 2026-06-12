@@ -40,7 +40,12 @@ public class User
 
     [JsonIgnore]
     public SubscriptionTier SubscriptionTier =>
-        SubscriptionStatus == "pro" ? SubscriptionTier.Pro : SubscriptionTier.Free;
+        SubscriptionStatus?.Trim().ToLowerInvariant() switch
+        {
+            "pro" => SubscriptionTier.Pro,
+            "lifetime" => SubscriptionTier.Lifetime,
+            _ => SubscriptionTier.Free
+        };
 
     [JsonIgnore]
     public int TotalWordsUsed => MonthlyWordCount;
@@ -75,7 +80,7 @@ public class User
     {
         get
         {
-            if (SubscriptionTier == SubscriptionTier.Pro) return false;
+            if (SubscriptionTier.IsPaid()) return false;
             if (WordCountResetAt == null) return false;
             return DateTime.UtcNow >= WordCountResetAt;
         }
@@ -85,17 +90,23 @@ public class User
 public enum SubscriptionTier
 {
     Free,
-    Pro
+    Pro,
+    Lifetime
 }
 
 public static class SubscriptionTierExtensions
 {
     public const int FreeMonthlyWordLimit = 2000;
 
+    /// <summary>True for any paid tier (Pro or Lifetime) — unlimited usage.</summary>
+    public static bool IsPaid(this SubscriptionTier tier) =>
+        tier is SubscriptionTier.Pro or SubscriptionTier.Lifetime;
+
     public static string GetDisplayName(this SubscriptionTier tier) => tier switch
     {
         SubscriptionTier.Free => "Free Trial",
         SubscriptionTier.Pro => "Pro",
+        SubscriptionTier.Lifetime => "Lifetime",
         _ => "Unknown"
     };
 
@@ -103,6 +114,7 @@ public static class SubscriptionTierExtensions
     {
         SubscriptionTier.Free => FreeMonthlyWordLimit,
         SubscriptionTier.Pro => int.MaxValue,
+        SubscriptionTier.Lifetime => int.MaxValue,
         _ => FreeMonthlyWordLimit
     };
 
@@ -110,6 +122,7 @@ public static class SubscriptionTierExtensions
     {
         SubscriptionTier.Free => "$0",
         SubscriptionTier.Pro => "$9.99/month",
+        SubscriptionTier.Lifetime => "One-time",
         _ => "$0"
     };
 
@@ -124,6 +137,13 @@ public static class SubscriptionTierExtensions
         SubscriptionTier.Pro => new[]
         {
             "Unlimited transcriptions",
+            "Included API access",
+            "Priority support",
+            "Cloud sync (coming soon)"
+        },
+        SubscriptionTier.Lifetime => new[]
+        {
+            "Unlimited transcriptions, forever",
             "Included API access",
             "Priority support",
             "Cloud sync (coming soon)"

@@ -29,7 +29,7 @@ public sealed class LanguagePostProcessService
     {
         public const int HttpTimeoutSeconds = 30;
         public const int MinCompletionTokens = 500;
-        public const int MaxCompletionTokens = 4000;
+        public const int MaxCompletionTokens = 8000;
     }
 
     // MARK: - Private Properties
@@ -101,7 +101,16 @@ public sealed class LanguagePostProcessService
             }
 
             var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-            var corrected = json["choices"]?[0]?["message"]?["content"]?.ToString()?.Trim();
+            var choice = json["choices"]?[0];
+            var corrected = choice?["message"]?["content"]?.ToString()?.Trim();
+
+            // A truncated correction silently loses the tail of the dictation;
+            // the raw transcript beats a cut-off "improvement".
+            if (string.Equals(choice?["finish_reason"]?.ToString(), "length", StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.WriteLine("[LanguagePostProcess] Completion truncated, returning raw text");
+                return rawText;
+            }
 
             return string.IsNullOrWhiteSpace(corrected) ? rawText : corrected;
         }

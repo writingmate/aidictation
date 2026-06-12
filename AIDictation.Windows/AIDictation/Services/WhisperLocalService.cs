@@ -75,18 +75,38 @@ public sealed class WhisperLocalService : IDisposable
             Directory.CreateDirectory(modelDir);
             var tempPath = ModelPath + ".download";
 
+            // Resume a partial download instead of restarting ~470 MB from zero.
+            long existingBytes = File.Exists(tempPath) ? new FileInfo(tempPath).Length : 0;
+
             using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-            using var response = await httpClient.GetAsync(
-                Constants.ModelDownloadUrl,
+            using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, Constants.ModelDownloadUrl);
+            if (existingBytes > 0)
+            {
+                downloadRequest.Headers.Range =
+                    new System.Net.Http.Headers.RangeHeaderValue(existingBytes, null);
+            }
+
+            using var response = await httpClient.SendAsync(
+                downloadRequest,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
+
+            if (existingBytes > 0 && response.StatusCode != System.Net.HttpStatusCode.PartialContent)
+            {
+                // The server ignored the range request; start over.
+                existingBytes = 0;
+            }
             response.EnsureSuccessStatusCode();
 
-            var totalBytes = response.Content.Headers.ContentLength ?? -1L;
-            long readBytes = 0;
+            var remainingBytes = response.Content.Headers.ContentLength ?? -1L;
+            var totalBytes = remainingBytes > 0 ? existingBytes + remainingBytes : -1L;
+            long readBytes = existingBytes;
 
             await using (var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken))
-            await using (var fileStream = File.Create(tempPath))
+            await using (var fileStream = new FileStream(
+                tempPath,
+                existingBytes > 0 ? FileMode.Append : FileMode.Create,
+                FileAccess.Write))
             {
                 var buffer = new byte[Constants.DownloadBufferSize];
                 int read;
@@ -102,15 +122,16 @@ public sealed class WhisperLocalService : IDisposable
             }
 
             File.Move(tempPath, ModelPath, overwrite: true);
+
+            // A factory created from an earlier model file must not survive the swap.
+            _factory?.Dispose();
+            _factory = null;
+
             ModelDownloadProgress?.Invoke(this, 1.0);
-        }
-        catch
-        {
-            try { File.Delete(ModelPath + ".download"); } catch { }
-            throw;
         }
         finally
         {
+            // On failure the partial .download file is kept so the next attempt resumes.
             _modelLock.Release();
         }
     }

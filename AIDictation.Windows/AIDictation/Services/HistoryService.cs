@@ -26,6 +26,7 @@ public sealed class HistoryService
         public const string HistoryFileName = "history.json";
         public const string AudioFolderName = "recordings";
         public const int MaxRecordings = 100;
+        public const long MaxAudioBytes = 500L * 1024 * 1024;
     }
 
     // MARK: - Public Properties
@@ -73,21 +74,25 @@ public sealed class HistoryService
     /// </summary>
     public void Load()
     {
-        lock (_lock)
+        RunOnUiThread(() =>
         {
-            if (_isLoaded) return;
-
-            var recordings = LoadFromFile();
-            Recordings.Clear();
-            foreach (var recording in recordings.OrderByDescending(r => r.Timestamp))
+            lock (_lock)
             {
-                Recordings.Add(recording);
-            }
+                if (_isLoaded) return;
 
-            _isLoaded = true;
-        }
+                var recordings = LoadFromFile();
+                Recordings.Clear();
+                foreach (var recording in recordings.OrderByDescending(r => r.Timestamp))
+                {
+                    Recordings.Add(recording);
+                }
+
+                _isLoaded = true;
+            }
+        });
 
         CleanupOrphanedAudioFiles();
+        EnforceAudioStorageCap();
     }
 
     /// <summary>
@@ -95,21 +100,24 @@ public sealed class HistoryService
     /// </summary>
     public void Add(Recording recording)
     {
-        lock (_lock)
+        RunOnUiThread(() =>
         {
-            // Insert at the beginning (most recent first)
-            Recordings.Insert(0, recording);
-
-            // Enforce max limit
-            while (Recordings.Count > Constants.MaxRecordings)
+            lock (_lock)
             {
-                var oldest = Recordings[^1];
-                DeleteAudioFile(oldest.AudioFilePath);
-                Recordings.RemoveAt(Recordings.Count - 1);
-            }
+                // Insert at the beginning (most recent first)
+                Recordings.Insert(0, recording);
 
-            Save();
-        }
+                // Enforce max limit
+                while (Recordings.Count > Constants.MaxRecordings)
+                {
+                    var oldest = Recordings[^1];
+                    DeleteAudioFile(oldest.AudioFilePath);
+                    Recordings.RemoveAt(Recordings.Count - 1);
+                }
+
+                Save();
+            }
+        });
 
         HistoryChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -141,15 +149,18 @@ public sealed class HistoryService
     /// </summary>
     public void Update(Recording recording)
     {
-        lock (_lock)
+        RunOnUiThread(() =>
         {
-            var index = IndexOf(recording.Id);
-            if (index >= 0)
+            lock (_lock)
             {
-                Recordings[index] = recording;
-                Save();
+                var index = IndexOf(recording.Id);
+                if (index >= 0)
+                {
+                    Recordings[index] = recording;
+                    Save();
+                }
             }
-        }
+        });
 
         HistoryChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -159,18 +170,26 @@ public sealed class HistoryService
     /// </summary>
     public bool Delete(Guid id)
     {
-        lock (_lock)
+        var deleted = false;
+        RunOnUiThread(() =>
         {
-            var recording = Recordings.FirstOrDefault(r => r.Id == id);
-            if (recording == null) return false;
+            lock (_lock)
+            {
+                var recording = Recordings.FirstOrDefault(r => r.Id == id);
+                if (recording == null) return;
 
-            DeleteAudioFile(recording.AudioFilePath);
-            Recordings.Remove(recording);
-            Save();
+                DeleteAudioFile(recording.AudioFilePath);
+                Recordings.Remove(recording);
+                Save();
+                deleted = true;
+            }
+        });
+
+        if (deleted)
+        {
+            HistoryChanged?.Invoke(this, EventArgs.Empty);
         }
-
-        HistoryChanged?.Invoke(this, EventArgs.Empty);
-        return true;
+        return deleted;
     }
 
     /// <summary>
@@ -178,16 +197,19 @@ public sealed class HistoryService
     /// </summary>
     public void Clear()
     {
-        lock (_lock)
+        RunOnUiThread(() =>
         {
-            foreach (var recording in Recordings)
+            lock (_lock)
             {
-                DeleteAudioFile(recording.AudioFilePath);
-            }
+                foreach (var recording in Recordings)
+                {
+                    DeleteAudioFile(recording.AudioFilePath);
+                }
 
-            Recordings.Clear();
-            Save();
-        }
+                Recordings.Clear();
+                Save();
+            }
+        });
 
         HistoryChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -252,8 +274,14 @@ public sealed class HistoryService
             var json = File.ReadAllText(_historyPath);
             return JsonConvert.DeserializeObject<List<Recording>>(json, _jsonSettings) ?? new List<Recording>();
         }
+        catch (IOException)
+        {
+            return new List<Recording>();
+        }
         catch
         {
+            // Keep the corrupt file as evidence instead of overwriting it.
+            try { File.Copy(_historyPath, _historyPath + ".bak", overwrite: true); } catch { }
             return new List<Recording>();
         }
     }
@@ -263,11 +291,29 @@ public sealed class HistoryService
         try
         {
             var json = JsonConvert.SerializeObject(Recordings.ToList(), _jsonSettings);
-            File.WriteAllText(_historyPath, json);
+            // Write-then-rename keeps a crash mid-write from truncating the file.
+            var tempPath = _historyPath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, _historyPath, overwrite: true);
         }
         catch
         {
             // Silently fail - could add logging here
+        }
+    }
+
+    private static void RunOnUiThread(Action action)
+    {
+        // The Recordings collection is bound to WPF views; mutating it off the
+        // dispatcher thread throws NotSupportedException in CollectionView.
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            dispatcher.Invoke(action);
         }
     }
 
@@ -327,6 +373,33 @@ public sealed class HistoryService
                     {
                         // Skip files that can't be deleted
                     }
+                }
+            }
+        }
+        catch
+        {
+            // Silently fail cleanup - non-critical operation
+        }
+    }
+
+    /// <summary>
+    /// Deletes the oldest audio files once the recordings folder exceeds the
+    /// storage cap; the count cap alone lets 100 long WAVs grow unbounded.
+    /// </summary>
+    private void EnforceAudioStorageCap()
+    {
+        try
+        {
+            if (!Directory.Exists(_audioPath)) return;
+
+            long total = 0;
+            foreach (var file in new DirectoryInfo(_audioPath).GetFiles()
+                         .OrderByDescending(f => f.LastWriteTimeUtc))
+            {
+                total += file.Length;
+                if (total > Constants.MaxAudioBytes)
+                {
+                    try { file.Delete(); } catch { }
                 }
             }
         }

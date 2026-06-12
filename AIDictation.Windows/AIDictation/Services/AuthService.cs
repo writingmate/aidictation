@@ -100,7 +100,20 @@ public partial class AuthService : ObservableObject
 
             if (DateTimeOffset.UtcNow.AddMinutes(Constants.TokenRefreshBufferMinutes) >= expiresAt)
             {
-                accessToken = await RefreshTokensAsync(refreshToken) ?? string.Empty;
+                var (outcome, refreshed) = await RefreshTokensAsync(refreshToken);
+                if (outcome == RefreshOutcome.Rejected)
+                {
+                    ClearSessionState();
+                    return;
+                }
+                if (outcome == RefreshOutcome.NetworkError)
+                {
+                    // Offline start: keep the stored session for the next launch
+                    // instead of deleting a still-valid refresh token.
+                    IsAuthenticated = false;
+                    return;
+                }
+                accessToken = refreshed ?? string.Empty;
             }
 
             if (string.IsNullOrEmpty(accessToken))
@@ -113,8 +126,13 @@ public partial class AuthService : ObservableObject
             if (profile == null)
             {
                 // Access token may be stale despite the expiry timestamp - try one refresh.
-                accessToken = await RefreshTokensAsync(refreshToken) ?? string.Empty;
-                profile = string.IsNullOrEmpty(accessToken) ? null : await FetchProfileAsync(accessToken);
+                var (retryOutcome, retryToken) = await RefreshTokensAsync(refreshToken);
+                if (retryOutcome == RefreshOutcome.Rejected)
+                {
+                    ClearSessionState();
+                    return;
+                }
+                profile = string.IsNullOrEmpty(retryToken) ? null : await FetchProfileAsync(retryToken);
             }
 
             if (profile != null)
@@ -123,16 +141,14 @@ public partial class AuthService : ObservableObject
                 IsAuthenticated = true;
                 AuthStateChanged?.Invoke(this, EventArgs.Empty);
             }
-            else
-            {
-                ClearSessionState();
-            }
+            // A profile fetch failing without a definitive token rejection
+            // (backend or network down) keeps the stored session for later.
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[AuthService] Initialize error: {ex.Message}");
             ErrorMessage = "Failed to restore session";
-            ClearSessionState();
+            IsAuthenticated = false; // keep stored tokens; likely transient
         }
         finally
         {
@@ -253,7 +269,12 @@ public partial class AuthService : ObservableObject
         var (accessToken, refreshToken, expiresAt) = storedSession.Value;
         if (DateTimeOffset.UtcNow.AddMinutes(Constants.TokenRefreshBufferMinutes) >= expiresAt)
         {
-            return await RefreshTokensAsync(refreshToken);
+            var (outcome, refreshed) = await RefreshTokensAsync(refreshToken);
+            if (outcome == RefreshOutcome.Rejected)
+            {
+                ClearSessionState();
+            }
+            return refreshed;
         }
 
         return accessToken;
@@ -267,7 +288,8 @@ public partial class AuthService : ObservableObject
         var token = await GetValidAccessTokenAsync();
         if (token == null)
         {
-            ClearSessionState();
+            // No usable token right now (possibly just offline) - any definitive
+            // rejection has already cleared the session inside the refresh.
             return;
         }
 
@@ -338,16 +360,43 @@ public partial class AuthService : ObservableObject
         AuthStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private enum RefreshOutcome
+    {
+        Success,
+        Rejected,
+        NetworkError
+    }
+
     private static void SaveTokens(string accessToken, string refreshToken)
     {
-        // Access tokens from GoTrue last one hour; the exact expiry is refreshed lazily.
-        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(55);
+        // Use the JWT's own exp claim; servers can issue shorter-lived tokens
+        // than the historical one-hour default.
+        var expiresAt = GetJwtExpiry(accessToken) ?? DateTimeOffset.UtcNow.AddMinutes(55);
         CredentialHelper.SaveSession(accessToken, refreshToken, expiresAt);
     }
 
-    private async Task<string?> RefreshTokensAsync(string refreshToken)
+    private static DateTimeOffset? GetJwtExpiry(string jwt)
     {
-        if (string.IsNullOrEmpty(refreshToken)) return null;
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length < 2) return null;
+
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+            var json = JObject.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
+            var exp = json["exp"]?.Value<long>();
+            return exp.HasValue ? DateTimeOffset.FromUnixTimeSeconds(exp.Value) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<(RefreshOutcome Outcome, string? AccessToken)> RefreshTokensAsync(string refreshToken)
+    {
+        if (string.IsNullOrEmpty(refreshToken)) return (RefreshOutcome.Rejected, null);
 
         try
         {
@@ -362,14 +411,19 @@ public partial class AuthService : ObservableObject
             if (!response.IsSuccessStatusCode)
             {
                 Debug.WriteLine($"[AuthService] Session refresh failed: {(int)response.StatusCode}");
-                return null;
+
+                // Only a definitive client rejection means the refresh token is
+                // dead; a 5xx is the server having a bad day.
+                return (int)response.StatusCode < 500
+                    ? (RefreshOutcome.Rejected, null)
+                    : (RefreshOutcome.NetworkError, null);
             }
 
             var json = JObject.Parse(await response.Content.ReadAsStringAsync());
             var accessToken = json["access_token"]?.ToString();
             var newRefreshToken = json["refresh_token"]?.ToString() ?? refreshToken;
 
-            if (string.IsNullOrEmpty(accessToken)) return null;
+            if (string.IsNullOrEmpty(accessToken)) return (RefreshOutcome.Rejected, null);
 
             var expiresIn = json["expires_in"]?.Value<int>() ?? 3600;
             CredentialHelper.SaveSession(
@@ -377,12 +431,12 @@ public partial class AuthService : ObservableObject
                 newRefreshToken,
                 DateTimeOffset.UtcNow.AddSeconds(expiresIn));
 
-            return accessToken;
+            return (RefreshOutcome.Success, accessToken);
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[AuthService] Refresh error: {ex.Message}");
-            return null;
+            return (RefreshOutcome.NetworkError, null);
         }
     }
 

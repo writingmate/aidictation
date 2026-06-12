@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/windows-audio-e2e.yml'
       - 'AIDictation.Windows/scripts/audio-e2e.ps1'
+      - 'AIDictation.Windows/AIDictation/**'
 
 env:
   DOTNET_VERSION: '8.0.x'

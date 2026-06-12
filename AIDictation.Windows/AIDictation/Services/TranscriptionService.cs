@@ -167,35 +167,47 @@ public sealed class TranscriptionService
             ? JoinNonEmpty("\n", transcriptionPrompt, contextInstructions)
             : null;
 
-        using var content = new MultipartFormDataContent();
+        // The backend's FormData parser rejects .NET's default multipart framing
+        // (quoted boundary, unquoted disposition names, filename* parameter,
+        // charset on text parts); emit curl-style framing instead.
+        var boundary = Guid.NewGuid().ToString("N");
+        using var content = new MultipartFormDataContent(boundary);
+        content.Headers.Remove("Content-Type");
+        content.Headers.TryAddWithoutValidation("Content-Type", $"multipart/form-data; boundary={boundary}");
+
         await using var fileStream = File.OpenRead(audioFilePath);
         var fileContent = new StreamContent(fileStream);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        fileContent.Headers.ContentDisposition = new ContentDispositionHeaderValue("form-data")
+        {
+            Name = "\"file\"",
+            FileName = $"\"{Path.GetFileName(audioFilePath)}\""
+        };
+        content.Add(fileContent);
 
-        content.Add(fileContent, "file", Path.GetFileName(audioFilePath));
-        content.Add(new StringContent(BuildConfig.TranscriptionModel), "model");
-        content.Add(new StringContent("0"), "temperature");
-        content.Add(new StringContent("text"), "response_format");
+        content.Add(CreateFormField("model", BuildConfig.TranscriptionModel));
+        content.Add(CreateFormField("temperature", "0"));
+        content.Add(CreateFormField("response_format", "text"));
 
         if (!string.IsNullOrEmpty(transcriptionPrompt))
         {
-            content.Add(new StringContent(transcriptionPrompt), "prompt");
-            content.Add(new StringContent(transcriptionPrompt), "stt_prompt");
+            content.Add(CreateFormField("prompt", transcriptionPrompt));
+            content.Add(CreateFormField("stt_prompt", transcriptionPrompt));
         }
 
         if (!string.IsNullOrEmpty(postProcessingPrompt))
         {
-            content.Add(new StringContent(postProcessingPrompt), "post_processing_prompt");
+            content.Add(CreateFormField("post_processing_prompt", postProcessingPrompt));
         }
 
         if (!postProcessingEnabled)
         {
-            content.Add(new StringContent("false"), "post_processing");
+            content.Add(CreateFormField("post_processing", "false"));
         }
 
         if (!string.IsNullOrEmpty(apiLanguage))
         {
-            content.Add(new StringContent(apiLanguage), "language");
+            content.Add(CreateFormField("language", apiLanguage));
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, BuildConfig.TranscriptionEndpoint)
@@ -356,6 +368,21 @@ public sealed class TranscriptionService
     }
 
     // MARK: - Helper Methods
+
+    /// <summary>
+    /// Builds a text form field with curl-style framing: quoted disposition
+    /// name and no Content-Type header, which strict FormData parsers expect.
+    /// </summary>
+    private static StringContent CreateFormField(string name, string value)
+    {
+        var field = new StringContent(value);
+        field.Headers.ContentType = null;
+        field.Headers.ContentDisposition = new ContentDispositionHeaderValue("form-data")
+        {
+            Name = $"\"{name}\""
+        };
+        return field;
+    }
 
     private List<string> GetSelectedLanguageCodes()
     {

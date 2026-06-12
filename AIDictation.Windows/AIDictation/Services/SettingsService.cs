@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using AIDictation.Models;
 using Microsoft.Win32;
@@ -88,7 +89,7 @@ public sealed class SettingsService
             if (_isLoaded) return;
 
             Settings = LoadFromFile<AppSettings>(_settingsPath) ?? new AppSettings();
-            DictionaryEntries = LoadFromFile<List<DictionaryEntry>>(_dictionaryPath) ?? new List<DictionaryEntry>();
+            DictionaryEntries = LoadFromFile<List<DictionaryEntry>>(_dictionaryPath) ?? CreateDefaultDictionary();
             Shortcuts = LoadFromFile<List<Shortcut>>(_shortcutsPath) ?? new List<Shortcut>();
             ContextRules = LoadFromFile<List<ContextRule>>(_contextRulesPath) ?? new List<ContextRule>();
 
@@ -166,6 +167,22 @@ public sealed class SettingsService
     {
         DictionaryEntries.RemoveAll(e => e.Id == id);
         SaveDictionary();
+    }
+
+    /// <summary>
+    /// First-run vocabulary seed mirroring the macOS app. Disabled by default
+    /// so the entries are visible to toggle on, not silently applied.
+    /// </summary>
+    private List<DictionaryEntry> CreateDefaultDictionary()
+    {
+        var defaults = new[]
+        {
+            "AIDictation", "Calendly", "OpenAI", "ChatGPT", "GitHub",
+            "API", "iOS", "macOS", "JSON", "SQL"
+        }.Select(word => new DictionaryEntry { Trigger = word, Replacement = null, IsEnabled = false }).ToList();
+
+        SaveToFile(_dictionaryPath, defaults);
+        return defaults;
     }
 
     // MARK: - Shortcut Management

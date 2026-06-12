@@ -308,38 +308,26 @@
                     <TextBlock Text="Dictionary" Style="{StaticResource PageTitle}"/>
                     <TextBlock Style="{StaticResource RowDesc}" Margin="0,0,0,12"
                                Text="Names and jargon the transcriber should recognize."/>
-                    <ItemsControl ItemsSource="{Binding Words}" Margin="0,0,0,8">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
+                    <ItemsControl ItemsSource="{Binding Words}" Margin="0,0,0,9">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
-                                        BorderThickness="1" CornerRadius="6" Padding="13,6,8,6" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding Word}" FontSize="12.5"
-                                                   Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"/>
-                                        <Button Width="16" Height="16" Margin="7,0,0,0" Cursor="Hand"
+                                <Border Style="{StaticResource SettingCard}" MinHeight="0" Padding="13,10">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox Style="{StaticResource FluentToggle}" IsChecked="{Binding IsEnabled}"
+                                                  VerticalAlignment="Center" Margin="0,0,13,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Word}" Style="{StaticResource RowTitle}"
+                                                   FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <Button Grid.Column="2" Style="{StaticResource IconButton}" VerticalAlignment="Center"
                                                 Command="{Binding DataContext.RemoveWordCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 CommandParameter="{Binding}">
-                                            <Button.Template>
-                                                <ControlTemplate TargetType="Button">
-                                                    <Border x:Name="bd" CornerRadius="8" Background="Transparent">
-                                                        <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                                   FontSize="8" Foreground="{DynamicResource TextMutedBrush}"
-                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource DangerSoftBrush}"/>
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Button.Template>
+                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
                                         </Button>
-                                    </StackPanel>
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -506,45 +494,51 @@
                     </Border>
 
                     <Border Style="{StaticResource SettingCard}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Overlay Color" Style="{StaticResource RowTitle}"/>
-                                <TextBlock Text="Accent color for the recording overlay" Style="{StaticResource RowDesc}"/>
-                            </StackPanel>
-                            <ItemsControl Grid.Column="1" ItemsSource="{Binding OverlaySwatches}" VerticalAlignment="Center">
+                        <StackPanel>
+                            <TextBlock Text="Overlay Color" Style="{StaticResource RowTitle}"/>
+                            <TextBlock Text="Accent color for the recording overlay" Style="{StaticResource RowDesc}"
+                                       Margin="0,0,0,14"/>
+                            <ItemsControl ItemsSource="{Binding OverlaySwatches}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal"/>
+                                        <WrapPanel MaxWidth="440"/>
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Button Width="30" Height="30" Margin="0,0,9,0" Cursor="Hand"
-                                                Command="{Binding DataContext.SelectSwatchCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding}">
-                                            <Button.Template>
-                                                <ControlTemplate TargetType="Button">
-                                                    <Grid>
-                                                        <Ellipse Fill="{Binding Brush}"/>
-                                                        <Ellipse x:Name="ring" Stroke="White" StrokeThickness="2" Margin="-2"
-                                                                 Visibility="Collapsed"/>
-                                                    </Grid>
-                                                    <ControlTemplate.Triggers>
+                                        <Border CornerRadius="10" Padding="12,9" Margin="0,0,9,9" Cursor="Hand"
+                                                Background="{DynamicResource SurfaceBrush}" BorderThickness="1.5">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+                                                    <Style.Triggers>
                                                         <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                            <Setter TargetName="ring" Property="Visibility" Value="Visible"/>
+                                                            <Setter Property="BorderBrush" Value="{Binding Brush}"/>
                                                         </DataTrigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Button.Template>
-                                        </Button>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <Border.InputBindings>
+                                                <MouseBinding MouseAction="LeftClick"
+                                                              Command="{Binding DataContext.SelectSwatchCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                              CommandParameter="{Binding}"/>
+                                            </Border.InputBindings>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Grid Width="24" Height="24" Margin="0,0,9,0">
+                                                    <Ellipse Fill="{Binding Brush}"/>
+                                                    <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="9" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                </Grid>
+                                                <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </Grid>
+                        </StackPanel>
                     </Border>
 
                     <Border Style="{StaticResource SettingCard}">

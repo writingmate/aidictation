@@ -140,13 +140,10 @@ public sealed class AudioRecorderService : IDisposable
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-            return new AudioDevice
-            {
-                Id = device.ID,
-                Name = device.FriendlyName,
-                IsDefault = true
-            };
+            var device = GetDefaultCaptureDevice(enumerator);
+            return device == null
+                ? null
+                : new AudioDevice { Id = device.ID, Name = device.FriendlyName, IsDefault = true };
         }
         catch
         {
@@ -167,7 +164,8 @@ public sealed class AudioRecorderService : IDisposable
             var device = GetSelectedOrDefaultDevice();
             if (device == null)
             {
-                RecordingError?.Invoke(this, "No audio input device available");
+                RecordingError?.Invoke(this,
+                    "No microphone found or access is blocked. Check Windows microphone privacy settings.");
                 return false;
             }
 
@@ -297,19 +295,60 @@ public sealed class AudioRecorderService : IDisposable
         {
             using var enumerator = new MMDeviceEnumerator();
 
+            // An explicitly chosen device is a WASAPI endpoint id (same scheme
+            // GetInputDevices reports); honor it when it is still active.
             if (!string.IsNullOrEmpty(_selectedDeviceId))
             {
                 try
                 {
-                    return enumerator.GetDevice(_selectedDeviceId);
+                    var selected = enumerator.GetDevice(_selectedDeviceId);
+                    if (selected is { State: DeviceState.Active })
+                    {
+                        return selected;
+                    }
                 }
                 catch
                 {
-                    // Device not available, fall back to default
+                    // Device unplugged or id stale; fall back to the default.
                 }
             }
 
-            return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+            return GetDefaultCaptureDevice(enumerator);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Resolves a usable capture device, preferring the one the user sees as
+    /// "Default" in Windows sound settings (Multimedia/Console) over the
+    /// communications default, then any active microphone.
+    /// </summary>
+    private static MMDevice? GetDefaultCaptureDevice(MMDeviceEnumerator enumerator)
+    {
+        foreach (var role in new[] { Role.Multimedia, Role.Console, Role.Communications })
+        {
+            try
+            {
+                var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, role);
+                if (device is { State: DeviceState.Active })
+                {
+                    return device;
+                }
+            }
+            catch
+            {
+                // No default for this role; try the next.
+            }
+        }
+
+        try
+        {
+            return enumerator
+                .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+                .FirstOrDefault();
         }
         catch
         {
@@ -321,7 +360,7 @@ public sealed class AudioRecorderService : IDisposable
     {
         try
         {
-            var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+            var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
             return device.ID == defaultDevice.ID;
         }
         catch

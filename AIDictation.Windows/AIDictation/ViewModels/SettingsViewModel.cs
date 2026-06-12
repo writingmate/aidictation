@@ -12,7 +12,6 @@ using CommunityToolkit.Mvvm.Input;
 using AIDictation.Helpers;
 using AIDictation.Models;
 using AIDictation.Services;
-using NAudio.Wave;
 
 namespace AIDictation.ViewModels;
 
@@ -257,7 +256,7 @@ public partial class SettingsViewModel : ObservableObject
 
         var entry = new DictionaryEntry { Trigger = word, Replacement = null, IsEnabled = true };
         SettingsService.Instance.AddDictionaryEntry(entry);
-        Words.Add(new DictionaryWordItem(entry.Id, word));
+        Words.Add(new DictionaryWordItem(entry.Id, word, true));
         NewWord = string.Empty;
     }
 
@@ -602,10 +601,12 @@ public partial class SettingsViewModel : ObservableObject
         AudioDevices.Add(new AudioDeviceItem { DeviceId = null, DisplayName = "Default Input Device" });
         try
         {
-            for (int i = 0; i < WaveIn.DeviceCount; i++)
+            // Use the same WASAPI enumeration the recorder uses so the stored
+            // DeviceId is a real endpoint id (not a WaveIn index, which the
+            // recorder cannot resolve) and names are full, not 31-char truncated.
+            foreach (var device in AudioRecorderService.Instance.GetInputDevices())
             {
-                var capabilities = WaveIn.GetCapabilities(i);
-                AudioDevices.Add(new AudioDeviceItem { DeviceId = i.ToString(), DisplayName = capabilities.ProductName });
+                AudioDevices.Add(new AudioDeviceItem { DeviceId = device.Id, DisplayName = device.Name });
             }
         }
         catch
@@ -645,12 +646,12 @@ public partial class SettingsViewModel : ObservableObject
         OverlayPositions.Add(new OverlayPositionItem(OverlayPosition.Top, "Top"));
 
         OverlaySwatches.Clear();
-        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Orange, "#F16E00"));
-        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Blue, "#3B82F6"));
-        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Green, "#3BC45A"));
-        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Purple, "#A855F7"));
-        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Pink, "#FF7EC7"));
-        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Graphite, "#6E6E6E"));
+        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Orange, "#F16E00", "Orange"));
+        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Blue, "#3B82F6", "Blue"));
+        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Green, "#3BC45A", "Green"));
+        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Purple, "#A855F7", "Purple"));
+        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Pink, "#FF7EC7", "Pink"));
+        OverlaySwatches.Add(new SwatchItem(OverlayColorTheme.Graphite, "#6E6E6E", "Graphite"));
     }
 
     private void LoadSettings()
@@ -707,7 +708,7 @@ public partial class SettingsViewModel : ObservableObject
         Words.Clear();
         foreach (var entry in SettingsService.Instance.DictionaryEntries)
         {
-            Words.Add(new DictionaryWordItem(entry.Id, entry.Trigger));
+            Words.Add(new DictionaryWordItem(entry.Id, entry.Trigger, entry.IsEnabled));
         }
     }
 
@@ -828,26 +829,42 @@ public partial class SwatchItem : ObservableObject
 {
     public OverlayColorTheme Theme { get; }
     public Brush Brush { get; }
+    public string Name { get; }
 
     [ObservableProperty]
     private bool _isSelected;
 
-    public SwatchItem(OverlayColorTheme theme, string hex)
+    public SwatchItem(OverlayColorTheme theme, string hex, string name)
     {
         Theme = theme;
         Brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        Name = name;
     }
 }
 
-public class DictionaryWordItem
+public partial class DictionaryWordItem : ObservableObject
 {
     public string Id { get; }
     public string Word { get; }
 
-    public DictionaryWordItem(string id, string word)
+    [ObservableProperty]
+    private bool _isEnabled;
+
+    public DictionaryWordItem(string id, string word, bool isEnabled = true)
     {
         Id = id;
         Word = word;
+        _isEnabled = isEnabled; // set the field directly so load does not re-save
+    }
+
+    partial void OnIsEnabledChanged(bool value)
+    {
+        var entry = SettingsService.Instance.DictionaryEntries.Find(e => e.Id == Id);
+        if (entry != null)
+        {
+            entry.IsEnabled = value;
+            SettingsService.Instance.SaveDictionary();
+        }
     }
 }
 

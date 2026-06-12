@@ -71,6 +71,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_SIZE_DP = 55
         private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
+        private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
         private const val VOLUME_SHORTCUT_WINDOW_MS = 1_200L
         private const val VOLUME_SHORTCUT_PRESS_COUNT = 3
         private const val VOLUME_SHORTCUT_NO_SPEECH_TIMEOUT_MS = 8_000L
@@ -154,6 +155,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var volumeShortcutNoSpeechJob: Job? = null
     private var recordingStartedByVolumeShortcut = false
     private var bubbleAnimationJob: Job? = null
+    private var pendingHideJob: Job? = null
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
     private var fixGrammarButton: TextView? = null
@@ -297,16 +299,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
-        if (!shouldKeepBubbleVisibleWithoutKeyboard() && !isKeyboardVisible()) {
-            bubbleShouldBeVisible = false
-            if (recordingState == RecordingState.Recording) {
-                stopRecording(discard = true)
-            }
-            hideBubble()
-            hideCommandActions()
-            return
-        }
-
         if (shouldShowBubble(source)) {
             bubbleShouldBeVisible = true
             showBubble()
@@ -314,12 +306,39 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        bubbleShouldBeVisible = false
-        if (recordingState == RecordingState.Recording) {
-            stopRecording(discard = true)
+        scheduleDeferredHide()
+    }
+
+    /**
+     * Hides the bubble only when the hide condition still holds after a debounce window.
+     * Focus and IME visibility reports flap for single events during keyboard animations
+     * and in WebView/Compose fields; hiding immediately would remove and re-add the
+     * overlay window between consecutive events, which shows up as flicker.
+     */
+    private fun scheduleDeferredHide() {
+        if (pendingHideJob?.isActive == true) return
+
+        if (!isBubbleAttached && !isCommandActionsAttached && recordingState != RecordingState.Recording) {
+            bubbleShouldBeVisible = false
+            return
         }
-        hideBubble()
-        hideCommandActions()
+
+        pendingHideJob = serviceScope.launch {
+            delay(BUBBLE_HIDE_DEBOUNCE_MS)
+            if (shouldShowBubble(null)) return@launch
+
+            bubbleShouldBeVisible = false
+            if (recordingState == RecordingState.Recording) {
+                stopRecording(discard = true)
+            }
+            hideBubble()
+            hideCommandActions()
+        }
+    }
+
+    private fun cancelPendingHide() {
+        pendingHideJob?.cancel()
+        pendingHideJob = null
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
@@ -473,6 +492,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return true
     }
     private fun showBubble() {
+        cancelPendingHide()
         ensureBubbleCreated()
         val bubble = bubbleView ?: return
         val params = bubbleParams ?: return
@@ -497,6 +517,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun hideBubble() {
+        cancelPendingHide()
         bubbleShouldBeVisible = false
         if (!isBubbleAttached) return
 

@@ -141,6 +141,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     fun setColors(idle: Int, active: Int) {
+        if (idleColor == idle && activeColor == active) return
         idleColor = idle
         activeColor = active
         invalidate()

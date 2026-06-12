@@ -412,11 +412,91 @@ public partial class OverlayWindow : Window
 
     private void UpdateWindowPosition()
     {
-        var workArea = SystemParameters.WorkArea;
-        Left = (workArea.Width - Width) / 2 + workArea.Left;
+        var workArea = GetActiveMonitorWorkArea();
+        Left = workArea.Left + (workArea.Width - Width) / 2;
         Top = _position == OverlayPosition.Top
             ? workArea.Top + 8
             : workArea.Bottom - Height - 8;
+    }
+
+    /// <summary>
+    /// Work area (in device-independent units) of the monitor under the cursor,
+    /// so the overlay follows the user on multi-monitor setups instead of
+    /// sticking to the primary display.
+    /// </summary>
+    private Rect GetActiveMonitorWorkArea()
+    {
+        try
+        {
+            if (!NativeMonitor.GetCursorPos(out var point))
+            {
+                return SystemParameters.WorkArea;
+            }
+
+            var monitor = NativeMonitor.MonitorFromPoint(point, NativeMonitor.MONITOR_DEFAULTTONEAREST);
+            var info = new NativeMonitor.MONITORINFO
+            {
+                cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMonitor.MONITORINFO>()
+            };
+            if (monitor == IntPtr.Zero || !NativeMonitor.GetMonitorInfo(monitor, ref info))
+            {
+                return SystemParameters.WorkArea;
+            }
+
+            // Native work-area pixels -> WPF device-independent units.
+            var topLeft = new Point(info.rcWork.left, info.rcWork.top);
+            var bottomRight = new Point(info.rcWork.right, info.rcWork.bottom);
+            var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice;
+            if (transform.HasValue)
+            {
+                topLeft = transform.Value.Transform(topLeft);
+                bottomRight = transform.Value.Transform(bottomRight);
+            }
+            return new Rect(topLeft, bottomRight);
+        }
+        catch
+        {
+            return SystemParameters.WorkArea;
+        }
+    }
+
+    private static class NativeMonitor
+    {
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int left;
+            public int top;
+            public int right;
+            public int bottom;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
     }
 
     // MARK: - Event Handlers

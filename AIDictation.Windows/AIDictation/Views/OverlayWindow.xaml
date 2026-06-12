@@ -15,16 +15,19 @@
     <!-- Morphing pill, ported from macOS RecordingOverlayView:
          collapsed 53x7 strip <-> accent capsule, morph 260ms KeySpline(.2,.8,.2,1),
          content fades 140ms after, collapse 150ms. No text - pure graphic. -->
-    <Grid x:Name="Root" Background="Transparent"
-          MouseEnter="Pill_MouseEnter"
-          MouseLeave="Pill_MouseLeave"
-          MouseLeftButtonUp="Pill_MouseLeftButtonUp">
+    <!-- Hover handlers live on the visible pill, not the Root grid: the window
+         is a large transparent rect and MouseEnter on Root fires for the whole
+         invisible area, expanding the pill when the cursor merely passes near it. -->
+    <Grid x:Name="Root" Background="Transparent">
         <Border x:Name="Pill"
                 Width="53" Height="7"
                 CornerRadius="3.5"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                Cursor="Hand">
+                Cursor="Hand"
+                MouseEnter="Pill_MouseEnter"
+                MouseLeave="Pill_MouseLeave"
+                MouseLeftButtonUp="Pill_MouseLeftButtonUp">
             <Border.Effect>
                 <DropShadowEffect x:Name="PillShadow" BlurRadius="14" ShadowDepth="3" Direction="270" Opacity="0.35"/>
             </Border.Effect>

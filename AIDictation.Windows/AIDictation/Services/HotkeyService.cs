@@ -88,6 +88,9 @@ public sealed class HotkeyService : IDisposable
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr GetModuleHandle(string? lpModuleName);
 
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct KBDLLHOOKSTRUCT
         {
@@ -157,6 +160,13 @@ public sealed class HotkeyService : IDisposable
                 needsKeyboardHook = true;
                 RegisterKeyboardHotkey(HotkeyNames.Dictation, dictationHotkey, OnDictationHotkeyPressed);
             }
+            else
+            {
+                // A modifier-only keyboard hotkey can never be registered or
+                // matched on release; surface it instead of silently ignoring.
+                HotkeyConflictDetected?.Invoke(this, new HotkeyConflictEventArgs(
+                    HotkeyNames.Dictation, dictationHotkey, "The hotkey needs a non-modifier key"));
+            }
         }
 
         // Register command hotkey
@@ -170,6 +180,11 @@ public sealed class HotkeyService : IDisposable
             {
                 needsKeyboardHook = true;
                 RegisterKeyboardHotkey(HotkeyNames.Command, commandHotkey, OnCommandHotkeyPressed);
+            }
+            else
+            {
+                HotkeyConflictDetected?.Invoke(this, new HotkeyConflictEventArgs(
+                    HotkeyNames.Command, commandHotkey, "The hotkey needs a non-modifier key"));
             }
         }
 
@@ -449,19 +464,20 @@ public sealed class HotkeyService : IDisposable
 
     private static ModifierKeys GetCurrentModifiers()
     {
+        // Keyboard.Modifiers reads WPF's cached input state, which lags behind
+        // events arriving in a low-level hook callback; query the live key
+        // state instead so modifier matching stays accurate during press/release.
         var modifiers = ModifierKeys.None;
 
-        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
-            modifiers |= ModifierKeys.Control;
-        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
-            modifiers |= ModifierKeys.Shift;
-        if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0)
-            modifiers |= ModifierKeys.Alt;
-        if ((Keyboard.Modifiers & ModifierKeys.Windows) != 0)
-            modifiers |= ModifierKeys.Windows;
+        if (IsKeyDown(0x11)) modifiers |= ModifierKeys.Control; // VK_CONTROL
+        if (IsKeyDown(0x10)) modifiers |= ModifierKeys.Shift;   // VK_SHIFT
+        if (IsKeyDown(0x12)) modifiers |= ModifierKeys.Alt;     // VK_MENU
+        if (IsKeyDown(0x5B) || IsKeyDown(0x5C)) modifiers |= ModifierKeys.Windows;
 
         return modifiers;
     }
+
+    private static bool IsKeyDown(int vKey) => (WinApi.GetAsyncKeyState(vKey) & 0x8000) != 0;
 
     private static bool IsHotkeyMatch(Hotkey hotkey, Key key, ModifierKeys modifiers, bool isKeyUp)
     {

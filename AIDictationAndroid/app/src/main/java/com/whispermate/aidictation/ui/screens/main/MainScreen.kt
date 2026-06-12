@@ -61,6 +61,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.ui.components.CircularMicButton
+import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.components.MicButtonState
 import com.whispermate.aidictation.ui.screens.settings.SettingsScreen
 import com.whispermate.aidictation.util.AudioRecorder
@@ -100,6 +101,9 @@ fun MainScreen(
         context = context,
         autoStopOnSilenceEnabled = currentAutoStopOnSilenceEnabled
     )
+
+    // Keep the screen awake while dictation is recording or processing
+    KeepScreenOn(enabled = recordingState != RecordingState.Idle)
 
     // Show error in snackbar
     LaunchedEffect(error) {

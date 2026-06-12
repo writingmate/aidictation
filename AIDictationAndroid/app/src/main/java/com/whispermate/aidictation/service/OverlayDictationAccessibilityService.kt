@@ -1914,6 +1914,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         updateCommandActionButtons()
         val bubble = bubbleView ?: return
         bubble.setColors(bubbleIdleColor, resolveBubbleActiveColor())
+        // Keep the screen awake while dictation is recording or processing
+        bubble.keepScreenOn = recordingState != RecordingState.Idle
 
         when (recordingState) {
             RecordingState.Idle -> {

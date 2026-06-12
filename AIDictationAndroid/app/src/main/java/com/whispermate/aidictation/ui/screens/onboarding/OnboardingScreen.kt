@@ -92,6 +92,7 @@ import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
+import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 import com.whispermate.aidictation.util.AudioRecorder
 import java.io.File
@@ -668,6 +669,9 @@ private fun ButtonDemoStep(
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(context)
         else -> selectedColor
     }
+
+    // Keep the screen awake while the demo dictation is recording or processing
+    KeepScreenOn(enabled = isRecording || demoState.isProcessing)
 
     DisposableEffect(Unit) {
         onDispose {

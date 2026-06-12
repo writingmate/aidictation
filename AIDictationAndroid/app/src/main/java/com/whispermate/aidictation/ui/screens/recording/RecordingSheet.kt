@@ -62,6 +62,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.ui.components.CircularMicButton
+import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.components.MicButtonState
 import com.whispermate.aidictation.util.AudioRecorder
 import kotlinx.coroutines.delay
@@ -123,6 +124,8 @@ fun RecordingSheet(
             usePlatformDefaultWidth = false
         )
     ) {
+        // Keep the screen awake while dictation is recording or processing
+        KeepScreenOn(enabled = state != RecordingState.Viewing)
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = Color.Black.copy(alpha = 0.95f)

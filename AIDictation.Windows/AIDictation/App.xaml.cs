@@ -48,6 +48,8 @@ public partial class App : Application
     private bool _mutedSystemAudioForRecording;
     private IntPtr _dictationTargetWindow;
     private bool _isValidationOnly;
+    private bool _servicesReady;
+    private bool _ownsMutex;
     private CancellationTokenSource? _pipeCts;
 
     // MARK: - Application Lifecycle
@@ -62,6 +64,8 @@ public partial class App : Application
             Shutdown();
             return;
         }
+
+        _ownsMutex = true;
 
         base.OnStartup(e);
 
@@ -87,6 +91,7 @@ public partial class App : Application
 
         // Initialize services
         await InitializeServicesAsync();
+        _servicesReady = true;
 
         // Setup system tray
         SetupSystemTray();
@@ -100,7 +105,12 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _pipeCts?.Cancel();
-        if (!_isValidationOnly)
+
+        // A second (forwarding) instance — e.g. the OAuth callback launch or a
+        // re-launch while running — never initialized services or called Load(),
+        // so running cleanup here would overwrite the user's settings,
+        // dictionary, shortcuts and context rules with empty in-memory defaults.
+        if (!_isValidationOnly && _servicesReady)
         {
             SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
             UnsubscribeRuntimeEvents();
@@ -112,8 +122,12 @@ public partial class App : Application
             CleanupServices();
         }
 
-        // Release mutex
-        _singleInstanceMutex?.ReleaseMutex();
+        // Only the instance that created the mutex owns it; releasing an
+        // unowned mutex throws.
+        if (_ownsMutex)
+        {
+            try { _singleInstanceMutex?.ReleaseMutex(); } catch { }
+        }
         _singleInstanceMutex?.Dispose();
 
         base.OnExit(e);

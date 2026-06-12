@@ -34,7 +34,24 @@ public static class SendInputHelper
     private struct INPUTUNION
     {
         [FieldOffset(0)]
+        public MOUSEINPUT mi;
+
+        [FieldOffset(0)]
         public KEYBDINPUT ki;
+    }
+
+    // Declared even though only keyboard input is sent: the union must be
+    // sized for MOUSEINPUT or Marshal.SizeOf<INPUT>() is 32 instead of the
+    // native 40 on x64, and SendInput rejects every call with cbSize mismatch.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -68,7 +85,7 @@ public static class SendInputHelper
         inputs[0] = CreateKeyInput(virtualKeyCode, flags);
         inputs[1] = CreateKeyInput(virtualKeyCode, flags | KEYEVENTF_KEYUP);
 
-        SendInput(2, inputs, Marshal.SizeOf<INPUT>());
+        Dispatch(inputs);
     }
 
     /// <summary>
@@ -79,7 +96,7 @@ public static class SendInputHelper
         var inputs = new INPUT[1];
         var flags = extended ? KEYEVENTF_EXTENDEDKEY : 0u;
         inputs[0] = CreateKeyInput(virtualKeyCode, flags);
-        SendInput(1, inputs, Marshal.SizeOf<INPUT>());
+        Dispatch(inputs);
     }
 
     /// <summary>
@@ -90,7 +107,7 @@ public static class SendInputHelper
         var inputs = new INPUT[1];
         var flags = (extended ? KEYEVENTF_EXTENDEDKEY : 0u) | KEYEVENTF_KEYUP;
         inputs[0] = CreateKeyInput(virtualKeyCode, flags);
-        SendInput(1, inputs, Marshal.SizeOf<INPUT>());
+        Dispatch(inputs);
     }
 
     /// <summary>
@@ -109,7 +126,7 @@ public static class SendInputHelper
         // Ctrl up
         inputs[3] = CreateKeyInput(VK_CONTROL, KEYEVENTF_KEYUP);
 
-        SendInput(4, inputs, Marshal.SizeOf<INPUT>());
+        Dispatch(inputs);
     }
 
     /// <summary>
@@ -128,7 +145,7 @@ public static class SendInputHelper
         // Ctrl up
         inputs[3] = CreateKeyInput(VK_CONTROL, KEYEVENTF_KEYUP);
 
-        SendInput(4, inputs, Marshal.SizeOf<INPUT>());
+        Dispatch(inputs);
     }
 
     /// <summary>
@@ -147,7 +164,7 @@ public static class SendInputHelper
         // Shift up
         inputs[3] = CreateKeyInput(VK_SHIFT, KEYEVENTF_KEYUP);
 
-        SendInput(4, inputs, Marshal.SizeOf<INPUT>());
+        Dispatch(inputs);
     }
 
     /// <summary>
@@ -159,6 +176,16 @@ public static class SendInputHelper
     }
 
     // MARK: - Private Methods
+
+    private static void Dispatch(INPUT[] inputs)
+    {
+        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent != inputs.Length)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"SendInput injected {sent}/{inputs.Length} events (error {Marshal.GetLastWin32Error()})");
+        }
+    }
 
     private static INPUT CreateKeyInput(ushort virtualKeyCode, uint flags)
     {

@@ -63,8 +63,8 @@ android {
         applicationId = "com.aidictation.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = configValue("VERSION_CODE", "1025").toInt()
-        versionName = configValue("VERSION_NAME", "0.0.28")
+        versionCode = configValue("VERSION_CODE", "1026").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.29")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

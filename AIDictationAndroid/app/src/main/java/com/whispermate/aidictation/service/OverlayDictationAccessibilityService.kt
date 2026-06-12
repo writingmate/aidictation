@@ -1712,6 +1712,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val node = resolveFocusedEditableNode(null) ?: return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
+            Log.i(
+                TAG,
+                "Insert target: pkg=${node.packageName} class=${node.className} " +
+                    "sel=${node.textSelectionStart}..${node.textSelectionEnd} " +
+                    "hintShowing=${node.isShowingHintText} hint=${node.hintText} " +
+                    "desc=${node.contentDescription?.toString()?.take(60)} " +
+                    "text=${node.text?.toString()?.take(60)} " +
+                    "normalized=${snapshot.text.take(60)} normalizedSel=${snapshot.selectionStart}..${snapshot.selectionEnd}"
+            )
             val current = snapshot.text
             val selStart = snapshot.selectionStart
             val selEnd = snapshot.selectionEnd
@@ -1841,10 +1850,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         val hint = node.hintText?.toString()?.trim().orEmpty()
         if (hint.isNotEmpty()) {
-            val hintNfc = java.text.Normalizer.normalize(hint, java.text.Normalizer.Form.NFC)
-            val rawNfc = java.text.Normalizer.normalize(rawText.trim(), java.text.Normalizer.Form.NFC)
-
-            if (rawNfc.equals(hintNfc, ignoreCase = true)) {
+            if (matchesPlaceholderLabel(rawText, hint)) {
                 return NormalizedText("", rawText.length)
             }
 
@@ -1854,6 +1860,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 val prefixLength = hintPrefix.range.last + 1
                 return NormalizedText(rawText.substring(prefixLength), prefixLength)
             }
+        }
+
+        // WebView fields (e.g. LinkedIn's comment box) expose their placeholder as the
+        // node text with the label mirrored in contentDescription and no hintText. Only
+        // trust this when the caret has not moved into the text, so a real value that
+        // happens to match an accessibility label is not mistaken for a placeholder.
+        val description = node.contentDescription?.toString()?.trim().orEmpty()
+        if (
+            description.isNotEmpty() &&
+            node.textSelectionStart <= 0 &&
+            node.textSelectionEnd <= 0 &&
+            matchesPlaceholderLabel(rawText, description)
+        ) {
+            return NormalizedText("", rawText.length)
         }
 
         val packageName = node.packageName?.toString().orEmpty()
@@ -1878,6 +1898,22 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val text: String,
         val removedPrefix: Int
     )
+
+    /**
+     * True when the field's visible text is just its own placeholder label, tolerating
+     * case and trailing ellipsis/punctuation differences ("Share your thoughts…" vs
+     * "Share your thoughts").
+     */
+    private fun matchesPlaceholderLabel(rawText: String, label: String): Boolean {
+        val text = normalizeForPlaceholderComparison(rawText)
+        return text.isNotEmpty() && text == normalizeForPlaceholderComparison(label)
+    }
+
+    private fun normalizeForPlaceholderComparison(value: String): String {
+        return java.text.Normalizer.normalize(value.trim(), java.text.Normalizer.Form.NFC)
+            .trimEnd('.', '…', ':', ' ', ' ')
+            .lowercase()
+    }
 
     private fun resolveBubbleActiveColor(): Int {
         return when (activeCommandAction) {

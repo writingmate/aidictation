@@ -68,6 +68,7 @@ fun CircularMicButton(
     size: Dp = 100.dp
 ) {
     val activeColor = MaterialTheme.colorScheme.primary
+    val barColor = MaterialTheme.colorScheme.onPrimary
     val totalBars = 5
     val scale = size.value / 100f
     val barWidth = 9.2.dp * scale
@@ -172,7 +173,7 @@ fun CircularMicButton(
                         .width(barWidth)
                         .height(animatedHeight.dp)
                         .clip(RoundedCornerShape(barWidth / 2))
-                        .background(Color.White)
+                        .background(barColor)
                 )
             }
         }

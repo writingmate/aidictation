@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -36,7 +37,7 @@ import kotlin.random.Random
 fun AudioVisualization(
     audioLevel: Float,
     modifier: Modifier = Modifier,
-    barColor: Color = Color(0xFFFF6300) // Brand orange
+    barColor: Color = MaterialTheme.colorScheme.primary
 ) {
     val totalBars = 14
     val barWidth = 4.dp
@@ -130,7 +131,7 @@ private fun calculateBarHeight(
 @Composable
 fun ProcessingWaveView(
     modifier: Modifier = Modifier,
-    barColor: Color = Color(0xFFFF6300) // Brand orange
+    barColor: Color = MaterialTheme.colorScheme.primary
 ) {
     val totalBars = 14
     val barWidth = 4.dp

@@ -7,6 +7,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -123,6 +126,24 @@ private val AIDictationTypography = Typography(
     labelSmall = figtreeStyle(size = 12, lineHeight = 14)
 )
 
+/**
+ * Keeps a user-selected accent usable as the control color: very dark accents
+ * disappear against dark surfaces (e.g. the Black bubble color while the system
+ * is in dark mode or battery saver), very light ones against light surfaces.
+ */
+private fun readableAccent(accent: Color, darkTheme: Boolean): Color {
+    val luminance = accent.luminance()
+    return when {
+        darkTheme && luminance < 0.08f -> lerp(accent, Color.White, 0.5f)
+        !darkTheme && luminance > 0.85f -> lerp(accent, BrandBlack, 0.4f)
+        else -> accent
+    }
+}
+
+private fun onColorFor(color: Color): Color {
+    return if (color.luminance() > 0.5f) BrandBlack else Color.White
+}
+
 @Composable
 fun AIDictationTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -130,11 +151,21 @@ fun AIDictationTheme(
     content: @Composable () -> Unit
 ) {
     val baseColorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val accent = readableAccent(accentColor, darkTheme)
+    // Containers are composited to opaque colors so their on-colors keep a
+    // predictable contrast regardless of what they are drawn over.
+    val primaryContainer = if (darkTheme) {
+        accent.copy(alpha = 0.72f).compositeOver(DarkColorScheme.surface)
+    } else {
+        accent.copy(alpha = 0.12f).compositeOver(LightColorScheme.surface)
+    }
     val colorScheme = baseColorScheme.copy(
-        primary = accentColor,
-        primaryContainer = if (darkTheme) accentColor.copy(alpha = 0.72f) else accentColor.copy(alpha = 0.12f),
-        inversePrimary = accentColor,
-        surfaceTint = accentColor
+        primary = accent,
+        onPrimary = onColorFor(accent),
+        primaryContainer = primaryContainer,
+        onPrimaryContainer = onColorFor(primaryContainer),
+        inversePrimary = accent,
+        surfaceTint = accent
     )
 
     MaterialTheme(

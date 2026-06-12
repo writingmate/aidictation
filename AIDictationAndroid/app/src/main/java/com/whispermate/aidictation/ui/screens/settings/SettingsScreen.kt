@@ -65,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -636,12 +637,9 @@ private fun BubbleColorSwatch(
 ) {
     val shape = CircleShape
     val composeColor = Color(color)
+    // onSurface keeps the selection ring visible in both light and dark themes.
     val borderColor = if (selected) {
-        if (color == OverlayBubblePreferences.BLACK_COLOR) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            Color.Black.copy(alpha = 0.74f)
-        }
+        MaterialTheme.colorScheme.onSurface
     } else {
         MaterialTheme.colorScheme.outlineVariant
     }
@@ -659,11 +657,16 @@ private fun BubbleColorSwatch(
         contentAlignment = Alignment.Center
     ) {
         if (selected) {
+            // Dark badge on light swatches, light badge on dark ones.
+            val lightSwatch = composeColor.luminance() > 0.7f
             Box(
                 modifier = Modifier
                     .size(18.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.94f)),
+                    .background(
+                        if (lightSwatch) Color.Black.copy(alpha = 0.65f)
+                        else Color.White.copy(alpha = 0.94f)
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(

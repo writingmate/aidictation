@@ -159,7 +159,6 @@
     <string name="overlay_command_apply_failed">Could not apply command</string>
     <string name="overlay_command_failed">%1$s failed</string>
     <string name="overlay_command_no_instruction">No instruction heard</string>
-    <string name="overlay_volume_no_speech">No speech heard</string>
     <string name="overlay_dismiss_hide">Hide</string>
     <string name="overlay_dismiss_snooze">Snooze 10 min</string>
     <string name="overlay_hidden_permanently">Dictation bubble hidden</string>

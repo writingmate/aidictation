@@ -154,6 +154,11 @@ public partial class AppState : ObservableObject
     {
         lock (_stateLock)
         {
+            // A late error (e.g. a device callback) must not clobber an
+            // already-delivered result.
+            if (CurrentState == State.Result)
+                return false;
+
             var oldState = CurrentState;
             ErrorMessage = message;
             CurrentState = State.Error;

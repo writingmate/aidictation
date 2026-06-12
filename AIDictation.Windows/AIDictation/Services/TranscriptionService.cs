@@ -32,6 +32,7 @@ public sealed class TranscriptionService
         public const int MaxRetryAttempts = 3;
         public const int RetryDelayMs = 1000;
         public const int HttpTimeoutSeconds = 120;
+        public const long MaxUploadBytes = 24L * 1024 * 1024;
     }
 
     // MARK: - Private Properties
@@ -92,6 +93,21 @@ public sealed class TranscriptionService
             catch (Exception ex)
             {
                 lastException = ex;
+
+                // A cloud failure in auto mode falls back to the on-device
+                // model when it is already downloaded.
+                if (!useOffline && IsAutoProvider(providerOverride) &&
+                    WhisperLocalService.Instance.IsModelDownloaded)
+                {
+                    useOffline = true;
+                    continue;
+                }
+
+                // Client errors (bad key, quota, payload) and configuration
+                // problems will not succeed on retry.
+                if (IsNonRetryable(ex))
+                    break;
+
                 if (attempt < Constants.MaxRetryAttempts - 1)
                 {
                     await Task.Delay(Constants.RetryDelayMs * (attempt + 1), cancellationToken);
@@ -132,7 +148,15 @@ public sealed class TranscriptionService
 
         if (provider == AppSettings.AutoTranscriptionProvider)
         {
-            return System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable()
+            // An adapter being up does not guarantee internet, and the local
+            // model may never have been downloaded; prefer whichever side can
+            // actually do the work right now.
+            var cloudConfigured = !string.IsNullOrEmpty(BuildConfig.TranscriptionApiKey);
+            var online = System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable();
+
+            if (online && cloudConfigured) return AppSettings.CloudTranscriptionProvider;
+            if (WhisperLocalService.Instance.IsModelDownloaded) return AppSettings.LocalTranscriptionProvider;
+            return cloudConfigured
                 ? AppSettings.CloudTranscriptionProvider
                 : AppSettings.LocalTranscriptionProvider;
         }
@@ -141,6 +165,13 @@ public sealed class TranscriptionService
             ? AppSettings.LocalTranscriptionProvider
             : AppSettings.CloudTranscriptionProvider;
     }
+
+    private bool IsAutoProvider(string? overrideProvider) =>
+        (overrideProvider ?? _settings.Settings.TranscriptionProvider) == AppSettings.AutoTranscriptionProvider;
+
+    private static bool IsNonRetryable(Exception ex) =>
+        ex is InvalidOperationException ||
+        (ex is HttpRequestException { StatusCode: { } status } && (int)status is >= 400 and < 500);
 
     // MARK: - Cloud Pipeline
 
@@ -153,6 +184,13 @@ public sealed class TranscriptionService
         if (string.IsNullOrEmpty(apiKey))
         {
             throw new InvalidOperationException("Transcription service is not configured in this build");
+        }
+
+        var audioFile = new FileInfo(audioFilePath);
+        if (audioFile.Length > Constants.MaxUploadBytes)
+        {
+            throw new InvalidOperationException(
+                "Recording is too large for the transcription service. Try shorter dictations.");
         }
 
         var languageCodes = GetSelectedLanguageCodes();
@@ -222,7 +260,9 @@ public sealed class TranscriptionService
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
-                $"Transcription failed ({(int)response.StatusCode}): {Truncate(body, 200)}");
+                $"Transcription failed ({(int)response.StatusCode}): {Truncate(body, 200)}",
+                null,
+                response.StatusCode);
         }
 
         return ParseTranscriptionText(body);
@@ -235,6 +275,14 @@ public sealed class TranscriptionService
         string? contextInstructions,
         CancellationToken cancellationToken)
     {
+        if (!WhisperLocalService.Instance.IsModelDownloaded)
+        {
+            // Kicking off a ~470 MB download (with retries) in the middle of a
+            // dictation is never what the user wants; fail fast instead.
+            throw new InvalidOperationException(
+                "The on-device model is not downloaded yet. Open Settings to download it.");
+        }
+
         var languageCodes = GetSelectedLanguageCodes();
         var whisperLanguage = languageCodes.Count == 1 ? languageCodes[0] : "auto";
 
@@ -345,7 +393,10 @@ public sealed class TranscriptionService
             if (!string.IsNullOrEmpty(entry.Replacement))
             {
                 var pattern = $@"\b{Regex.Escape(entry.Trigger)}\b";
-                text = Regex.Replace(text, pattern, entry.Replacement, RegexOptions.IgnoreCase);
+                var replacement = entry.Replacement;
+                // MatchEvaluator keeps user text literal ($1, $& etc. must not
+                // be interpreted as group references).
+                text = Regex.Replace(text, pattern, _ => replacement, RegexOptions.IgnoreCase);
             }
         }
 
@@ -361,7 +412,8 @@ public sealed class TranscriptionService
         foreach (var shortcut in shortcuts)
         {
             var pattern = $@"\b{Regex.Escape(shortcut.VoiceTrigger)}\b";
-            text = Regex.Replace(text, pattern, shortcut.Expansion, RegexOptions.IgnoreCase);
+            var expansion = shortcut.Expansion;
+            text = Regex.Replace(text, pattern, _ => expansion, RegexOptions.IgnoreCase);
         }
 
         return text;

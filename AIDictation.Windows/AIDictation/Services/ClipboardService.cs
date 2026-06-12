@@ -1,12 +1,14 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 using AIDictation.Helpers;
 
 namespace AIDictation.Services;
 
 /// <summary>
-/// Manages clipboard operations including copying, pasting, and smart text insertion
+/// Inserts transcribed text into the target application via clipboard +
+/// synthesized Ctrl+V, preserving the user's clipboard content.
 /// </summary>
 public sealed class ClipboardService
 {
@@ -23,6 +25,8 @@ public sealed class ClipboardService
         public const int ClipboardDelayMs = 50;
         public const int PasteDelayMs = 30;
         public const int ClipboardRestoreDelayMs = 500;
+        public const int FocusRestoreDelayMs = 150;
+        public const int ClipboardWriteAttempts = 5;
     }
 
     // MARK: - P/Invoke
@@ -31,10 +35,10 @@ public sealed class ClipboardService
     private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
-    private static extern IntPtr GetFocus();
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("user32.dll")]
     private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -45,45 +49,54 @@ public sealed class ClipboardService
     // MARK: - Public API
 
     /// <summary>
-    /// Copies text to clipboard and simulates Ctrl+V paste
-    /// Preserves and restores original clipboard content
+    /// Copies text to the clipboard and pastes it into the target window via
+    /// Ctrl+V. Returns false when the text could not be delivered (clipboard
+    /// locked, target window gone, or injection blocked); the transcript is
+    /// left on the clipboard in that case so the user can paste manually.
     /// </summary>
-    public async Task PasteTextAsync(string text, bool smartSpacing = true)
+    public async Task<bool> PasteTextAsync(string text, IntPtr targetWindow = default, bool smartSpacing = true)
     {
         if (string.IsNullOrEmpty(text))
-            return;
+            return true;
 
         // Save original clipboard content
         var originalClipboard = await GetClipboardContentAsync();
+        var pasted = false;
 
         try
         {
-            // Apply smart spacing if enabled
-            var textToInsert = text;
-            if (smartSpacing)
+            var textToInsert = smartSpacing ? ApplySmartSpacing(text) : text;
+
+            if (!await SetClipboardTextAsync(textToInsert))
             {
-                textToInsert = await ApplySmartSpacingAsync(text);
+                System.Diagnostics.Debug.WriteLine("PasteTextAsync: clipboard write failed");
+                return false;
             }
 
-            // Set new text to clipboard
-            await SetClipboardTextAsync(textToInsert);
-
-            // Small delay to ensure clipboard is ready
             await Task.Delay(Constants.ClipboardDelayMs);
 
-            // Simulate Ctrl+V
-            SendInputHelper.SendPaste();
+            // Re-focus the window the user dictated into; pasting into whatever
+            // happens to be foreground would send the text to the wrong app.
+            if (targetWindow != IntPtr.Zero && !await TryFocusWindowAsync(targetWindow))
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "PasteTextAsync: target window not focusable; transcript left on clipboard");
+                return false;
+            }
+
+            pasted = SendInputHelper.SendPaste();
 
             // Wait for paste to complete
             await Task.Delay(Constants.PasteDelayMs);
+            return pasted;
         }
         finally
         {
             // The target app processes the injected Ctrl+V asynchronously;
-            // restoring (or clearing) the clipboard too soon erases the payload
-            // before the paste lands. Wait, and when there was no original
-            // content keep the payload instead of clearing it.
-            if (originalClipboard != null)
+            // restoring the clipboard too soon erases the payload before the
+            // paste lands. Restore only after a successful paste - on failure
+            // the transcript intentionally stays on the clipboard.
+            if (originalClipboard != null && pasted)
             {
                 await Task.Delay(Constants.ClipboardRestoreDelayMs);
                 await RestoreClipboardAsync(originalClipboard);
@@ -91,152 +104,80 @@ public sealed class ClipboardService
         }
     }
 
-    /// <summary>
-    /// Gets currently selected text from the focused application
-    /// Uses UI Automation first, falls back to Ctrl+C
-    /// </summary>
-    public async Task<string?> GetSelectedTextAsync()
+    // MARK: - Private Methods
+
+    private async Task<bool> TryFocusWindowAsync(IntPtr hWnd)
     {
-        // Try UI Automation first
-        var text = GetSelectedTextViaAutomation();
-        if (!string.IsNullOrEmpty(text))
-            return text;
+        if (GetForegroundWindow() == hWnd)
+            return true;
 
-        // Fallback to Ctrl+C method
-        return await GetSelectedTextViaCopyAsync();
-    }
-
-    /// <summary>
-    /// Gets the character immediately before the cursor position
-    /// Returns null if unable to determine
-    /// </summary>
-    public async Task<char?> GetCharacterBeforeCursorAsync()
-    {
-        // Save original clipboard
-        var originalClipboard = await GetClipboardContentAsync();
-
+        // SetForegroundWindow is restricted for background processes; attaching
+        // to the target window's input thread lifts the restriction.
+        var targetThread = GetWindowThreadProcessId(hWnd, out _);
+        var currentThread = GetCurrentThreadId();
+        var attached = targetThread != 0 && targetThread != currentThread &&
+                       AttachThreadInput(currentThread, targetThread, true);
         try
         {
-            // Clear clipboard
-            await ClearClipboardAsync();
-
-            // Select character to the left using Shift+Left
-            SendInputHelper.SendShiftLeft();
-            await Task.Delay(Constants.ClipboardDelayMs);
-
-            // Copy the selection
-            SendInputHelper.SendCopy();
-            await Task.Delay(Constants.ClipboardDelayMs);
-
-            // Get the character
-            var selectedChar = await GetClipboardTextAsync();
-
-            // Move cursor back to original position (deselect by pressing Right)
-            SendInputHelper.SendRight();
-
-            if (!string.IsNullOrEmpty(selectedChar) && selectedChar.Length == 1)
-            {
-                return selectedChar[0];
-            }
-
-            return null;
+            SetForegroundWindow(hWnd);
         }
         finally
         {
-            await Task.Delay(Constants.ClipboardDelayMs);
-            await RestoreClipboardAsync(originalClipboard);
+            if (attached)
+            {
+                AttachThreadInput(currentThread, targetThread, false);
+            }
         }
+
+        await Task.Delay(Constants.FocusRestoreDelayMs);
+        return GetForegroundWindow() == hWnd;
     }
 
     /// <summary>
-    /// Checks if a space should be inserted before the text
+    /// Prepends a space when the character before the caret needs one. Read-only:
+    /// uses UI Automation and never injects keystrokes (a probe that sends
+    /// Ctrl+C would, for example, kill the foreground process in a terminal).
     /// </summary>
-    public async Task<bool> ShouldInsertSpaceBeforeAsync()
+    private static string ApplySmartSpacing(string text)
     {
-        var charBefore = await GetCharacterBeforeCursorAsync();
-
-        // Insert space if there's a character before and it's not a space, newline, or common punctuation that doesn't need trailing space
-        if (charBefore.HasValue)
-        {
-            var c = charBefore.Value;
-            return !char.IsWhiteSpace(c) && c != '(' && c != '[' && c != '{' && c != '"' && c != '\'' && c != '`';
-        }
-
-        // No character before (start of document) - no space needed
-        return false;
-    }
-
-    // MARK: - Private Methods
-
-    private async Task<string> ApplySmartSpacingAsync(string text)
-    {
-        if (await ShouldInsertSpaceBeforeAsync())
+        var charBefore = GetCharacterBeforeCaret();
+        if (charBefore is char c &&
+            !char.IsWhiteSpace(c) &&
+            c != '(' && c != '[' && c != '{' && c != '"' && c != '\'' && c != '`')
         {
             return " " + text;
         }
         return text;
     }
 
-    private string? GetSelectedTextViaAutomation()
+    private static char? GetCharacterBeforeCaret()
     {
         try
         {
-            var focusedElement = AutomationElement.FocusedElement;
-            if (focusedElement == null)
+            var focused = AutomationElement.FocusedElement;
+            if (focused == null)
                 return null;
 
-            if (focusedElement.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
-                pattern is TextPattern textPattern)
+            if (!focused.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) ||
+                pattern is not TextPattern textPattern)
             {
-                var selection = textPattern.GetSelection();
-                if (selection.Length > 0)
-                {
-                    return selection[0].GetText(-1);
-                }
-            }
-
-            // Try value pattern for simple text fields
-            if (focusedElement.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePattern) &&
-                valuePattern is ValuePattern vp)
-            {
-                // ValuePattern doesn't give us selection, so return null to trigger fallback
                 return null;
             }
+
+            var selection = textPattern.GetSelection();
+            if (selection.Length == 0)
+                return null;
+
+            // Collapse the selection to the caret, then widen one character left.
+            var range = selection[0].Clone();
+            range.MoveEndpointByRange(TextPatternRangeEndpoint.End, range, TextPatternRangeEndpoint.Start);
+            range.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, -1);
+            var textBefore = range.GetText(1);
+            return textBefore.Length == 1 ? textBefore[0] : null;
         }
         catch
         {
-            // UI Automation failed, will fall back to Ctrl+C
-        }
-
-        return null;
-    }
-
-    private async Task<string?> GetSelectedTextViaCopyAsync()
-    {
-        // Save original clipboard
-        var originalClipboard = await GetClipboardContentAsync();
-
-        try
-        {
-            // Clear clipboard to detect if copy succeeded
-            await ClearClipboardAsync();
-
-            // Simulate Ctrl+C
-            SendInputHelper.SendCopy();
-
-            // Wait for copy to complete
-            await Task.Delay(Constants.ClipboardDelayMs);
-
-            // Get copied text
-            var text = await GetClipboardTextAsync();
-
-            return text;
-        }
-        finally
-        {
-            // Restore original clipboard
-            await Task.Delay(Constants.ClipboardDelayMs);
-            await RestoreClipboardAsync(originalClipboard);
+            return null;
         }
     }
 
@@ -259,106 +200,58 @@ public sealed class ClipboardService
         });
     }
 
-    private async Task<string?> GetClipboardTextAsync()
+    private async Task<bool> SetClipboardTextAsync(string text)
     {
         return await RunOnStaThreadAsync(() =>
         {
-            try
+            // Another process (clipboard manager, RDP, antivirus) may hold the
+            // clipboard lock; back off and retry instead of silently pasting
+            // whatever was on the clipboard before.
+            for (var attempt = 0; attempt < Constants.ClipboardWriteAttempts; attempt++)
             {
-                if (Clipboard.ContainsText())
-                {
-                    return Clipboard.GetText();
-                }
-            }
-            catch
-            {
-                // Clipboard access failed
-            }
-            return null;
-        });
-    }
-
-    private async Task SetClipboardTextAsync(string text)
-    {
-        await RunOnStaThreadAsync(() =>
-        {
-            try
-            {
-                Clipboard.SetText(text);
-            }
-            catch
-            {
-                // Clipboard access failed, retry once
                 try
                 {
-                    Thread.Sleep(10);
                     Clipboard.SetText(text);
+                    return true;
                 }
                 catch
                 {
-                    // Give up
+                    Thread.Sleep(10 << attempt);
                 }
             }
-            return (object?)null;
+            return false;
         });
     }
 
-    private async Task ClearClipboardAsync()
+    private async Task RestoreClipboardAsync(IDataObject dataObject)
     {
-        await RunOnStaThreadAsync(() =>
+        await RunOnStaThreadAsync<object?>(() =>
         {
             try
             {
-                Clipboard.Clear();
+                // Restoring the full data object preserves rich content
+                // (images, file lists, HTML) instead of just the text view.
+                Clipboard.SetDataObject(dataObject, true);
+                return null;
             }
             catch
             {
-                // Ignore
+                // Fall back to the text representation below.
             }
-            return (object?)null;
-        });
-    }
 
-    private async Task RestoreClipboardAsync(IDataObject? dataObject)
-    {
-        if (dataObject == null)
-        {
-            await ClearClipboardAsync();
-            return;
-        }
-
-        await RunOnStaThreadAsync(() =>
-        {
             try
             {
-                // Try to restore text content
-                if (dataObject.GetDataPresent(DataFormats.UnicodeText))
+                if (dataObject.GetDataPresent(DataFormats.UnicodeText) &&
+                    dataObject.GetData(DataFormats.UnicodeText) is string text)
                 {
-                    var text = dataObject.GetData(DataFormats.UnicodeText) as string;
-                    if (text != null)
-                    {
-                        Clipboard.SetText(text);
-                        return (object?)null;
-                    }
+                    Clipboard.SetText(text);
                 }
-                else if (dataObject.GetDataPresent(DataFormats.Text))
-                {
-                    var text = dataObject.GetData(DataFormats.Text) as string;
-                    if (text != null)
-                    {
-                        Clipboard.SetText(text);
-                        return (object?)null;
-                    }
-                }
-
-                // For other data types, try to set the data object directly
-                Clipboard.SetDataObject(dataObject, true);
             }
             catch
             {
                 // Clipboard restoration failed
             }
-            return (object?)null;
+            return null;
         });
     }
 

@@ -44,7 +44,6 @@ public sealed class AudioRecorderService : IDisposable
 
     private static class Constants
     {
-        public const int SampleRate = 44100;
         public const int Channels = 1; // Mono
         public const int BitsPerSample = 16;
         public const string RecordingsFolderName = "Recordings";
@@ -176,10 +175,12 @@ public sealed class AudioRecorderService : IDisposable
             
             // Create WASAPI capture
             _capture = new WasapiCapture(device, true, 50); // 50ms buffer
-            
-            // Create wave format for output (convert to mono 16-bit)
-            var targetFormat = new WaveFormat(Constants.SampleRate, Constants.BitsPerSample, Constants.Channels);
-            
+
+            // The conversion below changes bit depth and channel count but never
+            // resamples, so the WAV header must carry the device mix rate or the
+            // file plays (and transcribes) pitch-shifted.
+            var targetFormat = new WaveFormat(_capture.WaveFormat.SampleRate, Constants.BitsPerSample, Constants.Channels);
+
             _writer = new WaveFileWriter(_currentFilePath, targetFormat);
 
             _capture.DataAvailable += OnDataAvailable;
@@ -215,6 +216,16 @@ public sealed class AudioRecorderService : IDisposable
             Cleanup();
             IsRecording = false;
         }
+    }
+
+    /// <summary>
+    /// Forcibly tears down a capture session that failed to stop cleanly.
+    /// Fires no completion events.
+    /// </summary>
+    public void AbortRecording()
+    {
+        Cleanup();
+        IsRecording = false;
     }
 
     /// <summary>
@@ -434,6 +445,14 @@ public sealed class AudioRecorderService : IDisposable
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
+        // A stop event from a previous capture session (still tearing down
+        // asynchronously) must not clean up the current one.
+        if (sender is WasapiCapture stopped && !ReferenceEquals(stopped, _capture))
+        {
+            stopped.Dispose();
+            return;
+        }
+
         var filePath = _currentFilePath;
         
         Cleanup();

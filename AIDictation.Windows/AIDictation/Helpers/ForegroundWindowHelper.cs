@@ -18,6 +18,21 @@ public static class ForegroundWindowHelper
     // MARK: - Public API
 
     /// <summary>
+    /// Returns the foreground window handle, or IntPtr.Zero when none.
+    /// </summary>
+    public static IntPtr GetForegroundWindowHandle()
+    {
+        try
+        {
+            return GetForegroundWindow();
+        }
+        catch
+        {
+            return IntPtr.Zero;
+        }
+    }
+
+    /// <summary>
     /// Returns the current foreground application, or null when it cannot be resolved
     /// (e.g. the desktop or a protected system window is focused).
     /// </summary>

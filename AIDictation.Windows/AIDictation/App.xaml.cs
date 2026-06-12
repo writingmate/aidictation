@@ -29,6 +29,10 @@ public partial class App : Application
         public const string PipeName = "AIDictation_SingleInstance_Pipe";
         public const string UrlScheme = "aidictation";
         public const string UrlSchemeDescription = "AIDictation Protocol";
+
+        // Caps the upload below the transcription API's file-size limit.
+        public static readonly TimeSpan MaxRecordingDuration = TimeSpan.FromMinutes(4);
+        public static readonly TimeSpan StopWatchdogTimeout = TimeSpan.FromSeconds(10);
     }
 
     // MARK: - Private Properties
@@ -36,9 +40,12 @@ public partial class App : Application
     private static Mutex? _singleInstanceMutex;
     private TaskbarIcon? _trayIcon;
     private readonly DispatcherTimer _recordingTimer = new();
+    private readonly DispatcherTimer _stopWatchdog = new();
     private DateTime _recordingStartedAt;
     private bool _isStoppingRecording;
     private bool _discardNextRecording;
+    private bool _awaitingStopCallback;
+    private IntPtr _dictationTargetWindow;
     private bool _isValidationOnly;
     private CancellationTokenSource? _pipeCts;
 
@@ -253,14 +260,18 @@ public partial class App : Application
     private static void BringExistingInstanceToForeground()
     {
         // Find and activate existing window
-        var currentProcess = Process.GetCurrentProcess();
+        using var currentProcess = Process.GetCurrentProcess();
+        var activated = false;
         foreach (var process in Process.GetProcessesByName(currentProcess.ProcessName))
         {
-            if (process.Id != currentProcess.Id && process.MainWindowHandle != IntPtr.Zero)
+            using (process)
             {
-                NativeMethods.SetForegroundWindow(process.MainWindowHandle);
-                NativeMethods.ShowWindow(process.MainWindowHandle, NativeMethods.SW_RESTORE);
-                break;
+                if (!activated && process.Id != currentProcess.Id && process.MainWindowHandle != IntPtr.Zero)
+                {
+                    NativeMethods.SetForegroundWindow(process.MainWindowHandle);
+                    NativeMethods.ShowWindow(process.MainWindowHandle, NativeMethods.SW_RESTORE);
+                    activated = true;
+                }
             }
         }
     }
@@ -481,6 +492,9 @@ public partial class App : Application
 
         _recordingTimer.Interval = TimeSpan.FromMilliseconds(100);
         _recordingTimer.Tick += OnRecordingTimerTick;
+
+        _stopWatchdog.Interval = Constants.StopWatchdogTimeout;
+        _stopWatchdog.Tick += OnStopWatchdogTick;
     }
 
     private void UnsubscribeRuntimeEvents()
@@ -497,6 +511,8 @@ public partial class App : Application
         OverlayService.Shared.RecordingCancelRequested -= OnOverlayRecordingCancelRequested;
         _recordingTimer.Tick -= OnRecordingTimerTick;
         _recordingTimer.Stop();
+        _stopWatchdog.Tick -= OnStopWatchdogTick;
+        _stopWatchdog.Stop();
     }
 
     private static void CleanupServices()
@@ -552,21 +568,39 @@ public partial class App : Application
 
     private void OnDictationHotkeyPressed(object? sender, EventArgs e)
     {
-        StartRecording(false);
+        HandleHotkeyPressed(isCommandMode: false);
     }
 
     private void OnDictationHotkeyReleased(object? sender, EventArgs e)
     {
-        StopRecording();
+        HandleHotkeyReleased();
     }
 
     private void OnCommandHotkeyPressed(object? sender, EventArgs e)
     {
-        StartRecording(true);
+        HandleHotkeyPressed(isCommandMode: true);
     }
 
     private void OnCommandHotkeyReleased(object? sender, EventArgs e)
     {
+        HandleHotkeyReleased();
+    }
+
+    private void HandleHotkeyPressed(bool isCommandMode)
+    {
+        // Toggle mode: the same press starts and stops; releases are ignored.
+        if (!SettingsService.Instance.Settings.PushToTalk && AppState.Shared.IsRecording)
+        {
+            StopRecording();
+            return;
+        }
+
+        StartRecording(isCommandMode);
+    }
+
+    private void HandleHotkeyReleased()
+    {
+        if (!SettingsService.Instance.Settings.PushToTalk) return;
         StopRecording();
     }
 
@@ -588,13 +622,30 @@ public partial class App : Application
         _discardNextRecording = true;
         _isStoppingRecording = true;
         _recordingTimer.Stop();
+        ArmStopWatchdog();
         AudioRecorderService.Instance.StopRecording();
         AppState.Shared.Reset();
     }
 
     private void StartRecording(bool isCommandMode)
     {
+        if (!TranscriptionService.Instance.IsConfigured)
+        {
+            AppState.Shared.SetError("Transcription is not configured in this build");
+            return;
+        }
+
+        if (AuthService.Instance.CurrentUser?.HasReachedLimit == true)
+        {
+            AppState.Shared.SetError("Monthly word limit reached. Upgrade to keep dictating.");
+            return;
+        }
+
         if (!AppState.Shared.StartRecording(isCommandMode)) return;
+
+        // Remember where the user is dictating so the paste cannot land in a
+        // window focused later (e.g. after Alt-Tab during transcription).
+        _dictationTargetWindow = Helpers.ForegroundWindowHelper.GetForegroundWindowHandle();
 
         AudioRecorderService.Instance.SelectedDeviceId = SettingsService.Instance.Settings.SelectedAudioDeviceId;
         _recordingStartedAt = DateTime.Now;
@@ -615,14 +666,44 @@ public partial class App : Application
         _isStoppingRecording = true;
         _recordingTimer.Stop();
         AppState.Shared.StartProcessing();
+        ArmStopWatchdog();
         AudioRecorderService.Instance.StopRecording();
+    }
+
+    /// <summary>
+    /// If the device never raises RecordingStopped the app would sit in
+    /// Processing forever with a dead hotkey; the watchdog forces a reset.
+    /// </summary>
+    private void ArmStopWatchdog()
+    {
+        _awaitingStopCallback = true;
+        _stopWatchdog.Stop();
+        _stopWatchdog.Start();
+    }
+
+    private void OnStopWatchdogTick(object? sender, EventArgs e)
+    {
+        _stopWatchdog.Stop();
+        if (!_awaitingStopCallback) return;
+
+        _awaitingStopCallback = false;
+        _isStoppingRecording = false;
+        _discardNextRecording = false;
+        AudioRecorderService.Instance.AbortRecording();
+        AppState.Shared.SetError("The audio device did not stop cleanly. Please try again.");
     }
 
     private void OnRecordingTimerTick(object? sender, EventArgs e)
     {
-        if (AppState.Shared.IsRecording)
+        if (!AppState.Shared.IsRecording) return;
+
+        var elapsed = DateTime.Now - _recordingStartedAt;
+        AppState.Shared.UpdateRecordingDuration(elapsed);
+
+        // Stop before the recording outgrows what the transcription API accepts.
+        if (elapsed >= Constants.MaxRecordingDuration)
         {
-            AppState.Shared.UpdateRecordingDuration(DateTime.Now - _recordingStartedAt);
+            StopRecording();
         }
     }
 
@@ -636,7 +717,10 @@ public partial class App : Application
         Dispatcher.Invoke(() =>
         {
             _recordingTimer.Stop();
+            _stopWatchdog.Stop();
+            _awaitingStopCallback = false;
             _isStoppingRecording = false;
+            _discardNextRecording = false;
             AppState.Shared.SetError(message);
             HistoryService.Instance.Add(new Recording
             {
@@ -655,6 +739,9 @@ public partial class App : Application
 
     private async Task CompleteRecordingAsync(string filePath)
     {
+        _stopWatchdog.Stop();
+        _awaitingStopCallback = false;
+
         if (_discardNextRecording)
         {
             _discardNextRecording = false;
@@ -676,7 +763,15 @@ public partial class App : Application
 
             AppState.Shared.SetResult(result.Text);
             HistoryService.Instance.Add(CreateRecording(filePath, result.Text, TranscriptionStatus.Success, null));
-            await ClipboardService.Instance.PasteTextAsync(result.Text);
+
+            var pasted = await ClipboardService.Instance.PasteTextAsync(result.Text, _dictationTargetWindow);
+            if (!pasted)
+            {
+                // The transcript intentionally stays on the clipboard for a
+                // manual paste; record the delivery failure for diagnostics.
+                LogException("CompleteRecordingAsync",
+                    new InvalidOperationException("Paste was not delivered; transcript left on clipboard"));
+            }
         }
         catch (Exception ex)
         {

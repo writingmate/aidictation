@@ -72,6 +72,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
+        private const val INSERT_RESOLVE_ATTEMPTS = 3
+        private const val INSERT_RESOLVE_RETRY_MS = 250L
         private const val VOLUME_SHORTCUT_WINDOW_MS = 1_200L
         private const val VOLUME_SHORTCUT_PRESS_COUNT = 3
         private const val VOLUME_SHORTCUT_NO_SPEECH_TIMEOUT_MS = 8_000L
@@ -157,6 +159,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var bubbleAnimationJob: Job? = null
     private var pendingHideJob: Job? = null
     private var stickyEditableFocusArmed = false
+    private var dictationTargetNode: AccessibilityNodeInfo? = null
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
     private var fixGrammarButton: TextView? = null
@@ -219,6 +222,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         stopRecording(discard = true)
+        dictationTargetNode = null
         hideBubble()
         hideCommandActions()
         hideDismissActions()
@@ -292,6 +296,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         stopRecording(discard = true)
+        dictationTargetNode = null
         hideBubble()
         hideCommandActions()
         hideDismissActions()
@@ -511,11 +516,55 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun isEligibleEditableNode(node: AccessibilityNodeInfo): Boolean {
         if (!node.isEditable) return false
-        // isVisibleToUser and isFocused can be unreliable on foldable cover screens 
+        // isVisibleToUser and isFocused can be unreliable on foldable cover screens
         // or when an overlay/routine is starting up.
         if (!node.isEnabled) return false
         if (node.isPassword) return false
         return true
+    }
+
+    private fun refreshNode(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            node.refresh()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun currentDictationNode(): AccessibilityNodeInfo? {
+        return dictationTargetNode?.takeIf { refreshNode(it) && isEligibleEditableNode(it) }
+            ?: resolveFocusedEditableNode(null)
+    }
+
+    /**
+     * Returns the node dictation output should be written into. Prefers the field
+     * captured when recording started: WebView trees (Chrome) rebuild while
+     * transcription is in flight, and re-resolving input focus afterwards can land on
+     * an unrelated editable such as the browser omnibox. Falls back to re-resolution
+     * with brief retries, rejecting candidates that do not match the original field.
+     */
+    private suspend fun acquireInsertTarget(): AccessibilityNodeInfo? {
+        val preferred = dictationTargetNode
+        if (preferred != null && refreshNode(preferred) && isEligibleEditableNode(preferred)) {
+            return preferred
+        }
+        repeat(INSERT_RESOLVE_ATTEMPTS) { attempt ->
+            val candidate = resolveFocusedEditableNode(null)
+            if (candidate != null && isCompatibleInsertTarget(preferred, candidate)) {
+                return candidate
+            }
+            if (attempt < INSERT_RESOLVE_ATTEMPTS - 1) delay(INSERT_RESOLVE_RETRY_MS)
+        }
+        return null
+    }
+
+    private fun isCompatibleInsertTarget(
+        original: AccessibilityNodeInfo?,
+        candidate: AccessibilityNodeInfo
+    ): Boolean {
+        original ?: return true
+        return original.packageName?.toString() == candidate.packageName?.toString() &&
+            original.viewIdResourceName == candidate.viewIdResourceName
     }
     private fun showBubble() {
         cancelPendingHide()
@@ -1157,6 +1206,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
+        dictationTargetNode = resolveFocusedEditableNode(null)
         activeCommandAction = action
         recordingMode = RecordingMode.Dictation
         recordingState = RecordingState.Processing
@@ -1215,6 +1265,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             } finally {
                 recordingState = RecordingState.Idle
                 activeCommandAction = null
+                dictationTargetNode = null
                 updateBubbleUi()
                 refreshOverlayVisibility(null)
             }
@@ -1260,11 +1311,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun replaceSelectionOrMatchedText(
+    private suspend fun replaceSelectionOrMatchedText(
         targetText: String,
         replacement: String
     ): Boolean {
-        val node = resolveFocusedEditableNode(null) ?: return false
+        val node = acquireInsertTarget() ?: return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
             val selStart = snapshot.selectionStart
@@ -1332,6 +1383,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             Toast.makeText(this, "Focus a text field first", Toast.LENGTH_SHORT).show()
             return
         }
+        dictationTargetNode = focusedNode
 
         if (mode == RecordingMode.RewriteInstruction && pendingRewriteTarget == null) {
             activeCommandAction = null
@@ -1498,7 +1550,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val focusedNode = resolveFocusedEditableNode(null)
+        val focusedNode = currentDictationNode()
         if (focusedNode == null) {
             audioFile.delete()
             recordingState = RecordingState.Idle
@@ -1527,6 +1579,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             } finally {
                 audioFile.delete()
                 recordingState = RecordingState.Idle
+                dictationTargetNode = null
                 if (mode == RecordingMode.RewriteInstruction) {
                     activeCommandAction = null
                     pendingRewriteTarget = null
@@ -1548,7 +1601,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val node = resolveFocusedEditableNode(null)
+        val node = currentDictationNode()
         val snapshot = node?.let { captureEditableTextSnapshot(it) } ?: EditableTextSnapshot("", 0, 0)
 
         val contextText = snapshot.text.take(snapshot.selectionStart).takeLast(200)
@@ -1678,8 +1731,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun applyCommandResult(transformedText: String): Boolean {
-        val node = resolveFocusedEditableNode(null) ?: return false
+    private suspend fun applyCommandResult(transformedText: String): Boolean {
+        val node = acquireInsertTarget() ?: return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
             val current = snapshot.text
@@ -1708,8 +1761,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun insertDictationText(text: String): Boolean {
-        val node = resolveFocusedEditableNode(null) ?: return false
+    private suspend fun insertDictationText(text: String): Boolean {
+        val node = acquireInsertTarget() ?: return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
             Log.i(

@@ -520,6 +520,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // or when an overlay/routine is starting up.
         if (!node.isEnabled) return false
         if (node.isPassword) return false
+        // A field showing its hint with no caret is not an active edit target. Chrome's
+        // omnibox keeps reporting input focus in this state while the user is actually
+        // editing web page content.
+        if (node.isShowingHintText && node.textSelectionStart == -1 && node.textSelectionEnd == -1) {
+            return false
+        }
         return true
     }
 
@@ -1374,7 +1380,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         val focusedNode = resolveFocusedEditableNode(null)
-        if (focusedNode == null) {
+        if (focusedNode == null && !(stickyEditableFocusArmed && isKeyboardVisible())) {
             if (mode == RecordingMode.RewriteInstruction) {
                 activeCommandAction = null
                 pendingRewriteTarget = null
@@ -1383,6 +1389,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             Toast.makeText(this, "Focus a text field first", Toast.LENGTH_SHORT).show()
             return
         }
+        // focusedNode may be null while a WebView tree rebuilds (sticky focus armed);
+        // insert-time acquisition re-resolves with retries.
         dictationTargetNode = focusedNode
 
         if (mode == RecordingMode.RewriteInstruction && pendingRewriteTarget == null) {
@@ -1551,7 +1559,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         val focusedNode = currentDictationNode()
-        if (focusedNode == null) {
+        if (focusedNode == null && !stickyEditableFocusArmed) {
             audioFile.delete()
             recordingState = RecordingState.Idle
             if (mode == RecordingMode.RewriteInstruction) {
@@ -1764,7 +1772,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private suspend fun insertDictationText(text: String): Boolean {
         val node = acquireInsertTarget() ?: return false
         try {
-            val snapshot = captureEditableTextSnapshot(node)
+            var snapshot = captureEditableTextSnapshot(node)
             Log.i(
                 TAG,
                 "Insert target: pkg=${node.packageName} class=${node.className} " +
@@ -1772,8 +1780,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     "hintShowing=${node.isShowingHintText} hint=${node.hintText} " +
                     "desc=${node.contentDescription?.toString()?.take(60)} " +
                     "text=${node.text?.toString()?.take(60)} " +
-                    "normalized=${snapshot.text.take(60)} normalizedSel=${snapshot.selectionStart}..${snapshot.selectionEnd}"
+                    "normalized=${snapshot.text.take(60)} normalizedSel=${snapshot.selectionStart}..${snapshot.selectionEnd} " +
+                    "extras=${node.extras?.keySet()?.joinToString(",")}"
             )
+            if (snapshot.text.isNotEmpty() && isPhantomPlaceholderText(node)) {
+                Log.i(TAG, "Field text is a phantom placeholder; treating field as empty")
+                snapshot = EditableTextSnapshot("", 0, 0)
+            }
             val current = snapshot.text
             val selStart = snapshot.selectionStart
             val selEnd = snapshot.selectionEnd
@@ -1812,6 +1825,36 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         return pasteFallback(node, replacement, safeStart, safeEnd)
+    }
+
+    /**
+     * Chrome exposes CSS/ARIA placeholders of web editors (e.g. LinkedIn's composer) as
+     * the node's text with a caret at the end and no hint metadata, indistinguishable
+     * from real content. Such text does not actually exist in the field, so selecting
+     * it fails - probe with ACTION_SET_SELECTION before preserving it on insert.
+     */
+    private fun isPhantomPlaceholderText(node: AccessibilityNodeInfo): Boolean {
+        val rawLength = node.text?.length ?: 0
+        if (rawLength == 0) return false
+
+        if (!setNodeSelection(node, 0, rawLength)) {
+            Log.i(TAG, "Placeholder probe: select-all rejected")
+            return true
+        }
+        if (!refreshNode(node)) return false
+
+        val selected = node.textSelectionStart == 0 && node.textSelectionEnd == rawLength
+        if (selected) {
+            // Real text: collapse the probe selection back to the end.
+            setNodeSelection(node, rawLength, rawLength)
+            return false
+        }
+        Log.i(
+            TAG,
+            "Placeholder probe: select-all did not take " +
+                "(sel=${node.textSelectionStart}..${node.textSelectionEnd}, len=$rawLength)"
+        )
+        return true
     }
 
     private fun setNodeText(node: AccessibilityNodeInfo, text: String): Boolean {

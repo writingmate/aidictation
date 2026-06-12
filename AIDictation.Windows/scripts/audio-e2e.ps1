@@ -122,9 +122,14 @@ try {
     Write-Host "F8 down (recording should start)"
     Start-Sleep -Milliseconds 900
 
+    $playSw = [System.Diagnostics.Stopwatch]::StartNew()
     $player = New-Object System.Media.SoundPlayer $speechWav
     $player.PlaySync()
-    Write-Host "Finished playing phrase"
+    $playSw.Stop()
+    Write-Host "Finished playing phrase in $([int]$playSw.ElapsedMilliseconds) ms"
+    if ($playSw.ElapsedMilliseconds -lt 1500) {
+        Write-Host "::warning::Playback returned suspiciously fast - likely no working render device, captured audio will be silent"
+    }
     Start-Sleep -Milliseconds 600
     Take-Screenshot "03-recording"
 

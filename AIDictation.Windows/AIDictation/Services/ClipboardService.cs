@@ -22,6 +22,7 @@ public sealed class ClipboardService
     {
         public const int ClipboardDelayMs = 50;
         public const int PasteDelayMs = 30;
+        public const int ClipboardRestoreDelayMs = 500;
     }
 
     // MARK: - P/Invoke
@@ -78,9 +79,15 @@ public sealed class ClipboardService
         }
         finally
         {
-            // Restore original clipboard content after a delay
-            await Task.Delay(Constants.ClipboardDelayMs);
-            await RestoreClipboardAsync(originalClipboard);
+            // The target app processes the injected Ctrl+V asynchronously;
+            // restoring (or clearing) the clipboard too soon erases the payload
+            // before the paste lands. Wait, and when there was no original
+            // content keep the payload instead of clearing it.
+            if (originalClipboard != null)
+            {
+                await Task.Delay(Constants.ClipboardRestoreDelayMs);
+                await RestoreClipboardAsync(originalClipboard);
+            }
         }
     }
 

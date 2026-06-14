@@ -111,7 +111,7 @@ platform :ios do
         team_id: team_id,
         targets: ["WhisperMateIOS"],
         build_configurations: ["Release"],
-        code_sign_identity: "Apple Distribution",
+        code_sign_identity: "iPhone Distribution",
         **provisioning_profile_settings(app_profile)
       )
 
@@ -121,7 +121,7 @@ platform :ios do
         team_id: team_id,
         targets: ["WhisperMateKeyboard"],
         build_configurations: ["Release"],
-        code_sign_identity: "Apple Distribution",
+        code_sign_identity: "iPhone Distribution",
         **provisioning_profile_settings(keyboard_profile)
       )
 
@@ -131,7 +131,7 @@ platform :ios do
         team_id: team_id,
         targets: ["WhisperMateLiveActivity"],
         build_configurations: ["Release"],
-        code_sign_identity: "Apple Distribution",
+        code_sign_identity: "iPhone Distribution",
         **provisioning_profile_settings(live_activity_profile)
       )
 
@@ -141,20 +141,20 @@ platform :ios do
         team_id: team_id,
         targets: ["ParakeetRuntime", "PermissionFlowRuntime"],
         build_configurations: ["Release"],
-        code_sign_identity: "Apple Distribution"
+        code_sign_identity: "iPhone Distribution"
       )
 
       gym_options[:xcargs] = [
         "DEVELOPMENT_TEAM=#{team_id}",
         "CODE_SIGN_STYLE=Manual",
-        "CODE_SIGN_IDENTITY=\"Apple Distribution\"",
+        "CODE_SIGN_IDENTITY=\"iPhone Distribution\"",
         auth_args
       ].reject(&:empty?).join(" ")
       gym_options[:export_options] = {
         method: "app-store",
         teamID: team_id,
         signingStyle: "manual",
-        signingCertificate: "Apple Distribution",
+        signingCertificate: "iPhone Distribution",
         provisioningProfiles: {
           "com.whispermate.ios" => app_profile,
           "com.whispermate.ios.keyboard" => keyboard_profile,
@@ -169,12 +169,12 @@ platform :ios do
       UI.user_error!("IOS_KEYBOARD_APPSTORE_PROFILE_NAME is required to export the keyboard with an App Store distribution profile") if keyboard_profile.empty?
       UI.user_error!("IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME is required to export the Live Activity extension") if live_activity_profile.empty?
 
-      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=\"Apple Distribution\""
+      gym_options[:xcargs] = "DEVELOPMENT_TEAM=#{team_id} CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=\"iPhone Distribution\""
       gym_options[:export_options] = {
         method: "app-store",
         teamID: team_id,
         signingStyle: "manual",
-        signingCertificate: "Apple Distribution",
+        signingCertificate: "iPhone Distribution",
         provisioningProfiles: {
           "com.whispermate.ios" => app_profile,
           "com.whispermate.ios.keyboard" => keyboard_profile,

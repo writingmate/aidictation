@@ -198,7 +198,7 @@
                                                       Command="{Binding DataContext.SelectLanguageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                       CommandParameter="{Binding}">
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding Flag}" Margin="0,0,6,0"/>
+                                                <TextBlock Text="{Binding Flag}" FontFamily="Segoe UI Emoji" Margin="0,0,6,0"/>
                                                 <TextBlock Text="{Binding DisplayName}"/>
                                             </StackPanel>
                                         </ToggleButton>

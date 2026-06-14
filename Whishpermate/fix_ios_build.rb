@@ -26,7 +26,7 @@ if ios_target
     config.build_settings['CODE_SIGN_STYLE'] = 'Manual'
     config.build_settings['DEVELOPMENT_TEAM'] = 'G7DJ6P37KU'
     if config.name == 'Release'
-      config.build_settings['CODE_SIGN_IDENTITY'] = 'Apple Distribution'
+      config.build_settings['CODE_SIGN_IDENTITY'] = 'iPhone Distribution'
       config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = ''
     end
   end
@@ -42,7 +42,7 @@ if keyboard_target
     config.build_settings['CODE_SIGN_STYLE'] = 'Manual'
     config.build_settings['DEVELOPMENT_TEAM'] = 'G7DJ6P37KU'
     if config.name == 'Release'
-      config.build_settings['CODE_SIGN_IDENTITY'] = 'Apple Distribution'
+      config.build_settings['CODE_SIGN_IDENTITY'] = 'iPhone Distribution'
       config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = ''
     end
   end

@@ -12,6 +12,8 @@
     <true/>
     <key>signingStyle</key>
     <string>manual</string>
+    <key>signingCertificate</key>
+    <string>iPhone Distribution</string>
     <key>provisioningProfiles</key>
     <dict>
         <key>com.whispermate.ios</key>

@@ -5,7 +5,7 @@
 <h1 align="center">AIDictation</h1>
 
 <p align="center">
-  Fast, native voice-to-text for macOS, Windows, and Android.
+  Fast, native voice-to-text for macOS, Windows, iOS, and Android.
 </p>
 
 <p align="center">
@@ -25,6 +25,7 @@
 | App | Latest | Download |
 | --- | --- | --- |
 | macOS | v0.0.92 | [Download DMG](https://github.com/writingmate/aidictation/releases/download/v0.0.92/AIDictation-v0.0.92.dmg) |
+| iOS | TestFlight beta | [Join TestFlight](https://testflight.apple.com/join/934P27ed) |
 | Windows | v0.0.4 | [Download installer](https://github.com/writingmate/aidictation/releases/download/windows-v0.0.4/AIDictation-Windows-Setup-v0.0.4.exe) · [Portable ZIP](https://github.com/writingmate/aidictation/releases/download/windows-v0.0.4/AIDictation-Windows-v0.0.4.zip) |
 | Android | v0.0.29 | [Download APK](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/AIDictation-Android-0.0.29.apk) · [Play upload AAB](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/AIDictation-Android-0.0.29.aab) · [Checksums](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/SHA256SUMS.txt) |
 
@@ -34,7 +35,7 @@ AIDictation turns your voice into text and inserts it into the app you are alrea
 
 ## Highlights
 
-- Native apps for macOS, Windows, and Android
+- Native apps for macOS, Windows, iOS, and Android
 - Fast voice-to-text with cloud mode
 - Offline mode on Android with downloadable on-device speech recognition
 - Privacy-focused local handling of recordings and settings
@@ -51,6 +52,13 @@ AIDictation turns your voice into text and inserts it into the app you are alrea
 3. Drag AIDictation to Applications.
 4. Launch AIDictation and follow setup.
 5. Enable microphone and accessibility access when prompted.
+
+### iOS
+
+1. Install [TestFlight](https://apps.apple.com/app/testflight/id899247664) from the App Store.
+2. Open the [AIDictation TestFlight invite](https://testflight.apple.com/join/934P27ed) on your iPhone or iPad.
+3. Tap Accept, install AIDictation, and follow setup.
+4. Enable microphone access when prompted.
 
 ### Windows
 

@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIDictation for Windows — UI Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   AIDictation Windows — Design Tokens
+   These map 1:1 to WPF resource keys when we implement.
+   ============================================================ */
+:root{
+  /* Brand */
+  --brand:        #F16E00;   /* PrimaryBrush          */
+  --brand-hot:    #FF8A1F;   /* PrimaryHoverBrush     */
+  --brand-soft:   #FFF0E0;   /* AccentLightBrush      */
+  --grad-a:       #FFED46;   /* BrandGradientTop      */
+  --grad-b:       #FF7EC7;   /* BrandGradientBottom   */
+
+  /* Dark surfaces — Windows 11 Fluent (Mica window + layer cards) */
+  --bg0:          #202020;   /* Mica window           */
+  --bg1:          #2B2B2B;   /* Card / layer fill     */
+  --bg2:          #323232;   /* Card hover            */
+  --stroke:       rgba(255,255,255,.084);  /* CardStroke   */
+  --stroke-hi:    rgba(255,255,255,.16);
+  --ink:          #FFFFFF;   /* TextFillPrimary       */
+  --ink-2:        #C9C9C9;   /* TextFillSecondary     */
+  --ink-3:        #8A8A8A;   /* TextFillTertiary      */
+
+  /* Light (onboarding) — Win11 light */
+  --lt-bg:        #FAFAFA;
+  --lt-ink:       #1B1B1B;
+  --lt-sub:       #5F5F5F;
+  --lt-card:      #FFFFFF;
+  --lt-stroke:    #E5E5E5;
+
+  /* Status */
+  --ok:           #3BC45A;
+  --err:          #E5484D;
+
+  /* Win11 geometry: 8px surfaces, 4px controls */
+  --r-win:        8px;
+  --r-card:       8px;
+  --r-ctl:        4px;
+  --r-pill:       999px;
+
+  --font-display: "Figtree", sans-serif;   /* brand font — hero/display moments */
+  --font-body:    "Figtree", sans-serif;   /* spec page */
+  --font-ui:      "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif; /* app windows */
+  --font-mono:    "JetBrains Mono", monospace;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none !important}
+.ic{
+  width:1em;height:1em;stroke:currentColor;fill:none;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round;vertical-align:-.12em;flex:none;
+}
+.cc{
+  font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:.06em;
+  border-radius:5px;padding:2.5px 5px;line-height:1;flex:none;
+  background:rgba(0,0,0,.08);color:inherit;opacity:.75;
+}
+.lang .cc{background:#fff;border:1px solid var(--lt-stroke);color:#8A8077}
+.lang.on .cc{border-color:#F0B27E;color:#B85800}
+.dlang .cc{background:var(--bg2);border:1px solid var(--stroke);color:var(--ink-3)}
+.dlang.on .cc{border-color:rgba(241,110,0,.5);color:#FFB070}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--font-body);
+  background:#0D0B09;
+  color:var(--ink);
+  background-image:
+    radial-gradient(1200px 500px at 80% -10%, rgba(241,110,0,.08), transparent 60%),
+    radial-gradient(900px 500px at -10% 30%, rgba(255,126,199,.05), transparent 60%);
+}
+body::after{ /* grain */
+  content:"";position:fixed;inset:0;pointer-events:none;opacity:.5;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ============ Page chrome ============ */
+.rail{
+  position:fixed;top:0;left:0;bottom:0;width:230px;padding:28px 20px;
+  border-right:1px solid rgba(255,255,255,.06);
+  background:rgba(13,11,9,.8);backdrop-filter:blur(12px);z-index:50;
+}
+.rail .logo{display:flex;align-items:center;gap:10px;margin-bottom:30px}
+.rail .logo .dot{
+  width:30px;height:30px;border-radius:9px;flex:none;
+  background:linear-gradient(135deg,var(--grad-a),var(--brand) 55%,var(--grad-b));
+  display:grid;place-items:center;font-size:15px;
+  box-shadow:0 4px 18px rgba(241,110,0,.45);
+}
+.rail .logo b{font-family:var(--font-display);font-weight:800;font-size:15px;letter-spacing:-.02em}
+.rail .logo span{display:block;font-size:10.5px;color:var(--ink-3);font-weight:500;letter-spacing:.14em;text-transform:uppercase}
+.rail nav{display:flex;flex-direction:column;gap:2px}
+.rail a{
+  color:var(--ink-2);text-decoration:none;font-size:13.5px;font-weight:500;
+  padding:8px 12px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;
+  transition:.15s;
+}
+.rail a:hover{color:var(--ink);background:rgba(255,255,255,.05)}
+.rail a small{font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3)}
+.rail .sep{height:1px;background:rgba(255,255,255,.06);margin:14px 0}
+.rail .note{font-size:11px;color:var(--ink-3);line-height:1.6;padding:0 12px}
+
+main{margin-left:230px;padding:54px 56px 140px;max-width:1240px}
+
+.hero h1{
+  font-family:var(--font-display);font-size:clamp(36px,4.6vw,58px);font-weight:800;
+  letter-spacing:-.035em;line-height:1.02;
+}
+.hero h1 em{
+  font-style:normal;
+  background:linear-gradient(100deg,var(--grad-a),var(--brand) 50%,var(--grad-b));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero p{color:var(--ink-2);max-width:620px;margin-top:16px;font-size:15px;line-height:1.65}
+.hero .meta{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap}
+.chip{
+  font-family:var(--font-mono);font-size:10.5px;font-weight:500;color:var(--ink-2);
+  border:1px solid var(--stroke);border-radius:var(--r-pill);padding:5px 12px;background:rgba(255,255,255,.02);
+}
+
+section{margin-top:90px}
+.sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:8px}
+.sec-head .num{font-family:var(--font-mono);color:var(--brand);font-size:12px;font-weight:700}
+.sec-head h2{font-family:var(--font-display);font-weight:700;font-size:27px;letter-spacing:-.025em}
+.sec-sub{color:var(--ink-2);font-size:13.5px;margin-bottom:26px;max-width:640px;line-height:1.6}
+.sec-sub code{font-family:var(--font-mono);font-size:11px;color:var(--brand-hot)}
+
+/* ============ Token swatches ============ */
+.tokens{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:10px}
+.tok{border:1px solid var(--stroke);border-radius:10px;overflow:hidden;background:var(--bg1)}
+.tok .sw{height:54px}
+.tok .nm{padding:8px 10px 2px;font-family:var(--font-mono);font-size:10px;color:var(--ink)}
+.tok .hx{padding:0 10px 9px;font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3)}
+.type-row{display:flex;flex-wrap:wrap;gap:34px;align-items:baseline;border:1px solid var(--stroke);border-radius:12px;padding:24px 28px;background:var(--bg1);margin-top:10px}
+.type-row .t-display{font-family:var(--font-display);font-size:30px;font-weight:800;letter-spacing:-.03em}
+.type-row .t-body{font-size:14px;color:var(--ink-2)}
+.type-row .t-mono{font-family:var(--font-mono);font-size:12px;color:var(--brand-hot)}
+
+/* ============================================================
+   WINDOW CHROME — Windows 11 style
+   ============================================================ */
+.window{
+  border-radius:var(--r-win);overflow:hidden;
+  border:1px solid rgba(255,255,255,.09);
+  box-shadow:0 28px 70px rgba(0,0,0,.55),0 4px 14px rgba(0,0,0,.4);
+  background:var(--bg0);
+  font-family:var(--font-ui); /* app windows render in Segoe UI */
+}
+.window.light{background:var(--lt-bg)}
+.titlebar{
+  height:36px;display:flex;align-items:center;padding-left:14px;gap:9px;flex:none;user-select:none;
+}
+.window.light .titlebar{background:var(--lt-bg);color:var(--lt-ink)}
+.window:not(.light) .titlebar{background:var(--bg0);color:var(--ink-2)}
+.titlebar .app-ico{
+  width:15px;height:15px;border-radius:4px;
+  background:linear-gradient(135deg,var(--grad-a),var(--brand) 60%,var(--grad-b));
+}
+.titlebar .t{font-size:11.5px;font-weight:500;letter-spacing:.01em}
+.titlebar .caption{margin-left:auto;display:flex;height:100%}
+.caption span{
+  width:44px;display:grid;place-items:center;font-size:10px;opacity:.65;cursor:default;transition:.12s;
+  font-family:"Segoe UI Symbol","Albert Sans",sans-serif;
+}
+.caption span:hover{background:rgba(128,128,128,.18);opacity:1}
+.caption span.x:hover{background:#E5484D;color:#fff;opacity:1}
+
+.stage{
+  display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap;
+}
+.stage .stack{display:flex;flex-direction:column;gap:10px}
+.stage .cap{font-family:var(--font-mono);font-size:10px;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase}
+.stage .cap b{color:var(--brand)}
+
+/* ============================================================
+   1 — ONBOARDING  (900 × 580)
+   ============================================================ */
+.onb{width:900px;height:580px;display:flex;flex-direction:column}
+.onb-body{flex:1;display:flex;min-height:0;position:relative}
+.onb-left{flex:1;display:flex;flex-direction:column;padding:6px 44px 30px;position:relative}
+.onb-right{
+  width:350px;flex:none;position:relative;overflow:hidden;
+  background:linear-gradient(168deg,var(--grad-a),#FFB45E 45%,var(--grad-b));
+}
+.onb-right::before{
+  content:"";position:absolute;inset:0;opacity:.35;
+  background:radial-gradient(420px 320px at 75% 20%,rgba(255,255,255,.8),transparent 60%);
+}
+.dots{display:flex;gap:9px;justify-content:center;padding:24px 0 12px}
+.dots i{width:7px;height:7px;border-radius:50%;background:#DDD7CF;transition:.25s}
+.dots i.on{background:var(--brand);transform:scale(1.25);box-shadow:0 0 0 4px var(--brand-soft)}
+.onb h1{font-family:var(--font-display);font-size:33px;font-weight:800;letter-spacing:-.03em;color:var(--lt-ink);line-height:1.06}
+.onb .sub{color:var(--lt-sub);font-size:14px;line-height:1.65;margin-top:12px;max-width:420px}
+.onb .step{flex:1;display:flex;flex-direction:column;justify-content:center;animation:stepIn .35s ease both}
+@keyframes stepIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.onb-nav{display:flex;justify-content:space-between;align-items:center;margin-top:auto;padding-top:18px}
+
+/* WinUI buttons: 4px radius, accent fill with darker bottom edge */
+.btn{
+  font-family:var(--font-ui);font-weight:600;font-size:13px;cursor:pointer;
+  border-radius:var(--r-ctl);padding:8px 22px;transition:.12s;border:1px solid transparent;
+}
+.btn-brand{
+  background:var(--brand);color:#fff;
+  border-color:rgba(0,0,0,.12);border-bottom-color:rgba(0,0,0,.35);
+}
+.btn-brand:hover{background:var(--brand-hot)}
+.btn-brand:active{background:#D86200;color:rgba(255,255,255,.8)}
+.btn-ghost{background:transparent;color:#5F5F5F;padding-left:14px;padding-right:14px}
+.btn-ghost:hover{color:var(--lt-ink);background:rgba(0,0,0,.04)}
+.btn-dark-ghost{
+  background:rgba(255,255,255,.06);color:var(--ink);
+  border-color:var(--stroke);border-bottom-color:rgba(0,0,0,.3);
+}
+.btn-dark-ghost:hover{background:rgba(255,255,255,.09)}
+
+/* language chips */
+.langs{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px;max-width:470px;max-height:240px;overflow:auto;padding-right:6px}
+.lang{
+  display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none;
+  border:1.5px solid var(--lt-stroke);background:var(--lt-card);border-radius:var(--r-pill);
+  padding:8px 15px;font-size:12.5px;font-weight:600;color:var(--lt-ink);transition:.15s;
+}
+.lang:hover{border-color:#CFC7BD}
+.lang.on{background:var(--brand-soft);border-color:var(--brand);color:#9A4A00;box-shadow:0 2px 10px rgba(241,110,0,.18)}
+.lang .fl{font-size:14px}
+
+/* mode cards */
+.modes{display:flex;flex-direction:column;gap:12px;margin-top:26px;max-width:440px}
+.mode{
+  display:flex;gap:15px;align-items:flex-start;cursor:pointer;user-select:none;
+  border:1px solid var(--lt-stroke);border-radius:8px;padding:17px 18px;background:var(--lt-card);transition:.18s;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.mode:hover{transform:translateY(-1px)}
+.mode.on{background:var(--brand-soft);border-color:var(--brand);box-shadow:0 8px 26px rgba(241,110,0,.16)}
+.mode .mic{
+  width:38px;height:38px;flex:none;border-radius:11px;display:grid;place-items:center;
+  background:#fff;border:1px solid var(--lt-stroke);color:#8A8077;
+}
+.mode.on .mic{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 4px 12px rgba(241,110,0,.4)}
+.mode b{font-size:14.5px;color:var(--lt-ink);display:flex;align-items:center;gap:8px}
+.mode b .tag{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand);background:#fff;border:1px solid var(--brand);border-radius:99px;padding:2px 8px}
+.mode p{font-size:12.5px;color:var(--lt-sub);margin-top:4px;line-height:1.55}
+/* mac-parity mode rows: radio-check · name+desc · speed/quality stars */
+.mrows{display:flex;flex-direction:column;gap:10px;margin-top:24px;max-width:460px}
+.mrow{
+  display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none;
+  border:1.5px solid var(--lt-stroke);border-radius:10px;padding:12px 14px;background:var(--lt-card);transition:.16s;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.mrow.on{border-color:var(--brand);background:rgba(241,110,0,.06)}
+.mrow .mck{
+  width:21px;height:21px;flex:none;border-radius:50%;border:1.5px solid #C9C2B8;display:grid;place-items:center;
+  color:#fff;transition:.16s;
+}
+.mrow .mck svg{font-size:11px;stroke-width:3;opacity:0}
+.mrow.on .mck{background:var(--brand);border-color:var(--brand)}
+.mrow.on .mck svg{opacity:1}
+.mrow .mtx{flex:1;min-width:0}
+.mrow .mtx b{font-size:13.5px;color:var(--lt-ink);display:block}
+.mrow .mtx p{font-size:11.5px;color:var(--lt-sub);margin-top:1px}
+.stars{display:flex;flex-direction:column;gap:1px;flex:none}
+.stars div{display:flex;align-items:center;gap:1.5px}
+.stars span{font-size:9.5px;color:var(--lt-sub);width:38px}
+.stars b{font-size:9px;color:#D9D3CA;font-weight:400}
+.stars b.on{color:var(--brand)}
+/* status line: fixed height so appearance never shifts layout */
+.mstatus{
+  display:flex;align-items:center;gap:9px;min-height:34px;margin-top:10px;max-width:460px;
+  font-size:12px;color:var(--lt-sub);
+}
+.mstatus .spin2{
+  width:13px;height:13px;border:2px solid var(--lt-stroke);border-top-color:var(--brand);border-radius:50%;
+  animation:rot 0.9s linear infinite;flex:none;
+}
+@keyframes rot{to{transform:rotate(360deg)}}
+.mstatus .okc{width:15px;height:15px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;flex:none}
+.mstatus .okc svg{font-size:9px;stroke-width:3.5}
+.mstatus .quiet{color:#B3ACA1}
+
+/* realistic keyboard (windows legends), mac art styling: white keys, soft drop */
+.kb{
+  background:#EDEAE6;border-radius:18px;padding:16px;transform:rotate(-2deg);
+  box-shadow:0 30px 60px rgba(120,40,0,.22);
+  display:flex;flex-direction:column;gap:8px;overflow:hidden;max-width:300px;
+}
+.kb .krow{display:flex;gap:7px}
+.kb .k{
+  background:#fff;border-radius:8px;height:44px;min-width:44px;flex:none;
+  display:grid;place-items:center;font-family:var(--font-ui);font-size:13px;color:#3A3530;
+  box-shadow:0 2px 0 rgba(0,0,0,.07),0 5px 9px rgba(0,0,0,.05);
+}
+.kb .k.sm{font-size:10.5px;color:#6B655D}
+.kb .k.w1{min-width:58px}.kb .k.w2{min-width:74px}
+.kb .k.hot{
+  background:var(--brand);color:#fff;font-weight:700;
+  animation:pressKey 1.8s ease-in-out infinite;box-shadow:0 4px 0 rgba(154,52,0,.5);
+}
+.kb-wrap{position:relative}
+.kb-wrap .cursor{
+  position:absolute;bottom:-12px;left:118px;width:26px;height:26px;z-index:3;
+  filter:drop-shadow(0 3px 5px rgba(0,0,0,.35));
+}
+
+/* first-recording test step */
+.testbox{
+  margin-top:24px;max-width:440px;min-height:96px;border:1px solid var(--lt-stroke);border-radius:8px;
+  background:var(--lt-card);padding:13px 15px;font-size:13.5px;color:var(--lt-ink);line-height:1.6;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.03);
+}
+.testbox .caret{display:inline-block;width:1.5px;height:15px;background:var(--brand);vertical-align:-2px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.testins{margin-top:18px;display:flex;flex-direction:column;gap:9px;font-size:13.5px;color:var(--lt-ink)}
+.testins em{color:var(--lt-sub)}
+.testins .key{font-size:11px;padding:4px 9px}
+
+/* hotkey recorder */
+.hk-rec{
+  margin-top:26px;width:320px;display:flex;align-items:center;justify-content:space-between;
+  border:1.5px dashed #CFC7BD;border-radius:13px;padding:16px 18px;background:var(--lt-card);cursor:pointer;transition:.15s;
+}
+.hk-rec:hover{border-color:var(--brand)}
+.hk-rec .keys{display:flex;gap:6px}
+.key{
+  font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--lt-ink);
+  background:#fff;border:1px solid var(--lt-stroke);border-bottom-width:3px;border-radius:7px;padding:7px 13px;
+}
+.hk-rec .x{color:#B6AEA3;font-size:13px}
+.tip{font-size:11.5px;color:var(--lt-sub);margin-top:14px}
+
+/* color theme step (mac onboarding parity) */
+.cpv{
+  border-radius:16px;background:rgba(0,0,0,.05);height:110px;display:grid;place-items:center;
+  max-width:440px;margin-top:24px;
+}
+.cpill{
+  display:flex;align-items:center;gap:7px;padding:9px 14px;border-radius:99px;background:var(--th,#F16E00);
+  box-shadow:0 8px 14px 0 color-mix(in srgb,var(--th,#F16E00) 28%, transparent);
+  transition:background .28s cubic-bezier(.3,1.1,.4,1),box-shadow .28s ease;
+}
+.cpill .cir{width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.95);display:grid;place-items:center}
+.cpill .cir .xx{font-size:9px;font-weight:800;color:var(--th,#F16E00);transition:color .28s}
+.cpill .cir .sq{width:8px;height:8px;border-radius:2px;background:var(--th,#F16E00);transition:background .28s}
+.cpill .cb{width:4px;border-radius:99px;background:rgba(255,255,255,.92)}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px;max-width:440px}
+.copt{
+  display:flex;align-items:center;gap:10px;cursor:pointer;border:1.5px solid var(--lt-stroke);
+  border-radius:10px;padding:10px 12px;background:var(--lt-card);font-size:13px;font-weight:600;color:var(--lt-ink);
+  transition:.16s;
+}
+.copt .sw{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#fff;flex:none}
+.copt .sw svg{opacity:0;transform:scale(.5);transition:.18s}
+.copt.on{border-color:var(--c)}
+.copt.on .sw svg{opacity:1;transform:scale(1)}
+
+/* sign-in */
+.signin-card{
+  margin-top:26px;max-width:420px;border:1.5px solid var(--ok);background:#F0FAF2;border-radius:14px;
+  padding:16px 18px;display:none;align-items:center;gap:13px;
+}
+.signin-card.show{display:flex;animation:stepIn .3s ease}
+.signin-card .ck{width:34px;height:34px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;font-size:15px;flex:none}
+.signin-card b{font-size:14px;color:var(--lt-ink)}
+.signin-card span{display:block;font-size:12.5px;color:var(--lt-sub)}
+
+/* right-panel illustrations */
+.illus{position:relative;z-index:1;height:100%;display:grid;place-items:center}
+.illus .art{
+  border-radius:18px;background:#fff;
+  box-shadow:0 24px 60px rgba(120,40,0,.25);
+  animation:floaty 5s ease-in-out infinite;
+}
+/* Windows 11 consent dialog mock */
+.windlg{
+  width:250px;background:#F9F9F9;border:1px solid rgba(0,0,0,.09);border-radius:8px;
+  padding:22px 20px 18px;font-family:var(--font-ui);text-align:left;
+  box-shadow:0 24px 60px rgba(120,40,0,.25);animation:floaty 5s ease-in-out infinite;
+}
+.windlg .wd-ico{
+  width:44px;height:44px;border-radius:50%;background:#E8F1FB;color:#0067C0;
+  display:grid;place-items:center;margin-bottom:14px;
+}
+.windlg b{font-size:14px;color:#1B1B1B;line-height:1.35;display:block;font-weight:600}
+.windlg p{font-size:11.5px;color:#5F5F5F;line-height:1.5;margin-top:8px}
+.windlg .wd-acts{display:flex;gap:8px;margin-top:16px}
+.windlg .wd-btn{
+  position:relative;flex:1;text-align:center;font-size:12.5px;font-weight:600;padding:7px 0;border-radius:4px;
+  background:#FFFFFF;border:1px solid rgba(0,0,0,.12);border-bottom-color:rgba(0,0,0,.22);color:#1B1B1B;
+}
+.windlg .wd-btn.primary{background:#0067C0;border-color:rgba(0,0,0,.12);border-bottom-color:rgba(0,0,0,.4);color:#fff}
+.windlg .cursor2{
+  position:absolute;width:22px;height:22px;right:-9px;bottom:-13px;
+  filter:drop-shadow(0 2px 4px rgba(0,0,0,.35));
+}
+.illus .card{
+  background:#fff;border-radius:20px;padding:34px 30px;text-align:center;min-width:210px;
+  box-shadow:0 24px 60px rgba(120,40,0,.25);animation:floaty 5s ease-in-out infinite;
+}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+.illus .big{font-size:52px;line-height:1}
+.illus .cap2{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--lt-ink);margin-top:14px}
+.illus .micring{
+  width:96px;height:96px;margin:0 auto;border-radius:50%;display:grid;place-items:center;font-size:38px;
+  background:linear-gradient(135deg,var(--brand),var(--grad-b));color:#fff;
+  box-shadow:0 0 0 14px rgba(255,255,255,.35),0 0 0 28px rgba(255,255,255,.15);
+}
+.bubbles{position:absolute;inset:0;pointer-events:none;z-index:0}
+.bub{
+  position:absolute;background:#fff;border-radius:14px;padding:8px 16px;font-weight:700;font-size:13.5px;color:var(--lt-ink);
+  box-shadow:0 10px 28px rgba(120,40,0,.18);animation:floaty 6s ease-in-out infinite;
+}
+/* mini keyboard */
+.kbd-illu{display:flex;flex-direction:column;gap:7px;align-items:center}
+.kbd-row{display:flex;gap:7px}
+.kk{
+  width:42px;height:42px;border-radius:9px;background:#fff;display:grid;place-items:center;
+  font-family:var(--font-mono);font-weight:700;font-size:12px;color:var(--lt-ink);
+  box-shadow:0 6px 0 rgba(120,40,0,.18);
+}
+.kk.fn{background:var(--brand);color:#fff;animation:pressKey 1.8s ease-in-out infinite;box-shadow:0 6px 0 rgba(154,52,0,.55)}
+@keyframes pressKey{0%,100%{transform:translateY(0)}12%{transform:translateY(5px);box-shadow:0 1px 0 rgba(154,52,0,.55)}24%{transform:translateY(0)}}
+
+/* ---- Finale: gradient panel expands over the whole window (mac parity) ----
+   Phases mirror macOS OnboardingView: 1 panel expands (spring .5/.8),
+   2 card scales in (+0.4s), 3 checkmark pops (+0.3s), 4 button (+0.3s). */
+.finale{
+  position:absolute;top:0;right:0;bottom:0;width:350px;z-index:5;
+  background:linear-gradient(168deg,var(--grad-a),#FFB45E 45%,var(--grad-b));
+  display:grid;place-items:center;pointer-events:none;opacity:0;visibility:hidden;
+  transition:width .55s cubic-bezier(.3,1.18,.35,1);
+}
+.finale.armed{opacity:1;visibility:visible;pointer-events:auto}
+.finale.p1{width:100%}
+.finale .card{
+  background:#fff;border-radius:22px;padding:44px 54px;text-align:center;max-width:400px;
+  box-shadow:0 34px 90px rgba(120,40,0,.3);
+  opacity:0;transform:scale(.8);
+  transition:all .42s cubic-bezier(.32,1.25,.4,1);
+}
+.finale.p2 .card{opacity:1;transform:scale(1)}
+.finale .ok-ring{
+  width:72px;height:72px;border-radius:50%;background:var(--ok);margin:0 auto 20px;display:grid;place-items:center;
+  color:#fff;box-shadow:0 0 0 10px rgba(59,196,90,.18);
+  transform:scale(0);transition:transform .45s cubic-bezier(.3,1.6,.4,1);
+}
+.finale.p3 .ok-ring{transform:scale(1)}
+.finale h1{
+  font-family:var(--font-display);font-size:29px;font-weight:800;color:var(--lt-ink);letter-spacing:-.03em;
+  opacity:0;transition:opacity .35s ease .05s;
+}
+.finale p{color:var(--lt-sub);font-size:13.5px;margin:12px 0 26px;line-height:1.6;opacity:0;transition:opacity .35s ease .1s}
+.finale.p3 h1,.finale.p3 p{opacity:1}
+.finale .btn{opacity:0;transform:scale(.9);transition:all .3s ease-out}
+.finale.p4 .btn{opacity:1;transform:scale(1)}
+.finale .replay{
+  position:absolute;bottom:14px;right:16px;font-family:var(--font-mono);font-size:10px;color:rgba(120,40,0,.55);
+  cursor:pointer;letter-spacing:.08em;text-transform:uppercase;opacity:0;transition:opacity .3s ease 1.4s;
+}
+.finale.p4 .replay{opacity:1}
+
+/* ============================================================
+   2 — SETTINGS  (720 × 560) — Windows 11 Settings app pattern:
+   transparent nav on Mica, selection pill with accent bar,
+   content as full-width setting cards (icon · text · control).
+   ============================================================ */
+.settings{width:720px;height:560px;display:flex;flex-direction:column}
+.set-body{flex:1;display:flex;min-height:0}
+.set-side{
+  width:186px;flex:none;background:transparent;
+  padding:8px 6px;display:flex;flex-direction:column;gap:2px;
+}
+.set-item{
+  position:relative;display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:5px;cursor:pointer;
+  color:var(--ink);font-size:13px;font-weight:400;transition:.12s;
+}
+.set-item:hover{background:rgba(255,255,255,.055)}
+.set-item.on{background:rgba(255,255,255,.06)}
+.set-item.on::before{
+  content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:16px;border-radius:2px;background:var(--brand);
+}
+.set-item .ic{font-size:15px;color:var(--ink-2)}
+.set-item.on .ic{color:var(--brand)}
+.set-side .grow{flex:1}
+.set-side .ver{font-family:var(--font-mono);font-size:9.5px;color:var(--ink-3);padding:0 12px 6px}
+.set-main{flex:1;overflow:auto;padding:18px 26px 24px 14px}
+.set-main h3{font-family:var(--font-ui);font-weight:600;font-size:24px;letter-spacing:0;margin-bottom:16px}
+/* Win11 setting card row */
+.srow{
+  display:flex;align-items:center;gap:14px;
+  background:var(--bg1);border:1px solid var(--stroke);border-radius:6px;
+  padding:12px 16px;margin-bottom:5px;min-height:54px;
+}
+.srow:hover{background:var(--bg2)}
+.srow .sic{font-size:17px;color:var(--ink-2);flex:none}
+.srow .tx{flex:1;min-width:0}
+.srow .tx b{font-size:13.5px;font-weight:400;display:block;color:var(--ink)}
+.srow .tx p{font-size:11.5px;color:var(--ink-2);margin-top:2px;line-height:1.45}
+.srow.col{flex-direction:column;align-items:stretch;gap:12px}
+.srow.col .head{display:flex;align-items:center;gap:14px}
+.f-label{font-size:13.5px;font-weight:600;color:var(--ink);margin:18px 0 8px}
+.f-desc{font-size:11.5px;color:var(--ink-2);margin-bottom:11px;line-height:1.55}
+.hr{height:1px;background:var(--stroke);margin:20px 0}
+.select{
+  display:flex;justify-content:space-between;align-items:center;width:280px;
+  background:rgba(255,255,255,.06);border:1px solid var(--stroke);border-bottom-color:rgba(0,0,0,.3);
+  border-radius:var(--r-ctl);padding:7px 12px;
+  font-size:13px;color:var(--ink);cursor:pointer;transition:.12s;
+}
+.select:hover{background:rgba(255,255,255,.084)}
+.select span{color:var(--ink-3);font-size:10px}
+/* dark radio cards */
+.dmodes{display:flex;flex-direction:column;gap:8px;max-width:380px}
+.dmode{display:flex;gap:11px;align-items:flex-start;cursor:pointer;border:1px solid var(--stroke);border-radius:var(--r-card);padding:11px 13px;transition:.14s;background:var(--bg1)}
+.dmode:hover{background:var(--bg2)}
+.dmode.on{border-color:var(--brand);background:rgba(241,110,0,.08)}
+/* WinUI radio: accent ring, light center dot */
+.dmode .rb{width:16px;height:16px;flex:none;margin-top:2px;border-radius:50%;border:1px solid var(--ink-3);transition:.14s;background:transparent}
+.dmode.on .rb{border:5px solid var(--brand);background:#fff}
+.dmode b{font-size:13px}
+.dmode p{font-size:11px;color:var(--ink-2);margin-top:2px;line-height:1.5}
+/* Fluent toggle switch (markup unchanged: .check > .bx) */
+.check{display:flex;align-items:center;gap:12px;cursor:pointer;font-size:13px;color:var(--ink);padding:6px 0;user-select:none}
+.check .bx{
+  width:38px;height:19px;border-radius:10px;border:1px solid var(--ink-3);
+  position:relative;flex:none;font-size:0;color:transparent;transition:.15s;background:transparent;
+}
+.check .bx::after{
+  content:"";position:absolute;width:11px;height:11px;border-radius:50%;
+  background:var(--ink-3);left:3px;top:3px;transition:left .15s cubic-bezier(.2,.8,.2,1),background .15s;
+}
+.check:hover .bx::after{transform:scale(1.1)}
+.check.on .bx{background:var(--brand);border-color:var(--brand)}
+.check.on .bx::after{left:22px;background:#fff}
+/* dark lang chips */
+.dlangs{display:flex;flex-wrap:wrap;gap:7px;max-width:420px}
+.dlang{
+  display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;font-weight:600;color:var(--ink-2);
+  border:1px solid var(--stroke);border-radius:var(--r-pill);padding:6px 12px;background:var(--bg1);transition:.14s;
+}
+.dlang.on{background:rgba(241,110,0,.12);border-color:var(--brand);color:#FFC093}
+/* dictionary word chips */
+.words{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;max-width:460px}
+.word{
+  display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink);
+  background:var(--bg1);border:1px solid var(--stroke);border-radius:var(--r-pill);padding:6px 8px 6px 13px;
+}
+.word i{
+  font-style:normal;font-size:9px;color:var(--ink-3);cursor:pointer;width:16px;height:16px;
+  display:grid;place-items:center;border-radius:50%;transition:.12s;
+}
+.word i:hover{background:rgba(229,72,77,.18);color:var(--err)}
+
+/* rules list */
+.rule{
+  display:flex;align-items:center;gap:11px;background:var(--bg1);border:1px solid var(--stroke);
+  border-radius:9px;padding:10px 12px;margin-bottom:6px;transition:.13s;
+}
+.rule:hover{border-color:var(--ink-3)}
+.rule .tx b{font-size:12.5px;display:block}
+.rule .tx span{font-size:11px;color:var(--ink-2)}
+.rule .del{margin-left:auto;color:var(--ink-3);cursor:pointer;font-size:13px;padding:4px 7px;border-radius:6px;opacity:0;transition:.13s}
+.rule:hover .del{opacity:1}
+.rule .del:hover{color:var(--err);background:rgba(229,72,77,.12)}
+.addrow{display:flex;gap:7px;margin-top:9px}
+.addrow input{
+  flex:1;background:rgba(255,255,255,.06);border:1px solid var(--stroke);border-radius:var(--r-ctl);color:var(--ink);
+  font-family:var(--font-ui);font-size:12.5px;padding:8px 12px;outline:none;
+  border-bottom-color:rgba(255,255,255,.35);
+}
+.addrow input::placeholder{color:var(--ink-3)}
+.addrow input:focus{border-bottom:2px solid var(--brand);padding-bottom:7px}
+.addrow .btn{padding:8px 18px;font-size:12.5px}
+/* hotkey rows (dark) */
+.dhk{
+  display:flex;align-items:center;gap:10px;background:var(--bg1);border:1px solid var(--stroke);
+  border-radius:10px;padding:13px 15px;max-width:380px;
+}
+.dkey{
+  font-family:var(--font-mono);font-size:12.5px;font-weight:700;color:var(--ink);
+  background:var(--bg2);border:1px solid var(--stroke);border-bottom-width:3px;border-radius:6px;padding:5px 11px;
+}
+.dhk .hint{font-size:11px;color:var(--ink-3);margin-left:auto}
+/* overlay color swatches */
+.swatches{display:flex;gap:9px}
+.swc{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:.14s;position:relative}
+.swc.on{border-color:#fff;transform:scale(1.12);box-shadow:0 0 0 3px rgba(255,255,255,.15)}
+/* account */
+.acct{
+  border:1px solid var(--stroke);background:linear-gradient(160deg,var(--bg1),var(--bg2));
+  border-radius:14px;padding:18px;max-width:400px;
+}
+.acct .row{display:flex;align-items:center;gap:13px}
+.acct .av{
+  width:42px;height:42px;border-radius:50%;flex:none;display:grid;place-items:center;color:#fff;font-weight:800;font-size:16px;
+  font-family:var(--font-display);background:linear-gradient(135deg,var(--brand),var(--grad-b));
+}
+.acct b{font-size:14px}
+.acct .plan{
+  font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--brand);
+  border:1px solid var(--brand);border-radius:99px;padding:2px 9px;margin-left:8px;vertical-align:2px;
+}
+.acct .em{font-size:11.5px;color:var(--ink-2)}
+.usage{margin-top:15px}
+.usage .lbl{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--ink-2);margin-bottom:6px}
+.usage .track{height:7px;border-radius:99px;background:var(--bg0);overflow:hidden}
+.usage .fill{height:100%;width:31%;background:linear-gradient(90deg,var(--brand),var(--grad-b));border-radius:99px}
+.acct .acts{display:flex;gap:9px;margin-top:16px}
+.acct .acts .btn{font-size:12px;padding:9px 16px;border-radius:8px}
+.signed-out{max-width:400px;text-align:left}
+
+/* ============================================================
+   3 — HISTORY  (800 × 560)
+   ============================================================ */
+.history{width:800px;height:560px;display:flex;flex-direction:column}
+.h-tools{display:flex;gap:10px;padding:14px 18px;border-bottom:1px solid var(--stroke)}
+.search{
+  flex:1;display:flex;align-items:center;gap:9px;background:var(--bg1);border:1px solid var(--stroke);
+  border-radius:9px;padding:9px 13px;color:var(--ink-3);font-size:12.5px;
+}
+.search input{flex:1;background:none;border:none;outline:none;color:var(--ink);font-family:var(--font-body);font-size:12.5px}
+.search input::placeholder{color:var(--ink-3)}
+.h-list{flex:1;overflow:auto;padding:8px 10px}
+.h-date{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);padding:13px 10px 7px}
+.h-row{
+  display:flex;gap:14px;align-items:flex-start;border-radius:10px;padding:12px;transition:.13s;position:relative;
+  cursor:pointer;
+}
+.h-row:hover{background:var(--bg1)}
+.h-row.menu-open{background:var(--bg1)}
+/* click flyout: copy / re-transcribe cloud / on-device */
+.hmenu{
+  position:absolute;right:16px;top:38px;z-index:6;min-width:218px;display:none;
+  background:#2E2E2E;border:1px solid var(--stroke-hi);border-radius:8px;padding:5px;
+  box-shadow:0 14px 36px rgba(0,0,0,.55);
+}
+.h-row.menu-open .hmenu{display:block;animation:stepIn .14s ease}
+.hmenu .mi{
+  display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:5px;
+  font-size:12.5px;color:var(--ink);cursor:pointer;transition:.1s;
+}
+.hmenu .mi:hover{background:rgba(255,255,255,.08)}
+.hmenu .mi svg{color:var(--ink-2);font-size:13px}
+.h-meta{flex:none;width:92px}
+.h-meta .tm{font-size:12px;font-weight:700;color:var(--ink)}
+.h-meta .du{font-family:var(--font-mono);font-size:10px;color:var(--ink-3);margin-top:3px}
+.h-meta .du b{color:var(--brand);font-weight:500}
+.h-txt{flex:1;font-size:12.5px;color:var(--ink-2);line-height:1.6;padding-right:60px}
+.h-row:hover .h-txt{color:var(--ink)}
+.h-acts{position:absolute;right:10px;top:10px;display:flex;gap:4px;opacity:0;transition:.15s;transform:translateX(4px)}
+.h-row:hover .h-acts{opacity:1;transform:none}
+.h-acts span{
+  width:27px;height:27px;display:grid;place-items:center;border-radius:7px;cursor:pointer;font-size:12px;
+  background:var(--bg2);border:1px solid var(--stroke);color:var(--ink-2);transition:.12s;
+}
+.h-acts span:hover{color:var(--ink);border-color:var(--ink-3)}
+.h-acts span.d:hover{color:var(--err);border-color:var(--err)}
+.h-foot{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--stroke);padding:11px 18px}
+.h-foot .ct{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-3)}
+.h-foot .clear{font-size:11.5px;color:var(--err);cursor:pointer;font-weight:600;opacity:.85}
+.h-foot .clear:hover{opacity:1}
+.fail-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--err);margin-right:6px}
+
+/* ============================================================
+   4 — OVERLAY  (desktop strip)
+   ============================================================ */
+.desktop{
+  border-radius:14px;overflow:hidden;position:relative;height:190px;width:100%;
+  background:linear-gradient(140deg,#1B3A5C,#0E1E33 55%,#311B4A);
+  border:1px solid rgba(255,255,255,.08);
+  display:grid;place-items:end center;padding-bottom:26px;
+}
+.desktop .wall{position:absolute;inset:0;background:radial-gradient(500px 240px at 70% 10%,rgba(120,170,255,.25),transparent 60%)}
+.desktop .cap3{position:absolute;top:12px;left:16px;font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,.4);letter-spacing:.1em;text-transform:uppercase}
+/* Morphing pill — mirrors macOS RecordingOverlayView:
+   collapsed idle strip ⇄ accent capsule; morph cubic-bezier(.2,.8,.2,1) .26s,
+   content fades .14s. No text labels — pure graphic. */
+.mpill{
+  position:relative;z-index:2;display:flex;align-items:center;justify-content:center;
+  width:118px;height:32px;border-radius:99px;background:var(--brand);
+  box-shadow:0 4px 16px rgba(0,0,0,.35),0 1px 4px rgba(0,0,0,.3);cursor:pointer;
+  transition:width .26s cubic-bezier(.2,.8,.2,1),height .26s cubic-bezier(.2,.8,.2,1),
+             background .2s ease,box-shadow .2s ease;
+}
+.mpill.collapsed{
+  width:53px;height:7px;background:rgba(120,110,97,.94);
+  box-shadow:0 1px 3px rgba(0,0,0,.35),inset 0 0 0 .75px rgba(255,255,255,.24);
+}
+.mpill.wide{width:160px;justify-content:space-between;padding:0 5px}
+.mpill.cmd{background:#2F6BFF}
+.mpill .inner{display:flex;align-items:center;justify-content:center;gap:6px;opacity:1;transition:opacity .14s ease .1s}
+.mpill.collapsed .inner{opacity:0;transition-delay:0s}
+/* mac OverlayWaveMetrics: 10 elements, 4px wide, 4.75px gaps, max bar 13.5px */
+.idots{display:flex;gap:4.75px;align-items:center}
+.idots i{width:4px;height:4px;border-radius:99px;background:rgba(255,255,255,.92)}
+.bars{display:flex;gap:4.75px;align-items:center;height:22px}
+.bars i{width:4px;border-radius:2px;background:rgba(255,255,255,.95);animation:eq 1s ease-in-out infinite}
+@keyframes eq{0%,100%{height:4px}50%{height:var(--h,13px)}}
+/* processing: 10-dot lit-range sweep (driven by JS, mirrors OverlayLoadingDotsView) */
+.ldots{display:flex;gap:4.75px;align-items:center}
+.ldots i{width:4px;height:4px;border-radius:50%;background:rgba(255,255,255,.72);opacity:.28;transition:opacity .1s linear}
+.ldots i.lit{opacity:1}
+.cbtn{
+  width:22px;height:22px;flex:none;border-radius:50%;display:grid;place-items:center;color:#fff;cursor:pointer;
+  transition:.12s;
+}
+.cbtn.cancel{background:rgba(255,255,255,.18)}
+.cbtn.cancel:hover{background:rgba(255,255,255,.28);transform:scale(1.06)}
+.cbtn.stop{background:rgba(0,0,0,.28)}
+.cbtn.stop:hover{background:rgba(0,0,0,.4);transform:scale(1.06)}
+.cbtn .sq{width:8px;height:8px;border-radius:2px;background:#fff}
+.cbtn .xx{font-size:10px;font-weight:800;line-height:1}
+
+/* footer */
+.foot{margin-top:110px;border-top:1px solid rgba(255,255,255,.07);padding-top:26px;display:flex;justify-content:space-between;color:var(--ink-3);font-size:11.5px}
+.foot code{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-2)}
+
+@media (max-width:1100px){ main{padding:40px 26px} .onb,.onb-complete{transform:scale(.78);transform-origin:top left} }
+</style>
+</head>
+<body>
+
+<!-- Icon sprite — Lucide-style 24×24 strokes -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19a4.5 4.5 0 1 0-.42-8.98 6 6 0 1 0-11.06 3.1A3.5 3.5 0 0 0 7 19h10.5z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></symbol>
+    <symbol id="i-type" viewBox="0 0 24 24"><path d="M4 7V5h16v2"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="9" y1="19" x2="15" y2="19"/></symbol>
+    <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 13h0M10 13h0M14 13h0M18 13h0M8 16h8"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="4 12.5 9.5 18 20 6"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a13.5 13.5 0 0 1 0 18 13.5 13.5 0 0 1 0-18z"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.85a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01A1.7 1.7 0 0 0 10.05 3V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56h.01a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.05z"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 11 14 11 22 21 10 13 10 13 2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></symbol>
+    <symbol id="i-rules" viewBox="0 0 24 24"><path d="M4 6h12"/><path d="M4 12h8"/><path d="M4 18h6"/><polyline points="14 17 16.5 19.5 21 14.5"/></symbol>
+  </defs>
+</svg>
+
+<aside class="rail">
+  <div class="logo">
+    <div class="dot"><svg class="ic" style="color:#fff;font-size:15px"><use href="#i-mic"/></svg></div>
+    <div><b>AIDictation</b><span>Windows · UI Spec</span></div>
+  </div>
+  <nav>
+    <a href="#tokens">Design tokens <small>00</small></a>
+    <a href="#onboarding">Onboarding <small>01</small></a>
+    <a href="#settings">Settings <small>02</small></a>
+    <a href="#overlay">Overlay <small>03</small></a>
+  </nav>
+  <div class="sep"></div>
+  <p class="note">Every screen is interactive — click through onboarding steps, switch settings sections, hover history rows. Tokens map 1:1 to WPF resource keys.</p>
+</aside>
+
+<main>
+  <div class="hero">
+    <h1>One voice.<br>Every <em>window.</em></h1>
+    <p>The complete interface specification for AIDictation on Windows — unified around the brand gradient and warm graphite, replacing the current purple/orange split. Sizes match the real WPF windows.</p>
+    <div class="meta">
+      <span class="chip">WPF · net8.0-windows</span>
+      <span class="chip">Onboarding 900×580</span>
+      <span class="chip">Settings 650×550</span>
+      <span class="chip">Overlay pill</span>
+    </div>
+  </div>
+
+  <!-- ================= 00 TOKENS ================= -->
+  <section id="tokens">
+    <div class="sec-head"><span class="num">00</span><h2>Design tokens</h2></div>
+    <p class="sec-sub">Single accent — brand orange — across both light (onboarding) and dark (app) themes. The yellow→pink gradient is reserved for brand moments: onboarding panels, the logo, progress fills.</p>
+    <div class="tokens">
+      <div class="tok"><div class="sw" style="background:#F16E00"></div><div class="nm">PrimaryBrush</div><div class="hx">#F16E00</div></div>
+      <div class="tok"><div class="sw" style="background:#FF8A1F"></div><div class="nm">PrimaryHover</div><div class="hx">#FF8A1F</div></div>
+      <div class="tok"><div class="sw" style="background:linear-gradient(135deg,#FFED46,#FF7EC7)"></div><div class="nm">BrandGradient</div><div class="hx">#FFED46→#FF7EC7</div></div>
+      <div class="tok"><div class="sw" style="background:#151210"></div><div class="nm">Background</div><div class="hx">#151210</div></div>
+      <div class="tok"><div class="sw" style="background:#1D1916"></div><div class="nm">Surface</div><div class="hx">#1D1916</div></div>
+      <div class="tok"><div class="sw" style="background:#282320"></div><div class="nm">SurfaceHover</div><div class="hx">#282320</div></div>
+      <div class="tok"><div class="sw" style="background:#38312A"></div><div class="nm">Border</div><div class="hx">#38312A</div></div>
+      <div class="tok"><div class="sw" style="background:#F5EFE7"></div><div class="nm">TextPrimary</div><div class="hx">#F5EFE7</div></div>
+      <div class="tok"><div class="sw" style="background:#A99F92"></div><div class="nm">TextSecondary</div><div class="hx">#A99F92</div></div>
+      <div class="tok"><div class="sw" style="background:#3BC45A"></div><div class="nm">Success</div><div class="hx">#3BC45A</div></div>
+      <div class="tok"><div class="sw" style="background:#E5484D"></div><div class="nm">Error</div><div class="hx">#E5484D</div></div>
+    </div>
+    <div class="type-row">
+      <div class="t-display">Figtree — brand font, titles &amp; UI</div>
+      <div class="t-body">Figtree 400/500 — body &amp; controls (ship the font with the app)</div>
+      <div class="t-mono">JetBrains Mono — hotkeys · timers · meta</div>
+    </div>
+  </section>
+
+  <!-- ================= 01 ONBOARDING ================= -->
+  <section id="onboarding">
+    <div class="sec-head"><span class="num">01</span><h2>Onboarding</h2></div>
+    <p class="sec-sub">Six steps, split layout with the gradient panel; the final step goes full-gradient. Click <code>Next</code> / <code>Back</code> to walk the real flow — the mode cards, language chips and sign-in state are live.</p>
+
+    <div class="stage">
+      <div class="stack">
+        <div class="window light onb" id="onbWin">
+          <div class="titlebar"><div class="app-ico"></div><span class="t">AIDictation Setup</span>
+            <div class="caption"><span>—</span><span class="x">✕</span></div></div>
+          <div class="onb-body">
+            <div class="onb-left">
+              <div class="dots" id="dots"></div>
+
+              <!-- step 0: mic -->
+              <div class="step" data-step="0">
+                <h1>Microphone<br>Access</h1>
+                <p class="sub">AIDictation needs your microphone to record and transcribe your voice. Windows will ask once.</p>
+                <div style="margin-top:26px"><button class="btn btn-brand">Open Windows Settings</button></div>
+              </div>
+
+              <!-- step 1: languages -->
+              <div class="step" data-step="1" hidden>
+                <h1>Your languages</h1>
+                <p class="sub">Pick every language you dictate in — or let auto-detect figure it out.</p>
+                <div class="langs" id="langs"></div>
+              </div>
+
+              <!-- step 2: transcription mode (mac rows: radio · text · speed/quality stars) -->
+              <div class="step" data-step="2" hidden>
+                <h1>How should we<br>transcribe?</h1>
+                <p class="sub">You can change this anytime in Settings.</p>
+                <div class="mrows" id="mrows">
+                  <div class="mrow on" data-mode="cloud">
+                    <span class="mck"><svg class="ic"><use href="#i-check"/></svg></span>
+                    <div class="mtx"><b>Cloud</b><p>Best accuracy, requires internet</p></div>
+                    <div class="stars">
+                      <div><span>Speed</span><b class="on">★</b><b class="on">★</b><b class="on">★</b><b>★</b></div>
+                      <div><span>Quality</span><b class="on">★</b><b class="on">★</b><b class="on">★</b><b class="on">★</b></div>
+                    </div>
+                  </div>
+                  <div class="mrow" data-mode="local">
+                    <span class="mck"><svg class="ic"><use href="#i-check"/></svg></span>
+                    <div class="mtx"><b>On-device</b><p>Private — audio never leaves this PC</p></div>
+                    <div class="stars">
+                      <div><span>Speed</span><b class="on">★</b><b class="on">★</b><b class="on">★</b><b class="on">★</b></div>
+                      <div><span>Quality</span><b class="on">★</b><b class="on">★</b><b class="on">★</b><b>★</b></div>
+                    </div>
+                  </div>
+                  <div class="mrow" data-mode="auto">
+                    <span class="mck"><svg class="ic"><use href="#i-check"/></svg></span>
+                    <div class="mtx"><b>Automatic</b><p>Cloud when online, on-device when offline</p></div>
+                    <div class="stars">
+                      <div><span>Speed</span><b class="on">★</b><b class="on">★</b><b class="on">★</b><b class="on">★</b></div>
+                      <div><span>Quality</span><b class="on">★</b><b class="on">★</b><b class="on">★</b><b class="on">★</b></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="mstatus" id="mstatus">
+                  <span class="quiet">Offline model downloads on first use (~470 MB)</span>
+                </div>
+              </div>
+
+              <!-- step 4: hotkey -->
+              <div class="step" data-step="4" hidden>
+                <h1>Recording<br>Hotkey</h1>
+                <p class="sub">Press it anywhere on your PC to start and stop dictating.</p>
+                <div class="hk-rec"><div class="keys"><span class="key">F8</span></div><span class="x">✕ reset</span></div>
+                <p class="tip">Tip: function keys (F1–F12) work best — other apps rarely use them.</p>
+              </div>
+
+              <!-- step 3: overlay color -->
+              <div class="step" data-step="3" hidden>
+                <h1>Make it yours</h1>
+                <p class="sub">Pick the accent for the recording pill. You can change it later in Settings → Overlay.</p>
+                <div class="cgrid" id="cgrid"></div>
+              </div>
+
+              <!-- step 5: first recording (test) -->
+              <div class="step" data-step="5" hidden>
+                <h1>Try your first<br>recording</h1>
+                <p class="sub">Click into the box, then dictate hands-free.</p>
+                <div class="testbox" id="testbox"><span class="caret"></span></div>
+                <div class="testins">
+                  <div>Hold <span class="key">F8</span></div>
+                  <div>Say: <em>“This is my first recording.”</em></div>
+                  <div>Release when you are done</div>
+                </div>
+              </div>
+
+              <!-- step 6: sign in -->
+              <div class="step" data-step="6" hidden>
+                <h1>Sign in to<br>your account</h1>
+                <p class="sub">Free account includes cloud transcription and keeps your plan in sync across devices. Opens in your browser.</p>
+                <div style="margin-top:26px"><button class="btn btn-brand" id="signinBtn">Sign In with Browser</button></div>
+                <div class="signin-card" id="signinCard">
+                  <div class="ck"><svg class="ic" style="font-size:14px;stroke-width:3"><use href="#i-check"/></svg></div>
+                  <div><b>Signed in</b><span>hello@writingmate.ai</span></div>
+                </div>
+                <p class="tip">You can also do this later from Settings → Account.</p>
+              </div>
+
+              <div class="onb-nav">
+                <button class="btn btn-ghost" id="backBtn">Back</button>
+                <button class="btn btn-brand" id="nextBtn">Next</button>
+              </div>
+            </div>
+
+            <div class="onb-right">
+              <!-- per-step right panel — real macOS onboarding artwork where available -->
+              <div class="illus" data-illu="0">
+                <!-- Windows 11 microphone consent dialog (recreated) -->
+                <div class="windlg">
+                  <div class="wd-ico"><svg class="ic" style="font-size:22px;stroke-width:1.8"><use href="#i-mic"/></svg></div>
+                  <b>Let AIDictation access your microphone?</b>
+                  <p>AIDictation needs your microphone to record audio for transcription. You can change this later in Privacy settings.</p>
+                  <div class="wd-acts">
+                    <span class="wd-btn primary">Yes<svg class="cursor2" viewBox="0 0 24 24"><path d="M5 3l14 9-6.5 1.5L16 20l-3 1.4-3.4-6.6L5 19V3z" fill="#fff" stroke="#1B1B1B" stroke-width="1.4"/></svg></span>
+                    <span class="wd-btn">No</span>
+                  </div>
+                </div>
+              </div>
+              <div class="illus" data-illu="1" hidden>
+                <img class="art" src="prototype-assets/languages.png" alt="" style="max-width:280px">
+              </div>
+              <div class="illus" data-illu="2" hidden>
+                <div class="card"><div class="big" style="color:var(--brand)"><svg class="ic" style="font-size:54px;stroke-width:1.6" id="modeIcon"><use href="#i-cloud"/></svg></div><div class="cap2">Your voice, your choice</div></div>
+              </div>
+              <div class="illus" data-illu="3" hidden>
+                <div class="card" style="padding:30px 26px">
+                  <!-- mac overlayColorPreview: ✕ circle · 10 capsules · ■ circle on theme -->
+                  <div class="cpill" id="cpill">
+                    <span class="cir"><span class="xx">✕</span></span>
+                    <span class="cb" style="height:5px"></span><span class="cb" style="height:12px"></span>
+                    <span class="cb" style="height:17px"></span><span class="cb" style="height:12px"></span>
+                    <span class="cb" style="height:19px"></span><span class="cb" style="height:17px"></span>
+                    <span class="cb" style="height:21px"></span><span class="cb" style="height:20px"></span>
+                    <span class="cb" style="height:12px"></span><span class="cb" style="height:5px"></span>
+                    <span class="cir"><span class="sq"></span></span>
+                  </div>
+                  <div class="cap2" style="margin-top:20px">Lives quietly at the<br>edge of your screen</div>
+                </div>
+              </div>
+              <div class="illus" data-illu="4" hidden>
+                <!-- realistic keyboard, mac art style with Windows function row -->
+                <div class="kb-wrap">
+                  <!-- keyboard crop, F8 top-right under the cursor (mac art style) -->
+                  <div class="kb">
+                    <div class="krow">
+                      <span class="k sm">F4</span><span class="k sm">F5</span><span class="k sm">F6</span><span class="k sm">F7</span><span class="k hot">F8</span>
+                    </div>
+                    <div class="krow">
+                      <span class="k">4</span><span class="k">5</span><span class="k">6</span><span class="k">7</span><span class="k">8</span>
+                    </div>
+                    <div class="krow">
+                      <span class="k">R</span><span class="k">T</span><span class="k">Y</span><span class="k">U</span><span class="k">I</span>
+                    </div>
+                    <div class="krow">
+                      <span class="k">F</span><span class="k">G</span><span class="k">H</span><span class="k">J</span><span class="k">K</span>
+                    </div>
+                  </div>
+                  <svg class="cursor" viewBox="0 0 24 24" style="left:auto;right:8px;top:44px;bottom:auto">
+                    <path d="M5 3l14 9-6.5 1.5L16 20l-3 1.4-3.4-6.6L5 19V3z" fill="#fff" stroke="#1B1B1B" stroke-width="1.4"/>
+                  </svg>
+                </div>
+              </div>
+              <div class="illus" data-illu="5" hidden>
+                <img class="art" src="prototype-assets/dictation.png" alt="" style="max-width:270px">
+              </div>
+              <div class="illus" data-illu="6" hidden>
+                <div class="card"><div class="big" style="color:var(--brand)"><svg class="ic" style="font-size:54px;stroke-width:1.6"><use href="#i-user"/></svg></div><div class="cap2">One account,<br>every device</div></div>
+              </div>
+            </div>
+
+            <!-- Finale: the gradient panel grows over the whole window, mac-style -->
+            <div class="finale" id="finale">
+              <div class="card">
+                <div class="ok-ring"><svg class="ic" style="font-size:32px;stroke-width:3"><use href="#i-check"/></svg></div>
+                <h1>You're ready</h1>
+                <p>Press <b style="font-family:var(--font-mono);font-size:12px">F8</b> in any app to start dictating. AIDictation lives in your system tray.</p>
+                <button class="btn btn-brand" style="padding:13px 38px">Let's Go!</button>
+              </div>
+              <span class="replay" id="finaleReplay">↻ replay</span>
+            </div>
+          </div>
+        </div>
+        <span class="cap">steps 0–5 · 900 × 580 · <b>interactive — click Finish on the last step</b></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 02 SETTINGS ================= -->
+  <section id="settings">
+    <div class="sec-head"><span class="num">02</span><h2>Settings</h2></div>
+    <p class="sec-sub">Standard Windows 11 Settings anatomy: Mica window, transparent nav with the accent selection bar, setting cards (icon · label · control), Fluent toggles, 4px controls on 8px surfaces, Segoe UI. Accent stays brand orange. Click through the nav — both account states included.</p>
+
+    <div class="stage">
+      <div class="stack">
+        <div class="window settings">
+          <div class="titlebar"><div class="app-ico"></div><span class="t">Settings — AIDictation</span>
+            <div class="caption"><span>—</span><span>▢</span><span class="x">✕</span></div></div>
+          <div class="set-body">
+            <div class="set-side" id="setSide">
+              <div class="set-item on" data-sec="account"><svg class="ic"><use href="#i-user"/></svg>Account</div>
+              <div class="set-item" data-sec="audio"><svg class="ic"><use href="#i-mic"/></svg>Audio</div>
+              <div class="set-item" data-sec="language"><svg class="ic"><use href="#i-globe"/></svg>Language</div>
+              <div class="set-item" data-sec="dictionary"><svg class="ic"><use href="#i-book"/></svg>Dictionary</div>
+              <div class="set-item" data-sec="shortcuts"><svg class="ic"><use href="#i-zap"/></svg>Shortcuts</div>
+              <div class="set-item" data-sec="config"><svg class="ic"><use href="#i-gear"/></svg>Configuration</div>
+              <div class="set-item" data-sec="history"><svg class="ic"><use href="#i-clock"/></svg>History</div>
+              <div class="grow"></div>
+              <div class="ver">v0.0.1 · win-x64</div>
+            </div>
+
+            <div class="set-main">
+              <!-- CONFIGURATION (hotkey, push-to-talk, transcription mode, overlay, startup, updates) -->
+              <div class="sec-pane" data-pane="config" hidden>
+                <h3>Configuration</h3>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-kbd"/></svg>
+                  <div class="tx"><b>Dictation Hotkey</b><p>Shortcut to start and stop dictation</p></div>
+                  <span class="dkey">F8</span>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Push to Talk</b><p>Hold the hotkey to record, release to insert</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-cloud"/></svg>
+                  <div class="tx"><b>Transcription Mode</b><p>Choose how your voice is transcribed</p></div>
+                  <div class="select" style="width:150px">Cloud <span>▼</span></div>
+                </div>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-dot"/></svg>
+                  <div class="tx"><b>Show Overlay When Idle</b><p>Display the overlay even when not recording</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Overlay Color</b><p>Accent color for the recording overlay</p></div>
+                  <div class="swatches">
+                    <span class="swc on" style="background:#F16E00"></span>
+                    <span class="swc" style="background:#3B82F6"></span>
+                    <span class="swc" style="background:#3BC45A"></span>
+                    <span class="swc" style="background:#A855F7"></span>
+                    <span class="swc" style="background:#FF7EC7"></span>
+                    <span class="swc" style="background:#6E6E6E"></span>
+                  </div>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Overlay Position</b><p>Where the recording indicator appears</p></div>
+                  <div class="select" style="width:150px">Bottom <span>▼</span></div>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Start with Windows</b><p>Automatically start when you sign in</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>App Updates</b><p>Current version 0.0.1</p></div>
+                  <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 14px">Check for Updates</button>
+                </div>
+              </div>
+
+              <!-- AUDIO (mac: input device and audio settings) -->
+              <div class="sec-pane" data-pane="audio" hidden>
+                <h3>Audio</h3>
+                <div class="srow">
+                  <svg class="ic sic"><use href="#i-mic"/></svg>
+                  <div class="tx"><b>Input device</b><p>Microphone used for dictation</p></div>
+                  <div class="select" style="width:220px">Default — Realtek HD Audio <span>▼</span></div>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Mute system audio while recording</b><p>Pause music and videos while you dictate</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+                <div class="srow">
+                  <div class="tx"><b>Smart cleanup</b><p>AI fixes punctuation, stutters and obvious errors</p></div>
+                  <span class="check on"><span class="bx">✓</span></span>
+                </div>
+              </div>
+
+              <!-- LANGUAGE -->
+              <div class="sec-pane" data-pane="language" hidden>
+                <h3>Language</h3>
+                <div class="f-desc" style="margin-top:0">Select one or more — auto-detect works well for most people.</div>
+                <div class="dlangs">
+                  <span class="dlang"><span>🌐</span>Auto</span>
+                  <span class="dlang on"><span>🇬🇧</span>English</span>
+                  <span class="dlang on"><span>🇪🇸</span>Spanish</span>
+                  <span class="dlang"><span>🇩🇪</span>German</span>
+                  <span class="dlang"><span>🇫🇷</span>French</span>
+                  <span class="dlang"><span>🇺🇦</span>Ukrainian</span>
+                  <span class="dlang"><span>🇷🇺</span>Russian</span>
+                  <span class="dlang"><span>🇯🇵</span>Japanese</span>
+                  <span class="dlang"><span>🇨🇳</span>Chinese</span>
+                  <span class="dlang"><span>🇮🇹</span>Italian</span>
+                  <span class="dlang"><span>🇵🇱</span>Polish</span>
+                  <span class="dlang" style="border-style:dashed">+ 48 more</span>
+                </div>
+              </div>
+
+              <!-- DICTIONARY: a plain list of words the transcriber should know -->
+              <div class="sec-pane" data-pane="dictionary" hidden>
+                <h3>Dictionary</h3>
+                <div class="f-desc" style="margin-top:0">Names and jargon the transcriber should recognize.</div>
+                <div class="words">
+                  <span class="word">WritingMate<i>✕</i></span>
+                  <span class="word">Supabase<i>✕</i></span>
+                  <span class="word">Parakeet<i>✕</i></span>
+                  <span class="word">Vysotsky<i>✕</i></span>
+                  <span class="word">tailnet<i>✕</i></span>
+                </div>
+                <div class="addrow" style="max-width:380px"><input placeholder="Add a word…"><button class="btn btn-brand">Add</button></div>
+              </div>
+
+              <!-- SHORTCUTS (mac: voice-triggered text expansions) -->
+              <div class="sec-pane" data-pane="shortcuts" hidden>
+                <h3>Shortcuts</h3>
+                <div class="f-desc" style="margin-top:0">Say the trigger — it expands into the full text.</div>
+                <div class="rule"><span class="check on" style="padding:0"><span class="bx">✓</span></span><div class="tx"><b>“my email”</b><span>→ hello@writingmate.ai</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                <div class="rule"><span class="check" style="padding:0"><span class="bx"></span></span><div class="tx"><b>“signature”</b><span>→ Best regards, Artem — WritingMate</span></div><span class="del"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                <div class="addrow"><input placeholder="Voice trigger…"><input placeholder="Expansion text…"><button class="btn btn-brand">Add</button></div>
+              </div>
+
+              <!-- HISTORY: full history lives here (no separate window) -->
+              <div class="sec-pane" data-pane="history" hidden>
+                <h3>History</h3>
+                <div style="display:flex;gap:8px;margin-bottom:6px">
+                  <div class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search transcriptions…"></div>
+                  <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 16px">Export</button>
+                </div>
+                <div class="h-date" style="padding-left:4px">Today</div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">4:32 PM</div><div class="du">12.4s · <b>38 words</b></div></div>
+                  <div class="h-txt">Hey team, quick update on the Windows build — onboarding is fully validated on the runner, all twelve screenshots came back clean.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">2:18 PM</div><div class="du">5.1s · <b>16 words</b></div></div>
+                  <div class="h-txt">Remind me to push the release branch after the installer finishes notarizing tomorrow morning.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">11:03 AM</div><div class="du"><span class="fail-dot"></span>failed</div></div>
+                  <div class="h-txt" style="color:var(--ink-3);font-style:italic">Network error — recording kept, click to retry transcription.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-retry"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="h-date" style="padding-left:4px">Yesterday</div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">6:47 PM</div><div class="du">28.0s · <b>84 words</b></div></div>
+                  <div class="h-txt">Draft for the launch post: AIDictation now ships on Windows with full parity — offline mode, voice shortcuts, a personal dictionary…</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="h-row">
+                  <div class="h-meta"><div class="tm">9:12 AM</div><div class="du">3.3s · <b>9 words</b></div></div>
+                  <div class="h-txt">Buenos días equipo, la demo empieza en diez minutos.</div>
+                  <div class="h-acts"><span><svg class="ic"><use href="#i-copy"/></svg></span><span class="d"><svg class="ic"><use href="#i-trash"/></svg></span></div>
+                </div>
+                <div class="srow" style="margin-top:10px">
+                  <div class="tx"><b>217 recordings</b><p>14,302 words dictated</p></div>
+                  <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 14px;color:var(--err)">Clear All…</button>
+                </div>
+              </div>
+
+              <!-- ACCOUNT (default page; word count at the bottom) -->
+              <div class="sec-pane" data-pane="account">
+                <h3>Account</h3>
+                <div class="acct" id="acctIn">
+                  <div class="row">
+                    <div class="av">A</div>
+                    <div><b>hello@writingmate.ai</b><span class="plan">Free Trial</span><div class="em">Member since June 2026</div></div>
+                  </div>
+                  <div class="acts">
+                    <button class="btn btn-brand">Upgrade to Pro</button>
+                    <button class="btn btn-dark-ghost" id="signOutBtn">Sign Out</button>
+                  </div>
+                </div>
+                <div class="signed-out" id="acctOut" hidden>
+                  <div class="f-label" style="margin-top:0">Sign in to AIDictation</div>
+                  <div class="f-desc">Unlocks cloud transcription, syncs your subscription, tracks monthly usage. Opens in your browser.</div>
+                  <button class="btn btn-brand" id="signInBtn2">Sign In with Browser</button>
+                </div>
+                <div class="srow" style="margin-top:10px;max-width:400px">
+                  <div class="tx"><b>Invite Friends</b><p>Get 2,000 extra words when a friend joins</p></div>
+                  <button class="btn btn-dark-ghost" style="font-size:12px;padding:7px 14px">Copy Link</button>
+                </div>
+                <!-- word count at the bottom -->
+                <div class="srow col" id="usageRow" style="max-width:400px">
+                  <div class="head" style="gap:0">
+                    <div class="tx"><b>Word usage</b><p>Resets July 1</p></div>
+                    <span style="font-family:var(--font-mono);font-size:11px;color:var(--ink-2)">612 / 2,000</span>
+                  </div>
+                  <div class="usage" style="margin-top:0"><div class="track"><div class="fill"></div></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <span class="cap">720 × 560 · win11 settings pattern · <b>interactive</b></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 03 OVERLAY ================= -->
+  <section id="overlay">
+    <div class="sec-head"><span class="num">03</span><h2>Recording overlay</h2></div>
+    <p class="sec-sub">Ported 1:1 from the macOS <code>RecordingOverlayView</code>: a hairline strip when idle that morphs — <code>cubic-bezier(.2,.8,.2,1) · 260ms</code> — into the accent capsule. No text, ever. Content fades in 140ms after the morph; collapse takes 150ms.</p>
+
+    <div class="stack" style="margin-bottom:22px">
+      <div class="desktop" style="height:170px"><div class="wall"></div><span class="cap3">live demo · hover to expand · click to record → stop → processing</span>
+        <div class="mpill collapsed" id="demoPill">
+          <div class="inner" id="demoInner">
+            <div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </div>
+      </div>
+      <span class="cap"><b>interactive</b> — full state machine with the mac morph timing</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px">
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">idle · collapsed</span>
+          <div class="mpill collapsed"></div>
+        </div>
+        <span class="cap">hairline strip — 53×7, muted, 0.75px border</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">idle · hover</span>
+          <div class="mpill"><div class="inner"><div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
+        </div>
+        <span class="cap">expanded — idle dots on accent, click to record</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">recording</span>
+          <div class="mpill"><div class="inner">
+            <div class="bars">
+              <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+              <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i>
+            </div>
+          </div></div>
+        </div>
+        <span class="cap">live waveform — white on accent</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">recording · controls</span>
+          <div class="mpill wide"><div class="cbtn cancel"><span class="xx">✕</span></div>
+            <div class="bars">
+              <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+              <i style="--h:12px;animation-delay:.12s"></i>
+            </div>
+            <div class="cbtn stop"><span class="sq"></span></div></div>
+        </div>
+        <span class="cap">hover while recording — cancel ✕ / stop ■</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">processing</span>
+          <div class="mpill"><div class="inner"><div class="ldots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
+        </div>
+        <span class="cap">10-dot sweep — fills, drains, refills (2.2s cycle)</span>
+      </div>
+      <div class="stack">
+        <div class="desktop" style="height:140px"><div class="wall"></div><span class="cap3">command mode</span>
+          <div class="mpill cmd"><div class="inner">
+            <div class="bars">
+              <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+              <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+              <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i>
+            </div>
+          </div></div>
+        </div>
+        <span class="cap">system blue — AI rewrites selection</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>AIDictation · Windows interface prototype · implements next in <code>AIDictation.Windows</code></span>
+    <span><code>windows-app-prototype.html</code></span>
+  </div>
+</main>
+
+<script>
+/* ---------- Onboarding stepper ---------- */
+const steps=[...document.querySelectorAll('.step')];
+const illus=[...document.querySelectorAll('.illus')];
+const dotsEl=document.getElementById('dots');
+let cur=0;
+const LAST=6;
+for(let i=0;i<=LAST;i++){const d=document.createElement('i');dotsEl.appendChild(d)}
+const dots=[...dotsEl.children];
+function show(n){
+  cur=Math.max(0,Math.min(LAST,n));
+  steps.forEach(s=>s.hidden=+s.dataset.step!==cur);
+  illus.forEach(s=>s.hidden=+s.dataset.illu!==cur);
+  dots.forEach((d,i)=>d.classList.toggle('on',i===cur));
+  document.getElementById('backBtn').style.visibility=cur===0?'hidden':'visible';
+  document.getElementById('nextBtn').textContent=cur===LAST?'Finish':'Next';
+  steps.find(s=>!s.hidden).style.animation='none';
+  requestAnimationFrame(()=>{steps.find(s=>!s.hidden).style.animation=''});
+  if(cur===5) setTimeout(typeTest,700);
+}
+document.getElementById('nextBtn').onclick=()=>{ if(cur===LAST){runFinale()} else show(cur+1) };
+document.getElementById('backBtn').onclick=()=>show(cur-1);
+show(0);
+
+/* ---------- Overlay color themes (mac onboarding parity) ---------- */
+const THEMES=[["Orange","#F16E00"],["Blue","#3B82F6"],["Green","#3BC45A"],["Purple","#A855F7"],["Pink","#FF7EC7"],["Graphite","#6E6E6E"]];
+const cgrid=document.getElementById('cgrid');
+THEMES.forEach(([name,color],i)=>{
+  const el=document.createElement('div');
+  el.className='copt'+(i===0?' on':'');
+  el.style.setProperty('--c',color);
+  el.innerHTML=`<span class="sw" style="background:${color}"><svg class="ic" style="font-size:11px;stroke-width:3"><use href="#i-check"/></svg></span>${name}`;
+  el.onclick=()=>{
+    [...cgrid.children].forEach(x=>x.classList.remove('on'));
+    el.classList.add('on');
+    document.getElementById('cpill').style.setProperty('--th',color);
+    document.querySelectorAll('.mpill:not(.collapsed):not(.cmd)').forEach(p=>p.style.background=color);
+  };
+  cgrid.appendChild(el);
+});
+
+/* ---------- Processing sweep: exact port of OverlayLoadingDotsView ---------- */
+function easeIO(v){return v<.5?2*v*v:1-Math.pow(-2*v+2,2)/2}
+function litRange(p){
+  const last=9;
+  if(p<.32){const l=easeIO(p/.32);return [0,Math.round(l*last)]}
+  if(p<.5){const l=easeIO((p-.32)/.18);return [Math.round(l*last),last]}
+  if(p<.82){const l=easeIO((p-.5)/.32);return [Math.round((1-l)*last),last]}
+  const l=easeIO((p-.82)/.18);return [0,Math.round((1-l)*last)];
+}
+(function sweep(){
+  const t=(performance.now()/1000)%2.2/2.2;
+  const [a,b]=litRange(t);
+  document.querySelectorAll('.ldots').forEach(g=>{
+    [...g.children].forEach((d,i)=>d.classList.toggle('lit',i>=a&&i<=b));
+  });
+  requestAnimationFrame(sweep);
+})();
+
+/* ---------- Finale: mac-style 4-phase completion ---------- */
+const finale=document.getElementById('finale');
+let finaleTimers=[];
+function runFinale(){
+  finaleTimers.forEach(clearTimeout);finaleTimers=[];
+  finale.classList.add('armed');
+  finaleTimers.push(
+    setTimeout(()=>finale.classList.add('p1'),100),   // panel expands (spring .5/.8)
+    setTimeout(()=>finale.classList.add('p2'),500),   // card scales in
+    setTimeout(()=>finale.classList.add('p3'),800),   // checkmark pops
+    setTimeout(()=>finale.classList.add('p4'),1100)   // button reveals
+  );
+}
+document.getElementById('finaleReplay').onclick=()=>{
+  finaleTimers.forEach(clearTimeout);finaleTimers=[];
+  finale.classList.remove('p1','p2','p3','p4');
+  finaleTimers.push(setTimeout(runFinale,600));
+};
+
+/* languages (onboarding) — flag emoji chips (ship Twemoji flags in the WPF build) */
+const LANGS=[["🌐","Auto-detect"],["🇬🇧","English"],["🇪🇸","Spanish"],["🇩🇪","German"],["🇫🇷","French"],["🇺🇦","Ukrainian"],["🇷🇺","Russian"],["🇮🇹","Italian"],["🇵🇱","Polish"],["🇵🇹","Portuguese"],["🇳🇱","Dutch"],["🇯🇵","Japanese"],["🇨🇳","Chinese"],["🇰🇷","Korean"],["🇹🇷","Turkish"],["🇸🇪","Swedish"],["🇨🇿","Czech"],["🇬🇷","Greek"]];
+const langsEl=document.getElementById('langs');
+LANGS.forEach(([c,n],i)=>{
+  const el=document.createElement('span');el.className='lang'+(i===0?' on':'');
+  el.innerHTML=`<span class="fl" style="font-size:14px">${c}</span>${n}`;
+  el.onclick=()=>{
+    if(i===0){[...langsEl.children].forEach((x,j)=>x.classList.toggle('on',j===0));return}
+    el.classList.toggle('on');
+    const any=[...langsEl.children].some((x,j)=>j>0&&x.classList.contains('on'));
+    langsEl.children[0].classList.toggle('on',!any);
+  };
+  langsEl.appendChild(el);
+});
+
+/* transcription mode rows (mac parity) + model status with reserved height */
+const mstatus=document.getElementById('mstatus');
+const MODE_ICON={cloud:'#i-cloud',local:'#i-lock',auto:'#i-globe'};
+let modelReady=false,dlTimer=null;
+document.querySelectorAll('.mrow').forEach(m=>m.onclick=()=>{
+  document.querySelectorAll('.mrow').forEach(x=>x.classList.remove('on'));
+  m.classList.add('on');
+  document.getElementById('modeIcon').querySelector('use').setAttribute('href',MODE_ICON[m.dataset.mode]);
+  clearTimeout(dlTimer);
+  if(m.dataset.mode==='cloud'){
+    mstatus.innerHTML=`<span class="quiet">Offline model downloads on first use (~470 MB)</span>`;
+  }else if(modelReady){
+    mstatus.innerHTML=`<span class="okc"><svg class="ic"><use href="#i-check"/></svg></span>Offline model ready`;
+  }else{
+    mstatus.innerHTML=`<span class="spin2"></span>Downloading offline model…`;
+    dlTimer=setTimeout(()=>{
+      modelReady=true;
+      mstatus.innerHTML=`<span class="okc"><svg class="ic"><use href="#i-check"/></svg></span>Offline model ready`;
+    },2600);
+  }
+});
+
+/* first-recording typing demo */
+let typed=false;
+function typeTest(){
+  if(typed) return; typed=true;
+  const box=document.getElementById('testbox');
+  const text='This is my first recording.';
+  let i=0;
+  (function tick(){
+    box.innerHTML=text.slice(0,i)+'<span class="caret"></span>';
+    if(i++<text.length) setTimeout(tick,55);
+  })();
+}
+
+/* sign-in demo */
+document.getElementById('signinBtn').onclick=e=>{
+  e.target.style.display='none';
+  document.getElementById('signinCard').classList.add('show');
+};
+
+/* ---------- Settings ---------- */
+document.querySelectorAll('.set-item').forEach(it=>it.onclick=()=>{
+  document.querySelectorAll('.set-item').forEach(x=>x.classList.remove('on'));
+  it.classList.add('on');
+  document.querySelectorAll('.sec-pane').forEach(p=>p.hidden=p.dataset.pane!==it.dataset.sec);
+});
+document.querySelectorAll('.dmode').forEach(m=>m.onclick=()=>{
+  document.querySelectorAll('.dmode').forEach(x=>x.classList.remove('on'));m.classList.add('on');
+});
+document.querySelectorAll('.check').forEach(c=>c.onclick=()=>{
+  c.classList.toggle('on');c.querySelector('.bx').textContent=c.classList.contains('on')?'✓':'';
+});
+document.querySelectorAll('.dlang').forEach(l=>l.onclick=()=>l.classList.toggle('on'));
+document.querySelectorAll('.swc').forEach(s=>s.onclick=()=>{
+  document.querySelectorAll('.swc').forEach(x=>x.classList.remove('on'));s.classList.add('on');
+});
+document.getElementById('signOutBtn').onclick=()=>{
+  document.getElementById('acctIn').hidden=true;document.getElementById('acctOut').hidden=false;
+  document.getElementById('usageRow').hidden=true;
+};
+document.getElementById('signInBtn2').onclick=()=>{
+  document.getElementById('acctIn').hidden=false;document.getElementById('acctOut').hidden=true;
+  document.getElementById('usageRow').hidden=false;
+};
+
+/* ---------- History rows: click opens actions (copy / re-transcribe) ---------- */
+const HMENU=`<div class="hmenu">
+  <div class="mi"><svg class="ic"><use href="#i-copy"/></svg>Copy text</div>
+  <div class="mi"><svg class="ic"><use href="#i-cloud"/></svg>Re-transcribe with Cloud</div>
+  <div class="mi"><svg class="ic"><use href="#i-lock"/></svg>Re-transcribe On-device</div>
+</div>`;
+document.querySelectorAll('.h-row').forEach(r=>{
+  r.insertAdjacentHTML('beforeend',HMENU);
+  r.addEventListener('click',e=>{
+    if(e.target.closest('.h-acts')) return;
+    const wasOpen=r.classList.contains('menu-open');
+    document.querySelectorAll('.h-row.menu-open').forEach(x=>x.classList.remove('menu-open'));
+    if(!wasOpen && !e.target.closest('.hmenu')) r.classList.add('menu-open');
+  });
+});
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.h-row')){
+    document.querySelectorAll('.h-row.menu-open').forEach(x=>x.classList.remove('menu-open'));
+  }
+});
+
+/* ---------- Overlay live demo: collapsed ⇄ idle ⇄ recording(+controls) ⇄ processing ---------- */
+const demoPill=document.getElementById('demoPill');
+const demoInner=document.getElementById('demoInner');
+const WAVE=`<div class="bars">
+  <i style="--h:7px;animation-delay:0s"></i><i style="--h:14px;animation-delay:.1s"></i><i style="--h:18px;animation-delay:.2s"></i>
+  <i style="--h:11px;animation-delay:.05s"></i><i style="--h:19px;animation-delay:.25s"></i><i style="--h:16px;animation-delay:.15s"></i>
+  <i style="--h:20px;animation-delay:.3s"></i><i style="--h:12px;animation-delay:.12s"></i><i style="--h:6px;animation-delay:.22s"></i></div>`;
+const WAVE_S=WAVE.replace(/--h:20px[^<]*<\/i>/,'</i>'); // slightly narrower for controls
+const IDLE=`<div class="idots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
+const LOAD=`<div class="ldots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
+let demoState='collapsed'; // collapsed | idle | rec | proc
+function setDemo(state){
+  demoState=state;
+  demoPill.classList.toggle('collapsed',state==='collapsed');
+  demoPill.classList.toggle('wide',state==='rec');
+  if(state==='idle') demoInner.innerHTML=IDLE;
+  if(state==='rec') demoInner.innerHTML=
+    `<div style="display:flex;align-items:center;justify-content:space-between;width:150px">
+       <span class="cbtn cancel"><span class="xx">✕</span></span>${WAVE_S}<span class="cbtn stop"><span class="sq"></span></span>
+     </div>`;
+  if(state==='proc') demoInner.innerHTML=LOAD;
+}
+demoPill.addEventListener('mouseenter',()=>{ if(demoState==='collapsed') setDemo('idle') });
+demoPill.addEventListener('mouseleave',()=>{ if(demoState==='idle') setDemo('collapsed') });
+demoPill.addEventListener('click',e=>{
+  if(demoState==='idle'||demoState==='collapsed'){ setDemo('rec'); return }
+  if(demoState==='rec'){
+    if(e.target.closest('.cancel')){ setDemo('collapsed'); return }
+    setDemo('proc');
+    setTimeout(()=>setDemo('collapsed'),2200);
+  }
+});
+</script>
+</body>
+</html>

@@ -10,7 +10,7 @@
     <ApplicationIcon>..\Assets\app.ico</ApplicationIcon>
     <AssemblyName>AIDictation</AssemblyName>
     <RootNamespace>AIDictation</RootNamespace>
-    <Version>0.0.1</Version>
+    <Version>0.0.4</Version>
     <Authors>WritingMate</Authors>
     <Company>WritingMate</Company>
     <Product>AIDictation</Product>
@@ -23,14 +23,32 @@
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.3" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="Supabase" Version="1.1.1" />
     <PackageReference Include="CredentialManagement" Version="1.0.2" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+  </ItemGroup>
+
+  <!-- Backend configuration injected at build time (CI secrets) with env-var passthrough.
+       Mirrors the Android buildConfigField pattern; defaults live in Helpers/BuildConfig.cs. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="TRANSCRIPTION_ENDPOINT" Value="$(TRANSCRIPTION_ENDPOINT)" />
+    <AssemblyMetadata Include="TRANSCRIPTION_MODEL" Value="$(TRANSCRIPTION_MODEL)" />
+    <AssemblyMetadata Include="TRANSCRIPTION_API_KEY" Value="$(TRANSCRIPTION_API_KEY)" />
+    <AssemblyMetadata Include="AIDICTATION_POST_PROCESSING_ENDPOINT" Value="$(AIDICTATION_POST_PROCESSING_ENDPOINT)" />
+    <AssemblyMetadata Include="AIDICTATION_POST_PROCESSING_MODEL" Value="$(AIDICTATION_POST_PROCESSING_MODEL)" />
+    <AssemblyMetadata Include="AIDICTATION_POST_PROCESSING_KEY" Value="$(AIDICTATION_POST_PROCESSING_KEY)" />
+    <AssemblyMetadata Include="SUPABASE_URL" Value="$(SUPABASE_URL)" />
+    <AssemblyMetadata Include="SUPABASE_ANON_KEY" Value="$(SUPABASE_ANON_KEY)" />
+    <AssemblyMetadata Include="AUTH_WEB_URL" Value="$(AUTH_WEB_URL)" />
+    <AssemblyMetadata Include="STRIPE_PAYMENT_LINK" Value="$(STRIPE_PAYMENT_LINK)" />
   </ItemGroup>
 
   <ItemGroup>
     <Resource Include="..\Assets\*.ico" Link="Assets\%(Filename)%(Extension)" />
     <Resource Include="..\Assets\*.png" Link="Assets\%(Filename)%(Extension)" />
     <Resource Include="Resources\Onboarding\*.png" />
+    <Resource Include="Resources\Fonts\*.ttf" />
   </ItemGroup>
 
 </Project>

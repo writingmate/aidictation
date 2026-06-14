@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using AIDictation.Models;
 using AIDictation.Services;
@@ -25,8 +26,13 @@ public partial class App : Application
     private static class Constants
     {
         public const string MutexName = "AIDictation_SingleInstance_Mutex";
+        public const string PipeName = "AIDictation_SingleInstance_Pipe";
         public const string UrlScheme = "aidictation";
         public const string UrlSchemeDescription = "AIDictation Protocol";
+
+        // Caps the upload below the transcription API's file-size limit.
+        public static readonly TimeSpan MaxRecordingDuration = TimeSpan.FromMinutes(4);
+        public static readonly TimeSpan StopWatchdogTimeout = TimeSpan.FromSeconds(10);
     }
 
     // MARK: - Private Properties
@@ -34,24 +40,48 @@ public partial class App : Application
     private static Mutex? _singleInstanceMutex;
     private TaskbarIcon? _trayIcon;
     private readonly DispatcherTimer _recordingTimer = new();
+    private readonly DispatcherTimer _stopWatchdog = new();
     private DateTime _recordingStartedAt;
     private bool _isStoppingRecording;
+    private bool _discardNextRecording;
+    private bool _awaitingStopCallback;
+    private bool _mutedSystemAudioForRecording;
+    private IntPtr _dictationTargetWindow;
+    private bool _isValidationOnly;
+    private bool _servicesReady;
+    private bool _ownsMutex;
+    private CancellationTokenSource? _pipeCts;
 
     // MARK: - Application Lifecycle
 
     protected override async void OnStartup(StartupEventArgs e)
     {
-        // Single instance enforcement
+        // Single instance enforcement; forward our launch URL (e.g. the
+        // aidictation://auth-callback from the browser) to the running instance.
         if (!EnsureSingleInstance())
         {
+            ForwardArgsToRunningInstance(e.Args);
             Shutdown();
             return;
         }
+
+        _ownsMutex = true;
 
         base.OnStartup(e);
 
         // Setup global exception handlers
         SetupExceptionHandling();
+        ApplyWindowsAppTheme();
+
+        if (IsOverlayValidationRun(e.Args))
+        {
+            _isValidationOnly = true;
+            await RunOverlayValidationAsync();
+            return;
+        }
+
+        // Listen for URLs forwarded by subsequent instances
+        StartPipeServer();
 
         // Register URL scheme
         RegisterUrlScheme();
@@ -61,6 +91,7 @@ public partial class App : Application
 
         // Initialize services
         await InitializeServicesAsync();
+        _servicesReady = true;
 
         // Setup system tray
         SetupSystemTray();
@@ -73,20 +104,156 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
-        UnsubscribeRuntimeEvents();
+        _pipeCts?.Cancel();
 
-        // Cleanup system tray
-        _trayIcon?.Dispose();
+        // A second (forwarding) instance — e.g. the OAuth callback launch or a
+        // re-launch while running — never initialized services or called Load(),
+        // so running cleanup here would overwrite the user's settings,
+        // dictionary, shortcuts and context rules with empty in-memory defaults.
+        if (!_isValidationOnly && _servicesReady)
+        {
+            SettingsService.Instance.SettingsChanged -= OnSettingsChanged;
+            UnsubscribeRuntimeEvents();
 
-        // Cleanup services
-        CleanupServices();
+            // Cleanup system tray
+            _trayIcon?.Dispose();
 
-        // Release mutex
-        _singleInstanceMutex?.ReleaseMutex();
+            // Cleanup services
+            CleanupServices();
+        }
+
+        // Only the instance that created the mutex owns it; releasing an
+        // unowned mutex throws.
+        if (_ownsMutex)
+        {
+            try { _singleInstanceMutex?.ReleaseMutex(); } catch { }
+        }
         _singleInstanceMutex?.Dispose();
 
         base.OnExit(e);
+    }
+
+    // MARK: - Theme
+
+    private void ApplyWindowsAppTheme()
+    {
+        if (UsesLightWindowsTheme())
+        {
+            SetThemeColor("BackgroundColor", "#F7F7F7");
+            SetThemeColor("SurfaceColor", "#FFFFFF");
+            SetThemeColor("SurfaceHoverColor", "#FAFAFA");
+            SetThemeColor("BorderColor", "#15000000");
+            SetThemeColor("BorderHiColor", "#26000000");
+            SetThemeColor("TextPrimaryColor", "#1A1A1A");
+            SetThemeColor("TextSecondaryColor", "#5F5F5F");
+            SetThemeColor("TextMutedColor", "#7A7A7A");
+            SetThemeColor("SubtleControlColor", "#08000000");
+            SetThemeColor("SubtleControlHoverColor", "#10000000");
+            SetThemeColor("NavHoverColor", "#08000000");
+            SetThemeColor("NavSelectedColor", "#0C000000");
+            SetThemeColor("SelectedChipColor", "#1AF16E00");
+            SetThemeColor("SelectedChipTextColor", "#9A4A00");
+            SetThemeColor("InputBackgroundColor", "#FFFFFF");
+            SetThemeColor("MenuBackgroundColor", "#FFFFFF");
+            SetThemeColor("DangerSoftColor", "#18E5484D");
+            return;
+        }
+
+        SetThemeColor("BackgroundColor", "#202020");
+        SetThemeColor("SurfaceColor", "#2B2B2B");
+        SetThemeColor("SurfaceHoverColor", "#323232");
+        SetThemeColor("BorderColor", "#15FFFFFF");
+        SetThemeColor("BorderHiColor", "#29FFFFFF");
+        SetThemeColor("TextPrimaryColor", "#FFFFFF");
+        SetThemeColor("TextSecondaryColor", "#C9C9C9");
+        SetThemeColor("TextMutedColor", "#8A8A8A");
+        SetThemeColor("SubtleControlColor", "#0FFFFFFF");
+        SetThemeColor("SubtleControlHoverColor", "#17FFFFFF");
+        SetThemeColor("NavHoverColor", "#0EFFFFFF");
+        SetThemeColor("NavSelectedColor", "#0FFFFFFF");
+        SetThemeColor("SelectedChipColor", "#1FF16E00");
+        SetThemeColor("SelectedChipTextColor", "#FFC093");
+        SetThemeColor("InputBackgroundColor", "#0FFFFFFF");
+        SetThemeColor("MenuBackgroundColor", "#2E2E2E");
+        SetThemeColor("DangerSoftColor", "#2EE5484D");
+    }
+
+    private static bool UsesLightWindowsTheme()
+    {
+        try
+        {
+            var value = Registry.GetValue(
+                @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme",
+                1);
+            return value is not int intValue || intValue != 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private void SetThemeColor(string key, string hex)
+    {
+        var color = (Color)ColorConverter.ConvertFromString(hex);
+        Resources[key] = color;
+
+        var brushKey = key.Replace("Color", "Brush", StringComparison.Ordinal);
+        if (Resources[brushKey] is SolidColorBrush brush && !brush.IsFrozen)
+        {
+            brush.Color = color;
+        }
+        else
+        {
+            Resources[brushKey] = new SolidColorBrush(color);
+        }
+    }
+
+    // MARK: - UI Validation
+
+    private static bool IsOverlayValidationRun(string[] args) =>
+        args.Any(arg => arg.Equals("--validate-overlay", StringComparison.OrdinalIgnoreCase));
+
+    private async Task RunOverlayValidationAsync()
+    {
+        var overlay = new OverlayWindow();
+        overlay.SetPosition(OverlayPosition.Top);
+        overlay.SetHideWhenIdle(false);
+        overlay.SetColorTheme(OverlayColorTheme.Orange);
+        overlay.Show();
+
+        await Task.Delay(1100);
+
+        overlay.SetValidationHover(true);
+        await Task.Delay(1500);
+
+        overlay.SetValidationHover(false);
+        AppState.Shared.StartRecording();
+        for (var i = 0; i < 34; i++)
+        {
+            var wave = 0.18f + (float)(Math.Abs(Math.Sin(i * 0.45)) * 0.78);
+            AppState.Shared.UpdateAudioLevel(wave);
+            await Task.Delay(65);
+        }
+
+        overlay.SetValidationHover(true);
+        for (var i = 0; i < 24; i++)
+        {
+            var wave = 0.22f + (float)(Math.Abs(Math.Sin(i * 0.58)) * 0.7);
+            AppState.Shared.UpdateAudioLevel(wave);
+            await Task.Delay(65);
+        }
+
+        overlay.SetValidationHover(false);
+        AppState.Shared.StartProcessing();
+        await Task.Delay(2400);
+
+        AppState.Shared.SetResult("Ready");
+        await Task.Delay(1800);
+
+        overlay.Close();
+        Shutdown();
     }
 
     // MARK: - Single Instance
@@ -108,14 +275,18 @@ public partial class App : Application
     private static void BringExistingInstanceToForeground()
     {
         // Find and activate existing window
-        var currentProcess = Process.GetCurrentProcess();
+        using var currentProcess = Process.GetCurrentProcess();
+        var activated = false;
         foreach (var process in Process.GetProcessesByName(currentProcess.ProcessName))
         {
-            if (process.Id != currentProcess.Id && process.MainWindowHandle != IntPtr.Zero)
+            using (process)
             {
-                NativeMethods.SetForegroundWindow(process.MainWindowHandle);
-                NativeMethods.ShowWindow(process.MainWindowHandle, NativeMethods.SW_RESTORE);
-                break;
+                if (!activated && process.Id != currentProcess.Id && process.MainWindowHandle != IntPtr.Zero)
+                {
+                    NativeMethods.SetForegroundWindow(process.MainWindowHandle);
+                    NativeMethods.ShowWindow(process.MainWindowHandle, NativeMethods.SW_RESTORE);
+                    activated = true;
+                }
             }
         }
     }
@@ -208,16 +379,98 @@ public partial class App : Application
             var uri = new Uri(url);
             var path = uri.Host + uri.AbsolutePath;
 
-            // Handle auth callback
-            if (path.StartsWith("auth/callback", StringComparison.OrdinalIgnoreCase))
+            // Handle auth callback (aidictation://auth-callback, legacy auth/callback)
+            if (uri.Host.Equals("auth-callback", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("auth/callback", StringComparison.OrdinalIgnoreCase))
             {
-                // Process OAuth callback
-                _ = AuthService.Instance.HandleOAuthCallbackAsync(uri);
+                _ = Dispatcher.InvokeAsync(async () =>
+                {
+                    var success = await AuthService.Instance.HandleOAuthCallbackAsync(uri);
+
+                    // During onboarding the wizard reflects the signed-in state itself;
+                    // only surface Settings once setup is done.
+                    if (success && SettingsService.Instance.Settings.OnboardingCompleted)
+                    {
+                        ShowSettingsWindow();
+                    }
+                });
             }
         }
         catch
         {
             // Invalid URL format
+        }
+    }
+
+    // MARK: - Single Instance Messaging
+
+    private void StartPipeServer()
+    {
+        _pipeCts = new CancellationTokenSource();
+        var token = _pipeCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await using var server = new System.IO.Pipes.NamedPipeServerStream(
+                        Constants.PipeName,
+                        System.IO.Pipes.PipeDirection.In,
+                        1,
+                        System.IO.Pipes.PipeTransmissionMode.Byte,
+                        System.IO.Pipes.PipeOptions.Asynchronous);
+
+                    await server.WaitForConnectionAsync(token);
+
+                    using var reader = new StreamReader(server);
+                    var message = (await reader.ReadToEndAsync()).Trim();
+
+                    await Dispatcher.InvokeAsync(() => HandleForwardedMessage(message));
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Keep listening; a malformed client connection should not kill the server.
+                }
+            }
+        }, token);
+    }
+
+    private void HandleForwardedMessage(string message)
+    {
+        if (!string.IsNullOrWhiteSpace(message) &&
+            message.StartsWith($"{Constants.UrlScheme}://", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleUrlActivation(new[] { message });
+        }
+        else
+        {
+            // Plain activation - bring the app to the foreground.
+            ShowSettingsWindow();
+        }
+    }
+
+    private static void ForwardArgsToRunningInstance(string[] args)
+    {
+        try
+        {
+            using var client = new System.IO.Pipes.NamedPipeClientStream(
+                ".", Constants.PipeName, System.IO.Pipes.PipeDirection.Out);
+            client.Connect(2000);
+
+            using var writer = new StreamWriter(client);
+            writer.Write(args.Length > 0 ? args[0] : string.Empty);
+            writer.Flush();
+        }
+        catch
+        {
+            // Running instance is not listening; fall back to window activation.
+            BringExistingInstanceToForeground();
         }
     }
 
@@ -250,9 +503,13 @@ public partial class App : Application
         AudioRecorderService.Instance.RecordingError += OnRecordingError;
         OverlayService.Shared.RecordingStartRequested += OnOverlayRecordingStartRequested;
         OverlayService.Shared.RecordingStopRequested += OnOverlayRecordingStopRequested;
+        OverlayService.Shared.RecordingCancelRequested += OnOverlayRecordingCancelRequested;
 
         _recordingTimer.Interval = TimeSpan.FromMilliseconds(100);
         _recordingTimer.Tick += OnRecordingTimerTick;
+
+        _stopWatchdog.Interval = Constants.StopWatchdogTimeout;
+        _stopWatchdog.Tick += OnStopWatchdogTick;
     }
 
     private void UnsubscribeRuntimeEvents()
@@ -266,17 +523,21 @@ public partial class App : Application
         AudioRecorderService.Instance.RecordingError -= OnRecordingError;
         OverlayService.Shared.RecordingStartRequested -= OnOverlayRecordingStartRequested;
         OverlayService.Shared.RecordingStopRequested -= OnOverlayRecordingStopRequested;
+        OverlayService.Shared.RecordingCancelRequested -= OnOverlayRecordingCancelRequested;
         _recordingTimer.Tick -= OnRecordingTimerTick;
         _recordingTimer.Stop();
+        _stopWatchdog.Tick -= OnStopWatchdogTick;
+        _stopWatchdog.Stop();
     }
 
-    private static void CleanupServices()
+    private void CleanupServices()
     {
         // Stop any active recording
         if (AppState.Shared.IsRecording)
         {
             AudioRecorderService.Instance.StopRecording();
         }
+        RestoreSystemAudioAfterRecording();
 
         // Cleanup hotkey service
         HotkeyService.Instance.UnregisterAllHotkeys();
@@ -323,21 +584,39 @@ public partial class App : Application
 
     private void OnDictationHotkeyPressed(object? sender, EventArgs e)
     {
-        StartRecording(false);
+        HandleHotkeyPressed(isCommandMode: false);
     }
 
     private void OnDictationHotkeyReleased(object? sender, EventArgs e)
     {
-        StopRecording();
+        HandleHotkeyReleased();
     }
 
     private void OnCommandHotkeyPressed(object? sender, EventArgs e)
     {
-        StartRecording(true);
+        HandleHotkeyPressed(isCommandMode: true);
     }
 
     private void OnCommandHotkeyReleased(object? sender, EventArgs e)
     {
+        HandleHotkeyReleased();
+    }
+
+    private void HandleHotkeyPressed(bool isCommandMode)
+    {
+        // Toggle mode: the same press starts and stops; releases are ignored.
+        if (!SettingsService.Instance.Settings.PushToTalk && AppState.Shared.IsRecording)
+        {
+            StopRecording();
+            return;
+        }
+
+        StartRecording(isCommandMode);
+    }
+
+    private void HandleHotkeyReleased()
+    {
+        if (!SettingsService.Instance.Settings.PushToTalk) return;
         StopRecording();
     }
 
@@ -351,9 +630,38 @@ public partial class App : Application
         StopRecording();
     }
 
+    private void OnOverlayRecordingCancelRequested(object? sender, EventArgs e)
+    {
+        if (!AppState.Shared.IsRecording || _isStoppingRecording) return;
+
+        // Discard the recording: stop capture but skip transcription entirely.
+        _discardNextRecording = true;
+        _isStoppingRecording = true;
+        _recordingTimer.Stop();
+        ArmStopWatchdog();
+        AudioRecorderService.Instance.StopRecording();
+        AppState.Shared.Reset();
+    }
+
     private void StartRecording(bool isCommandMode)
     {
+        if (!TranscriptionService.Instance.IsConfigured)
+        {
+            AppState.Shared.SetError("Transcription is not configured in this build");
+            return;
+        }
+
+        if (AuthService.Instance.CurrentUser?.HasReachedLimit == true)
+        {
+            AppState.Shared.SetError("Monthly word limit reached. Upgrade to keep dictating.");
+            return;
+        }
+
         if (!AppState.Shared.StartRecording(isCommandMode)) return;
+
+        // Remember where the user is dictating so the paste cannot land in a
+        // window focused later (e.g. after Alt-Tab during transcription).
+        _dictationTargetWindow = Helpers.ForegroundWindowHelper.GetForegroundWindowHandle();
 
         AudioRecorderService.Instance.SelectedDeviceId = SettingsService.Instance.Settings.SelectedAudioDeviceId;
         _recordingStartedAt = DateTime.Now;
@@ -364,6 +672,53 @@ public partial class App : Application
         {
             _recordingTimer.Stop();
             AppState.Shared.SetError("Unable to start recording");
+            return;
+        }
+
+        MuteSystemAudioForRecording();
+    }
+
+    /// <summary>
+    /// Mutes the default playback device while recording (when enabled) so
+    /// speaker output does not bleed into the dictation. A device the user
+    /// muted themselves is left alone.
+    /// </summary>
+    private void MuteSystemAudioForRecording()
+    {
+        if (!SettingsService.Instance.Settings.MuteAudioWhenRecording) return;
+
+        try
+        {
+            using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(
+                NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
+            if (!device.AudioEndpointVolume.Mute)
+            {
+                device.AudioEndpointVolume.Mute = true;
+                _mutedSystemAudioForRecording = true;
+            }
+        }
+        catch
+        {
+            // No render device or access denied - recording proceeds unmuted.
+        }
+    }
+
+    private void RestoreSystemAudioAfterRecording()
+    {
+        if (!_mutedSystemAudioForRecording) return;
+        _mutedSystemAudioForRecording = false;
+
+        try
+        {
+            using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(
+                NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
+            device.AudioEndpointVolume.Mute = false;
+        }
+        catch
+        {
+            // Device gone; nothing to restore.
         }
     }
 
@@ -374,14 +729,45 @@ public partial class App : Application
         _isStoppingRecording = true;
         _recordingTimer.Stop();
         AppState.Shared.StartProcessing();
+        ArmStopWatchdog();
         AudioRecorderService.Instance.StopRecording();
+    }
+
+    /// <summary>
+    /// If the device never raises RecordingStopped the app would sit in
+    /// Processing forever with a dead hotkey; the watchdog forces a reset.
+    /// </summary>
+    private void ArmStopWatchdog()
+    {
+        _awaitingStopCallback = true;
+        _stopWatchdog.Stop();
+        _stopWatchdog.Start();
+    }
+
+    private void OnStopWatchdogTick(object? sender, EventArgs e)
+    {
+        _stopWatchdog.Stop();
+        if (!_awaitingStopCallback) return;
+
+        _awaitingStopCallback = false;
+        _isStoppingRecording = false;
+        _discardNextRecording = false;
+        RestoreSystemAudioAfterRecording();
+        AudioRecorderService.Instance.AbortRecording();
+        AppState.Shared.SetError("The audio device did not stop cleanly. Please try again.");
     }
 
     private void OnRecordingTimerTick(object? sender, EventArgs e)
     {
-        if (AppState.Shared.IsRecording)
+        if (!AppState.Shared.IsRecording) return;
+
+        var elapsed = DateTime.Now - _recordingStartedAt;
+        AppState.Shared.UpdateRecordingDuration(elapsed);
+
+        // Stop before the recording outgrows what the transcription API accepts.
+        if (elapsed >= Constants.MaxRecordingDuration)
         {
-            AppState.Shared.UpdateRecordingDuration(DateTime.Now - _recordingStartedAt);
+            StopRecording();
         }
     }
 
@@ -395,7 +781,11 @@ public partial class App : Application
         Dispatcher.Invoke(() =>
         {
             _recordingTimer.Stop();
+            _stopWatchdog.Stop();
+            _awaitingStopCallback = false;
             _isStoppingRecording = false;
+            _discardNextRecording = false;
+            RestoreSystemAudioAfterRecording();
             AppState.Shared.SetError(message);
             HistoryService.Instance.Add(new Recording
             {
@@ -414,6 +804,18 @@ public partial class App : Application
 
     private async Task CompleteRecordingAsync(string filePath)
     {
+        _stopWatchdog.Stop();
+        _awaitingStopCallback = false;
+        RestoreSystemAudioAfterRecording();
+
+        if (_discardNextRecording)
+        {
+            _discardNextRecording = false;
+            _isStoppingRecording = false;
+            try { File.Delete(filePath); } catch { }
+            return;
+        }
+
         try
         {
             var result = await TranscriptionService.Instance.TranscribeAsync(filePath);
@@ -427,7 +829,15 @@ public partial class App : Application
 
             AppState.Shared.SetResult(result.Text);
             HistoryService.Instance.Add(CreateRecording(filePath, result.Text, TranscriptionStatus.Success, null));
-            await ClipboardService.Instance.PasteTextAsync(result.Text);
+
+            var pasted = await ClipboardService.Instance.PasteTextAsync(result.Text, _dictationTargetWindow);
+            if (!pasted)
+            {
+                // The transcript intentionally stays on the clipboard for a
+                // manual paste; record the delivery failure for diagnostics.
+                LogException("CompleteRecordingAsync",
+                    new InvalidOperationException("Paste was not delivered; transcript left on clipboard"));
+            }
         }
         catch (Exception ex)
         {
@@ -494,12 +904,16 @@ public partial class App : Application
 
     private void ShowSettingsWindow()
     {
+        ApplyWindowsAppTheme();
         ShowOrActivateWindow<SettingsWindow>();
     }
 
     private void ShowHistoryWindow()
     {
-        ShowOrActivateWindow<HistoryWindow>();
+        // History lives inside Settings now.
+        ApplyWindowsAppTheme();
+        var settings = ShowOrActivateWindow<SettingsWindow>();
+        settings.NavigateTo(ViewModels.SettingsViewModel.Sections.History);
     }
 
     private void OnOnboardingClosed(object? sender, EventArgs e)

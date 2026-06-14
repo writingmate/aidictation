@@ -5,11 +5,13 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="clr-namespace:AIDictation.ViewModels"
         mc:Ignorable="d"
-        Title="Settings"
-        MinWidth="600" MinHeight="500"
-        Width="650" Height="550"
+        Title="Settings — AIDictation"
+        Width="720" Height="560"
+        MinWidth="680" MinHeight="520"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource BackgroundBrush}"
+        Icon="/Assets/app.png"
+        Background="{DynamicResource BackgroundBrush}"
+        FontFamily="{StaticResource UiFont}"
         PreviewKeyDown="Window_PreviewKeyDown">
 
     <Window.DataContext>
@@ -17,273 +19,268 @@
     </Window.DataContext>
 
     <Window.Resources>
-        <!-- Sidebar Button Style -->
-        <Style x:Key="SidebarButtonStyle" TargetType="RadioButton">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,12"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="border" 
-                                Background="{TemplateBinding Background}" 
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" 
-                                            VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource SurfaceHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource SurfaceBrush}"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <!-- Fluent glyph helper -->
+        <FontFamily x:Key="Glyphs">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
 
-        <!-- Section Header Style -->
-        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="20"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="Margin" Value="0,0,0,20"/>
-        </Style>
-
-        <!-- Subsection Header Style -->
-        <Style x:Key="SubsectionHeaderStyle" TargetType="TextBlock">
+        <Style x:Key="NavGlyph" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource Glyphs}"/>
             <Setter Property="FontSize" Value="15"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
-        <!-- Description Style -->
-        <Style x:Key="DescriptionStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-            <Setter Property="Margin" Value="0,0,0,12"/>
-            <Setter Property="TextWrapping" Value="Wrap"/>
+        <Style x:Key="RowGlyph" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource Glyphs}"/>
+            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}"/>
+            <Setter Property="Margin" Value="0,0,14,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
-        <!-- ComboBox Style -->
-        <Style x:Key="SettingsComboBoxStyle" TargetType="ComboBox">
-            <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="12,8"/>
-            <Setter Property="FontSize" Value="14"/>
-        </Style>
-
-        <!-- TextBox Style -->
-        <Style x:Key="SettingsTextBoxStyle" TargetType="TextBox">
-            <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="12,8"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="CaretBrush" Value="{StaticResource TextPrimaryBrush}"/>
-        </Style>
-
-        <!-- Language Button Style -->
-        <Style x:Key="LanguageButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="12,8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" 
-                                Background="{TemplateBinding Background}" 
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource SurfaceHoverBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Hotkey Button Style -->
-        <Style x:Key="HotkeyButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Height" Value="40"/>
-            <Setter Property="Padding" Value="16,0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" 
-                                Background="{TemplateBinding Background}" 
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource SurfaceHoverBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Delete Button Style -->
-        <Style x:Key="DeleteButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Width" Value="28"/>
-            <Setter Property="Height" Value="28"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" 
-                                Background="{TemplateBinding Background}" 
-                                CornerRadius="4">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource SurfaceHoverBrush}"/>
-                                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Add Button Style -->
-        <Style x:Key="AddButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource PrimaryBrush}"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" 
-                                Background="{TemplateBinding Background}" 
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{StaticResource PrimaryHoverBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
+        <!-- Dark context menu for history actions -->
+        <Style x:Key="DarkMenu" TargetType="ContextMenu">
+            <Setter Property="Background" Value="{DynamicResource MenuBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderHiBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+            <Setter Property="FontSize" Value="12.5"/>
         </Style>
     </Window.Resources>
 
-    <Grid>
+    <Grid Background="{DynamicResource BackgroundBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="160"/>
+            <ColumnDefinition Width="186"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Sidebar -->
-        <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
-            <StackPanel Margin="0,16,0,0">
-                <RadioButton Style="{StaticResource SidebarButtonStyle}" 
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=0, Mode=OneWay}"
-                           Command="{Binding SelectSectionCommand}"
-                           CommandParameter="0"
-                           GroupName="Sections">
+        <!-- ============ Nav (transparent on Mica) ============ -->
+        <DockPanel Grid.Column="0" Margin="6,8">
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding VersionText}"
+                       FontFamily="{StaticResource MonoFont}" FontSize="9.5"
+                       Foreground="{DynamicResource TextMutedBrush}" Margin="12,0,0,6"/>
+            <StackPanel>
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" x:Name="NavAccount"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=0, Mode=TwoWay}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🔊" Margin="0,0,10,0"/>
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE77B;"/>
+                        <TextBlock Text="Account"/>
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=1, Mode=TwoWay}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE720;"/>
                         <TextBlock Text="Audio"/>
                     </StackPanel>
                 </RadioButton>
-                <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=1, Mode=OneWay}"
-                           Command="{Binding SelectSectionCommand}"
-                           CommandParameter="1"
-                           GroupName="Sections">
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=2, Mode=TwoWay}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="📝" Margin="0,0,10,0"/>
-                        <TextBlock Text="Text Rules"/>
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE774;"/>
+                        <TextBlock Text="Language"/>
                     </StackPanel>
                 </RadioButton>
-                <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=2, Mode=OneWay}"
-                           Command="{Binding SelectSectionCommand}"
-                           CommandParameter="2"
-                           GroupName="Sections">
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=3, Mode=TwoWay}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="⌨️" Margin="0,0,10,0"/>
-                        <TextBlock Text="Hotkeys"/>
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE82D;"/>
+                        <TextBlock Text="Dictionary"/>
                     </StackPanel>
                 </RadioButton>
-                <RadioButton Style="{StaticResource SidebarButtonStyle}"
-                           IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=3, Mode=OneWay}"
-                           Command="{Binding SelectSectionCommand}"
-                           CommandParameter="3"
-                           GroupName="Sections">
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=4, Mode=TwoWay}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="●" Margin="0,0,10,0"/>
-                        <TextBlock Text="Overlay"/>
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE945;"/>
+                        <TextBlock Text="Shortcuts"/>
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=5, Mode=TwoWay}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE713;"/>
+                        <TextBlock Text="Configuration"/>
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton Style="{StaticResource NavItem}" GroupName="Nav"
+                             IsChecked="{Binding SelectedSection, Converter={StaticResource EqualityConverter}, ConverterParameter=6, Mode=TwoWay}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource NavGlyph}" Text="&#xE81C;"/>
+                        <TextBlock Text="History"/>
                     </StackPanel>
                 </RadioButton>
             </StackPanel>
-        </Border>
+        </DockPanel>
 
-        <!-- Content Area -->
-        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="24">
+        <!-- ============ Content ============ -->
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="14,18,26,24">
             <Grid>
-                <!-- Audio Section -->
+
+                <!-- ===== ACCOUNT ===== -->
                 <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=0}">
-                    <TextBlock Text="Audio" Style="{StaticResource SectionHeaderStyle}"/>
+                    <TextBlock Text="Account" Style="{StaticResource PageTitle}"/>
 
-                    <!-- Input Device -->
-                    <TextBlock Text="Input Device" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Select your microphone or audio input device" Style="{StaticResource DescriptionStyle}"/>
-                    <ComboBox Style="{StaticResource SettingsComboBoxStyle}"
-                            ItemsSource="{Binding AudioDevices}"
-                            SelectedItem="{Binding SelectedAudioDevice}"
-                            DisplayMemberPath="DisplayName"
-                            Width="300"
-                            HorizontalAlignment="Left"/>
+                    <!-- Signed in -->
+                    <StackPanel Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Border CornerRadius="8" Padding="18" MaxWidth="420" HorizontalAlignment="Left" MinWidth="400"
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="{StaticResource SurfaceColor}" Offset="0"/>
+                                    <GradientStop Color="{StaticResource SurfaceHoverColor}" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="42" Height="42" CornerRadius="21" Background="{StaticResource BrandGradientBrush}">
+                                        <TextBlock Text="{Binding AccountInitial}" FontFamily="{StaticResource FigtreeFont}"
+                                                   FontWeight="ExtraBold" FontSize="16" Foreground="White"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Margin="13,0,0,0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding AccountEmail}" FontSize="14" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                            <Border BorderBrush="{StaticResource PrimaryBrush}" BorderThickness="1"
+                                                    CornerRadius="6" Padding="9,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding SubscriptionLabel}" FontSize="9" FontWeight="Bold"
+                                                           Foreground="{StaticResource PrimaryBrush}"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding MemberSinceText}" FontSize="11.5"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <Button Style="{StaticResource AccentButton}" Content="Upgrade to Pro" Padding="16,8"
+                                            Command="{Binding UpgradeCommand}"
+                                            Visibility="{Binding CanUpgrade, Converter={StaticResource BoolToVisibilityConverter}}"
+                                            Margin="0,0,9,0"/>
+                                    <Button Style="{StaticResource SubtleButton}" Content="Sign Out"
+                                            Command="{Binding SignOutCommand}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
 
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,24"/>
+                        <Border Style="{StaticResource SettingCard}" MaxWidth="420" HorizontalAlignment="Left" MinWidth="400" Margin="0,10,0,5">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Invite Friends" Style="{StaticResource RowTitle}"/>
+                                    <TextBlock Text="Get 2,000 extra words when a friend joins" Style="{StaticResource RowDesc}"/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource SubtleButton}" Content="Copy Link"
+                                        Command="{Binding CopyInviteLinkCommand}" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
 
-                    <!-- Language -->
-                    <TextBlock Text="Language" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Select languages for transcription" Style="{StaticResource DescriptionStyle}"/>
+                        <!-- Word usage at the bottom -->
+                        <Border Style="{StaticResource SettingCard}" MaxWidth="420" HorizontalAlignment="Left" MinWidth="400">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Word usage" Style="{StaticResource RowTitle}"/>
+                                        <TextBlock Text="{Binding UsageResetText}" Style="{StaticResource RowDesc}"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding UsageText}" FontFamily="{StaticResource MonoFont}"
+                                               FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                                </Grid>
+                                <Grid Height="7">
+                                    <Border CornerRadius="4" Background="{DynamicResource BackgroundBrush}"/>
+                                    <Border CornerRadius="4" Background="{StaticResource BrandGradientBrush}"
+                                            HorizontalAlignment="Left">
+                                        <Border.Width>
+                                            <MultiBinding Converter="{StaticResource PercentWidthConverter}">
+                                                <Binding Path="UsagePercent"/>
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType=Grid}"/>
+                                            </MultiBinding>
+                                        </Border.Width>
+                                    </Border>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Signed out -->
+                    <StackPanel MaxWidth="420" HorizontalAlignment="Left"
+                                Visibility="{Binding IsAuthenticated, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                        <TextBlock Text="Sign in to AIDictation" Style="{StaticResource RowTitle}" FontWeight="SemiBold"/>
+                        <TextBlock Style="{StaticResource RowDesc}" Margin="0,4,0,14"
+                                   Text="Unlocks cloud transcription, syncs your subscription, tracks monthly usage. Opens in your browser."/>
+                        <Button Style="{StaticResource AccentButton}" Content="Sign In with Browser"
+                                Command="{Binding SignInCommand}" HorizontalAlignment="Left"/>
+                        <TextBlock Text="{Binding AuthErrorMessage}" Foreground="{StaticResource ErrorBrush}"
+                                   FontSize="12" Margin="0,12,0,0" TextWrapping="Wrap"
+                                   Visibility="{Binding AuthErrorMessage, Converter={StaticResource NullToVisibilityConverter}}"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- ===== AUDIO ===== -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=1}">
+                    <TextBlock Text="Audio" Style="{StaticResource PageTitle}"/>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource RowGlyph}" Text="&#xE720;"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Input device" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Microphone used for dictation" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <ComboBox Grid.Column="2" Style="{StaticResource DarkCombo}" Width="220"
+                                      ItemsSource="{Binding AudioDevices}" SelectedItem="{Binding SelectedAudioDevice}"
+                                      DisplayMemberPath="DisplayName" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Mute system audio while recording" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Pause music and videos while you dictate" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource FluentToggle}"
+                                      IsChecked="{Binding MuteAudioWhenRecording}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Smart cleanup" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="AI fixes punctuation, stutters and obvious errors" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource FluentToggle}"
+                                      IsChecked="{Binding EnableLLMPostProcessing}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+
+                <!-- ===== LANGUAGE ===== -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=2}">
+                    <TextBlock Text="Language" Style="{StaticResource PageTitle}"/>
+                    <TextBlock Style="{StaticResource RowDesc}" Margin="0,0,0,12"
+                               Text="Select one or more — auto-detect works well for most people."/>
                     <ItemsControl ItemsSource="{Binding Languages}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -292,346 +289,398 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Button Style="{StaticResource LanguageButtonStyle}"
-                                      Command="{Binding DataContext.SelectLanguageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                      CommandParameter="{Binding}"
-                                      IsEnabled="{Binding IsSelectable}"
-                                      ToolTip="{Binding SupportText}"
-                                      Margin="0,0,8,8">
-                                    <Button.Background>
-                                        <Binding Path="IsSelected">
-                                            <Binding.Converter>
-                                                <StaticResource ResourceKey="BoolToBrushConverter"/>
-                                            </Binding.Converter>
-                                        </Binding>
-                                    </Button.Background>
+                                <ToggleButton Style="{StaticResource DarkChip}"
+                                              IsChecked="{Binding IsSelected, Mode=OneWay}"
+                                              Command="{Binding DataContext.SelectLanguageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                              CommandParameter="{Binding}">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="{Binding Flag}" Margin="0,0,6,0"/>
                                         <TextBlock Text="{Binding DisplayName}"/>
                                     </StackPanel>
-                                </Button>
+                                </ToggleButton>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </StackPanel>
 
-                <!-- Text Rules Section -->
-                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=1}">
-                    <TextBlock Text="Text Rules" Style="{StaticResource SectionHeaderStyle}"/>
-
-                    <!-- Dictionary Entries -->
-                    <TextBlock Text="Dictionary" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Add words to improve recognition accuracy" Style="{StaticResource DescriptionStyle}"/>
-                    
-                    <ItemsControl ItemsSource="{Binding DictionaryEntries}" Margin="0,0,0,12">
+                <!-- ===== DICTIONARY ===== -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=3}">
+                    <TextBlock Text="Dictionary" Style="{StaticResource PageTitle}"/>
+                    <TextBlock Style="{StaticResource RowDesc}" Margin="0,0,0,12"
+                               Text="Names and jargon the transcriber should recognize."/>
+                    <ItemsControl ItemsSource="{Binding Words}" Margin="0,0,0,9">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="{StaticResource SurfaceBrush}" 
-                                      CornerRadius="4" 
-                                      Padding="12,8" 
-                                      Margin="0,0,0,4">
+                                <Border Style="{StaticResource SettingCard}" MinHeight="0" Padding="13,10">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <CheckBox Grid.Column="0" 
-                                                IsChecked="{Binding IsEnabled}" 
-                                                VerticalAlignment="Center"
-                                                Margin="0,0,12,0"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Trigger}" 
-                                                     Foreground="{StaticResource TextPrimaryBrush}"
-                                                     FontSize="14"/>
-                                            <TextBlock Text="{Binding Replacement}" 
-                                                     Foreground="{StaticResource TextSecondaryBrush}"
-                                                     FontSize="12"
-                                                     Visibility="{Binding Replacement, Converter={StaticResource NullToVisibilityConverter}}"/>
-                                        </StackPanel>
-                                        <Button Grid.Column="2" 
-                                              Style="{StaticResource DeleteButtonStyle}"
-                                              Command="{Binding DataContext.RemoveDictionaryEntryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding}">
-                                            <TextBlock Text="🗑"/>
+                                        <CheckBox Style="{StaticResource FluentToggle}" IsChecked="{Binding IsEnabled}"
+                                                  VerticalAlignment="Center" Margin="0,0,13,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Word}" Style="{StaticResource RowTitle}"
+                                                   FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <Button Grid.Column="2" Style="{StaticResource IconButton}" VerticalAlignment="Center"
+                                                Command="{Binding DataContext.RemoveWordCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
                                         </Button>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-
-                    <Grid Margin="0,0,0,8">
+                    <Grid MaxWidth="380" HorizontalAlignment="Left">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" 
-                               Style="{StaticResource SettingsTextBoxStyle}"
-                               Text="{Binding NewDictionaryTrigger, UpdateSourceTrigger=PropertyChanged}"
-                               Margin="0,0,8,0">
-                            <TextBox.Tag>Word or phrase...</TextBox.Tag>
-                        </TextBox>
-                        <TextBox Grid.Column="1" 
-                               Style="{StaticResource SettingsTextBoxStyle}"
-                               Text="{Binding NewDictionaryReplacement, UpdateSourceTrigger=PropertyChanged}"
-                               Margin="0,0,8,0">
-                            <TextBox.Tag>Replacement (optional)</TextBox.Tag>
-                        </TextBox>
-                        <Button Grid.Column="2" 
-                              Style="{StaticResource AddButtonStyle}"
-                              Command="{Binding AddDictionaryEntryCommand}"
-                              Content="Add"/>
-                    </Grid>
-
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,16"/>
-
-                    <!-- Shortcuts -->
-                    <TextBlock Text="Shortcuts" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Voice-triggered text expansions" Style="{StaticResource DescriptionStyle}"/>
-
-                    <ItemsControl ItemsSource="{Binding Shortcuts}" Margin="0,0,0,12">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="{StaticResource SurfaceBrush}" 
-                                      CornerRadius="4" 
-                                      Padding="12,8" 
-                                      Margin="0,0,0,4">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <CheckBox Grid.Column="0" 
-                                                IsChecked="{Binding IsEnabled}" 
-                                                VerticalAlignment="Center"
-                                                Margin="0,0,12,0"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding VoiceTrigger}" 
-                                                     Foreground="{StaticResource TextPrimaryBrush}"
-                                                     FontSize="14"/>
-                                            <TextBlock Text="{Binding Expansion}" 
-                                                     Foreground="{StaticResource TextSecondaryBrush}"
-                                                     FontSize="12"
-                                                     TextTrimming="CharacterEllipsis"/>
-                                        </StackPanel>
-                                        <Button Grid.Column="2" 
-                                              Style="{StaticResource DeleteButtonStyle}"
-                                              Command="{Binding DataContext.RemoveShortcutCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding}">
-                                            <TextBlock Text="🗑"/>
-                                        </Button>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" 
-                               Style="{StaticResource SettingsTextBoxStyle}"
-                               Text="{Binding NewShortcutTrigger, UpdateSourceTrigger=PropertyChanged}"
-                               Margin="0,0,8,0">
-                            <TextBox.Tag>Voice trigger...</TextBox.Tag>
-                        </TextBox>
-                        <TextBox Grid.Column="1" 
-                               Style="{StaticResource SettingsTextBoxStyle}"
-                               Text="{Binding NewShortcutExpansion, UpdateSourceTrigger=PropertyChanged}"
-                               Margin="0,0,8,0">
-                            <TextBox.Tag>Expansion text...</TextBox.Tag>
-                        </TextBox>
-                        <Button Grid.Column="2" 
-                              Style="{StaticResource AddButtonStyle}"
-                              Command="{Binding AddShortcutCommand}"
-                              Content="Add"/>
-                    </Grid>
-
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,16"/>
-
-                    <!-- Context Rules -->
-                    <TextBlock Text="Context Rules" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="App-specific transcription instructions" Style="{StaticResource DescriptionStyle}"/>
-
-                    <ItemsControl ItemsSource="{Binding ContextRules}" Margin="0,0,0,12">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="{StaticResource SurfaceBrush}" 
-                                      CornerRadius="4" 
-                                      Padding="12,8" 
-                                      Margin="0,0,0,4">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <CheckBox Grid.Column="0" 
-                                                IsChecked="{Binding IsEnabled}" 
-                                                VerticalAlignment="Center"
-                                                Margin="0,0,12,0"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Name}" 
-                                                     Foreground="{StaticResource TextPrimaryBrush}"
-                                                     FontSize="14"/>
-                                            <TextBlock Text="{Binding Instructions}" 
-                                                     Foreground="{StaticResource TextSecondaryBrush}"
-                                                     FontSize="12"
-                                                     TextTrimming="CharacterEllipsis"/>
-                                        </StackPanel>
-                                        <Button Grid.Column="2" 
-                                              Style="{StaticResource DeleteButtonStyle}"
-                                              Command="{Binding DataContext.RemoveContextRuleCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                              CommandParameter="{Binding}">
-                                            <TextBlock Text="🗑"/>
-                                        </Button>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" 
-                               Style="{StaticResource SettingsTextBoxStyle}"
-                               Text="{Binding NewContextRuleName, UpdateSourceTrigger=PropertyChanged}"
-                               Margin="0,0,8,0">
-                            <TextBox.Tag>Rule name...</TextBox.Tag>
-                        </TextBox>
-                        <TextBox Grid.Column="1" 
-                               Style="{StaticResource SettingsTextBoxStyle}"
-                               Text="{Binding NewContextRuleInstructions, UpdateSourceTrigger=PropertyChanged}"
-                               Margin="0,0,8,0">
-                            <TextBox.Tag>Instructions...</TextBox.Tag>
-                        </TextBox>
-                        <Button Grid.Column="2" 
-                              Style="{StaticResource AddButtonStyle}"
-                              Command="{Binding AddContextRuleCommand}"
-                              Content="Add"/>
+                        <TextBox Style="{StaticResource DarkInput}" Margin="0,0,7,0" MinWidth="280"
+                                 Text="{Binding NewWord, UpdateSourceTrigger=PropertyChanged}"
+                                 KeyDown="NewWord_KeyDown"/>
+                        <Button Grid.Column="1" Style="{StaticResource AccentButton}" Content="Add" Padding="18,7"
+                                Command="{Binding AddWordCommand}"/>
                     </Grid>
                 </StackPanel>
 
-                <!-- Hotkeys Section -->
-                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=2}">
-                    <TextBlock Text="Hotkeys" Style="{StaticResource SectionHeaderStyle}"/>
-
-                    <!-- Dictation Hotkey -->
-                    <TextBlock Text="Dictation Hotkey" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Press to start/stop voice recording" Style="{StaticResource DescriptionStyle}"/>
-                    <Grid Margin="0,0,0,24">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Button Grid.Column="0" 
-                              Style="{StaticResource HotkeyButtonStyle}"
-                              Command="{Binding StartRecordingDictationHotkeyCommand}"
-                              HorizontalAlignment="Left"
-                              MinWidth="200">
-                            <TextBlock>
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="{Binding DictationHotkeyText}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsRecordingDictationHotkey}" Value="True">
-                                                <Setter Property="Text" Value="Press a key..."/>
-                                                <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Button>
-                        <Button Grid.Column="1" 
-                              Style="{StaticResource DeleteButtonStyle}"
-                              Command="{Binding ClearDictationHotkeyCommand}"
-                              Margin="8,0,0,0"
-                              ToolTip="Reset to default">
-                            <TextBlock Text="✕"/>
-                        </Button>
-                    </Grid>
-
-                    <!-- Command Hotkey -->
-                    <TextBlock Text="Command Hotkey" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Press to start command mode (LLM assisted)" Style="{StaticResource DescriptionStyle}"/>
+                <!-- ===== SHORTCUTS ===== -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=4}">
+                    <TextBlock Text="Shortcuts" Style="{StaticResource PageTitle}"/>
+                    <TextBlock Style="{StaticResource RowDesc}" Margin="0,0,0,12"
+                               Text="Say the trigger — it expands into the full text."/>
+                    <ItemsControl ItemsSource="{Binding Shortcuts}" Margin="0,0,0,9">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource SettingCard}" MinHeight="0" Padding="13,10">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox Style="{StaticResource FluentToggle}" IsChecked="{Binding IsEnabled}"
+                                                  VerticalAlignment="Center" Margin="0,0,13,0"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding VoiceTrigger}" Style="{StaticResource RowTitle}" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Expansion}" Style="{StaticResource RowDesc}" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" Style="{StaticResource IconButton}" VerticalAlignment="Center"
+                                                Command="{Binding DataContext.RemoveShortcutCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"/>
+                                        </Button>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <Button Grid.Column="0" 
-                              Style="{StaticResource HotkeyButtonStyle}"
-                              Command="{Binding StartRecordingCommandHotkeyCommand}"
-                              HorizontalAlignment="Left"
-                              MinWidth="200">
-                            <TextBlock>
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="{Binding CommandHotkeyText}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsRecordingCommandHotkey}" Value="True">
-                                                <Setter Property="Text" Value="Press a key..."/>
-                                                <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Button>
-                        <Button Grid.Column="1" 
-                              Style="{StaticResource DeleteButtonStyle}"
-                              Command="{Binding ClearCommandHotkeyCommand}"
-                              Margin="8,0,0,0"
-                              ToolTip="Reset to default">
-                            <TextBlock Text="✕"/>
-                        </Button>
+                        <TextBox Style="{StaticResource DarkInput}" Margin="0,0,7,0"
+                                 Text="{Binding NewShortcutTrigger, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBox Grid.Column="1" Style="{StaticResource DarkInput}" Margin="0,0,7,0"
+                                 Text="{Binding NewShortcutExpansion, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Button Grid.Column="2" Style="{StaticResource AccentButton}" Content="Add" Padding="18,7"
+                                Command="{Binding AddShortcutCommand}"/>
                     </Grid>
                 </StackPanel>
 
-                <!-- Overlay Section -->
-                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=3}">
-                    <TextBlock Text="Overlay" Style="{StaticResource SectionHeaderStyle}"/>
+                <!-- ===== CONFIGURATION ===== -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=5}">
+                    <TextBlock Text="Configuration" Style="{StaticResource PageTitle}"/>
 
-                    <TextBlock Text="Show Overlay When Idle" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Keep the floating overlay visible when you are not recording" Style="{StaticResource DescriptionStyle}"/>
-                    <CheckBox IsChecked="{Binding ShowOverlayWhenIdle, Mode=TwoWay}"
-                              Content="Show overlay when idle"
-                              Foreground="{StaticResource TextPrimaryBrush}"
-                              Margin="0,0,0,24"/>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource RowGlyph}" Text="&#xE765;"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Dictation Hotkey" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Shortcut to start and stop dictation" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <Button Grid.Column="2" VerticalAlignment="Center" Cursor="Hand" Background="Transparent"
+                                    BorderThickness="0" Padding="0"
+                                    Command="{Binding StartRecordingDictationHotkeyCommand}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <ContentPresenter/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <Border Style="{StaticResource KeyCap}">
+                                    <TextBlock FontFamily="{StaticResource MonoFont}" FontWeight="Bold" FontSize="12.5"
+                                               Foreground="{DynamicResource TextPrimaryBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="{Binding DictationHotkeyText}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsRecordingDictationHotkey}" Value="True">
+                                                        <Setter Property="Text" Value="Press a key…"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                            </Button>
+                        </Grid>
+                    </Border>
 
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,24"/>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Push to Talk" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Hold the hotkey to record, release to insert" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource FluentToggle}"
+                                      IsChecked="{Binding PushToTalk}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
 
-                    <TextBlock Text="Overlay Position" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Choose where the floating overlay appears" Style="{StaticResource DescriptionStyle}"/>
-                    <ComboBox Style="{StaticResource SettingsComboBoxStyle}"
-                              ItemsSource="{Binding OverlayPositions}"
-                              SelectedItem="{Binding SelectedOverlayPosition, Mode=TwoWay}"
-                              DisplayMemberPath="DisplayName"
-                              Width="220"
-                              HorizontalAlignment="Left"
-                              Margin="0,0,0,24"/>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource RowGlyph}" Text="&#xE753;"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Transcription Mode" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Choose how your voice is transcribed" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <ComboBox Grid.Column="2" Style="{StaticResource DarkCombo}" Width="150"
+                                      ItemsSource="{Binding TranscriptionModes}" SelectedItem="{Binding SelectedTranscriptionMode}"
+                                      DisplayMemberPath="Label" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
 
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,24"/>
+                    <Border Style="{StaticResource SettingCard}"
+                            Visibility="{Binding IsDownloadingModel, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <StackPanel>
+                            <TextBlock Text="Downloading speech model…" Style="{StaticResource RowDesc}" Margin="0,0,0,8"/>
+                            <ProgressBar Height="6" Minimum="0" Maximum="100" Value="{Binding ModelDownloadProgress, Mode=OneWay}"/>
+                        </StackPanel>
+                    </Border>
 
-                    <TextBlock Text="Overlay Color" Style="{StaticResource SubsectionHeaderStyle}"/>
-                    <TextBlock Text="Choose the accent color for the floating overlay" Style="{StaticResource DescriptionStyle}"/>
-                    <ComboBox Style="{StaticResource SettingsComboBoxStyle}"
-                              ItemsSource="{Binding OverlayColorThemes}"
-                              SelectedItem="{Binding SelectedOverlayColorTheme, Mode=TwoWay}"
-                              DisplayMemberPath="DisplayName"
-                              Width="220"
-                              HorizontalAlignment="Left"/>
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource RowGlyph}" Text="&#xEA3A;"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Show Overlay When Idle" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Display the overlay even when not recording" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="2" Style="{StaticResource FluentToggle}"
+                                      IsChecked="{Binding ShowOverlayWhenIdle}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <StackPanel>
+                            <TextBlock Text="Overlay Color" Style="{StaticResource RowTitle}"/>
+                            <TextBlock Text="Accent color for the recording overlay" Style="{StaticResource RowDesc}"
+                                       Margin="0,0,0,14"/>
+                            <ItemsControl ItemsSource="{Binding OverlaySwatches}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel MaxWidth="440"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="10" Padding="12,9" Margin="0,0,9,9" Cursor="Hand"
+                                                Background="{DynamicResource SurfaceBrush}" BorderThickness="1.5">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{Binding Brush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <Border.InputBindings>
+                                                <MouseBinding MouseAction="LeftClick"
+                                                              Command="{Binding DataContext.SelectSwatchCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                              CommandParameter="{Binding}"/>
+                                            </Border.InputBindings>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Grid Width="24" Height="24" Margin="0,0,9,0">
+                                                    <Ellipse Fill="{Binding Brush}"/>
+                                                    <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="9" Foreground="White"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                </Grid>
+                                                <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Overlay Position" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Where the recording indicator appears" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" Style="{StaticResource DarkCombo}" Width="150"
+                                      ItemsSource="{Binding OverlayPositions}" SelectedItem="{Binding SelectedOverlayPosition}"
+                                      DisplayMemberPath="DisplayName" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Start with Windows" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="Automatically start when you sign in" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" Style="{StaticResource FluentToggle}"
+                                      IsChecked="{Binding LaunchAtStartup}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{StaticResource SettingCard}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="App Updates" Style="{StaticResource RowTitle}"/>
+                                <TextBlock Text="{Binding VersionText}" Style="{StaticResource RowDesc}"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Style="{StaticResource SubtleButton}" Content="Check for Updates"
+                                    Command="{Binding CheckForUpdatesCommand}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+
+                <!-- ===== HISTORY ===== -->
+                <StackPanel Visibility="{Binding SelectedSection, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=6}">
+                    <TextBlock Text="History" Style="{StaticResource PageTitle}"/>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Style="{StaticResource DarkInput}" Margin="0,0,8,0"
+                                 Text="{Binding HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Button Grid.Column="1" Style="{StaticResource SubtleButton}" Content="Export"
+                                Command="{Binding ExportHistoryCommand}"/>
+                    </Grid>
+
+                    <ItemsControl ItemsSource="{Binding HistoryRows}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding GroupLabel}" FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                               Foreground="{DynamicResource TextMutedBrush}" Margin="4,13,0,7"
+                                               Visibility="{Binding ShowGroup, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                    <Border x:Name="rowBorder" CornerRadius="6" Padding="12" Background="Transparent"
+                                            Cursor="Hand" MouseLeftButtonUp="HistoryRow_Click"
+                                            Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Border.ContextMenu>
+                                            <ContextMenu Style="{StaticResource DarkMenu}">
+                                                <MenuItem Header="Copy text"
+                                                          Command="{Binding PlacementTarget.Tag.CopyHistoryTextCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                          CommandParameter="{Binding}"/>
+                                                <MenuItem Header="Re-transcribe with Cloud"
+                                                          Command="{Binding PlacementTarget.Tag.RetranscribeCloudCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                          CommandParameter="{Binding}"/>
+                                                <MenuItem Header="Re-transcribe On-device"
+                                                          Command="{Binding PlacementTarget.Tag.RetranscribeLocalCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                          CommandParameter="{Binding}"/>
+                                                <Separator/>
+                                                <MenuItem Header="Delete"
+                                                          Command="{Binding PlacementTarget.Tag.DeleteHistoryRowCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                          CommandParameter="{Binding}"/>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="96"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding TimeText}" FontSize="12" FontWeight="Bold"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                                <TextBlock Text="{Binding MetaText}" FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                                           Margin="0,3,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource ErrorBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding Text}" FontSize="12.5"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
+                                                       LineHeight="19"/>
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding HistoryStatsText}" Style="{StaticResource RowTitle}" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" Style="{StaticResource SubtleButton}" Content="Clear All…"
+                                    Foreground="{StaticResource ErrorBrush}" Command="{Binding ClearHistoryCommand}"/>
+                        </Grid>
+                    </Border>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

@@ -11,440 +11,554 @@ using AIDictation.Services;
 namespace AIDictation.Views;
 
 /// <summary>
-/// Compact floating overlay window for recording visualization.
-/// Shows recording animation, processing spinner, or result preview.
+/// Morphing recording pill, ported from the macOS RecordingOverlayView:
+/// a hairline strip when idle that morphs into the accent capsule with
+/// idle dots, a live waveform (with hover cancel/stop controls), or the
+/// 10-dot processing sweep. No text — pure graphic.
 /// </summary>
 public partial class OverlayWindow : Window
 {
-    // MARK: - Constants
-    
-    private static class Constants
+    // MARK: - Constants (mac metrics at 0.75 scale)
+
+    private static class Metrics
     {
-        public const int WaveformBarCount = 10;
-        public const double WaveformBarWidth = 5;
-        public const double WaveformBarGap = 3;
-        public const double WaveformMinHeight = 5;
-        public const double WaveformMaxHeight = 24;
-        public const double ResultDisplayDuration = 3.0; // seconds
-        public const double ErrorDisplayDuration = 4.0; // seconds
+        public const int ElementCount = 10;
+        public const double DotSize = 4;
+        public const double DotSpacing = 4.75;
+        public const double MaxBarHeight = 17.5;
+
+        public const double CollapsedWidth = 53;
+        public const double CollapsedHeight = 7;
+        public const double ActiveWidth = 112;
+        public const double ControlsWidth = 146;
+        public const double ActiveHeight = 30;
+
+        public const int MorphMs = 260;
+        public const int CollapseMs = 150;
+        public const int ContentFadeMs = 140;
+        public const int ContentRevealDelayMs = 260;
+        public const int ButtonRevealDelayMs = 90;
+        public const double SweepCycleSeconds = 2.2;
     }
-    
+
+    private enum PillState
+    {
+        Collapsed,
+        IdleExpanded,
+        Recording,
+        RecordingControls,
+        Processing
+    }
+
     // MARK: - Private Properties
-    
+
     private readonly AppState _appState;
-    private readonly DispatcherTimer _waveformTimer;
-    private readonly DispatcherTimer _autoHideTimer;
-    private readonly Rectangle[] _waveformBars;
-    private readonly Ellipse[] _idleDots;
+    private readonly DispatcherTimer _waveTimer;
+    private readonly DispatcherTimer _sweepTimer;
+    private readonly DispatcherTimer _resetTimer;
+    private readonly Rectangle[] _bars = new Rectangle[Metrics.ElementCount];
+    private readonly Ellipse[] _sweep = new Ellipse[Metrics.ElementCount];
+    private readonly double[] _waveValues = new double[Metrics.ElementCount];
     private readonly Random _random = new();
-    private readonly double[] _waveformValues;
+    private readonly SolidColorBrush _pillBrush = new(Color.FromArgb(0xF0, 0x78, 0x6E, 0x61));
+
+    private PillState _state = PillState.Collapsed;
     private OverlayPosition _position = OverlayPosition.Bottom;
     private OverlayColorTheme _colorTheme = OverlayColorTheme.Orange;
-    private bool _hideWhenIdle = false;
-    
+    private bool _hideWhenIdle;
+    private bool _isHovering;
+    private DateTime _sweepStart = DateTime.Now;
+    private DispatcherOperation? _pendingReveal;
+
+    private static readonly KeySpline MorphSpline = new(0.2, 0.8, 0.2, 1);
+
     // MARK: - Initialization
-    
+
     public OverlayWindow()
     {
         InitializeComponent();
-        
+
         _appState = AppState.Shared;
-        _waveformValues = new double[Constants.WaveformBarCount];
-        _waveformBars = new Rectangle[Constants.WaveformBarCount];
-        _idleDots = new Ellipse[Constants.WaveformBarCount];
-        
-        // Initialize waveform bars
-        InitializeWaveform();
-        
-        // Setup timers
-        _waveformTimer = new DispatcherTimer
+        Pill.Background = _pillBrush;
+        Pill.BorderBrush = new SolidColorBrush(Color.FromArgb(0x3D, 0xFF, 0xFF, 0xFF));
+        Pill.BorderThickness = new Thickness(0.75);
+
+        BuildElements();
+
+        _waveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        _waveTimer.Tick += (_, _) => UpdateWave(_appState.CurrentAudioLevel);
+
+        _sweepTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+        _sweepTimer.Tick += (_, _) => UpdateSweep();
+
+        _resetTimer = new DispatcherTimer();
+        _resetTimer.Tick += (_, _) => { _resetTimer.Stop(); _appState.Reset(); };
+
+        _appState.StateChanged += OnAppStateChanged;
+        _appState.AudioLevelUpdated += OnAudioLevel;
+
+        Loaded += (_, _) =>
         {
-            Interval = TimeSpan.FromMilliseconds(50)
+            UpdateWindowPosition();
+            SyncToAppState();
         };
-        _waveformTimer.Tick += WaveformTimer_Tick;
-        
-        _autoHideTimer = new DispatcherTimer();
-        _autoHideTimer.Tick += AutoHideTimer_Tick;
-        
-        // Subscribe to state changes
-        _appState.StateChanged += AppState_StateChanged;
-        _appState.AudioLevelUpdated += AppState_AudioLevelUpdated;
-        _appState.PropertyChanged += AppState_PropertyChanged;
-        
-        // Initialize position
-        Loaded += OverlayWindow_Loaded;
     }
-    
+
     // MARK: - Public API
-    
-    /// <summary>
-    /// Updates the overlay position setting
-    /// </summary>
+
     public void SetPosition(OverlayPosition position)
     {
         _position = position;
         UpdateWindowPosition();
     }
-    
-    /// <summary>
-    /// Sets whether to hide the overlay when idle
-    /// </summary>
+
     public void SetHideWhenIdle(bool hide)
     {
         _hideWhenIdle = hide;
-        UpdateVisibilityForState(_appState.CurrentState);
+        SyncToAppState();
     }
 
-    /// <summary>
-    /// Updates the overlay color theme.
-    /// </summary>
     public void SetColorTheme(OverlayColorTheme colorTheme)
     {
         _colorTheme = colorTheme;
-        ApplyColorTheme();
+        if (_state != PillState.Collapsed)
+        {
+            AnimatePillColor(ActiveColor());
+        }
     }
-    
-    /// <summary>
-    /// Shows the overlay with fade-in animation
-    /// </summary>
+
+    internal void SetValidationHover(bool hovering)
+    {
+        _isHovering = hovering;
+        SyncToAppState();
+    }
+
     public void ShowOverlay()
     {
-        if (!IsVisible)
-        {
-            Show();
-            var fadeIn = (Storyboard)FindResource("FadeInAnimation");
-            fadeIn.Begin(this);
-        }
+        if (!IsVisible) Show();
     }
-    
-    /// <summary>
-    /// Hides the overlay with fade-out animation
-    /// </summary>
+
     public void HideOverlay()
     {
-        if (IsVisible)
-        {
-            var fadeOut = (Storyboard)FindResource("FadeOutAnimation");
-            fadeOut.Completed += (s, e) => Hide();
-            fadeOut.Begin(this);
-        }
+        if (IsVisible) Hide();
     }
-    
-    // MARK: - Private Methods
-    
-    private void InitializeWaveform()
-    {
-        for (int i = 0; i < Constants.WaveformBarCount; i++)
-        {
-            var bar = new Rectangle
-            {
-                Width = Constants.WaveformBarWidth,
-                Height = Constants.WaveformMinHeight,
-                RadiusX = Constants.WaveformBarWidth / 2,
-                RadiusY = Constants.WaveformBarWidth / 2
-            };
 
+    // MARK: - Element construction
+
+    private void BuildElements()
+    {
+        for (int i = 0; i < Metrics.ElementCount; i++)
+        {
             var dot = new Ellipse
             {
-                Width = Constants.WaveformBarWidth,
-                Height = Constants.WaveformBarWidth
+                Width = Metrics.DotSize,
+                Height = Metrics.DotSize,
+                Fill = new SolidColorBrush(Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF)),
+                Margin = new Thickness(0, 0, i == Metrics.ElementCount - 1 ? 0 : Metrics.DotSpacing, 0)
             };
-            
-            _waveformBars[i] = bar;
-            _idleDots[i] = dot;
-            _waveformValues[i] = Constants.WaveformMinHeight;
-            
-            WaveformCanvas.Children.Add(bar);
-            IdleWaveCanvas.Children.Add(dot);
-        }
-        
-        WaveformCanvas.Loaded += (s, e) => PositionWaveformBars();
-        IdleWaveCanvas.Loaded += (s, e) => PositionIdleDots();
-        ApplyColorTheme();
-    }
-    
-    private void PositionWaveformBars()
-    {
-        double totalWidth = Constants.WaveformBarCount * (Constants.WaveformBarWidth + Constants.WaveformBarGap) - Constants.WaveformBarGap;
-        double startX = (WaveformCanvas.ActualWidth - totalWidth) / 2;
-        double centerY = WaveformCanvas.ActualHeight / 2;
-        
-        for (int i = 0; i < Constants.WaveformBarCount; i++)
-        {
-            var bar = _waveformBars[i];
-            System.Windows.Controls.Canvas.SetLeft(bar, startX + i * (Constants.WaveformBarWidth + Constants.WaveformBarGap));
-            System.Windows.Controls.Canvas.SetTop(bar, centerY - bar.Height / 2);
-        }
-    }
+            IdleDots.Children.Add(dot);
 
-    private void PositionIdleDots()
-    {
-        double totalWidth = Constants.WaveformBarCount * (Constants.WaveformBarWidth + Constants.WaveformBarGap) - Constants.WaveformBarGap;
-        double startX = (IdleWaveCanvas.ActualWidth - totalWidth) / 2;
-        double centerY = IdleWaveCanvas.ActualHeight / 2;
+            var bar = new Rectangle
+            {
+                Width = Metrics.DotSize,
+                Height = Metrics.DotSize,
+                RadiusX = 2,
+                RadiusY = 2,
+                Fill = new SolidColorBrush(Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, i == Metrics.ElementCount - 1 ? 0 : Metrics.DotSpacing, 0)
+            };
+            _bars[i] = bar;
+            _waveValues[i] = Metrics.DotSize;
+            WaveBars.Children.Add(bar);
 
-        for (int i = 0; i < Constants.WaveformBarCount; i++)
-        {
-            var dot = _idleDots[i];
-            System.Windows.Controls.Canvas.SetLeft(dot, startX + i * (Constants.WaveformBarWidth + Constants.WaveformBarGap));
-            System.Windows.Controls.Canvas.SetTop(dot, centerY - dot.Height / 2);
+            var sweepDot = new Ellipse
+            {
+                Width = Metrics.DotSize,
+                Height = Metrics.DotSize,
+                Fill = new SolidColorBrush(Color.FromArgb(0xB8, 0xFF, 0xFF, 0xFF)),
+                Opacity = 0.28,
+                Margin = new Thickness(0, 0, i == Metrics.ElementCount - 1 ? 0 : Metrics.DotSpacing, 0)
+            };
+            _sweep[i] = sweepDot;
+            SweepDots.Children.Add(sweepDot);
         }
     }
 
-    private void ApplyColorTheme()
+    // MARK: - State machine
+
+    private void SyncToAppState()
     {
-        var accent = GetAccentColor(_colorTheme);
-        var accentBrush = new SolidColorBrush(accent);
-        var background = _colorTheme == OverlayColorTheme.Graphite
-            ? Color.FromArgb(246, 42, 42, 42)
-            : Color.FromArgb(246, 31, 31, 31);
-
-        OverlayRoot.Background = new SolidColorBrush(background);
-
-        foreach (var bar in _waveformBars)
+        switch (_appState.CurrentState)
         {
-            bar.Fill = accentBrush;
-        }
-
-        foreach (var dot in _idleDots)
-        {
-            dot.Fill = accentBrush;
-            dot.Opacity = 0.9;
+            case AppState.State.Recording:
+                ApplyState(_isHovering ? PillState.RecordingControls : PillState.Recording);
+                break;
+            case AppState.State.Processing:
+                ApplyState(PillState.Processing);
+                break;
+            case AppState.State.Result:
+            case AppState.State.Error:
+                ApplyState(PillState.Collapsed);
+                _resetTimer.Interval = TimeSpan.FromSeconds(1.5);
+                _resetTimer.Start();
+                break;
+            default:
+                ApplyState(_isHovering ? PillState.IdleExpanded : PillState.Collapsed);
+                break;
         }
     }
 
-    private static Color GetAccentColor(OverlayColorTheme colorTheme)
+    private void ApplyState(PillState target)
     {
-        return colorTheme switch
+        if (_state == target) return;
+        var previous = _state;
+        _state = target;
+
+        // Idle visibility handling
+        if (target == PillState.Collapsed && _hideWhenIdle &&
+            _appState.CurrentState is AppState.State.Idle or AppState.State.Result or AppState.State.Error)
         {
-            OverlayColorTheme.Blue => Color.FromRgb(0, 122, 255),
-            OverlayColorTheme.Green => Color.FromRgb(52, 199, 89),
-            OverlayColorTheme.Purple => Color.FromRgb(175, 82, 222),
-            OverlayColorTheme.Pink => Color.FromRgb(255, 45, 146),
-            OverlayColorTheme.Graphite => Color.FromRgb(142, 142, 147),
-            _ => Color.FromRgb(255, 138, 31)
+            HideOverlay();
+            return;
+        }
+        ShowOverlay();
+
+        _waveTimer.Stop();
+        _sweepTimer.Stop();
+
+        var expanding = previous == PillState.Collapsed && target != PillState.Collapsed;
+        var collapsing = target == PillState.Collapsed;
+
+        // Geometry
+        double width = target switch
+        {
+            PillState.Collapsed => Metrics.CollapsedWidth,
+            PillState.RecordingControls => Metrics.ControlsWidth,
+            _ => Metrics.ActiveWidth
         };
+        double height = collapsing ? Metrics.CollapsedHeight : Metrics.ActiveHeight;
+        Pill.CornerRadius = new CornerRadius(height / 2);
+        Pill.BorderThickness = new Thickness(collapsing ? 0.75 : 0);
+
+        AnimateSize(width, height, collapsing ? Metrics.CollapseMs : Metrics.MorphMs, collapsing);
+
+        // Background color
+        AnimatePillColor(collapsing
+            ? Color.FromArgb(0xF0, 0x78, 0x6E, 0x61)
+            : ActiveColor());
+
+        // Content swap
+        _pendingReveal?.Abort();
+        PillContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(60)));
+
+        if (collapsing) return;
+
+        var revealDelay = expanding ? Metrics.ContentRevealDelayMs : 80;
+        _pendingReveal = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            // State may have changed while waiting
+            if (_state != target) return;
+
+            IdleDots.Visibility = target == PillState.IdleExpanded ? Visibility.Visible : Visibility.Collapsed;
+            WaveBars.Visibility = target is PillState.Recording or PillState.RecordingControls
+                ? Visibility.Visible : Visibility.Collapsed;
+            SweepDots.Visibility = target == PillState.Processing ? Visibility.Visible : Visibility.Collapsed;
+            ControlsRow.Visibility = target == PillState.RecordingControls ? Visibility.Visible : Visibility.Collapsed;
+
+            if (target is PillState.Recording or PillState.RecordingControls)
+            {
+                _waveTimer.Start();
+            }
+            if (target == PillState.Processing)
+            {
+                _sweepStart = DateTime.Now;
+                _sweepTimer.Start();
+            }
+            if (target == PillState.RecordingControls)
+            {
+                RevealButton(CancelScale, CancelButton);
+                RevealButton(StopScale, StopButton);
+            }
+
+            var fade = new DoubleAnimation(1, TimeSpan.FromMilliseconds(Metrics.ContentFadeMs))
+            {
+                BeginTime = TimeSpan.FromMilliseconds(revealDelay)
+            };
+            PillContent.BeginAnimation(OpacityProperty, fade);
+        }));
     }
-    
-    private void UpdateWaveform(float audioLevel)
+
+    private void AnimateSize(double width, double height, int durationMs, bool easeOut)
     {
-        double canvasHeight = WaveformCanvas.ActualHeight;
-        if (canvasHeight <= 0) return;
-        
-        double centerY = canvasHeight / 2;
-        
-        // Shift values left
-        for (int i = 0; i < Constants.WaveformBarCount - 1; i++)
+        var widthAnim = new DoubleAnimationUsingKeyFrames();
+        var heightAnim = new DoubleAnimationUsingKeyFrames();
+        var keyTime = KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(durationMs));
+
+        if (easeOut)
         {
-            _waveformValues[i] = _waveformValues[i + 1];
-        }
-        
-        // Add new value with some randomness for visual interest
-        double targetHeight = Constants.WaveformMinHeight + 
-            (Constants.WaveformMaxHeight - Constants.WaveformMinHeight) * audioLevel;
-        targetHeight *= (0.8 + _random.NextDouble() * 0.4); // Add 80-120% variance
-        targetHeight = Math.Clamp(targetHeight, Constants.WaveformMinHeight, Constants.WaveformMaxHeight);
-        _waveformValues[Constants.WaveformBarCount - 1] = targetHeight;
-        
-        // Update bars
-        for (int i = 0; i < Constants.WaveformBarCount; i++)
-        {
-            var bar = _waveformBars[i];
-            bar.Height = _waveformValues[i];
-            System.Windows.Controls.Canvas.SetTop(bar, centerY - bar.Height / 2);
-        }
-    }
-    
-    private void UpdateWindowPosition()
-    {
-        var workArea = SystemParameters.WorkArea;
-        
-        Left = (workArea.Width - Width) / 2 + workArea.Left;
-        
-        if (_position == OverlayPosition.Top)
-        {
-            Top = workArea.Top + 20;
+            var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+            widthAnim.KeyFrames.Add(new EasingDoubleKeyFrame(width, keyTime, ease));
+            heightAnim.KeyFrames.Add(new EasingDoubleKeyFrame(height, keyTime, ease));
         }
         else
         {
-            Top = workArea.Bottom - Height - 20;
+            widthAnim.KeyFrames.Add(new SplineDoubleKeyFrame(width, keyTime, MorphSpline));
+            heightAnim.KeyFrames.Add(new SplineDoubleKeyFrame(height, keyTime, MorphSpline));
+        }
+
+        Pill.BeginAnimation(WidthProperty, widthAnim);
+        Pill.BeginAnimation(HeightProperty, heightAnim);
+    }
+
+    private void AnimatePillColor(Color target)
+    {
+        _pillBrush.BeginAnimation(SolidColorBrush.ColorProperty,
+            new ColorAnimation(target, TimeSpan.FromMilliseconds(200)));
+    }
+
+    private static void RevealButton(ScaleTransform scale, UIElement element)
+    {
+        element.Opacity = 0;
+        var begin = TimeSpan.FromMilliseconds(Metrics.ButtonRevealDelayMs);
+
+        element.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)) { BeginTime = begin });
+
+        var anim = new DoubleAnimation(0.74, 1, TimeSpan.FromMilliseconds(160))
+        {
+            BeginTime = begin,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
+    }
+
+    private Color ActiveColor()
+    {
+        if (_appState.IsCommandMode && _appState.CurrentState == AppState.State.Recording)
+        {
+            return Color.FromRgb(0x2F, 0x6B, 0xFF);
+        }
+
+        return _colorTheme switch
+        {
+            OverlayColorTheme.Blue => Color.FromRgb(0x3B, 0x82, 0xF6),
+            OverlayColorTheme.Green => Color.FromRgb(0x3B, 0xC4, 0x5A),
+            OverlayColorTheme.Purple => Color.FromRgb(0xA8, 0x55, 0xF7),
+            OverlayColorTheme.Pink => Color.FromRgb(0xFF, 0x7E, 0xC7),
+            OverlayColorTheme.Graphite => Color.FromRgb(0x6E, 0x6E, 0x6E),
+            _ => Color.FromRgb(0xF1, 0x6E, 0x00)
+        };
+    }
+
+    // MARK: - Wave / sweep animation
+
+    private void UpdateWave(float audioLevel)
+    {
+        for (int i = 0; i < Metrics.ElementCount - 1; i++)
+        {
+            _waveValues[i] = _waveValues[i + 1];
+        }
+
+        double target = Metrics.DotSize +
+            (Metrics.MaxBarHeight - Metrics.DotSize) * Math.Clamp(audioLevel, 0f, 1f);
+        target *= 0.8 + _random.NextDouble() * 0.4;
+        _waveValues[Metrics.ElementCount - 1] =
+            Math.Clamp(target, Metrics.DotSize, Metrics.MaxBarHeight);
+
+        for (int i = 0; i < Metrics.ElementCount; i++)
+        {
+            _bars[i].Height = _waveValues[i];
         }
     }
-    
-    private void UpdateVisibilityForState(AppState.State state)
+
+    /// <summary>Exact port of the macOS OverlayLoadingDotsView lit-range sweep.</summary>
+    private void UpdateSweep()
     {
-        // Hide all panels first
-        IdlePanel.Visibility = Visibility.Collapsed;
-        RecordingPanel.Visibility = Visibility.Collapsed;
-        ProcessingPanel.Visibility = Visibility.Collapsed;
-        ResultPanel.Visibility = Visibility.Collapsed;
-        ErrorPanel.Visibility = Visibility.Collapsed;
-        
-        // Stop animations
-        _waveformTimer.Stop();
-        _autoHideTimer.Stop();
-        
-        var recordingPulse = (Storyboard)FindResource("RecordingPulseAnimation");
-        var spinnerAnim = (Storyboard)FindResource("SpinnerAnimation");
-        
-        recordingPulse.Stop(this);
-        spinnerAnim.Stop(this);
-        
-        switch (state)
+        var progress = (DateTime.Now - _sweepStart).TotalSeconds % Metrics.SweepCycleSeconds
+                       / Metrics.SweepCycleSeconds;
+        var (lo, hi) = LitRange(progress);
+
+        for (int i = 0; i < Metrics.ElementCount; i++)
         {
-            case AppState.State.Idle:
-                if (_hideWhenIdle)
-                {
-                    HideOverlay();
-                }
-                else
-                {
-                    IdlePanel.Visibility = Visibility.Visible;
-                    ShowOverlay();
-                }
-                break;
-                
-            case AppState.State.Recording:
-                RecordingPanel.Visibility = Visibility.Visible;
-                recordingPulse.Begin(this, true);
-                _waveformTimer.Start();
-                ShowOverlay();
-                break;
-                
-            case AppState.State.Processing:
-                ProcessingPanel.Visibility = Visibility.Visible;
-                spinnerAnim.Begin(this, true);
-                ShowOverlay();
-                break;
-                
-            case AppState.State.Result:
-                ResultPanel.Visibility = Visibility.Visible;
-                ResultPreviewText.Text = TruncateText(_appState.TranscriptionText, 40);
-                ShowOverlay();
-                
-                // Auto-hide after delay
-                _autoHideTimer.Interval = TimeSpan.FromSeconds(Constants.ResultDisplayDuration);
-                _autoHideTimer.Start();
-                break;
-                
-            case AppState.State.Error:
-                ErrorPanel.Visibility = Visibility.Visible;
-                ErrorText.Text = TruncateText(_appState.ErrorMessage, 35);
-                ShowOverlay();
-                
-                // Auto-hide after delay
-                _autoHideTimer.Interval = TimeSpan.FromSeconds(Constants.ErrorDisplayDuration);
-                _autoHideTimer.Start();
-                break;
+            _sweep[i].Opacity = i >= lo && i <= hi ? 1.0 : 0.28;
         }
     }
-    
-    private string TruncateText(string text, int maxLength)
+
+    private static (int, int) LitRange(double progress)
     {
-        if (string.IsNullOrEmpty(text)) return string.Empty;
-        
-        // Replace newlines with spaces
-        text = text.Replace("\r\n", " ").Replace("\n", " ").Trim();
-        
-        if (text.Length <= maxLength) return text;
-        return text[..(maxLength - 1)] + "…";
-    }
-    
-    private string FormatDuration(TimeSpan duration)
-    {
-        if (duration.TotalHours >= 1)
+        const int last = Metrics.ElementCount - 1;
+
+        if (progress < 0.32)
         {
-            return duration.ToString(@"h\:mm\:ss");
+            return (0, (int)Math.Round(EaseInOut(progress / 0.32) * last));
         }
-        return duration.ToString(@"m\:ss");
-    }
-    
-    // MARK: - Event Handlers
-    
-    private void OverlayWindow_Loaded(object sender, RoutedEventArgs e)
-    {
-        UpdateWindowPosition();
-        UpdateVisibilityForState(_appState.CurrentState);
-    }
-    
-    private void AppState_StateChanged(object? sender, AppState.StateChangedEventArgs e)
-    {
-        Dispatcher.Invoke(() => UpdateVisibilityForState(e.NewState));
-    }
-    
-    private void AppState_AudioLevelUpdated(object? sender, float level)
-    {
-        Dispatcher.Invoke(() =>
+        if (progress < 0.5)
         {
-            if (_appState.CurrentState == AppState.State.Recording)
+            return ((int)Math.Round(EaseInOut((progress - 0.32) / 0.18) * last), last);
+        }
+        if (progress < 0.82)
+        {
+            return ((int)Math.Round((1 - EaseInOut((progress - 0.5) / 0.32)) * last), last);
+        }
+        return (0, (int)Math.Round((1 - EaseInOut((progress - 0.82) / 0.18)) * last));
+    }
+
+    private static double EaseInOut(double v) =>
+        v < 0.5 ? 2 * v * v : 1 - Math.Pow(-2 * v + 2, 2) / 2;
+
+    // MARK: - Positioning
+
+    private void UpdateWindowPosition()
+    {
+        // Before the first Show() there is no PresentationSource, so the
+        // pixel->DIP transform is unavailable; the Loaded handler repositions.
+        if (!IsLoaded) return;
+
+        var workArea = GetActiveMonitorWorkArea();
+        Left = workArea.Left + (workArea.Width - Width) / 2;
+        Top = _position == OverlayPosition.Top
+            ? workArea.Top + 8
+            : workArea.Bottom - Height - 8;
+    }
+
+    /// <summary>
+    /// Work area (in device-independent units) of the monitor under the cursor,
+    /// so the overlay follows the user on multi-monitor setups instead of
+    /// sticking to the primary display.
+    /// </summary>
+    private Rect GetActiveMonitorWorkArea()
+    {
+        try
+        {
+            if (!NativeMonitor.GetCursorPos(out var point))
             {
-                UpdateWaveform(level);
+                return SystemParameters.WorkArea;
             }
-        });
-    }
-    
-    private void AppState_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(AppState.RecordingDuration))
-        {
-            Dispatcher.Invoke(() =>
+
+            var monitor = NativeMonitor.MonitorFromPoint(point, NativeMonitor.MONITOR_DEFAULTTONEAREST);
+            var info = new NativeMonitor.MONITORINFO
             {
-                DurationText.Text = FormatDuration(_appState.RecordingDuration);
-            });
-        }
-    }
-    
-    private void WaveformTimer_Tick(object? sender, EventArgs e)
-    {
-        // Simulate waveform movement when no real audio level updates
-        if (_appState.CurrentState == AppState.State.Recording)
-        {
-            UpdateWaveform(_appState.CurrentAudioLevel);
-        }
-    }
-    
-    private void AutoHideTimer_Tick(object? sender, EventArgs e)
-    {
-        _autoHideTimer.Stop();
-        _appState.Reset();
-    }
+                cbSize = System.Runtime.InteropServices.Marshal.SizeOf<NativeMonitor.MONITORINFO>()
+            };
+            if (monitor == IntPtr.Zero || !NativeMonitor.GetMonitorInfo(monitor, ref info))
+            {
+                return SystemParameters.WorkArea;
+            }
 
-    private void OverlayRoot_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (_appState.CurrentState == AppState.State.Idle ||
-            _appState.CurrentState == AppState.State.Result ||
-            _appState.CurrentState == AppState.State.Error)
+            // Native work-area pixels -> WPF device-independent units.
+            var topLeft = new Point(info.rcWork.left, info.rcWork.top);
+            var bottomRight = new Point(info.rcWork.right, info.rcWork.bottom);
+            var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice;
+            if (transform.HasValue)
+            {
+                topLeft = transform.Value.Transform(topLeft);
+                bottomRight = transform.Value.Transform(bottomRight);
+            }
+            return new Rect(topLeft, bottomRight);
+        }
+        catch
         {
-            StartRecording();
+            return SystemParameters.WorkArea;
         }
     }
 
-    private void StopButton_Click(object sender, RoutedEventArgs e)
+    private static class NativeMonitor
     {
-        StopRecording();
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int left;
+            public int top;
+            public int right;
+            public int bottom;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+    }
+
+    // MARK: - Event Handlers
+
+    private void OnAppStateChanged(object? sender, AppState.StateChangedEventArgs e)
+    {
+        Dispatcher.Invoke(SyncToAppState);
+    }
+
+    private void OnAudioLevel(object? sender, float level)
+    {
+        // Wave is driven by the 50ms timer; level is read from AppState there.
+    }
+
+    private void Pill_MouseEnter(object sender, MouseEventArgs e)
+    {
+        _isHovering = true;
+        SyncToAppState();
+    }
+
+    private void Pill_MouseLeave(object sender, MouseEventArgs e)
+    {
+        _isHovering = false;
+        SyncToAppState();
+    }
+
+    private void Pill_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_appState.CurrentState is AppState.State.Idle or AppState.State.Result or AppState.State.Error)
+        {
+            OverlayService.Shared.RequestRecordingStart();
+        }
+    }
+
+    private void CancelButton_Click(object sender, MouseButtonEventArgs e)
+    {
         e.Handled = true;
+        OverlayService.Shared.RequestRecordingCancel();
     }
 
-    private void StartRecording()
+    private void StopButton_Click(object sender, MouseButtonEventArgs e)
     {
-        OverlayService.Shared.RequestRecordingStart();
+        e.Handled = true;
+        if (_appState.IsRecording)
+        {
+            OverlayService.Shared.RequestRecordingStop();
+        }
     }
 
-    private void StopRecording()
-    {
-        if (!_appState.IsRecording) return;
-        OverlayService.Shared.RequestRecordingStop();
-    }
-    
     // MARK: - Cleanup
-    
+
     protected override void OnClosed(EventArgs e)
     {
-        _appState.StateChanged -= AppState_StateChanged;
-        _appState.AudioLevelUpdated -= AppState_AudioLevelUpdated;
-        _appState.PropertyChanged -= AppState_PropertyChanged;
-        _waveformTimer.Stop();
-        _autoHideTimer.Stop();
+        _appState.StateChanged -= OnAppStateChanged;
+        _appState.AudioLevelUpdated -= OnAudioLevel;
+        _waveTimer.Stop();
+        _sweepTimer.Stop();
+        _resetTimer.Stop();
         base.OnClosed(e);
     }
 }

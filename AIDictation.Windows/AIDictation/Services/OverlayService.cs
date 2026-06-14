@@ -25,6 +25,7 @@ public class OverlayService
 
     public event EventHandler<bool>? RecordingStartRequested;
     public event EventHandler? RecordingStopRequested;
+    public event EventHandler? RecordingCancelRequested;
     
     // MARK: - Initialization
     
@@ -164,5 +165,10 @@ public class OverlayService
     public void RequestRecordingStop()
     {
         RecordingStopRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RequestRecordingCancel()
+    {
+        RecordingCancelRequested?.Invoke(this, EventArgs.Empty);
     }
 }

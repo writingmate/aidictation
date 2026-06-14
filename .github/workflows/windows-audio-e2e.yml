@@ -1,0 +1,138 @@
+name: Windows Audio E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/windows-actions-smoke
+    paths:
+      - '.github/workflows/windows-audio-e2e.yml'
+      - 'AIDictation.Windows/scripts/audio-e2e.ps1'
+      - 'AIDictation.Windows/AIDictation/**'
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
+  E2E_DIR: 'AIDictation.Windows/artifacts/audio-e2e'
+  # Same backend configuration as production builds
+  TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
+  TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
+  TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
+  AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+  AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+  AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+  STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+
+jobs:
+  audio-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Start Windows audio services
+      shell: pwsh
+      run: |
+        foreach ($svc in @("AudioEndpointBuilder", "Audiosrv")) {
+          Set-Service -Name $svc -StartupType Automatic
+          Start-Service -Name $svc -ErrorAction SilentlyContinue
+        }
+        Get-Service Audiosrv, AudioEndpointBuilder | Format-Table Name, Status
+
+    - name: Install VB-CABLE virtual audio device
+      shell: pwsh
+      run: |
+        $ProgressPreference = 'SilentlyContinue'
+        $zip = Join-Path $env:RUNNER_TEMP 'vbcable.zip'
+        $dir = Join-Path $env:RUNNER_TEMP 'vbcable'
+        $downloaded = $false
+        foreach ($url in @(
+          'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip',
+          'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip')) {
+          try {
+            Invoke-WebRequest $url -OutFile $zip -UserAgent 'Mozilla/5.0'
+            $downloaded = $true
+            Write-Host "Downloaded $url"
+            break
+          } catch { Write-Host "Download failed: $url ($_)" }
+        }
+        if (-not $downloaded) { throw 'Could not download VB-CABLE driver pack' }
+        Expand-Archive $zip -DestinationPath $dir -Force
+
+        # Pre-trust the driver signing certificate so the silent install shows no prompt
+        $signedFile = Get-ChildItem $dir -Recurse -Include *.cat, VBCABLE_Setup_x64.exe |
+          Where-Object { (Get-AuthenticodeSignature $_.FullName).SignerCertificate } |
+          Select-Object -First 1
+        if ($signedFile) {
+          $cert = (Get-AuthenticodeSignature $signedFile.FullName).SignerCertificate
+          Write-Host "Trusting publisher cert: $($cert.Subject)"
+          $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPublisher', 'LocalMachine')
+          $store.Open('ReadWrite'); $store.Add($cert); $store.Close()
+        } else {
+          Write-Host '::warning::No Authenticode signature found in driver pack'
+        }
+
+        Start-Process -FilePath (Join-Path $dir 'VBCABLE_Setup_x64.exe') -ArgumentList '-i', '-h' -Wait
+        Start-Sleep -Seconds 5
+        Restart-Service AudioEndpointBuilder -Force -ErrorAction SilentlyContinue
+        Restart-Service Audiosrv -Force
+        Start-Sleep -Seconds 5
+
+        Get-CimInstance Win32_SoundDevice | Format-Table Name, Status
+        Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table FriendlyName, Status
+        if (-not (Get-CimInstance Win32_SoundDevice | Where-Object Name -like '*VB-Audio*')) {
+          throw 'VB-CABLE driver did not install (no VB-Audio sound device present)'
+        }
+
+    - name: Allow microphone access for desktop apps
+      shell: pwsh
+      run: |
+        $paths = @(
+          'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone',
+          'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged',
+          'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone'
+        )
+        foreach ($p in $paths) {
+          New-Item -Path $p -Force | Out-Null
+          Set-ItemProperty -Path $p -Name Value -Value 'Allow'
+        }
+
+    - name: Install ffmpeg
+      shell: pwsh
+      run: choco install ffmpeg -y --no-progress
+
+    - name: Publish app
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration Release
+        --runtime win-x64
+        --self-contained true
+        --output ${{ env.PUBLISH_DIR }}
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
+
+    - name: Run audio E2E
+      shell: pwsh
+      run: >
+        AIDictation.Windows/scripts/audio-e2e.ps1
+        -ExePath "${{ env.PUBLISH_DIR }}/AIDictation.exe"
+        -OutDir "${{ env.E2E_DIR }}"
+
+    - name: Upload E2E artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: audio-e2e-artifacts
+        path: ${{ env.E2E_DIR }}/
+        retention-days: 14

@@ -1,0 +1,119 @@
+name: Windows UI Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/windows-actions-smoke
+    paths:
+      - '.github/workflows/windows-ui-validation.yml'
+      - 'AIDictation.Windows/**'
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
+  SHOT_DIR: 'AIDictation.Windows/artifacts/screenshots'
+  VIDEO_DIR: 'AIDictation.Windows/artifacts/videos'
+  # Same backend configuration as production builds
+  TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
+  TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
+  TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
+  AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+  AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+  AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+  STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Publish app
+      run: >
+        dotnet publish ${{ env.PROJECT_PATH }}
+        --configuration Release
+        --runtime win-x64
+        --self-contained true
+        --output ${{ env.PUBLISH_DIR }}
+        -p:PublishSingleFile=true
+        -p:IncludeNativeLibrariesForSelfExtract=true
+        -p:EnableCompressionInSingleFile=true
+
+    - name: Drive UI and capture screenshots
+      shell: pwsh
+      run: >
+        AIDictation.Windows/scripts/validate-ui.ps1
+        -ExePath "${{ env.PUBLISH_DIR }}/AIDictation.exe"
+        -ShotDir "${{ env.SHOT_DIR }}"
+        -VideoDir "${{ env.VIDEO_DIR }}"
+
+    - name: Backend transcription smoke test
+      shell: pwsh
+      run: |
+        if (-not $env:TRANSCRIPTION_API_KEY) {
+          Write-Host "::warning::TRANSCRIPTION_API_KEY not set, skipping backend smoke test"
+          exit 0
+        }
+
+        # Synthesize a known phrase to WAV and run it through the same endpoint the app uses
+        Add-Type -AssemblyName System.Speech
+        $wav = Join-Path $env:RUNNER_TEMP "smoke.wav"
+        $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+        $synth.SetOutputToWaveFile($wav)
+        $synth.Speak("Hello world, this is a dictation test.")
+        $synth.Dispose()
+
+        $endpoint = if ($env:TRANSCRIPTION_ENDPOINT) { $env:TRANSCRIPTION_ENDPOINT } else { "https://writingmate.ai/api/openai/v1/audio/transcriptions" }
+        $model = if ($env:TRANSCRIPTION_MODEL) { $env:TRANSCRIPTION_MODEL } else { "groq/whisper-large-v3-turbo" }
+
+        # curl produces standard multipart encoding; PowerShell's -Form is rejected by the backend
+        $raw = & curl.exe -s -X POST $endpoint `
+          -H "Authorization: Bearer $env:TRANSCRIPTION_API_KEY" `
+          -F "file=@$wav;type=audio/wav" `
+          -F "model=$model" `
+          -F "temperature=0" `
+          -F "response_format=text" `
+          -w "`n%{http_code}"
+
+        $lines = $raw -split "`n"
+        $statusCode = $lines[-1].Trim()
+        $response = ($lines[0..($lines.Length - 2)] -join "`n").Trim()
+        Write-Host "HTTP $statusCode"
+        Write-Host "Transcription response: $response"
+
+        if ($statusCode -ne "200") {
+          throw "Transcription request failed with HTTP ${statusCode}: $response"
+        }
+
+        if ("$response" -notmatch "(?i)hello") {
+          throw "Transcription did not contain expected phrase: $response"
+        }
+        Write-Host "Backend transcription smoke test passed"
+
+    - name: Upload screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ui-validation-screenshots
+        path: ${{ env.SHOT_DIR }}/
+        retention-days: 14
+
+    - name: Upload overlay video
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: overlay-state-video
+        path: ${{ env.VIDEO_DIR }}/
+        retention-days: 14

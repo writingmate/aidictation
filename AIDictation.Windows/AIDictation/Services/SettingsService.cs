@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using AIDictation.Models;
 using Microsoft.Win32;
@@ -53,6 +54,7 @@ public sealed class SettingsService
     private readonly string _shortcutsPath;
     private readonly string _contextRulesPath;
     private readonly JsonSerializerSettings _jsonSettings;
+    private readonly object _loadLock = new();
     private bool _isLoaded;
 
     // MARK: - Initialization
@@ -82,14 +84,17 @@ public sealed class SettingsService
     /// </summary>
     public void Load()
     {
-        if (_isLoaded) return;
+        lock (_loadLock)
+        {
+            if (_isLoaded) return;
 
-        Settings = LoadFromFile<AppSettings>(_settingsPath) ?? new AppSettings();
-        DictionaryEntries = LoadFromFile<List<DictionaryEntry>>(_dictionaryPath) ?? new List<DictionaryEntry>();
-        Shortcuts = LoadFromFile<List<Shortcut>>(_shortcutsPath) ?? new List<Shortcut>();
-        ContextRules = LoadFromFile<List<ContextRule>>(_contextRulesPath) ?? new List<ContextRule>();
+            Settings = LoadFromFile<AppSettings>(_settingsPath) ?? new AppSettings();
+            DictionaryEntries = LoadFromFile<List<DictionaryEntry>>(_dictionaryPath) ?? CreateDefaultDictionary();
+            Shortcuts = LoadFromFile<List<Shortcut>>(_shortcutsPath) ?? new List<Shortcut>();
+            ContextRules = LoadFromFile<List<ContextRule>>(_contextRulesPath) ?? new List<ContextRule>();
 
-        _isLoaded = true;
+            _isLoaded = true;
+        }
     }
 
     /// <summary>
@@ -162,6 +167,22 @@ public sealed class SettingsService
     {
         DictionaryEntries.RemoveAll(e => e.Id == id);
         SaveDictionary();
+    }
+
+    /// <summary>
+    /// First-run vocabulary seed mirroring the macOS app. Disabled by default
+    /// so the entries are visible to toggle on, not silently applied.
+    /// </summary>
+    private List<DictionaryEntry> CreateDefaultDictionary()
+    {
+        var defaults = new[]
+        {
+            "AIDictation", "Calendly", "OpenAI", "ChatGPT", "GitHub",
+            "API", "iOS", "macOS", "JSON", "SQL"
+        }.Select(word => new DictionaryEntry { Trigger = word, Replacement = null, IsEnabled = false }).ToList();
+
+        SaveToFile(_dictionaryPath, defaults);
+        return defaults;
     }
 
     // MARK: - Shortcut Management
@@ -258,8 +279,16 @@ public sealed class SettingsService
             var json = File.ReadAllText(path);
             return JsonConvert.DeserializeObject<T>(json, _jsonSettings);
         }
+        catch (IOException)
+        {
+            // Transient read failure - not corruption.
+            return null;
+        }
         catch
         {
+            // Keep the corrupt file as evidence instead of silently letting
+            // the next save overwrite it with defaults.
+            try { File.Copy(path, path + ".bak", overwrite: true); } catch { }
             return null;
         }
     }
@@ -269,7 +298,10 @@ public sealed class SettingsService
         try
         {
             var json = JsonConvert.SerializeObject(data, _jsonSettings);
-            File.WriteAllText(path, json);
+            // Write-then-rename keeps a crash mid-write from truncating the file.
+            var tempPath = path + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, path, overwrite: true);
         }
         catch
         {

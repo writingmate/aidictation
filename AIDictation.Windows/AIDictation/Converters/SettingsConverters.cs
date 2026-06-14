@@ -78,6 +78,42 @@ public class BoolToBrushConverter : IValueConverter
 }
 
 /// <summary>
+/// Multiplies a 0..1 fraction by a container width (usage progress bars).
+/// </summary>
+public class PercentWidthConverter : IMultiValueConverter
+{
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (values.Length == 2 && values[0] is double percent && values[1] is double width)
+        {
+            return Math.Max(0, Math.Min(1, percent)) * width;
+        }
+        return 0d;
+    }
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+/// <summary>
+/// Inverts a boolean. Supports two-way binding for paired radio buttons.
+/// </summary>
+public class InverseBoolConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return value is bool b ? !b : value;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        return value is bool b ? !b : value;
+    }
+}
+
+/// <summary>
 /// Converts null/non-null to Visibility. Non-null = Visible, Null = Collapsed.
 /// </summary>
 public class NullToVisibilityConverter : IValueConverter

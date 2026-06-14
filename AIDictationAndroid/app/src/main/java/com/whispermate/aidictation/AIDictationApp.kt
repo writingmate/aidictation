@@ -32,7 +32,7 @@ class AIDictationApp : Application() {
         val internalDir = File(filesDir, "parakeet")
         if (!internalDir.exists()) return
 
-        Log.d("AIDictationApp", "Removing stale internal Parakeet cache at ${internalDir.absolutePath}")
+        Log.d("AIDictationApp", "Removing stale internal on-device model cache")
         internalDir.deleteRecursively()
     }
 }

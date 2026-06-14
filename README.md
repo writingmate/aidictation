@@ -1,135 +1,138 @@
-<img width="128" height="128" alt="app icon" src="https://github.com/user-attachments/assets/e4e380ae-043f-4fe3-9968-56a03851e1c2" />
+<p align="center">
+  <img width="128" height="128" alt="AIDictation app icon" src="https://github.com/user-attachments/assets/e4e380ae-043f-4fe3-9968-56a03851e1c2" />
+</p>
 
-# AIDictation - Voice to Text for macOS
+<h1 align="center">AIDictation</h1>
 
-A native macOS **AI dictation** and **voice to text** app powered by Groq's Whisper API. Convert speech to text instantly with the fastest AI-powered dictation tool for Mac.
+<p align="center">
+  Fast, native voice-to-text for macOS, Windows, and Android.
+</p>
 
-🌐 **Website**: [aidictation.com](https://aidictation.com)
+<p align="center">
+  <a href="https://aidictation.com">Website</a>
+  ·
+  <a href="https://www.youtube.com/watch?v=FQkePjWlDqY">Video overview</a>
+  ·
+  <a href="https://github.com/writingmate/aidictation/releases">All releases</a>
+</p>
 
-📺 **Video Overview**: [Watch on YouTube](https://www.youtube.com/watch?v=FQkePjWlDqY)
+<p align="center">
+  <img width="812" height="612" alt="AIDictation screenshot" src="https://github.com/user-attachments/assets/334c3d93-d1e5-4bba-9402-d451f917457a" />
+</p>
 
-<img width="812" height="612" alt="AIDictation Screenshot" src="https://github.com/user-attachments/assets/334c3d93-d1e5-4bba-9402-d451f917457a" />
+## Download
 
-## Why AIDictation?
+| App | Latest | Download |
+| --- | --- | --- |
+| macOS | v0.0.92 | [Download DMG](https://github.com/writingmate/aidictation/releases/download/v0.0.92/AIDictation-v0.0.92.dmg) |
+| Windows | v0.0.4 | [Download installer](https://github.com/writingmate/aidictation/releases/download/windows-v0.0.4/AIDictation-Windows-Setup-v0.0.4.exe) · [Portable ZIP](https://github.com/writingmate/aidictation/releases/download/windows-v0.0.4/AIDictation-Windows-v0.0.4.zip) |
+| Android | v0.0.29 | [Download APK](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/AIDictation-Android-0.0.29.apk) · [Play upload AAB](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/AIDictation-Android-0.0.29.aab) · [Checksums](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/SHA256SUMS.txt) |
 
-AIDictation is a lightweight, privacy-focused **voice to text** solution that brings AI dictation to your Mac. Unlike built-in macOS dictation, AIDictation uses state-of-the-art AI speech recognition for superior accuracy and supports LLM-powered text transformations.
+## What It Does
 
-## Key Features
+AIDictation turns your voice into text and inserts it into the app you are already using. It supports quick hold-to-dictate recording, continuous dictation, custom writing rules, glossary terms, shortcuts, and optional cleanup after transcription.
 
-### Fast AI Dictation
-- **400-800ms voice to text** conversion using Groq's lightning-fast inference
-- Native Swift/SwiftUI implementation for seamless macOS integration
-- 1.35 MB app size (vs 200+ MB for Electron-based alternatives)
-- Minimal CPU and memory usage
+## Highlights
 
-### Security & Privacy
-- Open source - read the code to see exactly how your voice data is handled
-- Audio is transcribed and immediately discarded, nothing is stored
-- Voice data only sent to Groq API, no third-party servers
-- API keys stored in macOS Keychain
+- Native apps for macOS, Windows, and Android
+- Fast voice-to-text with cloud mode
+- Offline mode on Android with downloadable on-device speech recognition
+- Privacy-focused local handling of recordings and settings
+- Secure storage for local app credentials
+- Custom dictionary, writing style, and shortcut support
+- Floating controls designed for writing in any app
 
-### AI-Powered Text Processing
-- Optional LLM transformations using Groq's AI models
-- Translate between languages (e.g. speak Russian, get English text)
-- Adjust tone or formality of your dictation
-- Custom glossaries for domain-specific terminology
+## Install
 
-### Intuitive Voice to Text Controls
-- Press and hold a hotkey (like Fn) to dictate
-- Double-tap for continuous dictation mode
-- Auto-paste transcribed text into any application
-- Minimal overlay indicator or full window mode
+### macOS
 
-### Pricing
-Free during beta. You only pay for Groq API usage.
+1. Download the [latest DMG](https://github.com/writingmate/aidictation/releases/download/v0.0.92/AIDictation-v0.0.92.dmg).
+2. Open the DMG.
+3. Drag AIDictation to Applications.
+4. Launch AIDictation and follow setup.
+5. Enable microphone and accessibility access when prompted.
 
-## Installation
+### Windows
 
-### Option 1: Download Release (Recommended)
+1. Download the [latest installer](https://github.com/writingmate/aidictation/releases/download/windows-v0.0.4/AIDictation-Windows-Setup-v0.0.4.exe).
+2. Run the installer.
+3. Launch AIDictation from the Start menu.
+4. Follow setup and allow microphone access.
 
-1. Download the latest DMG from the [Releases page](https://github.com/writingmate/whispermate/releases/latest)
-2. Open the DMG file
-3. Drag Whispermate to your Applications folder
-4. Launch Whispermate from Applications
-5. Follow the onboarding wizard to:
-   - Grant microphone permission
-   - Grant accessibility permission (for auto-paste)
-   - Configure your recording hotkey
+For a no-install option, download the [portable ZIP](https://github.com/writingmate/aidictation/releases/download/windows-v0.0.4/AIDictation-Windows-v0.0.4.zip), extract it, and run the app from the extracted folder.
 
-### Option 2: Build from Source
+### Android
 
-#### Prerequisites
+1. Download the [latest APK](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/AIDictation-Android-0.0.29.apk).
+2. Open the APK on your Android device.
+3. Allow installation from your browser or file manager if Android asks.
+4. Launch AIDictation and follow setup.
+5. Enable microphone and accessibility access when prompted.
 
-- macOS 13.0+ (Ventura or later)
-- Xcode 15.0+
-- Groq API key (get one at https://console.groq.com)
+The Android release also includes an [AAB](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/AIDictation-Android-0.0.29.aab) for Play Console uploads and [SHA-256 checksums](https://github.com/writingmate/aidictation/releases/download/android-v0.0.29/SHA256SUMS.txt) for verifying downloads.
 
-#### Steps
+## Build From Source
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/writingmate/whispermate.git
-   cd whispermate/Whishpermate
-   ```
+### macOS and iOS
 
-2. Open the project:
-   ```bash
-   open Whispermate.xcodeproj
-   ```
+Requirements:
 
-3. Build and run (⌘R)
+- macOS 13 or later
+- Xcode 15 or later
 
-4. Follow the onboarding wizard on first launch
-
-## Getting Started
-
-1. **First Launch**: Complete the onboarding wizard
-   - Enable microphone access
-   - Enable accessibility permissions (needed for auto-paste)
-   - Set your recording hotkey (Fn key recommended)
-
-2. **Voice to Text**:
-   - **Hold-to-Dictate**: Press and hold your hotkey, release to transcribe
-   - **Continuous Dictation**: Double-tap your hotkey to start, tap once to stop
-
-3. **Modes**:
-   - **Overlay Mode**: Minimal indicator in bottom-right corner
-   - **Full Mode**: Expanded window with settings and transcription history
-
-4. **Settings**:
-   - Configure your Groq API key for voice to text
-   - Choose between OpenAI Whisper or Groq for AI dictation
-   - Customize dictation hotkey
-   - Toggle auto-paste functionality
-
-## Security & Privacy
-
-- API keys are stored securely in macOS Keychain (never in plain text)
-- Voice recordings are temporary and not persisted
-- Your voice data is only sent to Groq's API for speech to text conversion
-
-## Architecture
-
-```
-AIDictation/
-├── WhisperMateApp.swift          # App entry point
-├── Views/
-│   └── ContentView.swift          # Main UI
-├── Services/
-│   ├── AudioRecorder.swift        # Voice recording with AVFoundation
-│   ├── GroqAPIClient.swift        # Groq API integration (voice to text)
-│   └── KeychainHelper.swift       # Secure key storage
-└── Info.plist                     # App permissions
+```bash
+git clone https://github.com/writingmate/aidictation.git
+cd aidictation/Whishpermate
+open Whispermate.xcodeproj
 ```
 
-## Groq API - Powering Voice to Text
+Build and run from Xcode.
 
-AIDictation uses Groq's Whisper Large V3 model for AI speech recognition:
-- Fast voice to text inference (typically < 1 second)
-- High accuracy speech recognition
-- Cost-effective AI dictation
+### Windows
 
-Get your API key: https://console.groq.com
+Requirements:
+
+- Windows 10 or later
+- Visual Studio 2022 with .NET desktop development tools
+
+```powershell
+git clone https://github.com/writingmate/aidictation.git
+cd aidictation\AIDictation.Windows
+dotnet build AIDictation.sln
+```
+
+### Android
+
+Requirements:
+
+- Android Studio or Android SDK command-line tools
+- JDK 17
+
+```bash
+git clone https://github.com/writingmate/aidictation.git
+cd aidictation/AIDictationAndroid
+./gradlew assembleDebug
+```
+
+Copy `AIDictationAndroid/local.properties.template` to `local.properties` when you need local cloud-mode configuration.
+
+## Privacy
+
+- Recordings are temporary and are not kept as app data after transcription.
+- Cloud mode sends audio to the configured transcription service.
+- Offline mode processes speech on the device where supported.
+- App credentials are stored in the operating system's secure storage.
+
+## Repository Layout
+
+```text
+AIDictationAndroid/      Android app
+AIDictation.Windows/    Windows app
+Whishpermate/           macOS and iOS apps
+ci_scripts/             Shared release and signing helpers
+scripts/                Release validation tools
+references/             Release notes and supporting docs
+```
 
 ## License
 

@@ -26,9 +26,13 @@ bin/
 obj/
 artifacts/
 *.app
+*.zip
 *.dSYM.zip
 *.dSYM
 *.dmg
+*.ipa
+*.pkg
+*.log
 
 # Swift Package Manager
 .swiftpm/
@@ -46,12 +50,16 @@ Pods/
 # API Keys (just in case)
 .env
 *.key
+*.keystore
 secrets.json
 Whishpermate/Whispermate/Secrets.plist
 Whishpermate/WhisperMateIOS/Secrets.plist
+notarization-error*.json
+notarize*.json
 
 # Claude Code
 .claude/
 
 # Local agent/runtime state
 .omx/
+.kotlin/

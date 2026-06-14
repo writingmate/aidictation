@@ -91,7 +91,7 @@ class ParakeetTranscriber @Inject constructor(
                         encoderModel.decodeWithLiteRt(samples, loadedModel)
                     }
                 }
-                Log.d(TAG, "LOCAL_TRANSCRIPTION_OK ${text.take(100)}")
+                Log.d(TAG, "Local transcription succeeded")
                 text
             }
         }
@@ -102,7 +102,7 @@ class ParakeetTranscriber @Inject constructor(
         runtime: ParakeetRuntime = ParakeetRuntime.ONNX
     ): LoadedParakeetModel {
         val directory = modelAssets.requireModelDirectory(runtime)
-        Log.d(TAG, "Loading Parakeet model from ${directory.absolutePath}")
+        Log.d(TAG, "Loading on-device transcription model")
         return LoadedParakeetModel(
             environment = ortEnvironment,
             directory = directory,
@@ -112,7 +112,7 @@ class ParakeetTranscriber @Inject constructor(
 
     private suspend fun loadLiteRtModel(): ParakeetLiteRtModel {
         val directory = modelAssets.requireModelDirectory(ParakeetRuntime.LITERT)
-        Log.d(TAG, "Loading Parakeet LiteRT model from ${directory.absolutePath}")
+        Log.d(TAG, "Loading on-device LiteRT transcription model")
         return ParakeetLiteRtModel.load(directory)
     }
 

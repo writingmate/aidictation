@@ -1503,7 +1503,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             repoPrompt.ifEmpty { null }
         ).joinToString("\n\n").ifEmpty { null }
 
-        Log.d("OverlayDictation", "Whisper prompt: $whisperPrompt, contextRules: $contextRules")
+        Log.d(
+            "OverlayDictation",
+            "Prepared transcription context: promptLength=${whisperPrompt?.length ?: 0}, " +
+                "rulesLength=${contextRules?.length ?: 0}"
+        )
 
         // Transcription + LLM post-processing (context rules go to LLM, not Whisper)
         val rawText = transcriptionRepository.transcribe(audioFile, whisperPrompt, contextRules)

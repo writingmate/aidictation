@@ -87,8 +87,7 @@ object LanguagePostProcessClient {
             append("Return ONLY the corrected transcription text. Do not include the transcription number, language labels, explanations, or quotation marks.")
         }
 
-        Log.d(TAG, "=== LanguagePostProcess ===")
-        Log.d(TAG, "Candidates:\n$candidateLines")
+        Log.d(TAG, "Starting language post-processing with ${candidates.size} candidates")
 
         try {
             val requestJson = JSONObject().apply {
@@ -117,12 +116,11 @@ object LanguagePostProcessClient {
             val response = okHttpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                Log.e(TAG, "Post-process request failed: ${response.code} - ${response.body?.string()}")
+                Log.e(TAG, "Post-process request failed: ${response.code}")
                 return@withContext bestCandidate(candidates)
             }
 
             val rawResponse = response.body?.string() ?: "{}"
-            Log.d(TAG, "LLM raw response: $rawResponse")
 
             val rawResult = JSONObject(rawResponse)
                 .getJSONArray("choices")
@@ -132,8 +130,6 @@ object LanguagePostProcessClient {
                 .trim()
                 .trimQuotes()
 
-            Log.d(TAG, "Result raw: $rawResult")
-
             // Validate: if the LLM hallucinated something that doesn't resemble any candidate,
             // fall back to the best candidate without correction
             val result = if (rawResult.isNotEmpty() && resemblesAnyCandidate(rawResult, candidates)) {
@@ -142,8 +138,6 @@ object LanguagePostProcessClient {
                 Log.w(TAG, "LLM output doesn't resemble any candidate, using best fallback")
                 bestCandidate(candidates)
             }
-
-            Log.d(TAG, "Result final: $result")
 
             result.ifEmpty { bestCandidate(candidates) }
         } catch (e: Exception) {

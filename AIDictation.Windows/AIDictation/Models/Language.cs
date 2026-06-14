@@ -148,7 +148,7 @@ public static class LanguageExtensions
     public static string GetCode(this Language language) => 
         LanguageData.TryGetValue(language, out var data) ? data.Code : "auto";
 
-    public static string GetDisplayName(this Language language) => 
+    public static string GetDisplayName(this Language language) =>
         LanguageData.TryGetValue(language, out var data) ? data.Name : "Unknown";
 
     public static string GetFlag(this Language language) => 

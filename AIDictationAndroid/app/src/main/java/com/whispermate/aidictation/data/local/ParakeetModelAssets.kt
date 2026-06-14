@@ -135,7 +135,7 @@ class ParakeetModelAssets @Inject constructor(
     private fun removeStaleInternalModelDirectory() {
         val internalDir = internalModelDir()
         if (!internalDir.exists()) return
-        Log.d(TAG, "Removing stale internal Parakeet model cache at ${internalDir.absolutePath}")
+        Log.d(TAG, "Removing stale internal on-device model cache")
         internalDir.deleteRecursively()
     }
 
@@ -144,7 +144,7 @@ class ParakeetModelAssets @Inject constructor(
         val files = requiredFiles(runtime)
         if (bundledAssetsMatch(destination, files)) return destination
 
-        Log.d(TAG, "Installing bundled Parakeet ${runtime.displayName} model to ${destination.absolutePath}")
+        Log.d(TAG, "Installing bundled on-device ${runtime.displayName} model")
         destination.deleteRecursively()
         destination.mkdirs()
 

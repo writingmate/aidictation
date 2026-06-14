@@ -90,7 +90,7 @@ object CommandClient {
                 put("reasoning_effort", "low")
             }
 
-            Log.d(TAG, "Executing command '${command.name}' on text: ${targetText.take(50)}...")
+            Log.d(TAG, "Executing command")
 
             val request = Request.Builder()
                 .url(endpoint)
@@ -102,13 +102,11 @@ object CommandClient {
             val response = okHttpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
-                Log.e(TAG, "Command request failed: ${response.code} - $errorBody")
+                Log.e(TAG, "Command request failed: ${response.code}")
                 return@withContext Result.failure(Exception("Command request failed: ${response.code}"))
             }
 
             val responseBody = response.body?.string() ?: "{}"
-            Log.d(TAG, "Raw response: $responseBody")
             val json = JSONObject(responseBody)
             val message = json
                 .getJSONArray("choices")
@@ -117,10 +115,10 @@ object CommandClient {
 
             val content = message.getString("content").trim()
 
-            Log.d(TAG, "Command '${command.name}' result: ${content.take(50)}...")
+            Log.d(TAG, "Command completed")
             Result.success(content)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to execute command '${command.name}'", e)
+            Log.e(TAG, "Failed to execute command", e)
             Result.failure(e)
         }
     }
@@ -191,7 +189,7 @@ object CommandClient {
                 put("reasoning_effort", "low")
             }
 
-            Log.d(TAG, "Executing instruction '$instruction' on text: ${targetText.take(50)}...")
+            Log.d(TAG, "Executing instruction")
 
             val request = Request.Builder()
                 .url(endpoint)
@@ -203,13 +201,11 @@ object CommandClient {
             val response = okHttpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
-                Log.e(TAG, "Instruction request failed: ${response.code} - $errorBody")
+                Log.e(TAG, "Instruction request failed: ${response.code}")
                 return@withContext Result.failure(Exception("Instruction request failed: ${response.code}"))
             }
 
             val responseBody = response.body?.string() ?: "{}"
-            Log.d(TAG, "Raw response: $responseBody")
             val json = JSONObject(responseBody)
             val message = json
                 .getJSONArray("choices")
@@ -218,10 +214,10 @@ object CommandClient {
 
             val content = message.getString("content").trim()
 
-            Log.d(TAG, "Instruction result: ${content.take(50)}...")
+            Log.d(TAG, "Instruction completed")
             Result.success(content)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to execute instruction '$instruction'", e)
+            Log.e(TAG, "Failed to execute instruction", e)
             Result.failure(e)
         }
     }

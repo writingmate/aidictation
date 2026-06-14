@@ -74,13 +74,11 @@ Output: you, your, ya"""
             val response = okHttpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
-                Log.e(TAG, "Suggestion request failed: ${response.code} - $errorBody")
+                Log.e(TAG, "Suggestion request failed: ${response.code}")
                 return@withContext Result.failure(Exception("Suggestion request failed: ${response.code}"))
             }
 
             val responseBody = response.body?.string() ?: "{}"
-            Log.d(TAG, "Raw response: $responseBody")
             val json = JSONObject(responseBody)
             val message = json
                 .getJSONArray("choices")
@@ -101,7 +99,7 @@ Output: you, your, ya"""
                 .filter { it.isNotBlank() }
                 .take(3)
 
-            Log.d(TAG, "Got suggestions: $suggestions from content: $content")
+            Log.d(TAG, "Got ${suggestions.size} suggestions")
             Result.success(suggestions)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get suggestions", e)

@@ -74,9 +74,7 @@ object TranscriptionClient {
             val apiKey = config?.apiKey ?: BuildConfig.TRANSCRIPTION_API_KEY
             val endpoint = config?.endpoint ?: BuildConfig.TRANSCRIPTION_ENDPOINT
             val model = config?.model ?: BuildConfig.TRANSCRIPTION_MODEL
-            Log.d(TAG, "Transcribing file: ${audioFile.absolutePath}, size: ${audioFile.length()} bytes")
-            Log.d(TAG, "Endpoint: $endpoint")
-            Log.d(TAG, "Model: $model")
+            Log.d(TAG, "Transcribing audio, size: ${audioFile.length()} bytes")
             Log.d(
                 TAG,
                 "Language: ${language ?: "auto-detect"}, promptLength: ${prompt?.length ?: 0}, " +
@@ -85,8 +83,8 @@ object TranscriptionClient {
             )
 
             if (apiKey.isEmpty()) {
-                Log.e(TAG, "API key is empty!")
-                return@withContext Result.failure(Exception("API key not configured"))
+                Log.e(TAG, "Cloud mode is not configured")
+                return@withContext Result.failure(Exception("Cloud mode is not configured"))
             }
 
             if (shouldUseChunkedUpload(endpoint) && audioFile.length() > MAX_SINGLE_UPLOAD_AUDIO_BYTES) {
@@ -171,7 +169,6 @@ object TranscriptionClient {
                     }
                     if (!language.isNullOrEmpty()) {
                         addFormDataPart("language", language)
-                        Log.d(TAG, "Language: $language")
                     }
                 }
                 .build()
@@ -182,20 +179,19 @@ object TranscriptionClient {
                 .post(requestBody)
                 .build()
 
-            Log.d(TAG, "Sending transcription request with model: $model")
+            Log.d(TAG, "Sending transcription request")
             val response = okHttpClient.newCall(request).execute()
             Log.d(TAG, "Response code: ${response.code}")
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
-                Log.e(TAG, "Transcription failed: ${response.code} - $errorBody")
+                Log.e(TAG, "Transcription failed: ${response.code}")
                 return Result.failure(TranscriptionHttpException(response.code, errorBody))
             }
 
             val responseBody = response.body?.string()
-            Log.d(TAG, "Response body: $responseBody")
             val text = parseTranscriptionText(responseBody)
-            Log.d(TAG, "Transcribed text: '$text'")
+            Log.d(TAG, "Transcription succeeded")
 
             Result.success(text)
         } catch (e: Exception) {
@@ -303,8 +299,7 @@ object TranscriptionClient {
             Log.d(TAG, "Applying one LLM post-processing pass to merged chunk transcript")
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
-                Log.w(TAG, "Merged transcript post-processing failed: ${response.code} - $errorBody")
+                Log.w(TAG, "Merged transcript post-processing failed: ${response.code}")
                 return Result.success(transcription)
             }
 
@@ -574,7 +569,7 @@ object TranscriptionClient {
 
         val detectedCommand = detectCommand(rawText, commands)
         if (detectedCommand != null) {
-            Log.d(TAG, "Detected voice command: ${detectedCommand.first.name}")
+            Log.d(TAG, "Detected voice command")
             val textBeforeCommand = detectedCommand.second.trim()
             val targetText = textBeforeCommand.ifEmpty { contextText.trim() }
 

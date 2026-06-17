@@ -42,6 +42,7 @@ jobs:
       AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
       GROQ_TRANSCRIPTION_KEY: ${{ secrets.GROQ_TRANSCRIPTION_KEY }}
       GROQ_LLM_KEY: ${{ secrets.GROQ_LLM_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
       STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
       STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
@@ -108,8 +109,13 @@ jobs:
           set -euo pipefail
 
           bundle_id="com.whispermate.ios"
-          marketing_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Whishpermate/WhisperMateIOS/Info.plist)"
-          committed_build_number="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' Whishpermate/WhisperMateIOS/Info.plist)"
+          build_settings="$(xcodebuild -project Whishpermate/Whispermate.xcodeproj -scheme WhisperMateIOS -configuration Release -showBuildSettings)"
+          marketing_version="$(printf '%s\n' "${build_settings}" | awk -F= '/^[[:space:]]*MARKETING_VERSION[[:space:]]*=/{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }')"
+          committed_build_number="$(printf '%s\n' "${build_settings}" | awk -F= '/^[[:space:]]*CURRENT_PROJECT_VERSION[[:space:]]*=/{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }')"
+          if [ -z "${marketing_version}" ] || [ -z "${committed_build_number}" ]; then
+            echo "::error::Could not resolve MARKETING_VERSION or CURRENT_PROJECT_VERSION from Xcode build settings"
+            exit 1
+          fi
           export BUNDLE_ID="${bundle_id}"
           export MARKETING_VERSION="${marketing_version}"
 

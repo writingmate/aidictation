@@ -29,7 +29,7 @@ public class OpenAIClient {
     // Custom URLSession optimized for persistent connections and SSL session reuse
     private static let urlSession: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10.0 // Fail fast - 10 seconds max per request
+        config.timeoutIntervalForRequest = 60.0 // Allow slower uploads/transcription responses before failing
         config.timeoutIntervalForResource = 300.0 // Keep connection alive for 5 minutes
         config.httpMaximumConnectionsPerHost = 6 // Allow multiple connections to same host
         // URLSession automatically handles SSL session resumption and connection reuse

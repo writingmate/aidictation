@@ -1,6 +1,6 @@
-AIDictation turns your voice into clean text anywhere you type on Android.
+AI Dictation turns your voice into clean text anywhere you type on Android.
 
-Tap into a text field, use the floating mic, and speak naturally. AIDictation records your speech, transcribes it, and places the finished text where you need it.
+Tap into a text field, use the floating mic, and speak naturally. AI Dictation records your speech, transcribes it, and places the finished text where you need it.
 
 Built for everyday writing:
 - Fast voice-to-text dictation for messages, notes, email, documents, and web forms
@@ -20,8 +20,8 @@ Privacy-minded by design:
 - Recordings are temporary unless saved in your local history
 
 AccessibilityService disclosure:
-AIDictation uses Android AccessibilityService to provide dictation in other apps. With your permission, it detects when an editable text field is focused, shows the floating microphone, reads the current text and cursor position in the active field, and inserts or replaces dictated text only when you start dictation or apply a command. AIDictation does not use AccessibilityService to read passwords, payment fields, or secure screens, and it does not use this access for unrelated tracking or background monitoring.
+AI Dictation uses Android AccessibilityService to provide dictation in other apps. With your permission, it detects when an editable text field is focused, shows the floating microphone, reads the current text and cursor position in the active field, and inserts or replaces dictated text only when you start dictation or apply a command. AI Dictation does not use AccessibilityService to read passwords, payment fields, or secure screens, and it does not use this access for unrelated tracking or background monitoring.
 
-AIDictation is useful for people who write a lot from thought: product managers drafting specs, developers writing notes, founders replying to customers, students capturing ideas, and anyone who wants to type less.
+AI Dictation is useful for people who write a lot from thought: product managers drafting specs, developers writing notes, founders replying to customers, students capturing ideas, and anyone who wants to type less.
 
 Speak naturally. Get polished text. Keep writing.

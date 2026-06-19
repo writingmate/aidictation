@@ -1,0 +1,91 @@
+name: Android Play Listing
+
+on:
+  workflow_dispatch:
+    inputs:
+      play_track:
+        description: 'Google Play track'
+        required: true
+        default: production
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-play-listing-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: '17'
+  ANDROID_PROJECT_DIR: AIDictationAndroid
+
+jobs:
+  publish-listing:
+    name: Publish Play listing
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+
+    env:
+      PLAY_TRACK: ${{ inputs.play_track || vars.ANDROID_PLAY_TRACK || 'production' }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+      ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.ANDROID_PUBLISHER_CREDENTIALS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate track
+        shell: bash
+        run: |
+          case "${PLAY_TRACK}" in
+            internal|alpha|beta|production) ;;
+            *)
+              echo "Unsupported PLAY_TRACK '${PLAY_TRACK}'. Use internal, alpha, beta, or production." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+
+      - name: Decode Google Play credentials
+        run: |
+          credentials_path="$RUNNER_TEMP/google-play-service-account.json"
+          if [ -n "${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64}" ]; then
+            echo "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64" | base64 -d > "$credentials_path"
+          elif [ -n "${ANDROID_PUBLISHER_CREDENTIALS}" ]; then
+            printf '%s' "$ANDROID_PUBLISHER_CREDENTIALS" > "$credentials_path"
+          else
+            echo "Set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 or ANDROID_PUBLISHER_CREDENTIALS." >&2
+            exit 1
+          fi
+          python3 -m json.tool "$credentials_path" >/dev/null
+          echo "PLAY_SERVICE_ACCOUNT_CREDENTIALS=$credentials_path" >> "$GITHUB_ENV"
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Publish Play listing assets
+        run: |
+          ./gradlew \
+            :app:publishReleaseListing \
+            -PPLAY_TRACK="${PLAY_TRACK}" \
+            -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}" \
+            --stacktrace

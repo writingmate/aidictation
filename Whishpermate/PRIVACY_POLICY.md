@@ -1,7 +1,7 @@
 # WhisperMate Privacy Policy
 
 **Effective Date**: November 5, 2025
-**Last Updated**: November 5, 2025
+**Last Updated**: June 19, 2026
 
 ## Introduction
 
@@ -15,9 +15,11 @@ Please read this privacy policy carefully. If you do not agree with the terms of
 
 WhisperMate records your voice when you use the voice-to-text feature. This audio is:
 - **Temporarily processed** to convert speech to text
-- **Transmitted securely** to our transcription service provider
+- **Transmitted securely** to our cloud transcription service only after you allow cloud transcription
 - **Not stored** on our servers after transcription is complete
 - **Not used** for any purpose other than providing you the transcription service
+
+You can use offline mode to transcribe on your device without sending audio to the cloud.
 
 ### Usage Data
 
@@ -56,8 +58,9 @@ Anonymous usage data is used to:
 ### Transcription Service Provider
 
 We use third-party AI services to process voice recordings and generate transcriptions:
-- **Provider**: Groq, OpenAI, or similar API providers (configurable)
-- **Data Shared**: Audio recordings only
+- **Provider**: AIDictation's cloud transcription service, which uses Groq for transcription. Some development or configurable builds may use OpenAI or another API provider.
+- **Data Shared**: Voice recordings are sent for cloud transcription. Transcripts may be sent for formatting when you use modes or rules that require cloud formatting.
+- **Permission**: The App asks for your permission before sending voice recordings or transcripts to cloud transcription.
 - **Data Retention**: Audio is not retained after transcription
 - **Security**: All data is transmitted via secure, encrypted connections (HTTPS)
 
@@ -130,6 +133,7 @@ We do NOT use "Full Access" to:
 - **Audio Recordings**: Deleted immediately after transcription (typically within seconds)
 - **Transcriptions**: Stored locally on your device only, under your control
 - **Usage Analytics**: Anonymized data retained for up to 12 months for improvement purposes
+- **Cloud Processing**: Voice recordings and transcripts sent to cloud transcription are used to provide your requested transcription or formatting and are not sold for advertising.
 
 ## Changes to This Privacy Policy
 
@@ -168,6 +172,8 @@ We believe in transparency. This Privacy Policy reflects our commitment to:
 ## Summary (TL;DR)
 
 - ✅ We process your voice to create transcriptions
+- ✅ The App asks before sending audio or transcripts to cloud transcription
+- ✅ Offline mode keeps transcription on your device
 - ✅ Audio is deleted immediately after transcription
 - ✅ All data transmission is encrypted
 - ❌ We don't store your recordings or transcriptions
@@ -177,5 +183,5 @@ We believe in transparency. This Privacy Policy reflects our commitment to:
 
 ---
 
-*This privacy policy was last updated on November 5, 2025.*
-*WhisperMate v0.0.20*
+*This privacy policy was last updated on June 19, 2026.*
+*WhisperMate v0.0.92*

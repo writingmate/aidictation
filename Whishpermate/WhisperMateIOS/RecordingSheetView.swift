@@ -25,6 +25,7 @@ struct RecordingSheetView: View {
     @State private var isPlaying = false
     @State private var selectedOutputMode: TranscriptionOutputMode = .dictation
     @State private var activeOutputMode: TranscriptionOutputMode?
+    @State private var showCloudTranscriptionConsent = false
 
     private var selectedPreset: ContextRule? {
         recordingPreset(for: selectedOutputMode, manager: toneStyleManager)
@@ -82,6 +83,18 @@ struct RecordingSheetView: View {
         }
         .onReceive(audioRecorder.$frequencyBands) { bands in
             updateFrequencyBands(bands)
+        }
+        .alert("Cloud Transcription", isPresented: $showCloudTranscriptionConsent) {
+            Button("Allow Cloud Transcription") {
+                CloudTranscriptionConsent.grant()
+                startRecording()
+            }
+            Button("Use Offline Mode") {
+                useOfflineModeFromCloudConsent()
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("To transcribe in cloud mode, AIDictation sends your voice recording and transcript to AIDictation's cloud transcription service, which uses Groq to create the transcript. Offline mode keeps transcription on this device.")
         }
     }
 
@@ -317,6 +330,8 @@ struct RecordingSheetView: View {
             return
         }
 
+        guard ensureCloudTranscriptionAllowedForRecording() else { return }
+
         switch AVAudioSession.sharedInstance().recordPermission {
         case .granted:
             beginRecording()
@@ -338,6 +353,27 @@ struct RecordingSheetView: View {
             errorMessage = "Unable to check microphone permission."
             sheetState = .viewing
         }
+    }
+
+    private func ensureCloudTranscriptionAllowedForRecording() -> Bool {
+        guard !transcriptionProviderManager.shouldUseOnDeviceTranscription,
+              !CloudTranscriptionConsent.isGranted
+        else {
+            return true
+        }
+
+        showCloudTranscriptionConsent = true
+        return false
+    }
+
+    private func useOfflineModeFromCloudConsent() {
+        guard TranscriptionMode.offline.isAvailable else {
+            errorMessage = SharedParakeetTranscriptionService.unavailableMessage
+            return
+        }
+
+        transcriptionProviderManager.setTranscriptionMode(.offline)
+        prepareSelectedModeIfNeeded()
     }
 
     private var needsOfflineRuntimeForSelectedMode: Bool {

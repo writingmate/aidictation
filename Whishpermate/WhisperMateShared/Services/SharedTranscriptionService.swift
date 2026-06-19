@@ -43,6 +43,9 @@ public enum SharedTranscriptionService {
         } else if providerManager.shouldUseOnDeviceTranscription {
             rawTranscript = try await SharedParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
         } else {
+            guard CloudTranscriptionConsent.isGranted else {
+                throw error(CloudTranscriptionConsent.requiredErrorMessage)
+            }
             rawTranscript = try await transcribeWithCloud(
                 audioURL: audioURL,
                 providerManager: providerManager,
@@ -120,6 +123,11 @@ public enum SharedTranscriptionService {
             return transcript
         }
 
+        guard CloudTranscriptionConsent.isGranted else {
+            DebugLog.info("Skipping cloud post-processing because cloud transcription is not allowed", context: "SharedTranscriptionService")
+            return transcript
+        }
+
         guard let client = makeLLMClientIfAvailable() else {
             DebugLog.warning("LLM post-processing unavailable - using transcript without mode formatting", context: "SharedTranscriptionService")
             return transcript
@@ -162,6 +170,10 @@ public enum SharedTranscriptionService {
         providerManager: TranscriptionProviderManager,
         prompts: (stt: String, postProcessing: String)
     ) async throws -> String {
+        guard CloudTranscriptionConsent.isGranted else {
+            throw error(CloudTranscriptionConsent.requiredErrorMessage)
+        }
+
         let provider = providerManager.selectedProvider == .onDevice ? TranscriptionProvider.custom : providerManager.selectedProvider
         let apiKey = KeychainHelper.get(key: provider.apiKeyName) ?? SecretsLoader.transcriptionKey(for: provider)
 

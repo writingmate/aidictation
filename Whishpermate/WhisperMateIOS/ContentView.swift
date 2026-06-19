@@ -38,6 +38,7 @@ struct ContentView: View {
     @State private var showKeyboardReturnScreen = false
     @State private var keyboardBridgeAliveUntil: Date?
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
+    @State private var showCloudTranscriptionConsent = false
     @State private var keyboardCommandPollTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -96,6 +97,18 @@ struct ContentView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(offlineModelMessage)
+            }
+            .alert("Cloud Transcription", isPresented: $showCloudTranscriptionConsent) {
+                Button("Allow Cloud Transcription") {
+                    CloudTranscriptionConsent.grant()
+                    handleInlineRecordingTap()
+                }
+                Button("Use Offline Mode") {
+                    useOfflineModeFromCloudConsent()
+                }
+                Button("Not Now", role: .cancel) {}
+            } message: {
+                Text("To transcribe in cloud mode, AIDictation sends your voice recording and transcript to AIDictation's cloud transcription service, which uses Groq to create the transcript. Offline mode keeps transcription on this device.")
             }
     }
 
@@ -905,7 +918,23 @@ struct ContentView: View {
     }
 
     private func switchToCloudTranscription() {
+        guard CloudTranscriptionConsent.isGranted else {
+            showCloudTranscriptionConsent = true
+            return
+        }
+
         transcriptionProviderManager.setTranscriptionMode(.cloud)
+    }
+
+    private func useOfflineModeFromCloudConsent() {
+        guard TranscriptionMode.offline.isAvailable else {
+            offlineModelMessage = SharedParakeetTranscriptionService.unavailableMessage
+            showOfflineModelAlert = true
+            return
+        }
+
+        transcriptionProviderManager.setTranscriptionMode(.offline)
+        prepareOfflineModel()
     }
 
     private func prepareOfflineModel() {
@@ -1040,6 +1069,7 @@ struct ContentView: View {
     private func handleInlineRecordingTap() {
         DebugLog.info("inline primary action state=\(inlineRecording.state) selectedMode=\(selectedRecordingMode.displayName)", context: "KEYBOARD_DIAG")
         if inlineRecording.state == .idle {
+            guard ensureCloudTranscriptionAllowedForRecording() else { return }
             guard ensureOfflineModelReadyForRecording() else { return }
         }
 
@@ -1064,6 +1094,19 @@ struct ContentView: View {
             }
             markRecordingAsNew(recording)
         }
+    }
+
+    private func ensureCloudTranscriptionAllowedForRecording() -> Bool {
+        guard needsCloudTranscriptionConsentForRecording else {
+            return true
+        }
+
+        showCloudTranscriptionConsent = true
+        return false
+    }
+
+    private var needsCloudTranscriptionConsentForRecording: Bool {
+        !transcriptionProviderManager.shouldUseOnDeviceTranscription && !CloudTranscriptionConsent.isGranted
     }
 
     private func startKeyboardDictation(sessionID: String?) {

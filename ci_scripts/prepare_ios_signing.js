@@ -62,22 +62,42 @@ function token() {
   return `${signingInput}.${base64url(signature)}`;
 }
 
-async function request(method, route, body) {
-  const response = await fetch(`https://api.appstoreconnect.apple.com${route}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token()}`,
-      "Content-Type": "application/json"
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const text = await response.text();
-  const json = text ? JSON.parse(text) : {};
-  if (!response.ok) {
-    throw new Error(`App Store Connect API ${method} ${route} failed (${response.status}): ${text}`);
+async function request(method, route, body, options = {}) {
+  const attempts = options.attempts || 1;
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await fetch(`https://api.appstoreconnect.apple.com${route}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token()}`,
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    const text = await response.text();
+    const json = text ? JSON.parse(text) : {};
+    if (!response.ok) {
+      const message = `App Store Connect API ${method} ${route} failed (${response.status}): ${text}`;
+      lastError = new Error(message);
+      if (response.status >= 500 && attempt < attempts) {
+        const delayMs = attempt * 15000;
+        console.warn(`${message}\nRetrying in ${delayMs / 1000}s (${attempt + 1}/${attempts})...`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw lastError;
+    }
+
+    return json;
   }
-  return json;
+
+  throw lastError;
 }
 
 async function bundleIdFor(identifier, name) {
@@ -187,7 +207,7 @@ async function createProfile({ name, bundleId, certificateId }) {
         }
       }
     }
-  });
+  }, { attempts: 4 });
 
   return {
     uuid: response.data.attributes.uuid,

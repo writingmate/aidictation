@@ -84,7 +84,7 @@ struct RecordingSheetView: View {
         .onReceive(audioRecorder.$frequencyBands) { bands in
             updateFrequencyBands(bands)
         }
-        .alert("Cloud Transcription", isPresented: $showCloudTranscriptionConsent) {
+        .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCloudTranscriptionConsent) {
             Button("Allow Cloud Transcription") {
                 CloudTranscriptionConsent.grant()
                 startRecording()
@@ -94,7 +94,7 @@ struct RecordingSheetView: View {
             }
             Button("Not Now", role: .cancel) {}
         } message: {
-            Text("To transcribe in cloud mode, AIDictation sends your voice recording and transcript to AIDictation's cloud transcription service, which uses Groq to create the transcript. Offline mode keeps transcription on this device.")
+            Text(CloudTranscriptionConsent.disclosureMessage)
         }
     }
 

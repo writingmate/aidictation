@@ -98,7 +98,7 @@ struct ContentView: View {
             } message: {
                 Text(offlineModelMessage)
             }
-            .alert("Cloud Transcription", isPresented: $showCloudTranscriptionConsent) {
+            .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCloudTranscriptionConsent) {
                 Button("Allow Cloud Transcription") {
                     CloudTranscriptionConsent.grant()
                     handleInlineRecordingTap()
@@ -108,7 +108,7 @@ struct ContentView: View {
                 }
                 Button("Not Now", role: .cancel) {}
             } message: {
-                Text("To transcribe in cloud mode, AIDictation sends your voice recording and transcript to AIDictation's cloud transcription service, which uses Groq to create the transcript. Offline mode keeps transcription on this device.")
+                Text(CloudTranscriptionConsent.disclosureMessage)
             }
     }
 
@@ -989,12 +989,12 @@ struct ContentView: View {
     }
 
     private func openLogin() {
-        guard let url = authManager.loginURL() else {
+        guard authManager.loginURL() != nil else {
             loginConfigurationMessage = authManager.error ?? "Login is not configured in this build."
             showLoginConfigurationAlert = true
             return
         }
-        UIApplication.shared.open(url)
+        authManager.openLogin()
     }
 
     private func prepareReferralInvite() {
@@ -1426,6 +1426,7 @@ private struct ReferralInviteView: View {
 private struct TranscriptionModeSelectionView: View {
     @ObservedObject var transcriptionProviderManager: TranscriptionProviderManager
     @ObservedObject var parakeetService: SharedParakeetTranscriptionService
+    @State private var showCloudTranscriptionConsent = false
     let offlineModelStatusText: String
     let offlineModelStatusIcon: String
     let offlineModelTrailingIcon: String
@@ -1440,7 +1441,7 @@ private struct TranscriptionModeSelectionView: View {
                     modeButton(for: mode)
                 }
             } footer: {
-                Text("Choose cloud for best accuracy, offline for private on-device speed, or automatic to let AIDictation choose.")
+                Text("Cloud mode sends your voice recording and transcript to AIDictation's cloud transcription service after you allow cloud transcription. Offline mode keeps transcription on this device.")
             }
 
             if transcriptionProviderManager.transcriptionMode != .cloud {
@@ -1478,6 +1479,18 @@ private struct TranscriptionModeSelectionView: View {
         }
         .navigationTitle("Model")
         .navigationBarTitleDisplayMode(.inline)
+        .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCloudTranscriptionConsent) {
+            Button("Allow Cloud Transcription") {
+                CloudTranscriptionConsent.grant()
+                transcriptionProviderManager.setTranscriptionMode(.cloud)
+            }
+            Button("Use Offline Mode") {
+                transcriptionProviderManager.setTranscriptionMode(.offline)
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text(CloudTranscriptionConsent.disclosureMessage)
+        }
     }
 
     private func modeButton(for mode: TranscriptionMode) -> some View {
@@ -1485,7 +1498,7 @@ private struct TranscriptionModeSelectionView: View {
         let rating = modeRating(for: mode)
 
         return Button {
-            transcriptionProviderManager.setTranscriptionMode(mode)
+            selectMode(mode)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -1511,6 +1524,15 @@ private struct TranscriptionModeSelectionView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func selectMode(_ mode: TranscriptionMode) {
+        guard mode != .cloud || CloudTranscriptionConsent.isGranted else {
+            showCloudTranscriptionConsent = true
+            return
+        }
+
+        transcriptionProviderManager.setTranscriptionMode(mode)
     }
 
     private func modeStars(speed: Int, accuracy: Int) -> some View {

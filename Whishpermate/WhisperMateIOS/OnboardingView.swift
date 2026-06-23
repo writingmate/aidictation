@@ -323,7 +323,7 @@ struct OnboardingView: View {
             return "Open Settings"
         }
 
-        return "Enable Microphone"
+        return "Continue"
     }
 
     private func requestMicrophonePermission() {

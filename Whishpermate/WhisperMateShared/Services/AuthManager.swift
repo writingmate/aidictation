@@ -1,11 +1,14 @@
 import Combine
 import Foundation
 import Supabase
-#if canImport(AuthenticationServices) && canImport(AppKit)
+#if canImport(AuthenticationServices)
     import AuthenticationServices
 #endif
 #if canImport(AppKit)
     import AppKit
+#endif
+#if canImport(UIKit)
+    import UIKit
 #endif
 
 /// Manages user authentication state and session lifecycle via Supabase
@@ -32,7 +35,7 @@ public class AuthManager: ObservableObject {
 
     private let supabase = SupabaseManager.shared
     private var didStartAutoRefresh = false
-    #if canImport(AuthenticationServices) && canImport(AppKit)
+    #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
         private let authPresentationContextProvider = AuthPresentationContextProvider()
         private var authSession: ASWebAuthenticationSession?
     #endif
@@ -114,7 +117,7 @@ public class AuthManager: ObservableObject {
     }
 
     private func openAuthenticationURL(_ url: URL) {
-        #if canImport(AuthenticationServices) && canImport(AppKit)
+        #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
             if Thread.isMainThread {
                 startWebAuthenticationSession(url)
             } else {
@@ -124,10 +127,12 @@ public class AuthManager: ObservableObject {
             }
         #elseif canImport(AppKit)
             openAuthURLInBrowser(url)
+        #else
+            error = "Login is unavailable on this device."
         #endif
     }
 
-    #if canImport(AuthenticationServices) && canImport(AppKit)
+    #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
         private func startWebAuthenticationSession(_ url: URL) {
             guard authSession == nil, !isAuthenticationSessionActive else {
                 DebugLog.info("Auth popup already active, ignoring duplicate request", context: "AuthManager")
@@ -172,12 +177,20 @@ public class AuthManager: ObservableObject {
             authSession = session
 
             guard session.start() else {
-                DebugLog.warning("Auth popup could not start, falling back to browser", context: "AuthManager")
+                DebugLog.warning("Auth popup could not start", context: "AuthManager")
                 authSession = nil
                 isAuthenticationSessionActive = false
-                openAuthURLInBrowser(url)
+                handleAuthenticationSessionStartFailure(url)
                 return
             }
+        }
+
+        private func handleAuthenticationSessionStartFailure(_ url: URL) {
+            #if canImport(AppKit)
+                openAuthURLInBrowser(url)
+            #else
+                error = "Login could not open. Please try again."
+            #endif
         }
     #endif
 
@@ -303,8 +316,9 @@ public class AuthManager: ObservableObject {
     }
 }
 
-#if canImport(AuthenticationServices) && canImport(AppKit)
+#if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
     private final class AuthPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+        #if canImport(AppKit)
         private let fallbackWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
             styleMask: [],
@@ -316,12 +330,27 @@ public class AuthManager: ObservableObject {
             super.init()
             fallbackWindow.identifier = NSUserInterfaceItemIdentifier("authPresentation")
         }
+        #elseif canImport(UIKit)
+        private let fallbackWindow = UIWindow(frame: .zero)
+        #endif
 
         func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+            #if canImport(AppKit)
             NSApplication.shared.keyWindow ??
                 NSApplication.shared.mainWindow ??
                 NSApplication.shared.windows.first(where: { $0.isVisible }) ??
                 fallbackWindow
+            #elseif canImport(UIKit)
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first(where: { $0.isKeyWindow }) ??
+                UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap(\.windows)
+                    .first(where: { !$0.isHidden }) ??
+                fallbackWindow
+            #endif
         }
     }
 #endif

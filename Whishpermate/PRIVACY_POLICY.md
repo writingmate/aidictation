@@ -62,7 +62,7 @@ We use third-party AI services to process voice recordings and generate transcri
 - **Data Shared**: Voice recordings are sent for cloud transcription. Transcripts may be sent for formatting when you use modes or rules that require cloud formatting.
 - **Permission**: The App asks for your permission before sending voice recordings or transcripts to cloud transcription.
 - **Data Retention**: Audio is not retained after transcription
-- **Security**: All data is transmitted via secure, encrypted connections (HTTPS)
+- **Security**: All data is transmitted via secure, encrypted connections (HTTPS). Third-party transcription providers are required to protect shared data with the same or equal privacy and security protections and use it only to provide the requested transcription or formatting.
 
 These providers have their own privacy policies governing their handling of data. We recommend reviewing:
 - Groq Privacy Policy: https://groq.com/privacy-policy/

@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var recordingSheetID = UUID()
     @State private var selectedRecording: Recording?
     @State private var showTextRules = false
+    @State private var showLoginSheet = false
     @State private var showLoginConfigurationAlert = false
     @State private var loginConfigurationMessage = ""
     @State private var showOfflineModelAlert = false
@@ -51,6 +52,11 @@ struct ContentView: View {
                 drainKeyboardDiagnostics()
                 startKeyboardCommandPolling()
                 consumePendingKeyboardCommandIfNeeded()
+                #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-showAccountLoginForValidation") {
+                        showLoginSheet = true
+                    }
+                #endif
             }
             .onDisappear {
                 stopKeyboardCommandPolling()
@@ -82,6 +88,9 @@ struct ContentView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(loginConfigurationMessage)
+            }
+            .sheet(isPresented: $showLoginSheet) {
+                AccountLoginView(authManager: authManager)
             }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
                 if canDownloadOfflineModelFromAlert {
@@ -989,12 +998,7 @@ struct ContentView: View {
     }
 
     private func openLogin() {
-        guard authManager.loginURL() != nil else {
-            loginConfigurationMessage = authManager.error ?? "Login is not configured in this build."
-            showLoginConfigurationAlert = true
-            return
-        }
-        authManager.openLogin()
+        showLoginSheet = true
     }
 
     private func prepareReferralInvite() {
@@ -1003,7 +1007,7 @@ struct ContentView: View {
             return
         }
 
-        Task {
+        Task { @MainActor in
             await MainActor.run {
                 isPreparingReferral = true
                 referralError = nil
@@ -1357,6 +1361,146 @@ private struct UsageSummaryView: View {
 	            }
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct AccountLoginView: View {
+    private enum Mode: String, CaseIterable, Identifiable {
+        case signIn = "Log In"
+        case createAccount = "Create Account"
+
+        var id: String { rawValue }
+    }
+
+    @ObservedObject var authManager: AuthManager
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedField: Field?
+    @State private var mode: Mode = .signIn
+    @State private var email = ""
+    @State private var password = ""
+    @State private var message: String?
+    @State private var isWorking = false
+
+    private enum Field {
+        case email
+        case password
+    }
+
+    private var trimmedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSubmit: Bool {
+        !trimmedEmail.isEmpty && password.count >= 6 && !isWorking
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    Picker("Account action", selection: $mode) {
+                        ForEach(Mode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    TextField("Email", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($focusedField, equals: .email)
+                        .submitLabel(.next)
+                        .onSubmit {
+                            focusedField = .password
+                        }
+
+                    SecureField("Password", text: $password)
+                        .textContentType(mode == .createAccount ? .newPassword : .password)
+                        .focused($focusedField, equals: .password)
+                        .submitLabel(.done)
+                        .onSubmit(submit)
+                } footer: {
+                    Text(mode == .createAccount ? "Use at least 6 characters." : "Use the email and password for your account.")
+                }
+
+                if let message {
+                    Section {
+                        Text(message)
+                            .foregroundColor(message == successMessage ? .secondary : .orange)
+                    }
+                }
+
+                Section {
+                    Button(action: submit) {
+                        HStack {
+                            Spacer()
+                            if isWorking {
+                                ProgressView()
+                            } else {
+                                Text(mode.rawValue)
+                                    .fontWeight(.semibold)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .disabled(!canSubmit)
+                }
+            }
+            .navigationTitle(mode.rawValue)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                focusedField = .email
+            }
+            .onChange(of: authManager.isAuthenticated) { isAuthenticated in
+                if isAuthenticated {
+                    dismiss()
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private var successMessage: String {
+        "Check your email to finish creating your account."
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+
+        isWorking = true
+        message = nil
+
+        Task {
+            do {
+                switch mode {
+                case .signIn:
+                    try await authManager.signIn(email: trimmedEmail, password: password)
+                case .createAccount:
+                    try await authManager.createAccount(email: trimmedEmail, password: password)
+                    if !authManager.isAuthenticated {
+                        message = successMessage
+                    }
+                }
+
+                if authManager.isAuthenticated {
+                    dismiss()
+                }
+            } catch {
+                message = error.localizedDescription
+            }
+
+            isWorking = false
+        }
     }
 }
 

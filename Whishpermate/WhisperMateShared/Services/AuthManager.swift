@@ -204,6 +204,54 @@ public class AuthManager: ObservableObject {
         openSignUp()
     }
 
+    @MainActor
+    public func signIn(email: String, password: String) async throws {
+        guard let client = supabase.client else {
+            throw NSError(domain: "AuthManager", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Login is not configured in this build.",
+            ])
+        }
+
+        isLoading = true
+        error = nil
+
+        do {
+            _ = try await client.auth.signIn(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password
+            )
+            await refreshUser()
+        } catch {
+            isLoading = false
+            self.error = error.localizedDescription
+            throw error
+        }
+    }
+
+    @MainActor
+    public func createAccount(email: String, password: String) async throws {
+        guard let client = supabase.client else {
+            throw NSError(domain: "AuthManager", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Login is not configured in this build.",
+            ])
+        }
+
+        isLoading = true
+        error = nil
+
+        do {
+            _ = try await client.auth.signUp(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password
+            )
+            await refreshUser()
+        } catch {
+            isLoading = false
+            self.error = error.localizedDescription
+            throw error
+        }
+    }
+
     public func handleAuthCallback(url: URL) async {
         DebugLog.info("Handling auth callback: \(url.absoluteString)", context: "AuthManager")
 

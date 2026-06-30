@@ -50,7 +50,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -1567,9 +1566,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val selectedLangs = appPreferences.selectedLanguages.first()
-        val rewriteLang = if (selectedLangs.size == 1) selectedLangs.first() else null
-        val transcriptionResult = TranscriptionClient.transcribe(audioFile = audioFile, prompt = null, language = rewriteLang)
+        val transcriptionResult = TranscriptionClient.transcribe(audioFile = audioFile, prompt = null)
         transcriptionResult.onSuccess { instruction ->
             if (instruction.isBlank()) {
                 Toast.makeText(

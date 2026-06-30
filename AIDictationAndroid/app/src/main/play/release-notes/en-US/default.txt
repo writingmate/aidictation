@@ -1,1 +1,1 @@
-Restores the three-part active overlay bubble with cancel, recording, and accept controls.
+Fixes dictation language detection so selected languages no longer force every recording into one language.

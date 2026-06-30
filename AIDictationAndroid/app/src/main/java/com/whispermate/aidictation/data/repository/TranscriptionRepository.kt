@@ -35,6 +35,8 @@ class TranscriptionRepository @Inject constructor(
         contextRules: String? = null
     ): Result<String> {
         val languages = appPreferences.selectedLanguages.first()
+            .filter { WhisperLanguages.getLanguage(it) != null }
+            .distinct()
         val multilingual = true
         val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
         val postProcess = !onDeviceTranscription
@@ -61,7 +63,7 @@ class TranscriptionRepository @Inject constructor(
             }
         }
 
-        val language = apiLanguageFor(multilingual, languages)
+        val language: String? = null
         val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
         val transcriptionPrompt = buildLanguageAwarePrompt(prompt, languageNames)
         val postProcessingPrompt = if (postProcess) {
@@ -89,12 +91,6 @@ class TranscriptionRepository @Inject constructor(
         }
     }
 
-    private fun apiLanguageFor(multilingual: Boolean, languages: List<String>): String? {
-        if (!multilingual) return null
-        val validLanguages = languages.filter { WhisperLanguages.getLanguage(it) != null }
-        return validLanguages.singleOrNull()
-    }
-
     suspend fun buildPrompt(): String {
         val dictionary = appPreferences.dictionaryEntries.first()
             .filter { it.isEnabled }
@@ -119,6 +115,7 @@ class TranscriptionRepository @Inject constructor(
 
     private fun buildPostProcessingPrompt(prompt: String?, contextRules: String?): String? {
         return listOfNotNull(
+            "Preserve the language that was spoken. Do not translate the transcription into another language.",
             prompt?.takeIf { it.isNotBlank() },
             contextRules?.takeIf { it.isNotBlank() }
         ).joinToString("\n").ifBlank { null }

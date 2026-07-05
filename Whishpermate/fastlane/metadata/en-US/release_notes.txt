@@ -1,7 +1,5 @@
 New in This Release
 
-• 🎨 Improved UI with polished animations
-• ⚡ Enhanced copy button with visual feedback
-• 🔗 Updated share menu integration
-• 🐛 Bug fixes and performance improvements
-• 📱 Better iOS keyboard support
+• Added a clear cloud transcription permission disclosure before cloud processing
+• Fixed the Settings login action for users who need more words
+• Updated support and privacy information for App Review

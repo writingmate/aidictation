@@ -32,10 +32,10 @@
 - [ ] App description written (from APP_STORE_METADATA.md)
 - [ ] Keywords set: `voice to text, speech recognition, dictation, voice keyboard, transcription, voice input, speech to text`
 - [ ] Promotional text added (170 char)
-- [ ] What's New in 0.0.20 written
-- [ ] Support URL: https://github.com/writingmate/whispermate/issues
-- [ ] Marketing URL: https://whispermate.ai
-- [ ] Privacy Policy URL: https://whispermate.ai/privacy (needs hosting)
+- [ ] What's New in 0.0.92 written
+- [ ] Support URL: https://github.com/writingmate/aidictation/blob/codex/ios-app-review-fixes/SUPPORT.md
+- [ ] Marketing URL: https://github.com/writingmate/aidictation
+- [ ] Privacy Policy URL: https://github.com/writingmate/aidictation/blob/codex/ios-app-review-fixes/Whishpermate/PRIVACY_POLICY.md
 
 ### 6. Visual Assets
 **Screenshots (iPhone 6.7" - Required)**
@@ -74,8 +74,8 @@
 - [ ] Test instructions provided
 
 ### 9. Build & Upload
-- [ ] Version: 0.0.20
-- [ ] Build number: [Will be auto-incremented]
+- [ ] Version: 0.0.92
+- [ ] Build number: 101
 - [ ] App archived with Release configuration
 - [ ] Code signing configured correctly
 - [ ] No debug symbols or test code included
@@ -132,7 +132,7 @@
 
 ### Step 1: Finalize Assets
 1. Complete remaining screenshots (4 more needed)
-2. Host privacy policy on whispermate.ai/privacy
+2. Verify privacy policy URL is live
 3. Verify all URLs are live and accessible
 
 ### Step 2: Create App in App Store Connect
@@ -157,13 +157,13 @@
 # Archive the app
 xcodebuild -scheme WhisperMateIOS \
   -destination 'generic/platform=iOS' \
-  -archivePath "WhisperMate-iOS-v0.0.20.xcarchive" \
+  -archivePath "WhisperMate-iOS-v0.0.92-build-101.xcarchive" \
   archive \
   -allowProvisioningUpdates
 
 # Export for App Store
 xcodebuild -exportArchive \
-  -archivePath "WhisperMate-iOS-v0.0.20.xcarchive" \
+  -archivePath "WhisperMate-iOS-v0.0.92-build-101.xcarchive" \
   -exportPath "WhisperMate-iOS-Export" \
   -exportOptionsPlist ExportOptions.plist
 
@@ -236,7 +236,7 @@ xcodebuild -exportArchive \
 
 ---
 
-## ✅ Current Status: v0.0.20
+## ✅ Current Status: v0.0.92 build 101
 
 **Completed:**
 - ✅ macOS version released
@@ -254,7 +254,7 @@ xcodebuild -exportArchive \
 
 **Next Immediate Steps:**
 1. Capture remaining 4 screenshots
-2. Host privacy policy at whispermate.ai/privacy
+2. Verify privacy policy URL is live
 3. Create provisioning profiles in Apple Developer portal
 4. Create app in App Store Connect
 5. Archive and upload build
@@ -262,4 +262,4 @@ xcodebuild -exportArchive \
 ---
 
 *Last Updated: November 5, 2025*
-*Version: 0.0.20*
+*Version: 0.0.92 (101)*

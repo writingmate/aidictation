@@ -2,22 +2,22 @@ WhisperMate is the fastest way to turn your voice into text on iOS. Using advanc
 
 KEY FEATURES
 
-🎤 System-Wide Voice Keyboard
+System-Wide Voice Keyboard
 Access WhisperMate's voice input from any app - Messages, Email, Notes, Safari, and more. No need to switch apps or copy-paste.
 
-⚡ Lightning-Fast Transcription
+Lightning-Fast Transcription
 Get instant, accurate transcriptions powered by state-of-the-art AI. Perfect for messages, emails, notes, and documents.
 
-🔒 Private & Secure
+Private & Secure
 Your voice data is processed securely. We respect your privacy - your recordings are never stored on our servers.
 
-✨ Smart Text Formatting
+Smart Text Formatting
 Automatic punctuation, capitalization, and formatting. Your transcriptions look professional without any extra effort.
 
-🌍 Multilingual Support
+Multilingual Support
 Speak in your preferred language. WhisperMate supports dozens of languages with native-quality transcription.
 
-📋 Quick Share
+Quick Share
 Send your transcriptions directly to AI assistants like ChatGPT, Claude, Perplexity, or share via WhatsApp, Email, and more.
 
 PERFECT FOR

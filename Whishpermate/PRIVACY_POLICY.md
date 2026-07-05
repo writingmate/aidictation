@@ -1,7 +1,7 @@
 # WhisperMate Privacy Policy
 
 **Effective Date**: November 5, 2025
-**Last Updated**: June 19, 2026
+**Last Updated**: July 5, 2026
 
 ## Introduction
 
@@ -103,7 +103,7 @@ If you are in the EU, you have the right to:
 
 ### Exercising Your Rights
 
-To exercise these rights, please contact us at: [support email address]
+To exercise these rights, please contact us at: support@whispermate.ai
 
 ## Children's Privacy
 
@@ -155,8 +155,7 @@ By using WhisperMate, you consent to this transfer. We ensure that such transfer
 If you have questions or concerns about this Privacy Policy, please contact us:
 
 - **Email**: support@whispermate.ai
-- **GitHub**: https://github.com/writingmate/whispermate/issues
-- **Website**: https://whispermate.ai
+- **Support**: https://github.com/writingmate/aidictation/blob/codex/ios-app-review-fixes/SUPPORT.md
 
 ## Transparency Commitment
 
@@ -183,5 +182,5 @@ We believe in transparency. This Privacy Policy reflects our commitment to:
 
 ---
 
-*This privacy policy was last updated on June 19, 2026.*
+*This privacy policy was last updated on July 5, 2026.*
 *WhisperMate v0.0.92*

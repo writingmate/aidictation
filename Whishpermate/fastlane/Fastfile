@@ -19,6 +19,21 @@ def provisioning_profile_settings(profile)
   profile.match?(uuid_pattern) ? { profile_uuid: profile } : { profile_name: profile }
 end
 
+def app_store_connect_api_key_from_env
+  key_id = ENV["APP_STORE_CONNECT_API_KEY_KEY_ID"].to_s
+  issuer_id = ENV["APP_STORE_CONNECT_API_KEY_ISSUER_ID"].to_s
+  key_filepath = ENV["APP_STORE_CONNECT_API_KEY_KEY"].to_s
+
+  return nil if key_id.empty? || issuer_id.empty? || key_filepath.empty?
+
+  app_store_connect_api_key(
+    key_id: key_id,
+    issuer_id: issuer_id,
+    key_filepath: File.expand_path(key_filepath),
+    in_house: false
+  )
+end
+
 platform :ios do
   # Variables
   app_identifier = "com.whispermate.ios"
@@ -34,7 +49,7 @@ platform :ios do
       app_identifier: app_identifier,
       app_name: "WhisperMate",
       language: "English",
-      app_version: "0.0.20",
+      app_version: "0.0.92",
       sku: "whispermate-ios",
       team_id: team_id,
       platforms: ["ios"]
@@ -56,23 +71,27 @@ platform :ios do
   #####################################
   desc "Build the app for App Store"
   lane :build do
-    # Increment build number
-    if !ENV["IOS_BUILD_NUMBER"].to_s.empty?
-      committed_build_number = get_info_plist_value(
-        path: "WhisperMateIOS/Info.plist",
-        key: "CFBundleVersion"
-      ).to_i
-      requested_build_number = ENV["IOS_BUILD_NUMBER"].to_i
-      UI.user_error!("IOS_BUILD_NUMBER must be greater than the committed iOS build number") if requested_build_number <= committed_build_number
+    committed_build_number = get_info_plist_value(
+      path: "WhisperMateIOS/Info.plist",
+      key: "CFBundleVersion"
+    ).to_i
 
-      increment_build_number(
-        xcodeproj: "Whispermate.xcodeproj",
-        build_number: ENV["IOS_BUILD_NUMBER"]
-      )
+    # Use the committed build number by default so App Review resubmissions are
+    # reproducible. Set IOS_BUILD_NUMBER explicitly when a higher build is needed.
+    if !ENV["IOS_BUILD_NUMBER"].to_s.empty?
+      requested_build_number = ENV["IOS_BUILD_NUMBER"].to_i
+      UI.user_error!("IOS_BUILD_NUMBER must be at least the committed iOS build number") if requested_build_number < committed_build_number
+
+      if requested_build_number > committed_build_number
+        increment_build_number(
+          xcodeproj: "Whispermate.xcodeproj",
+          build_number: ENV["IOS_BUILD_NUMBER"]
+        )
+      else
+        UI.message("Using committed iOS build number #{committed_build_number}")
+      end
     else
-      increment_build_number(
-        xcodeproj: "Whispermate.xcodeproj"
-      )
+      UI.message("Using committed iOS build number #{committed_build_number}")
     end
 
     # Update provisioning profiles
@@ -219,16 +238,25 @@ platform :ios do
   #####################################
   desc "Upload metadata and screenshots to App Store Connect"
   lane :metadata do
-    deliver(
+    api_key = app_store_connect_api_key_from_env
+    deliver_options = {
       app_identifier: app_identifier,
       team_id: team_id,
       metadata_path: "./fastlane/metadata",
-      screenshots_path: "./fastlane/screenshots",
       skip_binary_upload: true,
       skip_app_version_update: false,
       force: true,
-      overwrite_screenshots: true
-    )
+    }
+    deliver_options[:api_key] = api_key if api_key
+
+    if File.directory?("./fastlane/screenshots")
+      deliver_options[:screenshots_path] = "./fastlane/screenshots"
+      deliver_options[:overwrite_screenshots] = true
+    else
+      deliver_options[:skip_screenshots] = true
+    end
+
+    deliver(**deliver_options)
 
     UI.success("✅ Metadata uploaded!")
   end
@@ -248,7 +276,7 @@ platform :ios do
       skip_waiting_for_build_processing: false,
       distribute_external: false,
       notify_external_testers: false,
-      changelog: "WhisperMate v0.0.20 - UI improvements and bug fixes"
+      changelog: "WhisperMate v0.0.92 - App Review privacy, login, and support fixes"
     )
 
     UI.success("✅ Uploaded to TestFlight!")
@@ -269,7 +297,8 @@ platform :ios do
     metadata
 
     # Upload to App Store Connect
-    deliver(
+    api_key = app_store_connect_api_key_from_env
+    deliver_options = {
       app_identifier: app_identifier,
       team_id: team_id,
       ipa: "./build/WhisperMate.ipa",
@@ -285,11 +314,21 @@ platform :ios do
         export_compliance_uses_encryption: false,
         export_compliance_is_exempt: true
       }
-    )
+    }
+    deliver_options[:api_key] = api_key if api_key
+
+    deliver(**deliver_options)
 
     # Create git tag
+    version = get_version_number(
+      xcodeproj: "Whispermate.xcodeproj",
+      target: "WhisperMateIOS"
+    )
+    build_number = get_build_number(
+      xcodeproj: "Whispermate.xcodeproj"
+    )
     add_git_tag(
-      tag: "ios-v0.0.20"
+      tag: "ios-v#{version}-build-#{build_number}"
     )
 
     # Push to git
@@ -348,16 +387,34 @@ platform :ios do
   end
 
   #####################################
+  # Lane: CI Submit Review
+  #####################################
+  desc "Submit the uploaded iOS build for App Review from GitHub Actions"
+  lane :ci_submit_review do
+    sh("node ../ci_scripts/submit_ios_app_review.js")
+  end
+
+  #####################################
   # Lane: Update Metadata Only
   #####################################
   desc "Update metadata without uploading a new build"
   lane :update_metadata do
-    deliver(
+    api_key = app_store_connect_api_key_from_env
+    deliver_options = {
       app_identifier: app_identifier,
       team_id: team_id,
       skip_binary_upload: true,
-      overwrite_screenshots: true
-    )
+    }
+    deliver_options[:api_key] = api_key if api_key
+
+    if File.directory?("./fastlane/screenshots")
+      deliver_options[:screenshots_path] = "./fastlane/screenshots"
+      deliver_options[:overwrite_screenshots] = true
+    else
+      deliver_options[:skip_screenshots] = true
+    end
+
+    deliver(**deliver_options)
 
     UI.success("✅ Metadata updated!")
   end

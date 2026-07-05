@@ -7,6 +7,11 @@ import MediaPlayer
 import SwiftUI
 import WhisperMateShared
 
+private enum CloudConsentAction {
+    case startInlineRecording
+    case switchToCloud
+}
+
 struct ContentView: View {
     @StateObject private var historyManager = HistoryManager()
     @StateObject private var dictionaryManager = DictionaryManager.shared
@@ -22,7 +27,7 @@ struct ContentView: View {
     @State private var recordingSheetID = UUID()
     @State private var selectedRecording: Recording?
     @State private var showTextRules = false
-    @State private var showLoginSheet = false
+    @State private var showAccountLoginSheet = false
     @State private var showLoginConfigurationAlert = false
     @State private var loginConfigurationMessage = ""
     @State private var showOfflineModelAlert = false
@@ -40,6 +45,7 @@ struct ContentView: View {
     @State private var keyboardBridgeAliveUntil: Date?
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
     @State private var showCloudTranscriptionConsent = false
+    @State private var pendingCloudConsentAction: CloudConsentAction?
     @State private var keyboardCommandPollTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -54,7 +60,7 @@ struct ContentView: View {
                 consumePendingKeyboardCommandIfNeeded()
                 #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-showAccountLoginForValidation") {
-                        showLoginSheet = true
+                        showAccountLoginSheet = true
                     }
                 #endif
             }
@@ -89,9 +95,6 @@ struct ContentView: View {
             } message: {
                 Text(loginConfigurationMessage)
             }
-            .sheet(isPresented: $showLoginSheet) {
-                AccountLoginView(authManager: authManager)
-            }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
                 if canDownloadOfflineModelFromAlert {
                     Button("Download") {
@@ -110,12 +113,25 @@ struct ContentView: View {
             .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCloudTranscriptionConsent) {
                 Button("Allow Cloud Transcription") {
                     CloudTranscriptionConsent.grant()
-                    handleInlineRecordingTap()
+                    let action = pendingCloudConsentAction
+                    pendingCloudConsentAction = nil
+
+                    switch action {
+                    case .startInlineRecording:
+                        handleInlineRecordingTap()
+                    case .switchToCloud:
+                        transcriptionProviderManager.setTranscriptionMode(.cloud)
+                    case .none:
+                        break
+                    }
                 }
                 Button("Use Offline Mode") {
+                    pendingCloudConsentAction = nil
                     useOfflineModeFromCloudConsent()
                 }
-                Button("Not Now", role: .cancel) {}
+                Button("Not Now", role: .cancel) {
+                    pendingCloudConsentAction = nil
+                }
             } message: {
                 Text(CloudTranscriptionConsent.disclosureMessage)
             }
@@ -634,9 +650,14 @@ struct ContentView: View {
                         }
                     } else {
                         Button(action: openLogin) {
-                            Label("Log In to Get More", systemImage: "person.crop.circle.badge.plus")
-                                .foregroundColor(.primary)
+                            HStack {
+                                Label("Log In to Get More", systemImage: "person.crop.circle.badge.plus")
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                            .foregroundColor(.primary)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -698,6 +719,30 @@ struct ContentView: View {
                     }
                 }
 
+                Section("Cloud Privacy") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(CloudTranscriptionConsent.disclosureMessage)
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(CloudTranscriptionConsent.isGranted ? "Cloud transcription is allowed." : "Cloud transcription is not allowed yet.")
+                            .font(.footnote.weight(.medium))
+                            .foregroundColor(CloudTranscriptionConsent.isGranted ? .secondary : .orange)
+                    }
+                    .padding(.vertical, 4)
+
+                    if CloudTranscriptionConsent.isGranted {
+                        Button("Turn Off Cloud Permission", role: .destructive) {
+                            CloudTranscriptionConsent.revoke()
+                        }
+                    } else {
+                        Button("Allow Cloud Transcription") {
+                            CloudTranscriptionConsent.grant()
+                        }
+                    }
+                }
+
                 Section("Transcription") {
                     NavigationLink {
                         DictionaryView(manager: dictionaryManager)
@@ -746,6 +791,9 @@ struct ContentView: View {
             .navigationTitle("Settings")
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .sheet(isPresented: $showAccountLoginSheet) {
+            AccountLoginView(authManager: authManager)
+        }
     }
 
     // MARK: - Permission Helpers
@@ -928,6 +976,7 @@ struct ContentView: View {
 
     private func switchToCloudTranscription() {
         guard CloudTranscriptionConsent.isGranted else {
+            pendingCloudConsentAction = .switchToCloud
             showCloudTranscriptionConsent = true
             return
         }
@@ -998,7 +1047,7 @@ struct ContentView: View {
     }
 
     private func openLogin() {
-        showLoginSheet = true
+        showAccountLoginSheet = true
     }
 
     private func prepareReferralInvite() {
@@ -1105,6 +1154,7 @@ struct ContentView: View {
             return true
         }
 
+        pendingCloudConsentAction = .startInlineRecording
         showCloudTranscriptionConsent = true
         return false
     }

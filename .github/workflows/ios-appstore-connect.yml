@@ -5,6 +5,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      submit_for_review:
+        description: "Upload metadata and submit the build for App Review"
+        required: false
+        type: boolean
+        default: false
+      existing_build_number:
+        description: "Submit an already uploaded build number instead of uploading a new IPA"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -51,6 +62,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install Fastlane
+        shell: bash
+        run: gem install fastlane -v 2.237.0 --no-document
 
       - name: Validate required secrets
         shell: bash
@@ -116,6 +136,16 @@ jobs:
             echo "::error::Could not resolve MARKETING_VERSION or CURRENT_PROJECT_VERSION from Xcode build settings"
             exit 1
           fi
+
+          if [ -n "${{ inputs.existing_build_number || '' }}" ]; then
+            echo "Marketing version: ${marketing_version}"
+            echo "Committed build number: ${committed_build_number}"
+            echo "Using existing App Store Connect build number: ${{ inputs.existing_build_number }}"
+            echo "IOS_MARKETING_VERSION=${marketing_version}" >> "${GITHUB_ENV}"
+            echo "IOS_BUILD_NUMBER=${{ inputs.existing_build_number }}" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+
           export BUNDLE_ID="${bundle_id}"
           export MARKETING_VERSION="${marketing_version}"
 
@@ -189,22 +219,27 @@ jobs:
           echo "Committed build number: ${committed_build_number}"
           echo "Latest App Store Connect build number: ${latest_uploaded_build}"
           echo "Next build number: ${next_build_number}"
+          echo "IOS_MARKETING_VERSION=${marketing_version}" >> "${GITHUB_ENV}"
           echo "IOS_BUILD_NUMBER=${next_build_number}" >> "${GITHUB_ENV}"
 
       - name: Write app secrets
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.existing_build_number == '' }}
         shell: bash
         run: ./ci_scripts/ci_pre_xcodebuild.sh
 
       - name: Prepare iOS signing assets
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.existing_build_number == '' }}
         shell: bash
         run: ./ci_scripts/prepare_ios_signing.js
 
       - name: Archive iOS app
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.existing_build_number == '' }}
         shell: bash
         working-directory: Whishpermate
         run: fastlane ios build
 
       - name: Validate IPA signing
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.existing_build_number == '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -227,6 +262,7 @@ jobs:
           fi
 
       - name: Upload IPA to App Store Connect
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.existing_build_number == '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -238,8 +274,13 @@ jobs:
             --apiKey "${APP_STORE_CONNECT_API_KEY_KEY_ID}" \
             --apiIssuer "${APP_STORE_CONNECT_API_KEY_ISSUER_ID}"
 
+      - name: Submit to App Review
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.submit_for_review }}
+        shell: bash
+        run: node ci_scripts/submit_ios_app_review.js
+
       - name: Upload IPA artifact
-        if: always()
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.existing_build_number == '') }}
         uses: actions/upload-artifact@v4
         with:
           name: WhisperMate-iOS-${{ github.run_number }}

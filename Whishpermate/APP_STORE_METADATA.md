@@ -71,15 +71,13 @@ voice to text, speech recognition, dictation, voice keyboard, transcription, voi
 
 ---
 
-## What's New in Version 0.0.20
+## What's New in Version 0.0.92
 
 **New in This Release**
 
-• 🎨 Improved UI with polished animations
-• ⚡ Enhanced copy button with visual feedback
-• 🔗 Updated share menu integration
-• 🐛 Bug fixes and performance improvements
-• 📱 Better iOS keyboard support
+• Added a clear cloud transcription permission disclosure before cloud processing
+• Fixed the Settings login action for users who need more words
+• Updated support and privacy information for App Review
 
 ---
 
@@ -99,16 +97,16 @@ voice to text, speech recognition, dictation, voice keyboard, transcription, voi
 ## Support Information
 
 ### Support URL
-https://github.com/writingmate/whispermate/issues
+https://github.com/writingmate/aidictation/blob/codex/ios-app-review-fixes/SUPPORT.md
 
 ### Marketing URL
-https://whispermate.ai
+https://github.com/writingmate/aidictation
 
 ### Privacy Policy URL
-https://whispermate.ai/privacy
+https://github.com/writingmate/aidictation/blob/codex/ios-app-review-fixes/Whishpermate/PRIVACY_POLICY.md
 
 ### Terms of Service URL (Optional)
-https://whispermate.ai/terms
+Not provided
 
 ---
 
@@ -154,15 +152,15 @@ https://whispermate.ai/terms
 - Full Keyboard Access: Required for keyboard extension to work across all apps
 
 **Privacy Notice:**
-All voice processing happens on-device or via secure API calls. We do not store or retain user voice recordings or transcription data.
+The app asks for cloud transcription permission before sending voice recordings or generated transcripts to AIDictation's cloud transcription service. That service sends recordings to Groq to create transcripts and may use transcripts to apply the user's selected formatting. Offline mode keeps transcription on the device. We do not store or retain user voice recordings or transcription data after processing.
 
 ---
 
 ## Additional Metadata
 
 ### Version Information
-- **Version Number**: 0.0.20
-- **Build Number**: [Auto-incremented]
+- **Version Number**: 0.0.92
+- **Build Number**: 101
 - **Minimum iOS Version**: 17.0 or later
 
 ### App Capabilities
@@ -304,4 +302,4 @@ WhisperMate is a voice-to-text keyboard for iOS that makes typing effortless. Sp
 ---
 
 *Last Updated: November 5, 2025*
-*Version: 0.0.20*
+*Version: 0.0.92*

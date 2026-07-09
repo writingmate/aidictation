@@ -327,6 +327,33 @@ public class AuthManager: ObservableObject {
         }
     }
 
+    public func deleteAccount() async throws {
+        DebugLog.info("Deleting account...", context: "AuthManager")
+        await MainActor.run {
+            self.isLoading = true
+            self.error = nil
+        }
+
+        do {
+            try await supabase.deleteCurrentUserAccount()
+            try? await supabase.client?.auth.signOut()
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+                self.isLoading = false
+                NotificationCenter.default.post(name: NSNotification.Name(Constants.userAuthChangedNotification), object: nil)
+            }
+            DebugLog.info("Account deleted successfully", context: "AuthManager")
+        } catch {
+            DebugLog.info("Account deletion failed: \(error.localizedDescription)", context: "AuthManager")
+            await MainActor.run {
+                self.isLoading = false
+                self.error = "Account deletion failed: \(error.localizedDescription)"
+            }
+            throw error
+        }
+    }
+
     public func updateWordCount(wordsToAdd: Int) async throws -> User {
         let updatedUser = try await supabase.updateUserWordCount(wordsToAdd: wordsToAdd)
         await MainActor.run {

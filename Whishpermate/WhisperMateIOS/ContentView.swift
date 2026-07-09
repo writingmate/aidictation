@@ -47,6 +47,11 @@ struct ContentView: View {
     @State private var showCloudTranscriptionConsent = false
     @State private var pendingCloudConsentAction: CloudConsentAction?
     @State private var keyboardCommandPollTask: Task<Void, Never>?
+    @State private var showDeleteAccountConfirmation = false
+    @State private var showDeleteAccountResult = false
+    @State private var deleteAccountResultTitle = ""
+    @State private var deleteAccountResultMessage = ""
+    @State private var isDeletingAccount = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -94,6 +99,22 @@ struct ContentView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(loginConfigurationMessage)
+            }
+            .sheet(isPresented: $showAccountLoginSheet) {
+                AccountLoginView(authManager: authManager)
+            }
+            .alert("Delete Account?", isPresented: $showDeleteAccountConfirmation) {
+                Button("Delete Account", role: .destructive) {
+                    deleteAccount()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This permanently deletes your account, usage, and invite data, then signs you out. If you have an active paid plan, cancel it from your billing receipt or payment provider to stop future charges.")
+            }
+            .alert(deleteAccountResultTitle, isPresented: $showDeleteAccountResult) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(deleteAccountResultMessage)
             }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
                 if canDownloadOfflineModelFromAlert {
@@ -648,6 +669,21 @@ struct ContentView: View {
                         } label: {
                             Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
                         }
+                        .disabled(isDeletingAccount)
+
+                        Button(role: .destructive) {
+                            showDeleteAccountConfirmation = true
+                        } label: {
+                            if isDeletingAccount {
+                                HStack {
+                                    ProgressView()
+                                    Text("Deleting Account")
+                                }
+                            } else {
+                                Label("Delete Account", systemImage: "trash")
+                            }
+                        }
+                        .disabled(isDeletingAccount)
                     } else {
                         Button(action: openLogin) {
                             HStack {
@@ -1048,6 +1084,25 @@ struct ContentView: View {
 
     private func openLogin() {
         showAccountLoginSheet = true
+    }
+
+    private func deleteAccount() {
+        guard !isDeletingAccount else { return }
+        isDeletingAccount = true
+
+        Task {
+            do {
+                try await authManager.deleteAccount()
+                deleteAccountResultTitle = "Account Deleted"
+                deleteAccountResultMessage = "Your account has been deleted and you have been signed out."
+            } catch {
+                deleteAccountResultTitle = "Account Not Deleted"
+                deleteAccountResultMessage = "We couldn't delete your account. Please try again."
+            }
+
+            isDeletingAccount = false
+            showDeleteAccountResult = true
+        }
     }
 
     private func prepareReferralInvite() {

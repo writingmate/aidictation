@@ -30,10 +30,20 @@ We may collect limited, anonymous usage data including:
 
 This data is collected solely to improve the App and is completely anonymous - we cannot identify individual users.
 
+### Account Information
+
+If you create an account, we collect and store the information needed to provide account-based features:
+- Email address
+- Password authentication data handled by our authentication provider
+- Account identifiers used to keep you signed in
+- Subscription status, word usage, and invite/referral information
+
+We use this information to let you sign in, sync your usage, provide account-based word limits, process upgrades, and support invite rewards.
+
 ### Information We Do NOT Collect
 
 We explicitly do NOT collect:
-- Personal identification information (name, email, phone number)
+- Phone number
 - Contact lists or address books
 - Location data
 - Photos or media files
@@ -99,7 +109,7 @@ If you are in the EU, you have the right to:
 - Data portability
 - Object to processing
 
-**Note**: Since we do not store personal data or audio recordings, there is typically no data to access, rectify, or delete.
+You can delete your account in the App from Settings > Account > Delete Account. Account deletion removes your account record and associated account data that we are not legally required to keep.
 
 ### Exercising Your Rights
 
@@ -132,6 +142,7 @@ We do NOT use "Full Access" to:
 
 - **Audio Recordings**: Deleted immediately after transcription (typically within seconds)
 - **Transcriptions**: Stored locally on your device only, under your control
+- **Account Data**: Stored while your account is active and deleted when you delete your account, except where retention is legally required
 - **Usage Analytics**: Anonymized data retained for up to 12 months for improvement purposes
 - **Cloud Processing**: Voice recordings and transcripts sent to cloud transcription are used to provide your requested transcription or formatting and are not sold for advertising.
 

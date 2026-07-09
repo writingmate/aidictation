@@ -122,12 +122,12 @@ Not provided
 - **First Name**: Artsiom
 - **Last Name**: Vysotski
 - **Phone Number**: [Your phone number]
-- **Email**: [Your support email]
+- **Email**: support@whispermate.ai
 
-### Demo Account (If required for review)
-- **Username**: N/A (No account required)
-- **Password**: N/A
-- **Notes**: The app works without authentication. Microphone permission is required for voice input.
+### Demo Account
+- **Username**: [Demo account email]
+- **Password**: [Demo account password]
+- **Notes**: The app works without authentication until the free word limit is reached, but it also supports account creation and sign-in. Provide an active demo account for App Review, or create a fresh test account during review.
 
 ### Notes for Reviewer
 
@@ -153,6 +153,16 @@ Not provided
 
 **Privacy Notice:**
 The app asks for cloud transcription permission before sending voice recordings or generated transcripts to AIDictation's cloud transcription service. That service sends recordings to Groq to create transcripts and may use transcripts to apply the user's selected formatting. Offline mode keeps transcription on the device. We do not store or retain user voice recordings or transcription data after processing.
+If signed in, the app stores account information such as email, usage, subscription status, and invite/referral data.
+
+**Account Deletion Review Path:**
+1. Sign in with the demo account, or create a new account.
+2. Open Settings.
+3. In Account, tap Delete Account.
+4. Confirm Delete Account.
+5. The app confirms the account was deleted and signs the user out.
+
+Include a physical-device screen recording of this full flow in the App Review Information Notes field.
 
 ---
 

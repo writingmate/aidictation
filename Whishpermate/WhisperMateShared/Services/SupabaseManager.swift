@@ -233,6 +233,11 @@ public class SupabaseManager {
         return updatedUser
     }
 
+    public func deleteCurrentUserAccount() async throws {
+        let client = try requireClient()
+        try await client.rpc("delete_current_user_account").execute()
+    }
+
     // MARK: - Transcription
 
     public func transcribe(audioData: Data, language: String = "en") async throws -> (transcription: String, wordCount: Int, updatedUser: User) {

@@ -57,19 +57,21 @@
 - [ ] Privacy policy written ✅ (PRIVACY_POLICY.md)
 - [ ] Privacy policy hosted at public URL 🔴 NEEDED
 - [ ] Privacy Nutrition Label completed in App Store Connect
-  - **Data Types Collected**: Audio (for transcription only)
+  - **Data Types Collected**: Audio (for transcription only), email address, account identifier, subscription status, usage data, diagnostics
   - **Data Use**: App Functionality
-  - **Data Linked to User**: No
+  - **Data Linked to User**: Yes for account, subscription, and usage data when signed in
   - **Data Used to Track You**: No
+- [ ] Account deletion verified on a physical iPhone
+- [ ] Account deletion screen recording attached in App Review Information Notes
 - [ ] Export Compliance: No (if not using encryption beyond standard iOS)
 
 ### 8. App Review Information
 - [ ] Contact information provided
   - First name: Artsiom
   - Last name: Vysotski
-  - Email: [Your email]
+  - Email: support@whispermate.ai
   - Phone: [Your phone]
-- [ ] Demo account info (if required): N/A
+- [ ] Demo account info provided for account deletion review
 - [ ] Notes for reviewer written (see APP_STORE_METADATA.md)
 - [ ] Test instructions provided
 

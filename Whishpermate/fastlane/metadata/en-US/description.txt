@@ -1,47 +1,37 @@
-WhisperMate is the fastest way to turn your voice into text on iOS. Using advanced speech recognition, WhisperMate transcribes your voice with incredible accuracy, making typing feel effortless.
+Speak naturally. Get clean, useful text wherever you type.
 
-KEY FEATURES
+AI Dictation is a voice-to-text app and keyboard for iPhone and iPad. Use your voice for messages, email, notes, documents, and any other app with a text field.
 
-🎤 System-Wide Voice Keyboard
-Access WhisperMate's voice input from any app - Messages, Email, Notes, Safari, and more. No need to switch apps or copy-paste.
+DICTATE IN ANY APP
 
-⚡ Lightning-Fast Transcription
-Get instant, accurate transcriptions powered by state-of-the-art AI. Perfect for messages, emails, notes, and documents.
+Enable the AI Dictation keyboard once, then use it anywhere you normally type. Tap the microphone, speak naturally, and continue with text that is ready to use.
 
-🔒 Private & Secure
-Your voice data is processed securely. We respect your privacy - your recordings are never stored on our servers.
+OFFLINE OR CLOUD — YOU CHOOSE
 
-✨ Smart Text Formatting
-Automatic punctuation, capitalization, and formatting. Your transcriptions look professional without any extra effort.
+Use offline mode when you want transcription to stay on your device or when you do not have a connection. Choose cloud mode when you want additional cleanup and formatting. AI Dictation asks before sending audio for cloud transcription.
 
-🌍 Multilingual Support
-Speak in your preferred language. WhisperMate supports dozens of languages with native-quality transcription.
+CLEANER WRITING FROM NATURAL SPEECH
 
-📋 Quick Share
-Send your transcriptions directly to AI assistants like ChatGPT, Claude, Perplexity, or share via WhatsApp, Email, and more.
+AI Dictation adds punctuation and turns rough speech into readable text. Spend less time fixing filler words, sentence breaks, and formatting after you dictate.
 
-PERFECT FOR
+BUILT FOR THE WAY YOU WRITE
 
-• Composing messages while on the go
-• Taking quick notes during meetings
-• Writing emails hands-free
-• Journaling and creative writing
-• Anyone who prefers speaking to typing
+• Dictate messages, email, notes, and longer drafts
+• Choose from a broad set of languages
+• Add names and specialized terms to your personal dictionary
+• Use context rules to shape the result for different writing situations
+• Review, copy, and share previous transcriptions
+• Keep keyboard recording status visible while you work
 
-HOW IT WORKS
+PRIVATE WHEN IT MATTERS
 
-1. Enable WhisperMate keyboard in Settings
-2. Switch to WhisperMate in any app
-3. Tap the microphone button and speak
-4. Watch your words appear instantly
+Offline mode processes transcription on your device. Cloud mode is optional and clearly identified, so you can choose the right mode for each conversation or draft.
 
-WHY CHOOSE WHISPERMATE?
+GET STARTED IN MINUTES
 
-Unlike built-in voice dictation, WhisperMate offers:
-- Superior accuracy with advanced AI models
-- Custom text formatting rules
-- Direct integration with AI assistants
-- Fast, responsive performance
-- Clean, intuitive interface
+1. Open AI Dictation and follow the setup guide.
+2. Enable the AI Dictation keyboard in Settings.
+3. Choose offline mode or cloud mode.
+4. Open any text field, switch to AI Dictation, and start speaking.
 
-Whether you're sending a quick text, drafting an email, or capturing your thoughts, WhisperMate makes voice-to-text effortless and accurate.
+Whether you are replying to a message, capturing an idea, or drafting something longer, AI Dictation helps your words keep up with your thoughts.

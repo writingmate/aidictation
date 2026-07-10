@@ -1,7 +1,7 @@
-New in This Release
+AI Dictation is now available on the App Store.
 
-• 🎨 Improved UI with polished animations
-• ⚡ Enhanced copy button with visual feedback
-• 🔗 Updated share menu integration
-• 🐛 Bug fixes and performance improvements
-• 📱 Better iOS keyboard support
+• Dictate in any app with the AI Dictation keyboard.
+• Choose private offline mode or cloud mode for extra cleanup and formatting.
+• Switch languages more reliably from the keyboard.
+• See when keyboard dictation is listening and stop it without leaving your current app.
+• Improved setup, sign-in, long dictation handling, and overall stability.

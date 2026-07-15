@@ -24,5 +24,9 @@ output.json
 # Kotlin
 *.kotlin_module
 
+# Python helper caches
+__pycache__/
+*.pyc
+
 # Mac files
 .DS_Store

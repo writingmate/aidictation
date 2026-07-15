@@ -11,7 +11,12 @@ import com.whispermate.aidictation.data.repository.RecordingRepository
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.util.AudioRecorder
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -21,9 +26,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import javax.inject.Inject
 
@@ -49,6 +54,7 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
     companion object {
         private const val TAG = "MainViewModel"
+        private const val RECORDING_FINALIZE_TIMEOUT_MS = 10_000L
     }
 
     private val parakeetRuntime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
@@ -189,6 +195,65 @@ class MainViewModel @Inject constructor(
         _recordingState.value = RecordingState.Recording
     }
 
+    fun reportRecordingStartFailure() {
+        _error.value = "Your recording could not start. Check microphone access and try again."
+    }
+
+    private fun beginStopping(): Boolean {
+        if (_recordingState.value != RecordingState.Recording) return false
+        _recordingState.value = RecordingState.Processing
+        return true
+    }
+
+    private fun reportRecordingFinalizationFailure(audioFile: File?) {
+        audioFile?.delete()
+        _error.value = "Your recording could not be saved. Check microphone access and try again."
+        _recordingState.value = RecordingState.Idle
+    }
+
+    fun finalizeRecording(recorder: AudioRecorder?, expectedAudioFile: File?): Boolean {
+        if (!beginStopping()) return false
+
+        if (recorder == null) {
+            reportRecordingFinalizationFailure(expectedAudioFile)
+            return true
+        }
+
+        viewModelScope.launch {
+            // MediaRecorder.stop() can block while Android finalizes the audio container.
+            // A sibling IO job lets the timeout restore the UI even if the platform call stalls.
+            val stopJob = viewModelScope.async(Dispatchers.IO) { recorder.stop() }
+            val result = try {
+                withTimeout(RECORDING_FINALIZE_TIMEOUT_MS) { stopJob.await() }
+            } catch (_: TimeoutCancellationException) {
+                stopJob.invokeOnCompletion { expectedAudioFile?.delete() }
+                stopJob.cancel()
+                reportRecordingFinalizationFailure(expectedAudioFile)
+                return@launch
+            } catch (error: CancellationException) {
+                stopJob.invokeOnCompletion { expectedAudioFile?.delete() }
+                stopJob.cancel()
+                expectedAudioFile?.delete()
+                throw error
+            }
+
+            if (result == null) {
+                reportRecordingFinalizationFailure(expectedAudioFile)
+                return@launch
+            }
+
+            stopRecording(result.first, result.second)
+        }
+        return true
+    }
+
+    fun cancelRecording(audioFile: File?) {
+        audioFile?.delete()
+        if (_recordingState.value == RecordingState.Recording) {
+            _recordingState.value = RecordingState.Idle
+        }
+    }
+
     fun triggerStartRecording() {
         viewModelScope.launch {
             _startRecordingTrigger.emit(Unit)
@@ -197,6 +262,12 @@ class MainViewModel @Inject constructor(
 
     fun stopRecording(audioFile: File?, durationMs: Long) {
         if (audioFile == null || durationMs < 300) {
+            audioFile?.delete()
+            _error.value = if (audioFile == null) {
+                "Your recording could not be saved. Check microphone access and try again."
+            } else {
+                "The recording was too short. Try again and speak a little longer."
+            }
             _recordingState.value = RecordingState.Idle
             return
         }
@@ -227,11 +298,16 @@ class MainViewModel @Inject constructor(
                         recordingRepository.addRecording(recording)
                         subscriptionRepository.recordWords(processedText)
                         _selectedRecording.value = recording
+                    } else {
+                        audioFile.delete()
+                        _error.value = "No speech was recognized. Try again and speak a little louder."
                     }
                     _recordingState.value = RecordingState.Idle
                 },
                 onFailure = { e ->
-                    _error.value = e.message ?: "Transcription failed"
+                    Log.e(TAG, "Transcription failed", e)
+                    audioFile.delete()
+                    _error.value = "Your recording could not be transcribed. Check your connection and try again."
                     _recordingState.value = RecordingState.Idle
                 }
             )

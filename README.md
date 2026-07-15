@@ -122,7 +122,7 @@ cd aidictation/AIDictationAndroid
 ./gradlew assembleDebug
 ```
 
-Copy `AIDictationAndroid/local.properties.template` to `local.properties` when you need local cloud-mode configuration.
+Copy `local.properties.template` to `local.properties` when you need local cloud-mode configuration. To reuse a macOS client configuration without putting secrets in `local.properties`, run `./scripts/run_configured_gradle.py --help`.
 
 ## Privacy
 

@@ -1,1 +1,1 @@
-Fixes dictation language detection so selected languages no longer force every recording into one language.
+Makes the floating mic appear more reliably, fixes stalls in automatic stop mode, and shows a clear message when dictation or text insertion fails.

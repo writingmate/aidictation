@@ -9,6 +9,7 @@ import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.preferences.ApiConfigManager
 import com.whispermate.aidictation.domain.model.Command
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -56,6 +57,7 @@ object TranscriptionClient {
 
     private val okHttpClient by lazy {
         OkHttpClient.Builder()
+            .callTimeout(70, TimeUnit.SECONDS)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
@@ -100,7 +102,7 @@ object TranscriptionClient {
                 )
             }
 
-            val primary = executeTranscriptionRequest(
+            var primary = executeTranscriptionRequest(
                 audioFile = audioFile,
                 prompt = prompt,
                 language = language,
@@ -110,6 +112,21 @@ object TranscriptionClient {
                 apiKey = apiKey,
                 model = model
             )
+
+            if (isRetryableTranscriptionFailure(primary.exceptionOrNull())) {
+                Log.w(TAG, "Transient transcription failure; retrying once")
+                delay(500)
+                primary = executeTranscriptionRequest(
+                    audioFile = audioFile,
+                    prompt = prompt,
+                    language = language,
+                    sttPrompt = sttPrompt,
+                    postProcessingPrompt = postProcessingPrompt,
+                    endpoint = endpoint,
+                    apiKey = apiKey,
+                    model = model
+                )
+            }
 
             if (audioFile.length() > MAX_SINGLE_UPLOAD_AUDIO_BYTES && isPayloadTooLarge(primary.exceptionOrNull())) {
                 Log.w(TAG, "Single transcription upload rejected as too large; retrying with chunks")
@@ -532,6 +549,19 @@ object TranscriptionClient {
             lowerBody.contains("payload_too_large") ||
             lowerBody.contains("function_payload_too_large") ||
             lowerBody.contains("request entity too large")
+    }
+
+    private fun isRetryableTranscriptionFailure(error: Throwable?): Boolean {
+        return when (error) {
+            is TranscriptionHttpException -> error.statusCode == 408 ||
+                error.statusCode == 425 ||
+                error.statusCode in 500..599
+            // OkHttp reports callTimeout as InterruptedIOException (and socket timeouts
+            // inherit from it). Retrying would turn one bounded wait into another long stall.
+            is java.io.InterruptedIOException -> false
+            is java.io.IOException -> true
+            else -> false
+        }
     }
 
     private fun contentTypeFor(audioFile: File): String {

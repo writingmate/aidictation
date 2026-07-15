@@ -16,11 +16,10 @@ asset pack.
 
 `.github/workflows/android-play-release.yml` publishes the signed release
 AAB to Google Play from the same `android-v<versionName>` tag. Tag pushes ship
-to the Google Play `alpha` track by default with a `completed` release
-status. Set repository variable `ANDROID_PLAY_TRACK` to `internal`, `alpha`,
-`beta`, or `production` if a different automatic target is needed; use
-`production` only after the Play Console production track preconditions are
-cleared for this app. Set
+to the track selected by repository variable `ANDROID_PLAY_TRACK`, with
+`production` as the workflow fallback and a `completed` release status. The
+repository is currently configured for `production`. Set the variable to
+`internal`, `alpha`, `beta`, or `production` to change the automatic target. Set
 `ANDROID_PLAY_RELEASE_STATUS` to `draft`, `inProgress`, `halted`, or
 `completed` to override the default. The workflow uses the checked-in
 `versionName` and `versionCode`, and rejects tags that do not point at a commit
@@ -56,7 +55,7 @@ runs, matching the local-developer layout described in
 | `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
 | `SUPABASE_URL` | Optional dedicated Android override for Supabase auth/profile requests. |
 | `SUPABASE_ANON_KEY` | Optional dedicated Android override for the Supabase anon key. |
-| `AUTH_WEB_URL` | Optional dedicated Android override for the hosted auth page. Defaults to `https://voicesinmyhead.co/auth`. |
+| `AUTH_WEB_URL` | Optional dedicated Android override for the hosted auth page. Defaults to `https://aidictation.com/auth`. |
 | `STRIPE_PAYMENT_LINK` | Optional default Stripe checkout link. |
 | `STRIPE_PAYMENT_LINK_MONTHLY` | Optional monthly checkout link. |
 | `STRIPE_PAYMENT_LINK_ANNUAL` | Optional annual checkout link. |
@@ -83,7 +82,7 @@ Optional repository variables:
 
 | Variable | Purpose |
 |---|---|
-| `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `alpha`; supported values are `internal`, `alpha`, `beta`, and `production`. |
+| `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `production`; supported values are `internal`, `alpha`, `beta`, and `production`. |
 | `ANDROID_PLAY_RELEASE_STATUS` | Automatic tagged release status. Defaults to `completed`; supported values are `draft`, `inProgress`, `halted`, and `completed`. |
 
 Before the workflow can publish, create the app once in Play Console and

@@ -1,15 +1,15 @@
-# Copy this file to local.properties and fill in your API credentials
-# Do NOT commit local.properties to version control
+# Copy this file to AIDictationAndroid/local.properties when configuring a
+# local build. Do NOT commit local.properties to version control.
 
 # Android SDK location
-sdk.dir=/path/to/Android/Sdk
+sdk.dir=/absolute/path/to/Android/Sdk
 
-# Optional local version overrides. Tagged Android releases use these defaults.
-VERSION_CODE=1025
-VERSION_NAME=0.0.28
+# Optional local version overrides. Leave these commented to use Gradle defaults.
+# VERSION_CODE=
+# VERSION_NAME=
 
 # Writingmate transcription configuration
-TRANSCRIPTION_API_KEY=your_writingmate_transcription_key_here
+TRANSCRIPTION_API_KEY=
 TRANSCRIPTION_ENDPOINT=https://writingmate.ai/api/openai/v1/audio/transcriptions
 TRANSCRIPTION_MODEL=groq/whisper-large-v3-turbo
 
@@ -25,19 +25,19 @@ PARAKEET_ON_DEMAND_MODEL_SHA256=b0ba6367c660c9fb5b9cc711ae35dc4bb96b8ebee199a58a
 
 # Writingmate post-processing configuration
 # Matches AIDictationPostProcessing* in the macOS Secrets.plist.
-AIDICTATION_POST_PROCESSING_KEY=your_writingmate_post_processing_key_here
+AIDICTATION_POST_PROCESSING_KEY=
 AIDICTATION_POST_PROCESSING_ENDPOINT=https://writingmate.ai/api/openai/v1/chat/completions
 AIDICTATION_POST_PROCESSING_MODEL=openai/gpt-oss-20b
 
 # Auth and purchase configuration
 # Uses the same web auth + Stripe checkout setup as the macOS app.
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your_supabase_anon_key_here
-AUTH_WEB_URL=https://voicesinmyhead.co/auth
-STRIPE_PAYMENT_LINK=https://buy.stripe.com/your_default_checkout_link
-STRIPE_PAYMENT_LINK_MONTHLY=https://buy.stripe.com/your_monthly_checkout_link
-STRIPE_PAYMENT_LINK_ANNUAL=https://buy.stripe.com/your_annual_checkout_link
-STRIPE_PAYMENT_LINK_LIFETIME=https://buy.stripe.com/your_lifetime_checkout_link
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+AUTH_WEB_URL=https://aidictation.com/auth
+STRIPE_PAYMENT_LINK=
+STRIPE_PAYMENT_LINK_MONTHLY=
+STRIPE_PAYMENT_LINK_ANNUAL=
+STRIPE_PAYMENT_LINK_LIFETIME=
 
 # Optional Google Play publishing configuration for local Gradle Play Publisher runs.
 # CI normally writes PLAY_SERVICE_ACCOUNT_CREDENTIALS from a GitHub secret.

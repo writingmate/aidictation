@@ -43,14 +43,18 @@ import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 import com.whispermate.aidictation.util.AudioRecorder
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
@@ -67,8 +71,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
+        private const val FOCUS_RECOVERY_ATTEMPTS = 15
+        private const val FOCUS_RECOVERY_RETRY_MS = 200L
         private const val INSERT_RESOLVE_ATTEMPTS = 3
         private const val INSERT_RESOLVE_RETRY_MS = 250L
+        private const val INSERT_VERIFY_ATTEMPTS = 5
+        private const val INSERT_VERIFY_RETRY_MS = 150L
+        private const val RECORDING_FINALIZE_TIMEOUT_MS = 10_000L
+        private const val DICTATION_PROCESSING_TIMEOUT_MS = 75_000L
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
@@ -80,6 +90,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         private val TRACKED_EVENT_TYPES = setOf(
             AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
             AccessibilityEvent.TYPE_VIEW_CLICKED,
             AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
@@ -144,10 +155,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var recordingState: RecordingState = RecordingState.Idle
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private var audioRecorder: AudioRecorder? = null
+    private var activeRecordingFile: java.io.File? = null
     private var vadJob: Job? = null
     private var autoStopOnSilenceEnabled = false
     private var bubbleAnimationJob: Job? = null
     private var pendingHideJob: Job? = null
+    private var focusRecoveryJob: Job? = null
     private var stickyEditableFocusArmed = false
     private var dictationTargetNode: AccessibilityNodeInfo? = null
     private var activeCommandAction: CommandAction? = null
@@ -185,6 +198,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         prewarmOnDeviceTranscriber()
         refreshOverlayVisibility(null)
+        scheduleFocusRecoveryIfNeeded(force = true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -205,6 +219,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         lastFocusedPackage = event.packageName?.toString()
         refreshOverlayVisibility(event.source)
+        scheduleFocusRecoveryIfNeeded(force = isPotentialEditableFocusEvent(event))
     }
 
     override fun onInterrupt() {
@@ -214,6 +229,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
+        focusRecoveryJob?.cancel()
+        focusRecoveryJob = null
     }
 
     private fun registerBubblePreferenceListener() {
@@ -252,6 +269,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
+        focusRecoveryJob?.cancel()
+        focusRecoveryJob = null
         unregisterBubblePreferenceListener()
     }
 
@@ -299,18 +318,51 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        if (!isKeyboardVisible()) return false
+        // Focus commonly arrives before the IME window, especially immediately after the
+        // accessibility service is enabled. Remember the field first so a later keyboard/window
+        // update can reveal the bubble even if that update no longer carries the field node.
         if (!hasEditableDictationTarget(source)) return false
+        if (!isKeyboardVisible()) return false
         if (isBubbleSuppressed()) return false
         return true
+    }
+
+    private fun scheduleFocusRecoveryIfNeeded(force: Boolean = false) {
+        if ((!force && !stickyEditableFocusArmed) || isBubbleAttached) return
+        if (isBubbleSuppressed()) return
+        if (focusRecoveryJob?.isActive == true) return
+
+        focusRecoveryJob = serviceScope.launch {
+            repeat(FOCUS_RECOVERY_ATTEMPTS) { attempt ->
+                if (isBubbleAttached || isBubbleSuppressed()) return@launch
+                if (shouldShowBubble(null)) {
+                    refreshOverlayVisibility(null)
+                    return@launch
+                }
+                if (attempt < FOCUS_RECOVERY_ATTEMPTS - 1) {
+                    delay(FOCUS_RECOVERY_RETRY_MS)
+                }
+            }
+        }
+    }
+
+    private fun isPotentialEditableFocusEvent(event: AccessibilityEvent): Boolean {
+        if (
+            event.eventType != AccessibilityEvent.TYPE_VIEW_FOCUSED &&
+            event.eventType != AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED &&
+            event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED
+        ) {
+            return false
+        }
+        return event.source?.isEditable == true
     }
 
     /**
      * Editable-focus check with a sticky fallback. WebView-backed fields (LinkedIn,
      * Chrome, in-app browsers) drop FOCUS_INPUT for seconds while their virtual
      * accessibility tree rebuilds, so a failed lookup is not evidence the field was
-     * left. Once an eligible field has been seen with the keyboard up, the target is
-     * considered present until the keyboard closes or a password field takes focus.
+     * left. Once an eligible field has been seen, the target is considered present while
+     * the keyboard catches up, until the keyboard closes or a password field takes focus.
      */
     private fun hasEditableDictationTarget(source: AccessibilityNodeInfo?): Boolean {
         if (resolveFocusedEditableNode(source) != null) {
@@ -1242,7 +1294,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun replaceCurrentSelection(replacement: String): Boolean {
+    private suspend fun replaceCurrentSelection(replacement: String): Boolean {
         val node = resolveFocusedEditableNode(null) ?: return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
@@ -1359,6 +1411,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         audioRecorder = recorder
+        activeRecordingFile = file
         recordingMode = mode
         recordingState = RecordingState.Recording
         updateBubbleUi()
@@ -1381,101 +1434,151 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         vadJob = null
 
         val recorder = audioRecorder ?: run {
-            recordingState = RecordingState.Idle
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
+            if (!discard) {
+                Toast.makeText(this, R.string.dictation_recording_not_saved, Toast.LENGTH_LONG).show()
             }
-            recordingMode = RecordingMode.Dictation
-            updateBubbleUi()
-            refreshOverlayVisibility(null)
+            resetAfterRecording(mode)
             return
         }
 
-        val speechDetected = recorder.hasSpeechBeenDetected()
-        val result = recorder.stop()
-        val audioFile = result?.first
-        val duration = result?.second ?: 0L
         audioRecorder = null
+        val expectedAudioFile = activeRecordingFile
+        activeRecordingFile = null
 
         if (discard) {
-            audioFile?.delete()
-            recordingState = RecordingState.Idle
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
+            expectedAudioFile?.delete()
+            serviceScope.launch(Dispatchers.IO) {
+                recorder.release()
+                expectedAudioFile?.delete()
             }
-            recordingMode = RecordingMode.Dictation
-            updateBubbleUi()
-            refreshOverlayVisibility(null)
+            resetAfterRecording(mode)
             return
         }
 
-        if (audioFile == null || !audioFile.exists()) {
-            recordingState = RecordingState.Idle
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-            }
-            recordingMode = RecordingMode.Dictation
-            updateBubbleUi()
-            refreshOverlayVisibility(null)
-            return
-        }
-
-        if (duration < MIN_RECORDING_MS || !speechDetected) {
-            audioFile.delete()
-            recordingState = RecordingState.Idle
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-                Toast.makeText(this, R.string.overlay_command_no_instruction, Toast.LENGTH_SHORT).show()
-            }
-            recordingMode = RecordingMode.Dictation
-            updateBubbleUi()
-            refreshOverlayVisibility(null)
-            return
-        }
-
-        val focusedNode = currentDictationNode()
-        if (focusedNode == null && !stickyEditableFocusArmed) {
-            audioFile.delete()
-            recordingState = RecordingState.Idle
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-            }
-            recordingMode = RecordingMode.Dictation
-            updateBubbleUi()
-            refreshOverlayVisibility(null)
-            return
-        }
-
+        // MediaRecorder.stop() can block while Android finalizes the audio container. Move that
+        // work off the accessibility service's main thread and change state first so auto-stop
+        // cannot trigger a second stop while finalization is in progress.
         recordingState = RecordingState.Processing
         updateBubbleUi()
 
         serviceScope.launch {
+            val speechDetected = recorder.hasSpeechBeenDetected()
+            val stopJob = serviceScope.async(Dispatchers.IO) { recorder.stop() }
+            val result = try {
+                withTimeout(RECORDING_FINALIZE_TIMEOUT_MS) { stopJob.await() }
+            } catch (error: TimeoutCancellationException) {
+                stopJob.cancel()
+                expectedAudioFile?.delete()
+                Log.e(TAG, "Recording finalization timed out", error)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_recording_not_saved,
+                    Toast.LENGTH_LONG
+                ).show()
+                resetAfterRecording(mode)
+                return@launch
+            } catch (error: CancellationException) {
+                stopJob.cancel()
+                expectedAudioFile?.delete()
+                throw error
+            } catch (error: Throwable) {
+                stopJob.cancel()
+                expectedAudioFile?.delete()
+                Log.e(TAG, "Unable to finalize recording", error)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_recording_not_saved,
+                    Toast.LENGTH_LONG
+                ).show()
+                resetAfterRecording(mode)
+                return@launch
+            }
+            val audioFile = result?.first
+            val duration = result?.second ?: 0L
+
+            if (audioFile == null || !audioFile.exists()) {
+                expectedAudioFile?.delete()
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_recording_not_saved,
+                    Toast.LENGTH_LONG
+                ).show()
+                resetAfterRecording(mode)
+                return@launch
+            }
+
+            if (duration < MIN_RECORDING_MS || !speechDetected) {
+                audioFile.delete()
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    if (mode == RecordingMode.RewriteInstruction) {
+                        R.string.overlay_command_no_instruction
+                    } else {
+                        R.string.dictation_no_speech_heard
+                    },
+                    Toast.LENGTH_LONG
+                ).show()
+                resetAfterRecording(mode)
+                return@launch
+            }
+
+            val focusedNode = currentDictationNode()
+            if (focusedNode == null && !stickyEditableFocusArmed) {
+                audioFile.delete()
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_text_field_lost,
+                    Toast.LENGTH_LONG
+                ).show()
+                resetAfterRecording(mode)
+                return@launch
+            }
+
             try {
-                when (mode) {
-                    RecordingMode.Dictation -> processRecording(audioFile)
-                    RecordingMode.RewriteInstruction -> processRewriteInstructionRecording(
-                        audioFile = audioFile,
-                        target = pendingRewriteTarget
-                    )
+                withTimeout(DICTATION_PROCESSING_TIMEOUT_MS) {
+                    when (mode) {
+                        RecordingMode.Dictation -> processRecording(audioFile)
+                        RecordingMode.RewriteInstruction -> processRewriteInstructionRecording(
+                            audioFile = audioFile,
+                            target = pendingRewriteTarget
+                        )
+                    }
                 }
+            } catch (error: TimeoutCancellationException) {
+                Log.e(TAG, "Dictation timed out", error)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_timed_out,
+                    Toast.LENGTH_LONG
+                ).show()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                Log.e(TAG, "Unable to finish dictation", error)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_failed_try_again,
+                    Toast.LENGTH_LONG
+                ).show()
             } finally {
                 audioFile.delete()
-                recordingState = RecordingState.Idle
-                dictationTargetNode = null
-                if (mode == RecordingMode.RewriteInstruction) {
-                    activeCommandAction = null
-                    pendingRewriteTarget = null
-                }
-                recordingMode = RecordingMode.Dictation
-                updateBubbleUi()
-                refreshOverlayVisibility(null)
+                resetAfterRecording(mode)
             }
         }
+    }
+
+    private fun resetAfterRecording(mode: RecordingMode) {
+        activeRecordingFile?.delete()
+        activeRecordingFile = null
+        recordingState = RecordingState.Idle
+        dictationTargetNode = null
+        if (mode == RecordingMode.RewriteInstruction) {
+            activeCommandAction = null
+            pendingRewriteTarget = null
+        }
+        recordingMode = RecordingMode.Dictation
+        updateBubbleUi()
+        refreshOverlayVisibility(null)
     }
 
     private suspend fun processRecording(audioFile: java.io.File) {
@@ -1512,6 +1615,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val rawText = transcriptionRepository.transcribe(audioFile, whisperPrompt, contextRules)
             .getOrElse { e ->
                 Log.e("OverlayDictation", "Transcription failed", e)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_transcription_failed,
+                    Toast.LENGTH_LONG
+                ).show()
                 return
             }
 
@@ -1524,7 +1632,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             Toast.makeText(this@OverlayDictationAccessibilityService, "Transcription failed", Toast.LENGTH_SHORT).show()
             return
         }
-        if (transcription.text.isBlank()) return
+        if (transcription.text.isBlank()) {
+            Toast.makeText(
+                this@OverlayDictationAccessibilityService,
+                R.string.dictation_no_speech_recognized,
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
 
         val finalText = if (transcription.executedCommand != null) {
             transcription.text
@@ -1541,6 +1656,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (applied) {
             lastDictatedText = finalText
             subscriptionRepository.recordWords(finalText)
+        } else {
+            copyTextForManualPaste(finalText)
+            Toast.makeText(
+                this@OverlayDictationAccessibilityService,
+                R.string.dictation_text_not_inserted,
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -1678,7 +1800,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun replaceRange(
+    private suspend fun replaceRange(
         node: AccessibilityNodeInfo,
         currentText: String,
         start: Int,
@@ -1694,18 +1816,59 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             append(currentText.substring(safeEnd))
         }
 
-        if (setNodeText(node, updated)) {
+        val setTextAccepted = setNodeText(node, updated)
+        if (setTextAccepted && verifyInsertedText(node, updated)) {
             val cursor = safeStart + replacement.length
             setNodeSelection(node, cursor, cursor)
             return true
         }
 
-        if (currentText.isEmpty()) {
-            val rawLen = node.text?.length ?: 0
-            if (rawLen > 0) setNodeSelection(node, 0, rawLen)
+        if (setTextAccepted) {
+            // The editor may have applied the action while its accessibility tree is still
+            // stale. A second mutation could duplicate the dictation, so leave a clipboard
+            // fallback and let the user decide whether a manual paste is needed.
+            copyTextForManualPaste(replacement)
+            Log.w(TAG, "Target accepted ACTION_SET_TEXT but its result could not be verified")
+            return false
         }
 
-        return pasteFallback(node, replacement, safeStart, safeEnd)
+        // Editors can occasionally mutate text even when they report that ACTION_SET_TEXT
+        // failed. Only try a paste after a fresh compatible snapshot proves that the original
+        // text is still present.
+        val refreshedText = readCompatibleEditableText(node)
+        if (refreshedText != currentText) {
+            copyTextForManualPaste(replacement)
+            Log.w(TAG, "Target text changed after ACTION_SET_TEXT; skipping paste fallback")
+            return false
+        }
+
+        var pasteStart = safeStart
+        var pasteEnd = safeEnd
+        if (currentText.isEmpty()) {
+            val rawLen = node.text?.length ?: 0
+            if (rawLen > 0) {
+                pasteStart = 0
+                pasteEnd = rawLen
+            }
+        }
+
+        return pasteFallback(node, replacement, pasteStart, pasteEnd, updated)
+    }
+
+    private suspend fun readCompatibleEditableText(
+        originalNode: AccessibilityNodeInfo
+    ): String? {
+        repeat(INSERT_VERIFY_ATTEMPTS) { attempt ->
+            val candidate = when {
+                refreshNode(originalNode) && isEligibleEditableNode(originalNode) -> originalNode
+                else -> resolveFocusedEditableNode(null)
+            }
+            if (candidate != null && isCompatibleInsertTarget(originalNode, candidate)) {
+                return captureEditableTextSnapshot(candidate).text
+            }
+            if (attempt < INSERT_VERIFY_ATTEMPTS - 1) delay(INSERT_VERIFY_RETRY_MS)
+        }
+        return null
     }
 
     /**
@@ -1753,17 +1916,47 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
     }
 
-    private fun pasteFallback(
+    private suspend fun pasteFallback(
         node: AccessibilityNodeInfo,
         text: String,
         start: Int,
-        end: Int
+        end: Int,
+        expectedText: String
     ): Boolean {
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("dictation", text))
+        copyTextForManualPaste(text)
 
         setNodeSelection(node, start, end)
-        return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        val pasteAccepted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        if (!pasteAccepted) return false
+
+        val verified = verifyInsertedText(node, expectedText)
+        if (!verified) {
+            Log.w(TAG, "Target accepted ACTION_PASTE but did not expose the updated text")
+        }
+        return verified
+    }
+
+    private suspend fun verifyInsertedText(
+        originalNode: AccessibilityNodeInfo,
+        expectedText: String
+    ): Boolean {
+        repeat(INSERT_VERIFY_ATTEMPTS) { attempt ->
+            val candidate = when {
+                refreshNode(originalNode) && isEligibleEditableNode(originalNode) -> originalNode
+                else -> resolveFocusedEditableNode(null)
+            }
+            if (candidate != null && isCompatibleInsertTarget(originalNode, candidate)) {
+                val actualText = captureEditableTextSnapshot(candidate).text
+                if (actualText == expectedText) return true
+            }
+            if (attempt < INSERT_VERIFY_ATTEMPTS - 1) delay(INSERT_VERIFY_RETRY_MS)
+        }
+        return false
+    }
+
+    private fun copyTextForManualPaste(text: String) {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.dictation_clipboard_label), text))
     }
 
     private fun withLeadingSpaceIfNeeded(currentText: String, index: Int, text: String): String {

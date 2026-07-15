@@ -150,6 +150,15 @@
     <string name="error_recording_failed">Recording failed</string>
     <string name="error_permission_denied">Permission denied</string>
     <string name="usage_limit_reached">Word limit reached</string>
+    <string name="dictation_recording_not_saved">Your recording could not be saved. Check microphone access and try again.</string>
+    <string name="dictation_no_speech_heard">Not enough speech was heard. Try again and speak a little louder.</string>
+    <string name="dictation_text_field_lost">Keep the text field open until dictation is finished, then try again.</string>
+    <string name="dictation_transcription_failed">Your recording could not be transcribed. Check your connection and try again.</string>
+    <string name="dictation_no_speech_recognized">No speech was recognized. Try again and speak a little louder.</string>
+    <string name="dictation_text_not_inserted">Your text could not be inserted, so it was copied. Paste it into the text field.</string>
+    <string name="dictation_clipboard_label">Dictated text</string>
+    <string name="dictation_failed_try_again">Dictation could not finish. Please try again.</string>
+    <string name="dictation_timed_out">Dictation is taking too long. Check your connection and try again.</string>
 
     <!-- Accessibility -->
     <string name="accessibility_service_description">Shows a dictation bubble for active text fields and inserts dictated text only when you start dictation.</string>

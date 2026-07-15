@@ -340,6 +340,10 @@ class AuthRepository @Inject constructor(
     private fun preferredPaymentLink(): String {
         return BuildConfig.STRIPE_PAYMENT_LINK_MONTHLY.ifBlank {
             BuildConfig.STRIPE_PAYMENT_LINK
+        }.ifBlank {
+            BuildConfig.STRIPE_PAYMENT_LINK_ANNUAL
+        }.ifBlank {
+            BuildConfig.STRIPE_PAYMENT_LINK_LIFETIME
         }
     }
 

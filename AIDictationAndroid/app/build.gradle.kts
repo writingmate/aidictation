@@ -1,4 +1,5 @@
 import com.github.triplet.gradle.androidpublisher.ReleaseStatus
+import java.net.URI
 import java.util.Properties
 
 plugins {
@@ -18,10 +19,71 @@ val localProperties = Properties().apply {
     }
 }
 
+val emptyConfigSentinel = "__AIDICTATION_EMPTY__"
+
 fun configValue(name: String, defaultValue: String = ""): String {
-    return providers.gradleProperty(name).orNull
-        ?: providers.environmentVariable(name).orNull
-        ?: localProperties.getProperty(name, defaultValue)
+    val candidates = listOf(
+        providers.gradleProperty(name).orNull,
+        providers.environmentVariable(name).orNull,
+        localProperties.getProperty(name)
+    )
+    candidates.forEach { candidate ->
+        if (candidate == emptyConfigSentinel) return ""
+        if (!candidate.isNullOrBlank()) return candidate
+    }
+    return defaultValue
+}
+
+fun buildConfigString(value: String): String {
+    val escaped = buildString {
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> {
+                    if (character.code < 0x20) {
+                        append("\\u%04x".format(character.code))
+                    } else {
+                        append(character)
+                    }
+                }
+            }
+        }
+    }
+    return "\"$escaped\""
+}
+
+fun normalizedTranscriptionModel(value: String): String {
+    return value.takeUnless {
+        it.isBlank() || it.lowercase().contains("gpt-4o-transcribe")
+    } ?: "groq/whisper-large-v3-turbo"
+}
+
+fun normalizedAuthWebUrl(value: String): String {
+    val trimmed = value.trim().ifBlank { "https://aidictation.com/auth" }
+    val uri = runCatching { URI(trimmed) }.getOrNull() ?: return trimmed
+    val isLegacyAuthPage = uri.host?.lowercase() in setOf(
+        "voicesinmyhead.co",
+        "www.voicesinmyhead.co"
+    ) && uri.path?.trimEnd('/') == "/auth"
+    return if (isLegacyAuthPage) "https://aidictation.com/auth" else trimmed
+}
+
+fun productionPaymentLink(value: String): String {
+    val uri = runCatching { URI(value) }.getOrNull() ?: return ""
+    val lowered = value.lowercase()
+    val hasPlaceholder = listOf("your_", "replace_me", "placeholder", "example.com", "changeme")
+        .any(lowered::contains)
+    return value.takeIf {
+        uri.scheme == "https" &&
+            uri.host == "buy.stripe.com" &&
+            !uri.path.isNullOrBlank() &&
+            !uri.path.lowercase().startsWith("/test_") &&
+            !hasPlaceholder
+    }.orEmpty()
 }
 
 fun playReleaseStatus(value: String): ReleaseStatus {
@@ -45,6 +107,13 @@ val parakeetOnDemandModelSha256 = configValue(
     "PARAKEET_ON_DEMAND_MODEL_SHA256",
     "b0ba6367c660c9fb5b9cc711ae35dc4bb96b8ebee199a58a7e8b680acc169824"
 )
+val stripePaymentLink = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK"))
+val stripePaymentLinkMonthly = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_MONTHLY"))
+    .ifBlank { stripePaymentLink }
+val stripePaymentLinkAnnual = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_ANNUAL"))
+val stripePaymentLinkLifetime = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_LIFETIME"))
+val transcriptionModel = normalizedTranscriptionModel(configValue("TRANSCRIPTION_MODEL"))
+val authWebUrl = normalizedAuthWebUrl(configValue("AUTH_WEB_URL"))
 
 android {
     namespace = "com.whispermate.aidictation"
@@ -53,9 +122,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = rootProject.file("release.keystore")
-            storePassword = localProperties.getProperty("KEYSTORE_PASSWORD", "")
-            keyAlias = localProperties.getProperty("KEY_ALIAS", "release")
-            keyPassword = localProperties.getProperty("KEY_PASSWORD", "")
+            storePassword = configValue("KEYSTORE_PASSWORD")
+            keyAlias = configValue("KEY_ALIAS", "release")
+            keyPassword = configValue("KEY_PASSWORD")
         }
     }
 
@@ -63,8 +132,8 @@ android {
         applicationId = "com.aidictation.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = configValue("VERSION_CODE", "1027").toInt()
-        versionName = configValue("VERSION_NAME", "0.0.30")
+        versionCode = configValue("VERSION_CODE", "1028").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.31")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -72,30 +141,30 @@ android {
         // app, which ships with Writingmate AI as the default transcription provider
         // routing Groq Whisper through the Writingmate proxy unless a custom
         // endpoint is set in local.properties.
-        buildConfigField("String", "TRANSCRIPTION_API_KEY", "\"${configValue("TRANSCRIPTION_API_KEY", "")}\"")
-        buildConfigField("String", "TRANSCRIPTION_ENDPOINT", "\"${configValue("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")}\"")
-        buildConfigField("String", "TRANSCRIPTION_MODEL", "\"${configValue("TRANSCRIPTION_MODEL", "groq/whisper-large-v3-turbo")}\"")
-        buildConfigField("String", "PARAKEET_RUNTIME", "\"${configValue("PARAKEET_RUNTIME", "")}\"")
+        buildConfigField("String", "TRANSCRIPTION_API_KEY", buildConfigString(configValue("TRANSCRIPTION_API_KEY")))
+        buildConfigField("String", "TRANSCRIPTION_ENDPOINT", buildConfigString(configValue("TRANSCRIPTION_ENDPOINT", "https://writingmate.ai/api/openai/v1/audio/transcriptions")))
+        buildConfigField("String", "TRANSCRIPTION_MODEL", buildConfigString(transcriptionModel))
+        buildConfigField("String", "PARAKEET_RUNTIME", buildConfigString(configValue("PARAKEET_RUNTIME")))
         buildConfigField("boolean", "PACKAGE_OFFLINE_MODELS", packageOfflineModels.toString())
-        buildConfigField("String", "PARAKEET_ON_DEMAND_MODEL_URL", "\"$parakeetOnDemandModelUrl\"")
-        buildConfigField("String", "PARAKEET_ON_DEMAND_MODEL_SHA256", "\"$parakeetOnDemandModelSha256\"")
+        buildConfigField("String", "PARAKEET_ON_DEMAND_MODEL_URL", buildConfigString(parakeetOnDemandModelUrl))
+        buildConfigField("String", "PARAKEET_ON_DEMAND_MODEL_SHA256", buildConfigString(parakeetOnDemandModelSha256))
 
         // Writingmate post-processing, matching the macOS app's
         // AIDictationPostProcessing* secrets.
-        buildConfigField("String", "AIDICTATION_POST_PROCESSING_KEY", "\"${configValue("AIDICTATION_POST_PROCESSING_KEY", "")}\"")
-        buildConfigField("String", "AIDICTATION_POST_PROCESSING_ENDPOINT", "\"${configValue("AIDICTATION_POST_PROCESSING_ENDPOINT", "https://writingmate.ai/api/openai/v1/chat/completions")}\"")
-        buildConfigField("String", "AIDICTATION_POST_PROCESSING_MODEL", "\"${configValue("AIDICTATION_POST_PROCESSING_MODEL", "openai/gpt-oss-20b")}\"")
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_KEY", buildConfigString(configValue("AIDICTATION_POST_PROCESSING_KEY")))
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_ENDPOINT", buildConfigString(configValue("AIDICTATION_POST_PROCESSING_ENDPOINT", "https://writingmate.ai/api/openai/v1/chat/completions")))
+        buildConfigField("String", "AIDICTATION_POST_PROCESSING_MODEL", buildConfigString(configValue("AIDICTATION_POST_PROCESSING_MODEL", "openai/gpt-oss-20b")))
 
         // Auth, usage, and purchase links. Android uses the same web auth and
         // Stripe checkout flow as the macOS app; empty values leave those entry
         // points disabled in local builds.
-        buildConfigField("String", "SUPABASE_URL", "\"${configValue("SUPABASE_URL", "")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${configValue("SUPABASE_ANON_KEY", "")}\"")
-        buildConfigField("String", "AUTH_WEB_URL", "\"${configValue("AUTH_WEB_URL", "https://voicesinmyhead.co/auth")}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK", "\"${configValue("STRIPE_PAYMENT_LINK", "")}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", "\"${configValue("STRIPE_PAYMENT_LINK_MONTHLY", configValue("STRIPE_PAYMENT_LINK", ""))}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", "\"${configValue("STRIPE_PAYMENT_LINK_ANNUAL", "")}\"")
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", "\"${configValue("STRIPE_PAYMENT_LINK_LIFETIME", "")}\"")
+        buildConfigField("String", "SUPABASE_URL", buildConfigString(configValue("SUPABASE_URL")))
+        buildConfigField("String", "SUPABASE_ANON_KEY", buildConfigString(configValue("SUPABASE_ANON_KEY")))
+        buildConfigField("String", "AUTH_WEB_URL", buildConfigString(authWebUrl))
+        buildConfigField("String", "STRIPE_PAYMENT_LINK", buildConfigString(stripePaymentLink))
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", buildConfigString(stripePaymentLinkAnnual))
+        buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", buildConfigString(stripePaymentLinkLifetime))
     }
 
     buildTypes {

@@ -65,6 +65,7 @@ import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.components.MicButtonState
 import com.whispermate.aidictation.ui.screens.settings.SettingsScreen
 import com.whispermate.aidictation.util.AudioRecorder
+import java.io.File
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,6 +94,7 @@ fun MainScreen(
 
     // Audio recorder state
     var audioRecorder by remember { mutableStateOf<AudioRecorder?>(null) }
+    var activeRecordingFile by remember { mutableStateOf<File?>(null) }
     val audioLevel = audioRecorder?.audioLevel?.collectAsState()?.value ?: 0f
     val frequencyBands = audioRecorder?.frequencyBands?.collectAsState()?.value
     val shouldAutoStop = audioRecorder?.shouldAutoStop?.collectAsState()?.value ?: false
@@ -101,6 +103,15 @@ fun MainScreen(
         context = context,
         autoStopOnSilenceEnabled = currentAutoStopOnSilenceEnabled
     )
+
+    fun finalizeRecording() {
+        val recorder = audioRecorder
+        val expectedAudioFile = activeRecordingFile
+        if (viewModel.finalizeRecording(recorder, expectedAudioFile)) {
+            audioRecorder = null
+            activeRecordingFile = null
+        }
+    }
 
     // Keep the screen awake while dictation is recording or processing
     KeepScreenOn(enabled = recordingState != RecordingState.Idle)
@@ -121,9 +132,12 @@ fun MainScreen(
                 audioRecorder = recorder
                 val file = recorder.start()
                 if (file != null) {
+                    activeRecordingFile = file
                     viewModel.startRecording()
                 } else {
                     audioRecorder = null
+                    activeRecordingFile = null
+                    viewModel.reportRecordingStartFailure()
                 }
             }
         }
@@ -136,9 +150,12 @@ fun MainScreen(
             audioRecorder = recorder
             val file = recorder.start()
             if (file != null) {
+                activeRecordingFile = file
                 viewModel.startRecording()
             } else {
                 audioRecorder = null
+                activeRecordingFile = null
+                viewModel.reportRecordingStartFailure()
             }
             onRecordingStarted()
         }
@@ -147,11 +164,7 @@ fun MainScreen(
     // Auto-stop when VAD detects silence after speech
     LaunchedEffect(shouldAutoStop) {
         if (shouldAutoStop && recordingState == RecordingState.Recording) {
-            val result = audioRecorder?.stop()
-            val file = result?.first
-            val duration = result?.second ?: 0L
-            audioRecorder = null
-            viewModel.stopRecording(file, duration)
+            finalizeRecording()
         }
     }
 
@@ -159,6 +172,7 @@ fun MainScreen(
     DisposableEffect(Unit) {
         onDispose {
             audioRecorder?.release()
+            viewModel.cancelRecording(activeRecordingFile)
         }
     }
 
@@ -169,19 +183,16 @@ fun MainScreen(
                 audioRecorder = recorder
                 val file = recorder.start()
                 if (file != null) {
+                    activeRecordingFile = file
                     viewModel.startRecording()
                 } else {
                     audioRecorder = null
+                    activeRecordingFile = null
+                    viewModel.reportRecordingStartFailure()
                 }
             }
             RecordingState.Recording -> {
-                scope.launch {
-                    val result = audioRecorder?.stop()
-                    val file = result?.first
-                    val duration = result?.second ?: 0L
-                    audioRecorder = null
-                    viewModel.stopRecording(file, duration)
-                }
+                finalizeRecording()
             }
             RecordingState.Processing -> Unit
         }

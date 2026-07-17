@@ -61,3 +61,13 @@ of three fresh trials (492 bytes). A bare dynamic term list returned the same
 complete 861-byte transcript in all three trials. With that bare term list and
 no raw vocabulary in cleanup, both the current production cleanup prompt and the
 generic preview prompt retained the full tail without a repeated suffix.
+
+The final prompt-only implementation was then replayed three times against the
+preview deployment with the corrected client payload (bare recognition hints,
+no raw vocabulary in cleanup):
+
+- `5402b2d2-033e-478e-b7ce-6d9d73d63cd9`: full tail present; no loop or hint echo.
+- `e15f523c-cbb2-4f90-9559-5168426415eb`: full tail present; no loop or hint echo.
+- `771b1a48-f728-41f3-b908-871d8030da67`: full tail present; no loop or hint echo.
+
+No output filtering, retry heuristic, or customer-specific prompt term was used.

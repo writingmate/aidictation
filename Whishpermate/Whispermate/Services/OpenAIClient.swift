@@ -142,8 +142,7 @@ class OpenAIClient {
         language: String? = nil,
         sttPrompt: String? = nil,
         postProcessingPrompt: String? = nil,
-        postProcessingEnabled: Bool = true,
-        retryOnDegeneration: Bool = true
+        postProcessingEnabled: Bool = true
     ) async throws -> String {
 
         let startTime = CFAbsoluteTimeGetCurrent()
@@ -250,25 +249,7 @@ class OpenAIClient {
             DebugLog.info("Transcription successful in \(String(format: "%.2f", duration))s", context: "OpenAIClient")
             print("⏱️ [Transcription] \(String(format: "%.2f", duration))s - \(effectiveModel)")
 
-            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if retryOnDegeneration,
-               TranscriptionTextSanitizer.containsDegenerateRepeatedSequence(trimmedText)
-            {
-                DebugLog.warning(
-                    "Detected repeated-sequence transcription degeneration; retrying without hints or cleanup",
-                    context: "OpenAIClient"
-                )
-                return try await transcribeSinglePart(
-                    audioURL: audioURL,
-                    endpointURL: url,
-                    effectiveModel: effectiveModel,
-                    language: language,
-                    postProcessingEnabled: false,
-                    retryOnDegeneration: false
-                )
-            }
-
-            return trimmedText
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch let error as OpenAIError {
             throw error
         } catch {
@@ -749,7 +730,7 @@ class OpenAIClient {
         DebugLog.info("LLM Post-processing request - User: \(userMessage)", context: "OpenAIClient")
         let result = try await chatCompletion(messages: messages, maxTokens: 8192)
         DebugLog.info("LLM Post-processing response: \(result)", context: "OpenAIClient")
-        return validatedPostProcessingResult(result, source: transcription)
+        return result
     }
 
     func applyNotesFormatting(transcription: String, rules: [String] = [], languageCodes: String? = nil, appContext: String? = nil) async throws -> String {
@@ -792,7 +773,7 @@ class OpenAIClient {
         DebugLog.info("Notes post-processing request - System: \(systemPrompt)", context: "OpenAIClient")
         let result = try await chatCompletion(messages: messages, maxTokens: 8192)
         DebugLog.info("Notes post-processing response: \(result)", context: "OpenAIClient")
-        return validatedPostProcessingResult(result, source: transcription)
+        return result
     }
 
     func applyMeetingFormatting(transcription: String, rules: [String] = [], languageCodes: String? = nil, appContext: String? = nil) async throws -> String {
@@ -836,21 +817,6 @@ class OpenAIClient {
         DebugLog.info("Meeting post-processing request - System: \(systemPrompt)", context: "OpenAIClient")
         let result = try await chatCompletion(messages: messages, maxTokens: 8192)
         DebugLog.info("Meeting post-processing response: \(result)", context: "OpenAIClient")
-        return validatedPostProcessingResult(result, source: transcription)
-    }
-
-    private func validatedPostProcessingResult(_ candidate: String, source: String) -> String {
-        guard let reason = TranscriptionTextSanitizer.postProcessingRejectionReason(
-            candidate: candidate,
-            source: source
-        ) else {
-            return candidate
-        }
-
-        DebugLog.warning(
-            "Rejected post-processing response (\(reason.rawValue)) - using transcript",
-            context: "OpenAIClient"
-        )
-        return source
+        return result
     }
 }

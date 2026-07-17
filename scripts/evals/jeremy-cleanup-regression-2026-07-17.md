@@ -21,6 +21,18 @@ program.
 The request also supplied the same raw custom-vocabulary list to recognition
 and cleanup.
 
+## Reproduction evidence
+
+On 2026-07-17, the recording was replayed twice against production with the
+same recognition hint and temperature:
+
+- Recognition only (`656f928c-d39c-4cd4-b603-f056026b0231`) returned the full
+  858-byte transcript, including the speech after "sell it", with no loop.
+- Cleanup enabled (`4416f9c3-65e4-4302-ac32-5476f1472392`) returned 718 bytes,
+  deleted that tail, invented names, and repeated a vocabulary term seven times.
+
+This isolates the failure to cleanup prompting for this eval run.
+
 ## Eval setup
 
 Run the complete recording through cloud mode with cleanup enabled and a

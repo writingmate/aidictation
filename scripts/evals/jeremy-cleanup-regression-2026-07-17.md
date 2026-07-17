@@ -71,3 +71,11 @@ no raw vocabulary in cleanup):
 - `771b1a48-f728-41f3-b908-871d8030da67`: full tail present; no loop or hint echo.
 
 No output filtering, retry heuristic, or customer-specific prompt term was used.
+
+After backend merge commit `90c346200a813ad3630ee81df93075dbaab8800c`
+reached production, the same corrected payload passed three more replays against
+`writingmate.ai`:
+
+- `7278557c-f4ed-463b-a8da-9a333edd41d3`: full tail present; no loop or hint echo.
+- `2d8b7fc3-6052-46b5-99eb-93d2010ec4d8`: full tail present; no loop or hint echo.
+- `615394e7-744c-4122-8585-df9719c73f64`: full tail present; no loop or hint echo.

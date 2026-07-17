@@ -43,10 +43,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
-      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
-      STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
-      STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
-      STRIPE_PAYMENT_LINK_LIFETIME: ${{ secrets.STRIPE_PAYMENT_LINK_LIFETIME }}
+      REVENUECAT_GOOGLE_API_KEY: ${{ vars.REVENUECAT_GOOGLE_API_KEY }}
+      REVENUECAT_ENTITLEMENT_ID: ${{ vars.REVENUECAT_ENTITLEMENT_ID || 'pro' }}
       # Shared macOS Secrets.plist (base64). If set, the Writingmate key is
       # extracted from CustomTranscriptionKey so both platforms share one secret.
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
@@ -105,10 +103,6 @@ jobs:
           supabase_url=$(extract SUPABASE_URL)
           supabase_anon_key=$(extract SUPABASE_ANON_KEY)
           auth_web_url=$(extract AUTH_WEB_URL)
-          stripe_link=$(extract STRIPE_PAYMENT_LINK)
-          stripe_monthly=$(extract STRIPE_PAYMENT_LINK_MONTHLY)
-          stripe_annual=$(extract STRIPE_PAYMENT_LINK_ANNUAL)
-          stripe_lifetime=$(extract STRIPE_PAYMENT_LINK_LIFETIME)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -137,22 +131,13 @@ jobs:
               exit 1
             fi
           fi
-          if [ -z "$STRIPE_PAYMENT_LINK" ] && [ -n "$stripe_link" ]; then
-            echo "STRIPE_PAYMENT_LINK=$stripe_link" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_MONTHLY" ] && [ -n "$stripe_monthly" ]; then
-            echo "STRIPE_PAYMENT_LINK_MONTHLY=$stripe_monthly" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_ANNUAL" ] && [ -n "$stripe_annual" ]; then
-            echo "STRIPE_PAYMENT_LINK_ANNUAL=$stripe_annual" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_LIFETIME" ] && [ -n "$stripe_lifetime" ]; then
-            echo "STRIPE_PAYMENT_LINK_LIFETIME=$stripe_lifetime" >> "$GITHUB_ENV"
-          fi
           rm /tmp/secrets.plist
 
       - name: Validate auth configuration
         run: python3 scripts/validate_client_config.py --allow-missing
+
+      - name: Test client configuration validation
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Write local.properties
         run: |
@@ -182,10 +167,8 @@ jobs:
           SUPABASE_URL=${SUPABASE_URL}
           SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
           AUTH_WEB_URL=${AUTH_WEB_URL_VALUE}
-          STRIPE_PAYMENT_LINK=${STRIPE_PAYMENT_LINK}
-          STRIPE_PAYMENT_LINK_MONTHLY=${STRIPE_PAYMENT_LINK_MONTHLY}
-          STRIPE_PAYMENT_LINK_ANNUAL=${STRIPE_PAYMENT_LINK_ANNUAL}
-          STRIPE_PAYMENT_LINK_LIFETIME=${STRIPE_PAYMENT_LINK_LIFETIME}
+          REVENUECAT_GOOGLE_API_KEY=${REVENUECAT_GOOGLE_API_KEY}
+          REVENUECAT_ENTITLEMENT_ID=${REVENUECAT_ENTITLEMENT_ID}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}
@@ -231,10 +214,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
-      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
-      STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
-      STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
-      STRIPE_PAYMENT_LINK_LIFETIME: ${{ secrets.STRIPE_PAYMENT_LINK_LIFETIME }}
+      REVENUECAT_GOOGLE_API_KEY: ${{ vars.REVENUECAT_GOOGLE_API_KEY }}
+      REVENUECAT_ENTITLEMENT_ID: ${{ vars.REVENUECAT_ENTITLEMENT_ID || 'pro' }}
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -320,10 +301,6 @@ jobs:
           echo "SUPABASE_URL:            $(present "$SUPABASE_URL")"
           echo "SUPABASE_ANON_KEY:       $(present "$SUPABASE_ANON_KEY")"
           echo "AUTH_WEB_URL:            $(present "$AUTH_WEB_URL")"
-          echo "STRIPE_PAYMENT_LINK:     $(present "$STRIPE_PAYMENT_LINK")"
-          echo "STRIPE_PAYMENT_LINK_MONTHLY:  $(present "$STRIPE_PAYMENT_LINK_MONTHLY")"
-          echo "STRIPE_PAYMENT_LINK_ANNUAL:   $(present "$STRIPE_PAYMENT_LINK_ANNUAL")"
-          echo "STRIPE_PAYMENT_LINK_LIFETIME: $(present "$STRIPE_PAYMENT_LINK_LIFETIME")"
           echo "SECRETS_PLIST:             $(present "$SECRETS_PLIST")"
           echo "ANDROID_KEYSTORE_BASE64:   $(present "$ANDROID_KEYSTORE_BASE64")"
           echo "ANDROID_KEYSTORE_PASSWORD: $(present "$KEYSTORE_PASSWORD")"
@@ -375,10 +352,6 @@ jobs:
           supabase_url=$(extract SUPABASE_URL)
           supabase_anon_key=$(extract SUPABASE_ANON_KEY)
           auth_web_url=$(extract AUTH_WEB_URL)
-          stripe_link=$(extract STRIPE_PAYMENT_LINK)
-          stripe_monthly=$(extract STRIPE_PAYMENT_LINK_MONTHLY)
-          stripe_annual=$(extract STRIPE_PAYMENT_LINK_ANNUAL)
-          stripe_lifetime=$(extract STRIPE_PAYMENT_LINK_LIFETIME)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -406,18 +379,6 @@ jobs:
               echo "SECRETS_PLIST must contain SUPABASE_URL, SUPABASE_ANON_KEY, and AUTH_WEB_URL together." >&2
               exit 1
             fi
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK" ] && [ -n "$stripe_link" ]; then
-            echo "STRIPE_PAYMENT_LINK=$stripe_link" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_MONTHLY" ] && [ -n "$stripe_monthly" ]; then
-            echo "STRIPE_PAYMENT_LINK_MONTHLY=$stripe_monthly" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_ANNUAL" ] && [ -n "$stripe_annual" ]; then
-            echo "STRIPE_PAYMENT_LINK_ANNUAL=$stripe_annual" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_LIFETIME" ] && [ -n "$stripe_lifetime" ]; then
-            echo "STRIPE_PAYMENT_LINK_LIFETIME=$stripe_lifetime" >> "$GITHUB_ENV"
           fi
           rm /tmp/secrets.plist
 
@@ -452,10 +413,8 @@ jobs:
           SUPABASE_URL=${SUPABASE_URL}
           SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
           AUTH_WEB_URL=${AUTH_WEB_URL_VALUE}
-          STRIPE_PAYMENT_LINK=${STRIPE_PAYMENT_LINK}
-          STRIPE_PAYMENT_LINK_MONTHLY=${STRIPE_PAYMENT_LINK_MONTHLY}
-          STRIPE_PAYMENT_LINK_ANNUAL=${STRIPE_PAYMENT_LINK_ANNUAL}
-          STRIPE_PAYMENT_LINK_LIFETIME=${STRIPE_PAYMENT_LINK_LIFETIME}
+          REVENUECAT_GOOGLE_API_KEY=${REVENUECAT_GOOGLE_API_KEY}
+          REVENUECAT_ENTITLEMENT_ID=${REVENUECAT_ENTITLEMENT_ID}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}

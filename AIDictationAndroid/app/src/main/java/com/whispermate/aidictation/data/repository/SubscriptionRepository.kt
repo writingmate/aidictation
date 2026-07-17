@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.data.repository
 
 import android.content.Context
+import android.app.Activity
 import android.content.Intent
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.preferences.AppPreferences
@@ -70,6 +71,9 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun checkCanTranscribe(): Result<Unit> {
+        if (authRepository.authState.value.user != null) {
+            authRepository.refreshRevenueCatEntitlement()
+        }
         val user = authRepository.authState.value.user
         if (user != null) {
             if (user.subscriptionTier.isPaid || !user.hasReachedLimit) return Result.success(Unit)
@@ -98,8 +102,25 @@ class SubscriptionRepository @Inject constructor(
         authRepository.openLogin(context)
     }
 
-    fun openUpgrade() {
-        authRepository.openUpgrade(context)
+    fun loadMonthlyPrice(onError: () -> Unit, onSuccess: (String) -> Unit) {
+        authRepository.loadMonthlyPrice(onError, onSuccess)
+    }
+
+    fun openUpgrade(
+        activity: Activity,
+        onError: () -> Unit,
+        onCancelled: () -> Unit,
+        onSuccess: () -> Unit
+    ) {
+        authRepository.openUpgrade(activity, onError, onCancelled, onSuccess)
+    }
+
+    fun restorePurchases(
+        onError: () -> Unit,
+        onNotFound: () -> Unit,
+        onSuccess: () -> Unit
+    ) {
+        authRepository.restorePurchases(onError, onNotFound, onSuccess)
     }
 
     suspend fun signOut() {

@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.ui.screens.main
 
 import android.util.Log
+import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.whispermate.aidictation.BuildConfig
@@ -43,6 +44,35 @@ data class OnDeviceModelUiState(
     val isDownloading: Boolean = false,
     val downloadProgress: Float? = null
 )
+
+enum class PaywallOperation {
+    Idle,
+    LoadingPlan,
+    Purchasing,
+    Restoring,
+    Complete
+}
+
+enum class PaywallMessage {
+    None,
+    PlanUnavailable,
+    PurchaseFailed,
+    PurchaseComplete,
+    RestoreFailed,
+    NothingToRestore,
+    RestoreComplete
+}
+
+data class PaywallUiState(
+    val operation: PaywallOperation = PaywallOperation.Idle,
+    val monthlyPrice: String? = null,
+    val message: PaywallMessage = PaywallMessage.None
+) {
+    val isBusy: Boolean
+        get() = operation == PaywallOperation.LoadingPlan ||
+            operation == PaywallOperation.Purchasing ||
+            operation == PaywallOperation.Restoring
+}
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -191,6 +221,12 @@ class MainViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _paywallState = MutableStateFlow(PaywallUiState())
+    val paywallState: StateFlow<PaywallUiState> = _paywallState.asStateFlow()
+
+    private val _showUpgradePaywall = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val showUpgradePaywall: SharedFlow<Unit> = _showUpgradePaywall.asSharedFlow()
+
     fun startRecording() {
         _recordingState.value = RecordingState.Recording
     }
@@ -275,10 +311,10 @@ class MainViewModel @Inject constructor(
         _recordingState.value = RecordingState.Processing
 
         viewModelScope.launch {
-            subscriptionRepository.checkCanTranscribe().onFailure { error ->
+            subscriptionRepository.checkCanTranscribe().onFailure {
                 audioFile.delete()
-                _error.value = error.message
                 _recordingState.value = RecordingState.Idle
+                _showUpgradePaywall.emit(Unit)
                 return@launch
             }
 
@@ -318,8 +354,104 @@ class MainViewModel @Inject constructor(
         subscriptionRepository.openLogin()
     }
 
-    fun openUpgrade() {
-        subscriptionRepository.openUpgrade()
+    fun preparePaywall(forceRefresh: Boolean = false) {
+        val current = _paywallState.value
+        if (current.isBusy || current.operation == PaywallOperation.Complete) return
+        if (current.monthlyPrice != null && !forceRefresh) return
+
+        _paywallState.value = current.copy(
+            operation = PaywallOperation.LoadingPlan,
+            message = PaywallMessage.None
+        )
+        subscriptionRepository.loadMonthlyPrice(
+            onError = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Idle,
+                    monthlyPrice = null,
+                    message = PaywallMessage.PlanUnavailable
+                )
+            },
+            onSuccess = { price ->
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Idle,
+                    monthlyPrice = price,
+                    message = PaywallMessage.None
+                )
+            }
+        )
+    }
+
+    fun purchaseFromPaywall(activity: Activity) {
+        val current = _paywallState.value
+        if (current.isBusy || current.operation == PaywallOperation.Complete) return
+
+        _paywallState.value = current.copy(
+            operation = PaywallOperation.Purchasing,
+            message = PaywallMessage.None
+        )
+        subscriptionRepository.openUpgrade(
+            activity = activity,
+            onError = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Idle,
+                    message = PaywallMessage.PurchaseFailed
+                )
+            },
+            onCancelled = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Idle,
+                    message = PaywallMessage.None
+                )
+            },
+            onSuccess = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Complete,
+                    message = PaywallMessage.PurchaseComplete
+                )
+            }
+        )
+    }
+
+    fun restorePurchases() {
+        subscriptionRepository.restorePurchases(
+            onError = { _error.value = "Your purchases could not be restored. Try again." },
+            onNotFound = { _error.value = "No previous purchases were found for this account." },
+            onSuccess = { _error.value = "Your purchases were restored." }
+        )
+    }
+
+    fun restorePurchasesFromPaywall() {
+        val current = _paywallState.value
+        if (current.isBusy || current.operation == PaywallOperation.Complete) return
+
+        _paywallState.value = current.copy(
+            operation = PaywallOperation.Restoring,
+            message = PaywallMessage.None
+        )
+        subscriptionRepository.restorePurchases(
+            onError = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Idle,
+                    message = PaywallMessage.RestoreFailed
+                )
+            },
+            onNotFound = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Idle,
+                    message = PaywallMessage.NothingToRestore
+                )
+            },
+            onSuccess = {
+                _paywallState.value = _paywallState.value.copy(
+                    operation = PaywallOperation.Complete,
+                    message = PaywallMessage.RestoreComplete
+                )
+            }
+        )
+    }
+
+    fun resetPaywall() {
+        _paywallState.value = PaywallUiState()
     }
 
     fun shareReferralInvite() {

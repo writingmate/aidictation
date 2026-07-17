@@ -53,32 +53,19 @@ public class SubscriptionManager: ObservableObject {
     // MARK: - Subscription
 
     public func openUpgrade() {
-        guard let stripePaymentLink = SecretsLoader.getValue(for: "STRIPE_PAYMENT_LINK") else {
-            print("Missing Stripe payment link configuration")
-            return
-        }
+        showUpgradeModal = true
+    }
 
-        if let user = authManager.currentUser {
-            if user.subscriptionTier.isPaid || user.stripeSubscriptionId != nil {
-                DebugLog.info("Upgrade skipped: user already has an active subscription", context: "SubscriptionManager")
-                return
-            }
-        }
+    public var shouldOfferUpgradeAfterLimit: Bool {
+        guard authManager.isAuthenticated,
+              let user = authManager.currentUser
+        else { return false }
+        return !user.subscriptionTier.isPaid && user.hasReachedLimit
+    }
 
-        // Add user email to pre-fill Stripe checkout if available
-        var urlString = stripePaymentLink
-        if let user = authManager.currentUser {
-            // URL encode the email
-            if let encodedEmail = user.email.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-                urlString += "?prefilled_email=\(encodedEmail)"
-            }
-        }
-
-        #if canImport(AppKit)
-            if let url = URL(string: urlString) {
-                NSWorkspace.shared.open(url)
-            }
-        #endif
+    public func openUpgradeAfterLimit() {
+        guard shouldOfferUpgradeAfterLimit else { return }
+        openUpgrade()
     }
 
     public func handlePaymentSuccess() async {

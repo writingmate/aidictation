@@ -26,6 +26,7 @@ struct RecordingSheetView: View {
     @State private var selectedOutputMode: TranscriptionOutputMode = .dictation
     @State private var activeOutputMode: TranscriptionOutputMode?
     @State private var showCloudTranscriptionConsent = false
+    @State private var showUpgradePaywall = false
 
     private var selectedPreset: ContextRule? {
         recordingPreset(for: selectedOutputMode, manager: toneStyleManager)
@@ -96,6 +97,9 @@ struct RecordingSheetView: View {
         } message: {
             Text(CloudTranscriptionConsent.disclosureMessage)
         }
+        .sheet(isPresented: $showUpgradePaywall) {
+            RevenueCatPaywallView()
+        }
     }
 
     // MARK: - State Views
@@ -119,11 +123,11 @@ struct RecordingSheetView: View {
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 10)
-            .background(Color.white)
+            .background(Color.dsBackground)
 
             viewingStateView
         }
-        .background(Color.white.ignoresSafeArea())
+        .background(Color.dsBackground.ignoresSafeArea())
     }
 
     private var detailsTransition: AnyTransition {
@@ -242,7 +246,7 @@ struct RecordingSheetView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
-                .background(Color.white)
+                .background(Color.dsBackground)
             }
 
             // Transcription content
@@ -258,15 +262,15 @@ struct RecordingSheetView: View {
                     }
 
                     Text(transcription)
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundColor(.black)
+                        .font(.body)
+                        .foregroundStyle(Color.dsForeground)
                         .lineSpacing(4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 24)
                 }
             }
-            .background(Color.white)
+            .background(Color.dsBackground)
 
             // Error message
             if !errorMessage.isEmpty {
@@ -291,9 +295,9 @@ struct RecordingSheetView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 20)
             }
-            .background(Color.white)
+            .background(Color.dsBackground)
         }
-        .background(Color.white)
+        .background(Color.dsBackground)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [transcription])
         }
@@ -325,8 +329,7 @@ struct RecordingSheetView: View {
     private func startRecording() {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
-            errorMessage = access.reason ?? "Log in to continue transcribing."
-            sheetState = .viewing
+            handleTranscriptionLimit(access.reason)
             return
         }
 
@@ -562,9 +565,8 @@ struct RecordingSheetView: View {
     private func transcribeAudio(audioURL: URL, outputMode: TranscriptionOutputMode) {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
-            errorMessage = access.reason ?? "Log in to continue transcribing."
-            sheetState = .viewing
             try? FileManager.default.removeItem(at: audioURL)
+            handleTranscriptionLimit(access.reason)
             return
         }
 
@@ -644,6 +646,14 @@ struct RecordingSheetView: View {
                     errorMessage = "Transcription failed: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+
+    private func handleTranscriptionLimit(_ reason: String?) {
+        errorMessage = reason ?? "Log in to continue transcribing."
+        sheetState = .viewing
+        if subscriptionManager.shouldOfferUpgradeAfterLimit {
+            showUpgradePaywall = true
         }
     }
 

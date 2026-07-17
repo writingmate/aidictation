@@ -30,14 +30,12 @@ AIDICTATION_POST_PROCESSING_ENDPOINT=https://writingmate.ai/api/openai/v1/chat/c
 AIDICTATION_POST_PROCESSING_MODEL=openai/gpt-oss-20b
 
 # Auth and purchase configuration
-# Uses the same web auth + Stripe checkout setup as the macOS app.
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 AUTH_WEB_URL=https://aidictation.com/auth
-STRIPE_PAYMENT_LINK=
-STRIPE_PAYMENT_LINK_MONTHLY=
-STRIPE_PAYMENT_LINK_ANNUAL=
-STRIPE_PAYMENT_LINK_LIFETIME=
+# Public Google Play SDK key from RevenueCat (goog_...). Never use a secret key here.
+REVENUECAT_GOOGLE_API_KEY=
+REVENUECAT_ENTITLEMENT_ID=pro
 
 # Optional Google Play publishing configuration for local Gradle Play Publisher runs.
 # CI normally writes PLAY_SERVICE_ACCOUNT_CREDENTIALS from a GitHub secret.

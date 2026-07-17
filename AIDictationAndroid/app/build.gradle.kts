@@ -72,20 +72,6 @@ fun normalizedAuthWebUrl(value: String): String {
     return if (isLegacyAuthPage) "https://aidictation.com/auth" else trimmed
 }
 
-fun productionPaymentLink(value: String): String {
-    val uri = runCatching { URI(value) }.getOrNull() ?: return ""
-    val lowered = value.lowercase()
-    val hasPlaceholder = listOf("your_", "replace_me", "placeholder", "example.com", "changeme")
-        .any(lowered::contains)
-    return value.takeIf {
-        uri.scheme == "https" &&
-            uri.host == "buy.stripe.com" &&
-            !uri.path.isNullOrBlank() &&
-            !uri.path.lowercase().startsWith("/test_") &&
-            !hasPlaceholder
-    }.orEmpty()
-}
-
 fun playReleaseStatus(value: String): ReleaseStatus {
     return when (value.trim().lowercase().replace("-", "_")) {
         "", "completed" -> ReleaseStatus.COMPLETED
@@ -107,13 +93,10 @@ val parakeetOnDemandModelSha256 = configValue(
     "PARAKEET_ON_DEMAND_MODEL_SHA256",
     "b0ba6367c660c9fb5b9cc711ae35dc4bb96b8ebee199a58a7e8b680acc169824"
 )
-val stripePaymentLink = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK"))
-val stripePaymentLinkMonthly = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_MONTHLY"))
-    .ifBlank { stripePaymentLink }
-val stripePaymentLinkAnnual = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_ANNUAL"))
-val stripePaymentLinkLifetime = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_LIFETIME"))
 val transcriptionModel = normalizedTranscriptionModel(configValue("TRANSCRIPTION_MODEL"))
 val authWebUrl = normalizedAuthWebUrl(configValue("AUTH_WEB_URL"))
+val revenueCatGoogleApiKey = configValue("REVENUECAT_GOOGLE_API_KEY").trim()
+val revenueCatEntitlementId = configValue("REVENUECAT_ENTITLEMENT_ID", "pro").trim()
 
 android {
     namespace = "com.whispermate.aidictation"
@@ -155,16 +138,12 @@ android {
         buildConfigField("String", "AIDICTATION_POST_PROCESSING_ENDPOINT", buildConfigString(configValue("AIDICTATION_POST_PROCESSING_ENDPOINT", "https://writingmate.ai/api/openai/v1/chat/completions")))
         buildConfigField("String", "AIDICTATION_POST_PROCESSING_MODEL", buildConfigString(configValue("AIDICTATION_POST_PROCESSING_MODEL", "openai/gpt-oss-20b")))
 
-        // Auth, usage, and purchase links. Android uses the same web auth and
-        // Stripe checkout flow as the macOS app; empty values leave those entry
-        // points disabled in local builds.
+        // Auth, usage, and purchases.
         buildConfigField("String", "SUPABASE_URL", buildConfigString(configValue("SUPABASE_URL")))
         buildConfigField("String", "SUPABASE_ANON_KEY", buildConfigString(configValue("SUPABASE_ANON_KEY")))
         buildConfigField("String", "AUTH_WEB_URL", buildConfigString(authWebUrl))
-        buildConfigField("String", "STRIPE_PAYMENT_LINK", buildConfigString(stripePaymentLink))
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", buildConfigString(stripePaymentLinkAnnual))
-        buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", buildConfigString(stripePaymentLinkLifetime))
+        buildConfigField("String", "REVENUECAT_GOOGLE_API_KEY", buildConfigString(revenueCatGoogleApiKey))
+        buildConfigField("String", "REVENUECAT_ENTITLEMENT_ID", buildConfigString(revenueCatEntitlementId))
     }
 
     buildTypes {
@@ -201,6 +180,33 @@ android {
     }
 }
 
+val validateRevenueCatReleaseConfig by tasks.registering {
+    group = "verification"
+    description = "Validates the public RevenueCat configuration embedded in release builds."
+    doLast {
+        val placeholderMarkers = listOf("your_", "replace_me", "placeholder", "example", "changeme")
+        val hasPlaceholder = placeholderMarkers.any { marker ->
+            revenueCatGoogleApiKey.lowercase().contains(marker)
+        }
+        if (
+            !revenueCatGoogleApiKey.startsWith("goog_") ||
+            revenueCatGoogleApiKey.length <= "goog_".length ||
+            hasPlaceholder
+        ) {
+            throw GradleException(
+                "REVENUECAT_GOOGLE_API_KEY must be the public Google Play SDK key (goog_...) for release builds."
+            )
+        }
+        if (revenueCatEntitlementId.isBlank()) {
+            throw GradleException("REVENUECAT_ENTITLEMENT_ID is required for release builds.")
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateRevenueCatReleaseConfig)
+}
+
 play {
     val credentialsPath = configValue("PLAY_SERVICE_ACCOUNT_CREDENTIALS", "")
     val releaseNameOverride = configValue("PLAY_RELEASE_NAME", "")
@@ -223,6 +229,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.revenuecat.purchases)
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

@@ -39,7 +39,9 @@ sealed class Screen(val route: String) {
 fun AIDictationNavHost(
     navController: NavHostController = rememberNavController(),
     shouldStartRecording: Boolean = false,
-    onRecordingStarted: () -> Unit = {}
+    onRecordingStarted: () -> Unit = {},
+    shouldShowUpgradePaywall: Boolean = false,
+    onUpgradePaywallShown: () -> Unit = {}
 ) {
     val onboardingViewModel: OnboardingViewModel = hiltViewModel()
     val hasCompletedOnboarding by onboardingViewModel.hasCompletedOnboarding.collectAsState()
@@ -54,6 +56,15 @@ fun AIDictationNavHost(
         if (shouldStartRecording && hasCompletedOnboarding) {
             navController.navigate(Screen.Main.route) {
                 popUpTo(Screen.Main.route) { inclusive = true }
+            }
+        }
+    }
+
+    LaunchedEffect(shouldShowUpgradePaywall, hasCompletedOnboarding) {
+        if (shouldShowUpgradePaywall && hasCompletedOnboarding) {
+            navController.navigate(Screen.Main.route) {
+                launchSingleTop = true
+                popUpTo(Screen.Main.route)
             }
         }
     }
@@ -102,7 +113,9 @@ fun AIDictationNavHost(
                     navController.navigate(Screen.RecordingDetail.createRoute(recordingId))
                 },
                 shouldStartRecording = shouldStartRecording,
-                onRecordingStarted = onRecordingStarted
+                onRecordingStarted = onRecordingStarted,
+                shouldShowUpgradePaywall = shouldShowUpgradePaywall,
+                onUpgradePaywallShown = onUpgradePaywallShown
             )
         }
 

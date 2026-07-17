@@ -9,7 +9,9 @@ struct WhisperMateApp: App {
     @StateObject private var onboardingManager = OnboardingManager()
     @State private var showKeyboardAudioSetup = false
 
-    init() {}
+    init() {
+        RevenueCatManager.shared.configure()
+    }
 
     var body: some Scene {
         WindowGroup {

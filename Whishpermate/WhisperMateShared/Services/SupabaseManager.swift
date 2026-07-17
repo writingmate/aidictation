@@ -123,6 +123,26 @@ public class SupabaseManager {
         return user
     }
 
+    /// Reconciles legacy lifetime/AppSumo access into RevenueCat using the
+    /// authenticated server path. The response is validated before callers
+    /// treat reconciliation as successful.
+    public func reconcileSubscription() async throws {
+        let client = try requireClient()
+        let session = try await client.auth.session
+        let response: SubscriptionReconciliationResponse = try await client.functions.invoke(
+            "check-subscription",
+            options: FunctionInvokeOptions(headers: [
+                "Authorization": "Bearer \(session.accessToken)",
+            ])
+        )
+
+        guard ["free", "pro", "lifetime"].contains(response.subscriptionStatus) else {
+            throw NSError(domain: "SupabaseManager", code: 502, userInfo: [
+                NSLocalizedDescriptionKey: "Subscription reconciliation returned an invalid status",
+            ])
+        }
+    }
+
     public func updateUserWordCount(wordsToAdd: Int) async throws -> User {
         let client = try requireClient()
         // First, fetch current user
@@ -254,6 +274,14 @@ public class SupabaseManager {
             ))
 
         return (response.transcription, response.wordCount, response.user)
+    }
+}
+
+private struct SubscriptionReconciliationResponse: Decodable {
+    let subscriptionStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case subscriptionStatus = "subscription_status"
     }
 }
 

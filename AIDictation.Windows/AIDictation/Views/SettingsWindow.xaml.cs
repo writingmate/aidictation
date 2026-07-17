@@ -16,6 +16,7 @@ public partial class SettingsWindow : Window
     {
         InitializeComponent();
         ViewModel.CloseRequested += OnCloseRequested;
+        ViewModel.UpgradeRequested += OnUpgradeRequested;
     }
 
     /// <summary>Navigates to a settings section (e.g. History from the tray menu).</summary>
@@ -64,9 +65,16 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void OnUpgradeRequested(object? sender, System.EventArgs e)
+    {
+        var paywall = new PaywallWindow { Owner = this };
+        paywall.ShowDialog();
+    }
+
     protected override void OnClosed(System.EventArgs e)
     {
         ViewModel.CloseRequested -= OnCloseRequested;
+        ViewModel.UpgradeRequested -= OnUpgradeRequested;
         ViewModel.Cleanup();
         base.OnClosed(e);
     }

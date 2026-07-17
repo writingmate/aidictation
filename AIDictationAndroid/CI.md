@@ -56,11 +56,8 @@ runs, matching the local-developer layout described in
 | `SUPABASE_URL` | Optional dedicated Android override for Supabase auth/profile requests. |
 | `SUPABASE_ANON_KEY` | Optional dedicated Android override for the Supabase anon key. |
 | `AUTH_WEB_URL` | Optional dedicated Android override for the hosted auth page. Defaults to `https://aidictation.com/auth`. |
-| `STRIPE_PAYMENT_LINK` | Optional default Stripe checkout link. |
-| `STRIPE_PAYMENT_LINK_MONTHLY` | Optional monthly checkout link. |
-| `STRIPE_PAYMENT_LINK_ANNUAL` | Optional annual checkout link. |
-| `STRIPE_PAYMENT_LINK_LIFETIME` | Optional lifetime checkout link. |
-| `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present, the workflow extracts `CustomTranscription*`, `AIDictationPostProcessing*`, `SUPABASE_*`, `AUTH_WEB_URL`, and `STRIPE_PAYMENT_LINK*` so both platforms ship with the same Writingmate auth and billing configuration. |
+| `REVENUECAT_ENTITLEMENT_ID` | Optional entitlement identifier; defaults to `pro`. |
+| `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` used for shared transcription and sign-in configuration. Android's RevenueCat key remains a separate repository variable. |
 
 ### Release signing (only needed for tagged Android releases)
 
@@ -78,10 +75,12 @@ runs, matching the local-developer layout described in
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` | Preferred. Base64-encoded Google Play service account JSON. |
 | `ANDROID_PUBLISHER_CREDENTIALS` | Optional fallback. Raw Google Play service account JSON used by Gradle Play Publisher. |
 
-Optional repository variables:
+Repository variables:
 
 | Variable | Purpose |
 |---|---|
+| `REVENUECAT_GOOGLE_API_KEY` | Required for release builds. Public Google Play SDK key beginning with `goog_`; do not use a RevenueCat secret or Test Store key. |
+| `REVENUECAT_ENTITLEMENT_ID` | RevenueCat entitlement identifier; defaults to `pro`. |
 | `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `production`; supported values are `internal`, `alpha`, `beta`, and `production`. |
 | `ANDROID_PLAY_RELEASE_STATUS` | Automatic tagged release status. Defaults to `completed`; supported values are `draft`, `inProgress`, `halted`, and `completed`. |
 
@@ -99,14 +98,14 @@ publishing settings.
 gh secret set TRANSCRIPTION_API_KEY --repo writingmate/aidictation
 
 # Or: reuse the Mac Secrets.plist (base64-encoded) — Writingmate,
-# Supabase auth, and Stripe values are pulled automatically.
+# Supabase auth values are pulled automatically.
 base64 -w0 Secrets.plist | gh secret set SECRETS_PLIST --repo writingmate/aidictation
 
 gh secret set AIDICTATION_POST_PROCESSING_KEY --repo writingmate/aidictation
 gh secret set SUPABASE_URL --repo writingmate/aidictation
 gh secret set SUPABASE_ANON_KEY --repo writingmate/aidictation
 gh secret set AUTH_WEB_URL --repo writingmate/aidictation
-gh secret set STRIPE_PAYMENT_LINK_MONTHLY --repo writingmate/aidictation
+gh variable set REVENUECAT_GOOGLE_API_KEY --repo writingmate/aidictation --body 'goog_…'
 base64 -w0 release.keystore | gh secret set ANDROID_KEYSTORE_BASE64 --repo writingmate/aidictation
 gh secret set ANDROID_KEYSTORE_PASSWORD --repo writingmate/aidictation
 gh secret set ANDROID_KEY_ALIAS         --repo writingmate/aidictation

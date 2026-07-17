@@ -32,6 +32,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.whispermate.aidictation.MainActivity
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
@@ -1211,11 +1212,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         serviceScope.launch {
             try {
                 subscriptionRepository.checkCanTranscribe().onFailure { error ->
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        error.message ?: getString(R.string.usage_limit_reached),
-                        Toast.LENGTH_LONG
-                    ).show()
+                    showUpgradePaywall(error)
                     return@launch
                 }
 
@@ -1581,13 +1578,29 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         refreshOverlayVisibility(null)
     }
 
+    private fun showUpgradePaywall(limitError: Throwable) {
+        val paywallIntent = Intent(this, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_SHOW_UPGRADE_PAYWALL
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+        }
+        runCatching { startActivity(paywallIntent) }
+            .onFailure { launchError ->
+                Log.w(TAG, "Unable to open the upgrade screen", launchError)
+                Toast.makeText(
+                    this,
+                    limitError.message ?: getString(R.string.usage_limit_reached),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
+
     private suspend fun processRecording(audioFile: java.io.File) {
         subscriptionRepository.checkCanTranscribe().onFailure { error ->
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                error.message ?: getString(R.string.usage_limit_reached),
-                Toast.LENGTH_LONG
-            ).show()
+            showUpgradePaywall(error)
             return
         }
 
@@ -1671,11 +1684,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         target: SelectionCommandTarget?
     ) {
         subscriptionRepository.checkCanTranscribe().onFailure { error ->
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                error.message ?: getString(R.string.usage_limit_reached),
-                Toast.LENGTH_LONG
-            ).show()
+            showUpgradePaywall(error)
             return
         }
 

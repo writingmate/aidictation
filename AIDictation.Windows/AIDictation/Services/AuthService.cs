@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using AIDictation.Helpers;
@@ -53,6 +54,8 @@ public partial class AuthService : ObservableObject
     // MARK: - Private Properties
 
     private readonly HttpClient _httpClient;
+    private readonly SemaphoreSlim _tokenRefreshGate = new(1, 1);
+    private readonly SemaphoreSlim _subscriptionReconciliationGate = new(1, 1);
 
     // MARK: - Events
 
@@ -132,11 +135,18 @@ public partial class AuthService : ObservableObject
                     ClearSessionState();
                     return;
                 }
-                profile = string.IsNullOrEmpty(retryToken) ? null : await FetchProfileAsync(retryToken);
+                if (!string.IsNullOrEmpty(retryToken))
+                {
+                    accessToken = retryToken;
+                    profile = await FetchProfileAsync(accessToken);
+                }
             }
 
             if (profile != null)
             {
+                profile = await ReconcileProfileSubscriptionAsync(accessToken, profile);
+                if (!IsCurrentSessionForUser(profile.UserId)) return;
+
                 CurrentUser = profile;
                 IsAuthenticated = true;
                 AuthStateChanged?.Invoke(this, EventArgs.Empty);
@@ -180,25 +190,79 @@ public partial class AuthService : ObservableObject
     }
 
     /// <summary>
-    /// Opens the Stripe upgrade page, pre-filled with the signed-in user's email.
+    /// Opens the hosted purchase page for the signed-in account.
     /// </summary>
     public void OpenUpgrade()
     {
-        var link = BuildConfig.StripePaymentLink;
+        if (!TryOpenUpgrade(out var errorMessage))
+        {
+            ErrorMessage = errorMessage;
+        }
+    }
+
+    /// <summary>
+    /// Tries to hand off the signed-in account to hosted checkout. The caller
+    /// owns the visible success or retry state because starting a browser only
+    /// proves the handoff, not that a purchase was completed.
+    /// </summary>
+    public bool TryOpenUpgrade(out string? errorMessage)
+    {
+        errorMessage = null;
+        var link = BuildConfig.RevenueCatWebPurchaseLink.Trim().TrimEnd('/');
         if (string.IsNullOrWhiteSpace(link))
         {
-            return;
+            errorMessage = "Checkout isn’t available right now. Please try again later.";
+            return false;
         }
 
         if (CurrentUser == null)
         {
-            OpenLogin();
-            return;
+            errorMessage = "Sign in to continue to checkout.";
+            return false;
         }
 
-        var separator = link.Contains('?') ? "&" : "?";
-        var url = $"{link}{separator}prefilled_email={Uri.EscapeDataString(CurrentUser.Email)}";
-        Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        if (!Uri.TryCreate(link, UriKind.Absolute, out var purchaseLink) ||
+            purchaseLink.Scheme != Uri.UriSchemeHttps ||
+            !purchaseLink.Host.Equals("pay.rev.cat", StringComparison.OrdinalIgnoreCase) ||
+            !purchaseLink.IsDefaultPort ||
+            !string.IsNullOrEmpty(purchaseLink.UserInfo) ||
+            !string.IsNullOrEmpty(purchaseLink.Query) ||
+            !string.IsNullOrEmpty(purchaseLink.Fragment) ||
+            purchaseLink.AbsolutePath
+                .Split('/', StringSplitOptions.RemoveEmptyEntries).Length != 1)
+        {
+            Debug.WriteLine("[AuthService] Checkout handoff failed: purchase link is invalid");
+            errorMessage = "Checkout isn’t available right now. Please try again later.";
+            return false;
+        }
+
+        var urlString =
+            $"{purchaseLink.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(CurrentUser.UserId.ToString().ToLowerInvariant())}" +
+            $"?email={Uri.EscapeDataString(CurrentUser.Email)}";
+
+        if (!Uri.TryCreate(urlString, UriKind.Absolute, out var checkoutUri) ||
+            checkoutUri.Scheme != Uri.UriSchemeHttps)
+        {
+            Debug.WriteLine("[AuthService] Checkout handoff failed: generated URL is invalid");
+            errorMessage = "Checkout isn’t available right now. Please try again later.";
+            return false;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = checkoutUri.AbsoluteUri,
+                UseShellExecute = true
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AuthService] Checkout handoff failed: {ex.Message}");
+            errorMessage = "Your browser could not be opened. Check your default browser and try again.";
+            return false;
+        }
     }
 
     /// <summary>
@@ -227,6 +291,13 @@ public partial class AuthService : ObservableObject
             var profile = await FetchProfileAsync(accessToken);
             if (profile != null)
             {
+                profile = await ReconcileProfileSubscriptionAsync(accessToken, profile);
+                if (!IsCurrentSessionForUser(profile.UserId))
+                {
+                    ErrorMessage = "Your sign-in session changed. Please try again.";
+                    return false;
+                }
+
                 CurrentUser = profile;
                 IsAuthenticated = true;
                 ErrorMessage = null;
@@ -261,7 +332,7 @@ public partial class AuthService : ObservableObject
     /// <summary>
     /// Returns a valid access token for API calls, refreshing it when close to expiry.
     /// </summary>
-    public async Task<string?> GetValidAccessTokenAsync()
+    public async Task<string?> GetValidAccessTokenAsync(bool reconcileSubscriptionAfterRefresh = true)
     {
         var storedSession = CredentialHelper.LoadSession();
         if (storedSession == null) return null;
@@ -274,6 +345,12 @@ public partial class AuthService : ObservableObject
             {
                 ClearSessionState();
             }
+            else if (outcome == RefreshOutcome.Success &&
+                     reconcileSubscriptionAfterRefresh &&
+                     !string.IsNullOrEmpty(refreshed))
+            {
+                await ReconcileCurrentUserSubscriptionAsync(refreshed);
+            }
             return refreshed;
         }
 
@@ -285,7 +362,9 @@ public partial class AuthService : ObservableObject
     /// </summary>
     public async Task RefreshUserAsync()
     {
-        var token = await GetValidAccessTokenAsync();
+        // This path reconciles the freshly fetched profile below, so suppress
+        // the otherwise automatic post-token-refresh check to avoid two calls.
+        var token = await GetValidAccessTokenAsync(reconcileSubscriptionAfterRefresh: false);
         if (token == null)
         {
             // No usable token right now (possibly just offline) - any definitive
@@ -296,6 +375,9 @@ public partial class AuthService : ObservableObject
         var profile = await FetchProfileAsync(token);
         if (profile != null)
         {
+            profile = await ReconcileProfileSubscriptionAsync(token, profile);
+            if (!IsCurrentSessionForUser(profile.UserId)) return;
+
             CurrentUser = profile;
             IsAuthenticated = true;
             AuthStateChanged?.Invoke(this, EventArgs.Empty);
@@ -307,14 +389,15 @@ public partial class AuthService : ObservableObject
     /// </summary>
     public async Task UpdateWordCountAsync(int wordsToAdd)
     {
-        if (wordsToAdd <= 0 || CurrentUser == null) return;
+        var userAtStart = CurrentUser;
+        if (wordsToAdd <= 0 || userAtStart == null) return;
 
         var token = await GetValidAccessTokenAsync();
-        if (token == null) return;
+        if (token == null || GetJwtSubject(token) != userAtStart.UserId) return;
 
         try
         {
-            var updatedCount = CurrentUser.MonthlyWordCount + wordsToAdd;
+            var updatedCount = userAtStart.MonthlyWordCount + wordsToAdd;
             var body = new JObject
             {
                 ["monthly_word_count"] = updatedCount,
@@ -323,23 +406,29 @@ public partial class AuthService : ObservableObject
 
             using var request = new HttpRequestMessage(
                 HttpMethod.Patch,
-                $"{BuildConfig.SupabaseUrl}/rest/v1/profiles?user_id=eq.{CurrentUser.UserId}&select=*");
+                $"{BuildConfig.SupabaseUrl}/rest/v1/profiles?user_id=eq.{userAtStart.UserId}&select=*");
             AddSupabaseHeaders(request, token);
             request.Headers.Add("Prefer", "return=representation");
             request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode)
+            using var response = await _httpClient.SendAsync(request);
+            var current = CurrentUser;
+            if (response.IsSuccessStatusCode &&
+                IsCurrentSessionForUser(userAtStart.UserId) &&
+                current?.UserId == userAtStart.UserId)
             {
                 var json = await response.Content.ReadAsStringAsync();
                 var profiles = JsonConvert.DeserializeObject<UserProfile[]>(json);
-                if (profiles is { Length: > 0 })
+                if (profiles is { Length: > 0 } && profiles[0].UserId == userAtStart.UserId)
                 {
+                    // Updating usage must not replace the last reconciled
+                    // RevenueCat status with the profile table's cached value.
+                    profiles[0].SubscriptionStatus = current.SubscriptionStatus;
                     CurrentUser = profiles[0];
                 }
                 else
                 {
-                    CurrentUser.MonthlyWordCount = updatedCount;
+                    current.MonthlyWordCount = updatedCount;
                 }
                 OnPropertyChanged(nameof(CurrentUser));
             }
@@ -377,29 +466,28 @@ public partial class AuthService : ObservableObject
 
     private static DateTimeOffset? GetJwtExpiry(string jwt)
     {
-        try
-        {
-            var parts = jwt.Split('.');
-            if (parts.Length < 2) return null;
-
-            var payload = parts[1].Replace('-', '+').Replace('_', '/');
-            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-            var json = JObject.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
-            var exp = json["exp"]?.Value<long>();
-            return exp.HasValue ? DateTimeOffset.FromUnixTimeSeconds(exp.Value) : null;
-        }
-        catch
-        {
-            return null;
-        }
+        var exp = GetJwtPayload(jwt)?["exp"]?.Value<long>();
+        return exp.HasValue ? DateTimeOffset.FromUnixTimeSeconds(exp.Value) : null;
     }
 
     private async Task<(RefreshOutcome Outcome, string? AccessToken)> RefreshTokensAsync(string refreshToken)
     {
         if (string.IsNullOrEmpty(refreshToken)) return (RefreshOutcome.Rejected, null);
 
+        await _tokenRefreshGate.WaitAsync();
         try
         {
+            var sessionAtStart = CredentialHelper.LoadSession();
+            if (sessionAtStart == null ||
+                !string.Equals(sessionAtStart.Value.RefreshToken, refreshToken, StringComparison.Ordinal))
+            {
+                // Another sign-in or sign-out replaced this refresh request.
+                return (RefreshOutcome.NetworkError, null);
+            }
+
+            var expectedUserId = GetJwtSubject(sessionAtStart.Value.AccessToken);
+            if (expectedUserId == null) return (RefreshOutcome.Rejected, null);
+
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
                 $"{BuildConfig.SupabaseUrl}/auth/v1/token?grant_type=refresh_token");
@@ -407,7 +495,13 @@ public partial class AuthService : ObservableObject
             var body = new JObject { ["refresh_token"] = refreshToken };
             request.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.SendAsync(request);
+            using var response = await _httpClient.SendAsync(request);
+            if (!IsCurrentRefreshSession(refreshToken, expectedUserId.Value))
+            {
+                // Never let an older request overwrite a newer account session.
+                return (RefreshOutcome.NetworkError, null);
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 Debug.WriteLine($"[AuthService] Session refresh failed: {(int)response.StatusCode}");
@@ -424,6 +518,11 @@ public partial class AuthService : ObservableObject
             var newRefreshToken = json["refresh_token"]?.ToString() ?? refreshToken;
 
             if (string.IsNullOrEmpty(accessToken)) return (RefreshOutcome.Rejected, null);
+            if (GetJwtSubject(accessToken) != expectedUserId)
+            {
+                Debug.WriteLine("[AuthService] Session refresh returned an unexpected identity");
+                return (RefreshOutcome.Rejected, null);
+            }
 
             var expiresIn = json["expires_in"]?.Value<int>() ?? 3600;
             CredentialHelper.SaveSession(
@@ -437,6 +536,10 @@ public partial class AuthService : ObservableObject
         {
             Debug.WriteLine($"[AuthService] Refresh error: {ex.Message}");
             return (RefreshOutcome.NetworkError, null);
+        }
+        finally
+        {
+            _tokenRefreshGate.Release();
         }
     }
 
@@ -460,7 +563,12 @@ public partial class AuthService : ObservableObject
             var userJson = JObject.Parse(await userResponse.Content.ReadAsStringAsync());
             var userId = userJson["id"]?.ToString();
             var email = userJson["email"]?.ToString() ?? string.Empty;
-            if (string.IsNullOrEmpty(userId)) return null;
+            if (!Guid.TryParse(userId, out var authenticatedUserId) ||
+                GetJwtSubject(accessToken) != authenticatedUserId)
+            {
+                Debug.WriteLine("[AuthService] Auth user fetch returned an unexpected identity");
+                return null;
+            }
 
             // ... then load the profile row with usage and subscription data.
             using var profileRequest = new HttpRequestMessage(
@@ -473,7 +581,8 @@ public partial class AuthService : ObservableObject
             {
                 var json = await profileResponse.Content.ReadAsStringAsync();
                 var profiles = JsonConvert.DeserializeObject<UserProfile[]>(json);
-                if (profiles is { Length: > 0 })
+                if (profiles is { Length: > 0 } &&
+                    profiles[0].UserId == authenticatedUserId)
                 {
                     if (string.IsNullOrEmpty(profiles[0].Email))
                     {
@@ -486,7 +595,7 @@ public partial class AuthService : ObservableObject
             // No profile row yet - return a minimal profile from auth data.
             return new UserProfile
             {
-                UserId = Guid.Parse(userId),
+                UserId = authenticatedUserId,
                 Email = email
             };
         }
@@ -495,6 +604,181 @@ public partial class AuthService : ObservableObject
             Debug.WriteLine($"[AuthService] Fetch profile error: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Uses the authenticated server reconciliation as the source of truth for
+    /// access. A failed lookup leaves the profile's cached status untouched;
+    /// a successful "free" response is authoritative and removes paid access.
+    /// </summary>
+    private async Task<UserProfile> ReconcileProfileSubscriptionAsync(
+        string accessToken,
+        UserProfile profile)
+    {
+        var priorUser = CurrentUser;
+        var reconciledStatus = await FetchReconciledSubscriptionStatusAsync(
+            accessToken,
+            profile.UserId);
+
+        if (reconciledStatus != null)
+        {
+            profile.SubscriptionStatus = reconciledStatus;
+        }
+        else if (priorUser?.UserId == profile.UserId)
+        {
+            // During a transient outage, keep the last status shown for this
+            // exact account instead of accepting a potentially stale profile row.
+            profile.SubscriptionStatus = priorUser.SubscriptionStatus;
+        }
+
+        return profile;
+    }
+
+    /// <summary>
+    /// Reconciles the current account immediately after a token refresh. This
+    /// keeps long-running sessions in sync even when no profile refresh follows.
+    /// </summary>
+    private async Task ReconcileCurrentUserSubscriptionAsync(string accessToken)
+    {
+        var userAtStart = CurrentUser;
+        if (userAtStart == null) return;
+
+        var reconciledStatus = await FetchReconciledSubscriptionStatusAsync(
+            accessToken,
+            userAtStart.UserId);
+        if (reconciledStatus == null || !IsCurrentSessionForUser(userAtStart.UserId)) return;
+
+        var current = CurrentUser;
+        if (current?.UserId != userAtStart.UserId ||
+            string.Equals(current.SubscriptionStatus, reconciledStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        current.SubscriptionStatus = reconciledStatus;
+        OnPropertyChanged(nameof(CurrentUser));
+        AuthStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Calls the Supabase edge function that resolves RevenueCat, Stripe-imported,
+    /// and AppSumo access for the authenticated user. Null means no authoritative
+    /// answer was received and callers must preserve their cached state.
+    /// </summary>
+    private async Task<string?> FetchReconciledSubscriptionStatusAsync(
+        string accessToken,
+        Guid expectedUserId)
+    {
+        if (GetJwtSubject(accessToken) != expectedUserId ||
+            !IsCurrentSessionForUser(expectedUserId))
+        {
+            Debug.WriteLine("[AuthService] Subscription check skipped: session identity changed");
+            return null;
+        }
+
+        await _subscriptionReconciliationGate.WaitAsync();
+        try
+        {
+            // Re-check after waiting because sign-out or a different account
+            // may have replaced the session while another lookup was running.
+            if (GetJwtSubject(accessToken) != expectedUserId ||
+                !IsCurrentSessionForUser(expectedUserId))
+            {
+                Debug.WriteLine("[AuthService] Subscription check skipped: session identity changed");
+                return null;
+            }
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"{BuildConfig.SupabaseUrl}/functions/v1/check-subscription");
+            AddSupabaseHeaders(request, accessToken);
+            request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+            using var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                Debug.WriteLine(
+                    $"[AuthService] Subscription check unavailable: {(int)response.StatusCode}");
+                return null;
+            }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var status = json["subscription_status"]?.Type == JTokenType.String
+                ? json["subscription_status"]!.Value<string>()?.Trim().ToLowerInvariant()
+                : null;
+            var subscribedToken = json["subscribed"];
+
+            if (subscribedToken?.Type != JTokenType.Boolean ||
+                status is not ("free" or "pro" or "lifetime"))
+            {
+                Debug.WriteLine("[AuthService] Subscription check returned an invalid response");
+                return null;
+            }
+
+            var subscribed = subscribedToken.Value<bool>();
+            if ((status == "free" && subscribed) ||
+                (status != "free" && !subscribed))
+            {
+                Debug.WriteLine("[AuthService] Subscription check returned an inconsistent response");
+                return null;
+            }
+
+            if (!IsCurrentSessionForUser(expectedUserId))
+            {
+                Debug.WriteLine("[AuthService] Subscription check ignored: session identity changed");
+                return null;
+            }
+
+            return status;
+        }
+        catch (Exception ex)
+        {
+            // Never log the request, response body, or token. A transient
+            // RevenueCat/Supabase failure must not revoke cached paid access.
+            Debug.WriteLine($"[AuthService] Subscription check error: {ex.GetType().Name}");
+            return null;
+        }
+        finally
+        {
+            _subscriptionReconciliationGate.Release();
+        }
+    }
+
+    private static JObject? GetJwtPayload(string jwt)
+    {
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length < 2) return null;
+
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+            return JObject.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static Guid? GetJwtSubject(string jwt)
+    {
+        var subject = GetJwtPayload(jwt)?["sub"]?.Value<string>();
+        return Guid.TryParse(subject, out var userId) ? userId : null;
+    }
+
+    private static bool IsCurrentSessionForUser(Guid expectedUserId)
+    {
+        var session = CredentialHelper.LoadSession();
+        return session != null && GetJwtSubject(session.Value.AccessToken) == expectedUserId;
+    }
+
+    private static bool IsCurrentRefreshSession(string refreshToken, Guid expectedUserId)
+    {
+        var session = CredentialHelper.LoadSession();
+        return session != null &&
+               string.Equals(session.Value.RefreshToken, refreshToken, StringComparison.Ordinal) &&
+               GetJwtSubject(session.Value.AccessToken) == expectedUserId;
     }
 
     private static void AddSupabaseHeaders(HttpRequestMessage request, string accessToken)

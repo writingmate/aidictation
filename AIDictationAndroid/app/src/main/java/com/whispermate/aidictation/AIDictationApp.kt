@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.whispermate.aidictation.data.local.ParakeetModelAssets
 import com.whispermate.aidictation.data.preferences.ApiConfigManager
+import com.whispermate.aidictation.data.repository.RevenueCatPurchaseManager
 import dagger.hilt.android.HiltAndroidApp
 import java.io.File
 import javax.inject.Inject
@@ -11,9 +12,11 @@ import javax.inject.Inject
 @HiltAndroidApp
 class AIDictationApp : Application() {
     @Inject lateinit var apiConfigManager: ApiConfigManager
+    @Inject lateinit var revenueCatPurchaseManager: RevenueCatPurchaseManager
 
     override fun onCreate() {
         super.onCreate()
+        revenueCatPurchaseManager.configure()
         removeStaleInternalParakeetCache()
     }
 

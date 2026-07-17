@@ -41,7 +41,7 @@
     <AssemblyMetadata Include="SUPABASE_URL" Value="$(SUPABASE_URL)" />
     <AssemblyMetadata Include="SUPABASE_ANON_KEY" Value="$(SUPABASE_ANON_KEY)" />
     <AssemblyMetadata Include="AUTH_WEB_URL" Value="$(AUTH_WEB_URL)" />
-    <AssemblyMetadata Include="STRIPE_PAYMENT_LINK" Value="$(STRIPE_PAYMENT_LINK)" />
+    <AssemblyMetadata Include="REVENUECAT_WEB_PURCHASE_LINK" Value="$(REVENUECAT_WEB_PURCHASE_LINK)" />
   </ItemGroup>
 
   <ItemGroup>

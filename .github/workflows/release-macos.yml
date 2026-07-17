@@ -73,12 +73,40 @@ jobs:
         env:
           SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          REVENUECAT_ENTITLEMENT_ID: ${{ vars.REVENUECAT_ENTITLEMENT_ID || 'pro' }}
+          REVENUECAT_WEB_PURCHASE_LINK: ${{ secrets.REVENUECAT_WEB_PURCHASE_LINK }}
         run: |
           test -n "$SENTRY_DSN"
+          test -n "$REVENUECAT_WEB_PURCHASE_LINK"
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          value = os.environ["REVENUECAT_WEB_PURCHASE_LINK"]
+          parsed = urlparse(value)
+          valid = (
+              parsed.scheme == "https"
+              and parsed.hostname == "pay.rev.cat"
+              and parsed.port is None
+              and parsed.username is None
+              and parsed.password is None
+              and parsed.path not in {"", "/"}
+              and not parsed.query
+              and not parsed.fragment
+          )
+          if not valid:
+              raise SystemExit(
+                  "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/... production link without query or fragment"
+              )
+          PY
           echo "$SECRETS_PLIST" | base64 --decode > Whishpermate/Whispermate/Secrets.plist
           /usr/libexec/PlistBuddy -c "Delete :SentryDSN" Whishpermate/Whispermate/Secrets.plist 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :SentryDSN string $SENTRY_DSN" Whishpermate/Whispermate/Secrets.plist
           /usr/libexec/PlistBuddy -c "Print :SentryDSN" Whishpermate/Whispermate/Secrets.plist >/dev/null
+          /usr/libexec/PlistBuddy -c "Delete :REVENUECAT_ENTITLEMENT_ID" Whishpermate/Whispermate/Secrets.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :REVENUECAT_ENTITLEMENT_ID string $REVENUECAT_ENTITLEMENT_ID" Whishpermate/Whispermate/Secrets.plist
+          /usr/libexec/PlistBuddy -c "Delete :REVENUECAT_WEB_PURCHASE_LINK" Whishpermate/Whispermate/Secrets.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :REVENUECAT_WEB_PURCHASE_LINK string $REVENUECAT_WEB_PURCHASE_LINK" Whishpermate/Whispermate/Secrets.plist
 
       - name: Validate release transcription secret
         run: |

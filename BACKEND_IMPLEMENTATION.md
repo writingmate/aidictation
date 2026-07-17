@@ -1,5 +1,7 @@
 # WhisperMate Backend Implementation Guide
 
+> **Legacy reference:** The Stripe-specific billing sections below describe the pre-RevenueCat system. New deployments should follow [REVENUECAT_MIGRATION.md](REVENUECAT_MIGRATION.md); RevenueCat and the `revenuecat-webhook` function are now the subscription source of truth.
+
 ## Overview
 We need a Supabase backend to handle:
 - User authentication (email/password)

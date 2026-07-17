@@ -24,7 +24,7 @@ enum class SubscriptionTier {
     companion object {
         fun fromStatus(status: String?): SubscriptionTier = when (status?.lowercase()) {
             "pro" -> Pro
-            "lifetime" -> Lifetime
+            "lifetime", "appsumo" -> Lifetime
             else -> Free
         }
     }

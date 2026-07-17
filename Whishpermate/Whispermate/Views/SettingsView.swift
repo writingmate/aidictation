@@ -4,12 +4,10 @@ import AVFoundation
 import SwiftUI
 import WhisperMateShared
 
-// MARK: - Billing Period
+private enum SettingsSheetDestination: String, Identifiable {
+    case paywall
 
-enum BillingPeriod {
-    case monthly
-    case annual
-    case lifetime
+    var id: String { rawValue }
 }
 
 // MARK: - Settings Card Component
@@ -107,9 +105,7 @@ struct SettingsView: View {
     @State private var audioDevices: [AudioDeviceManager.AudioDevice] = []
     @State private var selectedAudioDevice: AudioDeviceManager.AudioDevice?
     @State private var isSyncingAudioDeviceSelection = false
-    @State private var selectedBillingPeriod: BillingPeriod = .monthly
-    @State private var isCheckingPayment = false
-    @State private var paymentCheckTask: Task<Void, Never>?
+    @State private var presentedSheet: SettingsSheetDestination?
     @State private var pendingTranscriptionMode: TranscriptionMode?
     @State private var pendingCloudLanguage: Language?
     @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
@@ -130,6 +126,10 @@ struct SettingsView: View {
         .onAppear {
             showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
             loadAudioDevices()
+            presentPendingUpgradeIfNeeded()
+        }
+        .onChange(of: subscriptionManager.showUpgradeModal) { _ in
+            presentPendingUpgradeIfNeeded()
         }
         .onChange(of: selectedAudioDevice) { newValue in
             guard !isSyncingAudioDeviceSelection else { return }
@@ -143,9 +143,6 @@ struct SettingsView: View {
                 showMenuBarIcon = visible
             }
         }
-        .onDisappear {
-            stopPaymentConfirmationCheck()
-        }
         .alert("Switch to cloud transcription?", isPresented: cloudLanguageConfirmationBinding) {
             Button("Cancel", role: .cancel) {
                 pendingCloudLanguage = nil
@@ -156,6 +153,22 @@ struct SettingsView: View {
         } message: {
             Text(cloudLanguageConfirmationMessage)
         }
+        .sheet(item: $presentedSheet) { destination in
+            switch destination {
+            case .paywall:
+                RevenueCatPaywallView()
+            }
+        }
+    }
+
+    private func presentPendingUpgradeIfNeeded() {
+        guard subscriptionManager.showUpgradeModal else { return }
+        subscriptionManager.showUpgradeModal = false
+        selectedSection = .account
+        guard authManager.isAuthenticated,
+              authManager.currentUser?.subscriptionTier.isPaid != true
+        else { return }
+        presentedSheet = .paywall
     }
 
     @available(macOS 13.0, *)
@@ -469,33 +482,18 @@ struct SettingsView: View {
                             Text("Upgrade to Pro")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            if isCheckingPayment {
-                                Text("Checking for payment confirmation...")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            } else {
-                                Text("Unlimited transcriptions, priority support")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            }
+                            Text("Unlimited transcriptions, priority support")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
                         }
                         Spacer()
-                        if isCheckingPayment {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Button("Upgrade") {
-                                openPaymentLink()
-                            }
-                            .controlSize(.small)
+                        Button("Upgrade") {
+                            presentedSheet = .paywall
                         }
+                        .controlSize(.small)
                     }
                 }
             }
-
-        }
-        .onAppear {
-            resumePaymentCheckIfNeeded()
         }
     }
 
@@ -517,67 +515,6 @@ struct SettingsView: View {
             }
         }
         return nil
-    }
-
-    private func openPaymentLink() {
-        if isCheckingPayment {
-            return
-        }
-
-        if let user = authManager.currentUser, user.subscriptionTier.isPaid {
-            return
-        }
-
-        if let user = authManager.currentUser, user.stripeSubscriptionId != nil {
-            DebugLog.info("Checkout blocked: existing subscription detected", context: "SettingsView")
-            startPaymentConfirmationCheck(resuming: true)
-            return
-        }
-
-        if hasPendingPaymentAttempt() {
-            DebugLog.info("Checkout blocked: payment confirmation already in progress", context: "SettingsView")
-            startPaymentConfirmationCheck(resuming: true)
-            return
-        }
-
-        let paymentLinkKey: String
-        switch selectedBillingPeriod {
-        case .monthly:
-            paymentLinkKey = "STRIPE_PAYMENT_LINK_MONTHLY"
-        case .annual:
-            paymentLinkKey = "STRIPE_PAYMENT_LINK_ANNUAL"
-        case .lifetime:
-            paymentLinkKey = "STRIPE_PAYMENT_LINK_LIFETIME"
-        @unknown default:
-            paymentLinkKey = "STRIPE_PAYMENT_LINK_MONTHLY"
-        }
-
-        guard let paymentLinkString = SecretsLoader.getValue(for: paymentLinkKey),
-              var paymentURL = URL(string: paymentLinkString)
-        else {
-            DebugLog.error("Invalid payment link", context: "SettingsView")
-            return
-        }
-
-        // Add user email as query parameter if authenticated
-        if let email = authManager.currentUser?.email,
-           let encodedEmail = email.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
-        {
-            var components = URLComponents(url: paymentURL, resolvingAgainstBaseURL: false)
-            var queryItems = components?.queryItems ?? []
-            queryItems.append(URLQueryItem(name: "prefilled_email", value: encodedEmail))
-            components?.queryItems = queryItems
-            if let urlWithEmail = components?.url {
-                paymentURL = urlWithEmail
-            }
-        }
-
-        #if canImport(AppKit)
-            NSWorkspace.shared.open(paymentURL)
-        #endif
-
-        // Start checking for payment confirmation
-        startPaymentConfirmationCheck(resuming: false)
     }
 
     private func copyReferralInvite() {
@@ -634,96 +571,6 @@ struct SettingsView: View {
             }
         }
     }
-
-    private enum PaymentTracking {
-        static let pendingKey = "paymentAttemptAt"
-        static let pendingWindow: TimeInterval = 10 * 60
-    }
-
-    private func hasPendingPaymentAttempt() -> Bool {
-        guard let lastAttempt = AppDefaults.shared.object(forKey: PaymentTracking.pendingKey) as? Date else {
-            return false
-        }
-        return Date().timeIntervalSince(lastAttempt) < PaymentTracking.pendingWindow
-    }
-
-    private func markPaymentAttempt() {
-        AppDefaults.shared.set(Date(), forKey: PaymentTracking.pendingKey)
-    }
-
-    private func clearPaymentAttempt() {
-        AppDefaults.shared.removeObject(forKey: PaymentTracking.pendingKey)
-    }
-
-    private func resumePaymentCheckIfNeeded() {
-        guard !isCheckingPayment, paymentCheckTask == nil else { return }
-        guard authManager.isAuthenticated, !isPro else {
-            clearPaymentAttempt()
-            return
-        }
-        if hasPendingPaymentAttempt() {
-            startPaymentConfirmationCheck(resuming: true)
-        }
-    }
-
-    private func startPaymentConfirmationCheck(resuming: Bool) {
-        guard !isCheckingPayment, paymentCheckTask == nil else { return }
-
-        if !resuming {
-            markPaymentAttempt()
-        }
-
-        isCheckingPayment = true
-        DebugLog.info("Starting payment confirmation check", context: "SettingsView")
-
-        paymentCheckTask = Task {
-            var wasCancelled = false
-            // Poll for up to 10 minutes (120 checks every 5 seconds)
-            for _ in 0 ..< 120 {
-                if Task.isCancelled {
-                    wasCancelled = true
-                    break
-                }
-
-                // Wait 5 seconds between checks
-                do {
-                    try await Task.sleep(nanoseconds: 5_000_000_000)
-                } catch {
-                    wasCancelled = true
-                    break
-                }
-
-                // Refresh user data
-                await authManager.refreshUser()
-
-                // Check if subscription status changed to paid
-                if authManager.currentUser?.subscriptionTier.isPaid == true {
-                    DebugLog.info("✅ Payment confirmed! User is now \(authManager.currentUser?.subscriptionTier.displayName ?? "paid")", context: "SettingsView")
-                    await MainActor.run {
-                        isCheckingPayment = false
-                    }
-                    clearPaymentAttempt()
-                    break
-                }
-            }
-
-            // Stop checking after 10 minutes
-            await MainActor.run {
-                isCheckingPayment = false
-                paymentCheckTask = nil
-            }
-            if !wasCancelled {
-                clearPaymentAttempt()
-            }
-        }
-    }
-
-    private func stopPaymentConfirmationCheck() {
-        paymentCheckTask?.cancel()
-        paymentCheckTask = nil
-        isCheckingPayment = false
-    }
-
 
     // MARK: - General Section
 

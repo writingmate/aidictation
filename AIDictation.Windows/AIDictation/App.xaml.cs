@@ -654,6 +654,7 @@ public partial class App : Application
         if (AuthService.Instance.CurrentUser?.HasReachedLimit == true)
         {
             AppState.Shared.SetError("Monthly word limit reached. Upgrade to keep dictating.");
+            Dispatcher.BeginInvoke(new Action(ShowPaywallWindow));
             return;
         }
 
@@ -914,6 +915,12 @@ public partial class App : Application
         ApplyWindowsAppTheme();
         var settings = ShowOrActivateWindow<SettingsWindow>();
         settings.NavigateTo(ViewModels.SettingsViewModel.Sections.History);
+    }
+
+    private void ShowPaywallWindow()
+    {
+        ApplyWindowsAppTheme();
+        ShowOrActivateWindow<PaywallWindow>();
     }
 
     private void OnOnboardingClosed(object? sender, EventArgs e)

@@ -3,6 +3,7 @@ package com.whispermate.aidictation.ui.screens.main
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +64,7 @@ import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.ui.components.CircularMicButton
 import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.components.MicButtonState
+import com.whispermate.aidictation.ui.components.UpgradePaywallDialog
 import com.whispermate.aidictation.ui.screens.settings.SettingsScreen
 import com.whispermate.aidictation.util.AudioRecorder
 import java.io.File
@@ -76,6 +78,8 @@ fun MainScreen(
     onNavigateToRecordingDetail: (String) -> Unit,
     shouldStartRecording: Boolean = false,
     onRecordingStarted: () -> Unit = {},
+    shouldShowUpgradePaywall: Boolean = false,
+    onUpgradePaywallShown: () -> Unit = {},
     viewModel: MainViewModel = hiltViewModel()
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -86,11 +90,13 @@ fun MainScreen(
     val autoStopOnSilenceEnabled by viewModel.autoStopOnSilenceEnabled.collectAsState()
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
+    val paywallState by viewModel.paywallState.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val currentRecordingState by rememberUpdatedState(recordingState)
     val currentAutoStopOnSilenceEnabled by rememberUpdatedState(autoStopOnSilenceEnabled)
+    var showUpgradePaywall by rememberSaveable { mutableStateOf(false) }
 
     // Audio recorder state
     var audioRecorder by remember { mutableStateOf<AudioRecorder?>(null) }
@@ -121,6 +127,25 @@ fun MainScreen(
         error?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
+        }
+    }
+
+    LaunchedEffect(showUpgradePaywall, usageStatus.isAuthenticated) {
+        if (showUpgradePaywall && usageStatus.isAuthenticated) {
+            viewModel.preparePaywall()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.showUpgradePaywall.collect {
+            showUpgradePaywall = true
+        }
+    }
+
+    LaunchedEffect(shouldShowUpgradePaywall) {
+        if (shouldShowUpgradePaywall) {
+            showUpgradePaywall = true
+            onUpgradePaywallShown()
         }
     }
 
@@ -198,6 +223,28 @@ fun MainScreen(
         }
     }
 
+    if (showUpgradePaywall) {
+        UpgradePaywallDialog(
+            isAuthenticated = usageStatus.isAuthenticated,
+            monthlyPrice = paywallState.monthlyPrice,
+            operation = paywallState.operation,
+            message = paywallState.message,
+            onDismiss = {
+                showUpgradePaywall = false
+                viewModel.resetPaywall()
+            },
+            onContinue = {
+                if (usageStatus.isAuthenticated) {
+                    (context as? Activity)?.let(viewModel::purchaseFromPaywall)
+                } else {
+                    viewModel.openLogin()
+                }
+            },
+            onRetryPlan = { viewModel.preparePaywall(forceRefresh = true) },
+            onRestorePurchases = viewModel::restorePurchasesFromPaywall
+        )
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
@@ -263,7 +310,8 @@ fun MainScreen(
                 usageStatus = usageStatus,
                 onSignIn = { viewModel.openLogin() },
                 onSignOut = { viewModel.signOut() },
-                onUpgrade = { viewModel.openUpgrade() },
+                onUpgrade = { showUpgradePaywall = true },
+                onRestorePurchases = { viewModel.restorePurchases() },
                 onShareInvite = { viewModel.shareReferralInvite() },
                 onRedeemInvite = { viewModel.redeemReferralCode(it) },
                 modifier = Modifier.padding(paddingValues)

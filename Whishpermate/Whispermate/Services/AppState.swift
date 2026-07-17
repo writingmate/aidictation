@@ -409,8 +409,9 @@ class AppState: ObservableObject {
                     try? FileManager.default.removeItem(at: audioURL)
                     finishOverlayAfterRecording()
 
-                    // Open Settings to Account section
                     await MainActor.run {
+                        SubscriptionManager.shared.openUpgradeAfterLimit()
+                        showMainSettingsWindow()
                         NotificationCenter.default.post(name: .openAccountSettings, object: nil)
                     }
                     return

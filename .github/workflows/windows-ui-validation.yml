@@ -24,7 +24,7 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
   AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
-  STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+  REVENUECAT_WEB_PURCHASE_LINK: ${{ secrets.REVENUECAT_WEB_PURCHASE_LINK }}
 
 jobs:
   validate:

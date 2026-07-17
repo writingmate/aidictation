@@ -21,6 +21,7 @@ onnxRuntime = "1.25.1"
 playAssetDelivery = "2.3.0"
 litert = "2.0.3"
 gradlePlayPublisher = "3.13.0"
+revenueCat = "9.23.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -71,6 +72,7 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 onnx-runtime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxRuntime" }
 play-asset-delivery = { group = "com.google.android.play", name = "asset-delivery", version.ref = "playAssetDelivery" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
+revenuecat-purchases = { group = "com.revenuecat.purchases", name = "purchases", version.ref = "revenueCat" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

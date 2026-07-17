@@ -62,10 +62,9 @@ put_secret "GroqLLMKey" "$(value_from_env GroqLLMKey GROQ_LLM_KEY GROQ_API_KEY)"
 sentry_dsn="$(value_from_env SENTRY_DSN SentryDSN)"
 put_secret "SENTRY_DSN" "$sentry_dsn"
 put_secret "SentryDSN" "$sentry_dsn"
-put_secret "STRIPE_PAYMENT_LINK" "$(value_from_env STRIPE_PAYMENT_LINK)"
-put_secret "STRIPE_PAYMENT_LINK_MONTHLY" "$(value_from_env STRIPE_PAYMENT_LINK_MONTHLY)"
-put_secret "STRIPE_PAYMENT_LINK_ANNUAL" "$(value_from_env STRIPE_PAYMENT_LINK_ANNUAL)"
-put_secret "STRIPE_PAYMENT_LINK_LIFETIME" "$(value_from_env STRIPE_PAYMENT_LINK_LIFETIME)"
+put_secret "REVENUECAT_APPLE_API_KEY" "$(value_from_env REVENUECAT_APPLE_API_KEY)"
+put_secret "REVENUECAT_ENTITLEMENT_ID" "$(value_from_env REVENUECAT_ENTITLEMENT_ID)"
+put_secret "REVENUECAT_WEB_PURCHASE_LINK" "$(value_from_env REVENUECAT_WEB_PURCHASE_LINK)"
 
 if [ "$secret_count" -eq 0 ]; then
   if [ "${AIDICTATION_REQUIRE_SECRETS:-0}" = "1" ]; then

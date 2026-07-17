@@ -27,6 +27,7 @@
 		D1B200012F65000200000012 /* PermissionFlow_PermissionFlow.bundle in Resources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */; };
 		D7A900012F72000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D7A900012F72000100000002 /* AppIntents.framework */; };
 		D800E78DFFA88DCED50EE9F9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC33D501A203B8AEFB7871DF /* Foundation.framework */; };
+		E4C400032F90000100000003 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = E4C400022F90000100000002 /* RevenueCat */; };
 		DA93F0D2F436F9AF6A241959 /* WhisperMateLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DBA987B2CD71DDC4710889EA /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -244,6 +245,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E4C400032F90000100000003 /* RevenueCat in Frameworks */,
 				C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */,
 				C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */,
 				C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */,
@@ -470,6 +472,9 @@
 				C1E7D2AE2EBA925200A07338 /* WhisperMateShared */,
 			);
 			name = WhisperMateShared;
+			packageProductDependencies = (
+				E4C400022F90000100000002 /* RevenueCat */,
+			);
 			productName = WhisperMateShared;
 			productReference = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */;
 			productType = "com.apple.product-type.framework";
@@ -582,6 +587,7 @@
 				C1FA00012F0B000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
+				E4C400012F90000100000001 /* XCRemoteSwiftPackageReference "purchases-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C18566CA2EA0D31000B46F55;
@@ -1517,6 +1523,14 @@
 				minimumVersion = 2.1.0;
 			};
 		};
+		E4C400012F90000100000001 /* XCRemoteSwiftPackageReference "purchases-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.43.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1554,6 +1568,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */;
 			productName = PermissionFlow;
+		};
+		E4C400022F90000100000002 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E4C400012F90000100000001 /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = RevenueCat;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

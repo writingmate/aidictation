@@ -75,7 +75,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public bool CanUpgrade => IsAuthenticated &&
         AuthService.Instance.CurrentUser?.SubscriptionTier == SubscriptionTier.Free &&
-        !string.IsNullOrEmpty(BuildConfig.StripePaymentLink);
+        !string.IsNullOrEmpty(BuildConfig.RevenueCatWebPurchaseLink);
 
     // Audio
     [ObservableProperty]
@@ -162,6 +162,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public event EventHandler? CloseRequested;
     public event EventHandler? HotkeyChanged;
+    public event EventHandler? UpgradeRequested;
 
     // MARK: - Initialization
 
@@ -205,7 +206,7 @@ public partial class SettingsViewModel : ObservableObject
     private async Task SignOutAsync() => await AuthService.Instance.SignOutAsync();
 
     [RelayCommand]
-    private void Upgrade() => AuthService.Instance.OpenUpgrade();
+    private void Upgrade() => UpgradeRequested?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand]
     private void CopyInviteLink()

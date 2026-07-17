@@ -96,10 +96,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
-      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
-      STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
-      STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
-      STRIPE_PAYMENT_LINK_LIFETIME: ${{ secrets.STRIPE_PAYMENT_LINK_LIFETIME }}
+      REVENUECAT_GOOGLE_API_KEY: ${{ vars.REVENUECAT_GOOGLE_API_KEY }}
+      REVENUECAT_ENTITLEMENT_ID: ${{ vars.REVENUECAT_ENTITLEMENT_ID || 'pro' }}
       SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
 
       # Release signing
@@ -256,10 +254,6 @@ jobs:
           supabase_url=$(extract SUPABASE_URL)
           supabase_anon_key=$(extract SUPABASE_ANON_KEY)
           auth_web_url=$(extract AUTH_WEB_URL)
-          stripe_link=$(extract STRIPE_PAYMENT_LINK)
-          stripe_monthly=$(extract STRIPE_PAYMENT_LINK_MONTHLY)
-          stripe_annual=$(extract STRIPE_PAYMENT_LINK_ANNUAL)
-          stripe_lifetime=$(extract STRIPE_PAYMENT_LINK_LIFETIME)
           if [ -z "$TRANSCRIPTION_API_KEY" ] && [ -n "$wm_key" ]; then
             echo "TRANSCRIPTION_API_KEY=$wm_key" >> "$GITHUB_ENV"
           fi
@@ -288,18 +282,6 @@ jobs:
               exit 1
             fi
           fi
-          if [ -z "$STRIPE_PAYMENT_LINK" ] && [ -n "$stripe_link" ]; then
-            echo "STRIPE_PAYMENT_LINK=$stripe_link" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_MONTHLY" ] && [ -n "$stripe_monthly" ]; then
-            echo "STRIPE_PAYMENT_LINK_MONTHLY=$stripe_monthly" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_ANNUAL" ] && [ -n "$stripe_annual" ]; then
-            echo "STRIPE_PAYMENT_LINK_ANNUAL=$stripe_annual" >> "$GITHUB_ENV"
-          fi
-          if [ -z "$STRIPE_PAYMENT_LINK_LIFETIME" ] && [ -n "$stripe_lifetime" ]; then
-            echo "STRIPE_PAYMENT_LINK_LIFETIME=$stripe_lifetime" >> "$GITHUB_ENV"
-          fi
           rm /tmp/secrets.plist
 
       - name: Validate release client configuration
@@ -323,6 +305,10 @@ jobs:
           if [ "${AUTH_WEB_URL_VALUE%/}" = "https://voicesinmyhead.co/auth" ]; then
             AUTH_WEB_URL_VALUE=https://aidictation.com/auth
           fi
+          if [ -z "${REVENUECAT_GOOGLE_API_KEY:-}" ]; then
+            echo "REVENUECAT_GOOGLE_API_KEY is required for a release build." >&2
+            exit 1
+          fi
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           VERSION_CODE=${VERSION_CODE}
@@ -337,10 +323,8 @@ jobs:
           SUPABASE_URL=${SUPABASE_URL}
           SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
           AUTH_WEB_URL=${AUTH_WEB_URL_VALUE}
-          STRIPE_PAYMENT_LINK=${STRIPE_PAYMENT_LINK}
-          STRIPE_PAYMENT_LINK_MONTHLY=${STRIPE_PAYMENT_LINK_MONTHLY}
-          STRIPE_PAYMENT_LINK_ANNUAL=${STRIPE_PAYMENT_LINK_ANNUAL}
-          STRIPE_PAYMENT_LINK_LIFETIME=${STRIPE_PAYMENT_LINK_LIFETIME}
+          REVENUECAT_GOOGLE_API_KEY=${REVENUECAT_GOOGLE_API_KEY}
+          REVENUECAT_ENTITLEMENT_ID=${REVENUECAT_ENTITLEMENT_ID}
           KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}
           KEY_ALIAS=${KEY_ALIAS:-release}
           KEY_PASSWORD=${KEY_PASSWORD}

@@ -101,6 +101,7 @@ fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
+    onRestorePurchases: () -> Unit,
     onShareInvite: () -> Unit,
     onRedeemInvite: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -157,7 +158,8 @@ fun SettingsScreen(
             },
             onSignIn = onSignIn,
             onSignOut = onSignOut,
-            onUpgrade = onUpgrade
+            onUpgrade = onUpgrade,
+            onRestorePurchases = onRestorePurchases
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -447,7 +449,8 @@ private fun AccountSettingsSection(
     onRedeemInvite: () -> Unit,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
-    onUpgrade: () -> Unit
+    onUpgrade: () -> Unit,
+    onRestorePurchases: () -> Unit
 ) {
     val showsIdentityRow = usageStatus.isAuthenticated || usageStatus.isPro
 
@@ -494,6 +497,15 @@ private fun AccountSettingsSection(
                 titleColor = MaterialTheme.colorScheme.primary
             )
 
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
+
+        if (usageStatus.isAuthenticated) {
+            SettingsItem(
+                icon = Icons.Default.AutoAwesome,
+                title = stringResource(R.string.account_restore_purchases),
+                onClick = onRestorePurchases
+            )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
 

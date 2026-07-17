@@ -29,28 +29,28 @@ private enum AppWindowDefaults {
 }
 
 private func isAuthCallbackURL(_ url: URL) -> Bool {
-    url.scheme == "aidictation" && (url.host == "auth-callback" || url.host == "auth")
+    url.scheme == "aidictation" && url.host == "auth-callback"
 }
 
 private enum AuthCallbackGate {
-    private static var lastProcessedURL: String?
+    private static var lastProcessedURLHash: Int?
     private static var lastProcessedTime: Date?
     private static let duplicateWindow: TimeInterval = 5.0
 
     static func shouldProcess(_ url: URL, context: String) -> Bool {
-        let urlString = url.absoluteString
+        let urlHash = url.absoluteString.hashValue
         let now = Date()
 
-        if let lastURL = lastProcessedURL,
+        if let lastURLHash = lastProcessedURLHash,
            let lastTime = lastProcessedTime,
-           lastURL == urlString,
+           lastURLHash == urlHash,
            now.timeIntervalSince(lastTime) < duplicateWindow
         {
             DebugLog.info("Ignoring duplicate auth callback", context: context)
             return false
         }
 
-        lastProcessedURL = urlString
+        lastProcessedURLHash = urlHash
         lastProcessedTime = now
         return true
     }
@@ -90,6 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_: Notification) {
         SentryTelemetry.start()
+        RevenueCatManager.shared.configure()
         DockIconManager.shared.applySavedPreference()
         statusBarManager.setupMenuBar()
         _ = UpdateManager.shared
@@ -141,6 +142,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidBecomeActive(_: Notification) {
+        Task { await RevenueCatManager.shared.refreshCustomerInfo() }
         // Ensure window is always properly configured when app becomes active
         if mainWindow == nil {
             configureMainWindow()
@@ -180,7 +182,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func handleURL(_ url: URL) {
-        DebugLog.info("AppDelegate received URL: \(url.absoluteString)", context: "AppDelegate")
+        DebugLog.info(
+            "AppDelegate received URL scheme=\(url.scheme ?? "unknown") host=\(url.host ?? "unknown") path=\(url.path)",
+            context: "AppDelegate"
+        )
 
         // Handle authentication callback (aidictation://auth-callback)
         if isAuthCallbackURL(url) {

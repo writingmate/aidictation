@@ -37,7 +37,7 @@ public static class BuildConfig
     public static string SupabaseUrl => Get("SUPABASE_URL", string.Empty).TrimEnd('/');
     public static string SupabaseAnonKey => Get("SUPABASE_ANON_KEY", string.Empty);
     public static string AuthWebUrl => Get("AUTH_WEB_URL", Defaults.AuthWebUrl);
-    public static string StripePaymentLink => Get("STRIPE_PAYMENT_LINK", string.Empty);
+    public static string RevenueCatWebPurchaseLink => Get("REVENUECAT_WEB_PURCHASE_LINK", string.Empty);
 
     public static bool IsAuthConfigured =>
         !string.IsNullOrWhiteSpace(SupabaseUrl) &&

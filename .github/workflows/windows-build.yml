@@ -32,7 +32,7 @@ env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
   AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
-  STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
+  REVENUECAT_WEB_PURCHASE_LINK: ${{ secrets.REVENUECAT_WEB_PURCHASE_LINK }}
 
 jobs:
   build:
@@ -46,6 +46,28 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Validate purchase configuration for tagged releases
+      if: startsWith(github.ref, 'refs/tags/windows-v')
+      shell: pwsh
+      run: |
+        if ([string]::IsNullOrWhiteSpace($env:REVENUECAT_WEB_PURCHASE_LINK)) {
+          throw "REVENUECAT_WEB_PURCHASE_LINK is required for a Windows release"
+        }
+        $uri = $null
+        if (-not [Uri]::TryCreate($env:REVENUECAT_WEB_PURCHASE_LINK, [UriKind]::Absolute, [ref]$uri)) {
+          throw "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
+        }
+        $pathSegments = @($uri.AbsolutePath.Trim('/') -split '/' | Where-Object { $_ })
+        if ($uri.Scheme -ne "https" -or
+            $uri.Host -ne "pay.rev.cat" -or
+            -not $uri.IsDefaultPort -or
+            -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+            -not [string]::IsNullOrEmpty($uri.Query) -or
+            -not [string]::IsNullOrEmpty($uri.Fragment) -or
+            $pathSegments.Count -ne 1) {
+          throw "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
+        }
 
     - name: Restore dependencies
       run: dotnet restore ${{ env.PROJECT_PATH }}

@@ -1,0 +1,183 @@
+<Window x:Class="AIDictation.Views.PaywallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Upgrade — AIDictation"
+        Width="470" Height="620"
+        MinWidth="380" MinHeight="500"
+        ResizeMode="CanResizeWithGrip"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Icon="/Assets/app.png"
+        Background="{DynamicResource BackgroundBrush}"
+        FontFamily="{StaticResource UiFont}"
+        AutomationProperties.IsDialog="True">
+
+    <Window.Resources>
+        <Style x:Key="PaywallPrimaryButton" TargetType="Button"
+               BasedOn="{StaticResource AccentButton}">
+            <Setter Property="MinHeight" Value="42"/>
+            <Setter Property="Padding" Value="22,10"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PaywallSecondaryButton" TargetType="Button"
+               BasedOn="{StaticResource SubtleButton}">
+            <Setter Property="MinHeight" Value="38"/>
+            <Setter Property="Padding" Value="22,9"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.55"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Border Margin="1" CornerRadius="10"
+            BorderBrush="{DynamicResource BorderHiBrush}" BorderThickness="1"
+            Background="{DynamicResource BackgroundBrush}">
+        <Grid Margin="30,26,30,24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="0,0,8,0">
+                    <Border Width="54" Height="54" CornerRadius="27"
+                            Background="{StaticResource BrandGradientBrush}"
+                            HorizontalAlignment="Left">
+                        <TextBlock Text="&#xE7C1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="23" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   AutomationProperties.Name="Pro"/>
+                    </Border>
+
+                    <Border HorizontalAlignment="Left" Margin="0,18,0,8" Padding="9,3"
+                            CornerRadius="8" BorderBrush="{StaticResource PrimaryBrush}"
+                            BorderThickness="1">
+                        <TextBlock Text="PRO" FontFamily="{StaticResource MonoFont}"
+                                   FontSize="9.5" FontWeight="Bold"
+                                   Foreground="{StaticResource PrimaryBrush}"/>
+                    </Border>
+
+                    <TextBlock Text="Upgrade to Pro" FontFamily="{StaticResource FigtreeFont}"
+                               FontSize="28" FontWeight="ExtraBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextWrapping="Wrap"/>
+                    <TextBlock Text="Remove the monthly word limit and keep dictating without interruptions."
+                               Margin="0,7,0,22" FontSize="13" LineHeight="19"
+                               Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+
+                    <StackPanel Margin="1,0,0,0">
+                        <Grid Margin="0,0,0,13">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="25"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       Foreground="{StaticResource SuccessBrush}" FontSize="14"
+                                       AutomationProperties.Name="Included"/>
+                            <TextBlock Grid.Column="1" Text="Unlimited transcriptions"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       FontSize="13" TextWrapping="Wrap"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,13">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="25"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       Foreground="{StaticResource SuccessBrush}" FontSize="14"
+                                       AutomationProperties.Name="Included"/>
+                            <TextBlock Grid.Column="1" Text="Pro access on your supported devices"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       FontSize="13" TextWrapping="Wrap"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,13">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="25"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       Foreground="{StaticResource SuccessBrush}" FontSize="14"
+                                       AutomationProperties.Name="Included"/>
+                            <TextBlock Grid.Column="1" Text="Priority support when you need help"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       FontSize="13" TextWrapping="Wrap"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <Border Margin="0,8,0,0" Padding="12,11" CornerRadius="6"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="27"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="14" Foreground="{StaticResource PrimaryBrush}"
+                                       AutomationProperties.Name="Browser"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Checkout opens in your browser"
+                                           FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                <TextBlock Text="You’ll see the current plans, prices, and billing terms before you confirm."
+                                           Margin="0,3,0,0" FontSize="11.5" LineHeight="17"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border x:Name="StatusPanel" Visibility="Collapsed"
+                            Margin="0,12,0,0" Padding="12,10" CornerRadius="6"
+                            BorderBrush="{DynamicResource BorderHiBrush}" BorderThickness="1"
+                            Background="{DynamicResource SurfaceBrush}"
+                            AutomationProperties.LiveSetting="Polite">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="27"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <ProgressBar x:Name="StatusProgress" Width="18" Height="4"
+                                         IsIndeterminate="True" VerticalAlignment="Center"
+                                         Visibility="Collapsed"
+                                         AutomationProperties.Name="Working"/>
+                            <TextBlock x:Name="StatusGlyph" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Top"
+                                       AutomationProperties.Name="Status"/>
+                            <TextBlock x:Name="StatusText" Grid.Column="1"
+                                       FontSize="11.5" LineHeight="17"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap"/>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Text="Your Pro access is linked to the account you’re signed in with."
+                               Margin="0,12,0,4" FontSize="10.5" LineHeight="16"
+                               Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel Grid.Row="1" Margin="0,20,0,0">
+                <Button x:Name="OpenCheckoutButton" Style="{StaticResource PaywallPrimaryButton}"
+                        Click="Continue_Click" IsDefault="True"
+                        AutomationProperties.HelpText="Opens secure checkout in your default browser.">
+                    <AccessText Text="Open secure _checkout"/>
+                </Button>
+                <Button x:Name="CheckAccessButton" Style="{StaticResource PaywallSecondaryButton}"
+                        Content="Check my access" Click="CheckAccess_Click"
+                        Visibility="Collapsed" Margin="0,8,0,0"
+                        AutomationProperties.HelpText="Checks whether Pro is active for this account."/>
+                <Button x:Name="CancelButton" Style="{StaticResource PaywallSecondaryButton}"
+                        Content="Not now" Click="Cancel_Click" IsCancel="True"
+                        Margin="0,8,0,0"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

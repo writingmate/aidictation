@@ -18,7 +18,6 @@ from urllib.parse import urlparse
 from validate_client_config import (
     AUTH_CONFIG_NAMES,
     ClientConfigurationError as ConfigurationError,
-    looks_like_placeholder,
     validate_client_configuration,
 )
 
@@ -39,11 +38,9 @@ PLIST_CONFIG_MAP = {
     "AUTH_WEB_URL": "AUTH_WEB_URL",
 }
 
-PAYMENT_CONFIG_NAMES = (
-    "STRIPE_PAYMENT_LINK",
-    "STRIPE_PAYMENT_LINK_MONTHLY",
-    "STRIPE_PAYMENT_LINK_ANNUAL",
-    "STRIPE_PAYMENT_LINK_LIFETIME",
+PURCHASE_CONFIG_NAMES = (
+    "REVENUECAT_GOOGLE_API_KEY",
+    "REVENUECAT_ENTITLEMENT_ID",
 )
 
 DEFAULTS = {
@@ -121,19 +118,7 @@ def canonical_auth_url(value: str) -> str:
     return value
 
 
-def valid_payment_link(value: str) -> bool:
-    parsed = urlparse(value)
-    path = parsed.path.lower()
-    return (
-        parsed.scheme == "https"
-        and parsed.hostname == "buy.stripe.com"
-        and bool(path.strip("/"))
-        and not path.startswith("/test_")
-        and not looks_like_placeholder(value)
-    )
-
-
-def resolved_configuration(plist: dict[str, str]) -> tuple[dict[str, str], int, int]:
+def resolved_configuration(plist: dict[str, str]) -> dict[str, str]:
     config = {
         target: plist.get(source, "")
         for target, source in PLIST_CONFIG_MAP.items()
@@ -169,23 +154,9 @@ def resolved_configuration(plist: dict[str, str]) -> tuple[dict[str, str], int, 
     )
     validate_client_configuration(config, required_names=required)
 
-    accepted_payment_links = 0
-    skipped_payment_links = 0
-    for name in PAYMENT_CONFIG_NAMES:
-        # An explicit empty environment value also prevents an old
-        # local.properties entry from re-enabling an unsafe checkout link.
-        config[name] = EMPTY_CONFIG_SENTINEL
-        explicit = os.environ.get(name, "").strip()
-        candidate = explicit or plist.get(name, "")
-        if not candidate:
-            continue
-        if valid_payment_link(candidate):
-            config[name] = candidate
-            accepted_payment_links += 1
-        else:
-            skipped_payment_links += 1
-
-    return config, accepted_payment_links, skipped_payment_links
+    config["REVENUECAT_GOOGLE_API_KEY"] = os.environ.get("REVENUECAT_GOOGLE_API_KEY", "").strip() or EMPTY_CONFIG_SENTINEL
+    config["REVENUECAT_ENTITLEMENT_ID"] = os.environ.get("REVENUECAT_ENTITLEMENT_ID", "pro").strip() or "pro"
+    return config
 
 
 def main() -> int:
@@ -195,7 +166,7 @@ def main() -> int:
         sdk_dir = require_directory(args.sdk_dir, "Android SDK")
         java_home = require_directory(args.java_home, "JDK")
         plist = load_plist(secrets_path)
-        config, accepted_links, skipped_links = resolved_configuration(plist)
+        config = resolved_configuration(plist)
     except ConfigurationError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return 2
@@ -209,7 +180,7 @@ def main() -> int:
         gradle_args.insert(0, "--no-daemon")
 
     child_env = os.environ.copy()
-    for name in (*PLIST_CONFIG_MAP, *PAYMENT_CONFIG_NAMES):
+    for name in (*PLIST_CONFIG_MAP, *PURCHASE_CONFIG_NAMES):
         child_env.pop(name, None)
     child_env.update(config)
     child_env["ANDROID_HOME"] = str(sdk_dir)
@@ -218,11 +189,7 @@ def main() -> int:
 
     print(f"Configuration source: {secrets_path}")
     print("Configured: cloud transcription, text cleanup, and sign-in")
-    if accepted_links or skipped_links:
-        print(
-            "Billing links: "
-            f"{accepted_links} production-looking accepted, {skipped_links} unsafe or placeholder skipped"
-        )
+    print("Purchases: RevenueCat configured" if config["REVENUECAT_GOOGLE_API_KEY"] != EMPTY_CONFIG_SENTINEL else "Purchases: not configured")
     sys.stdout.flush()
 
     completed = subprocess.run(

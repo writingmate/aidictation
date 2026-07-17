@@ -27,9 +27,14 @@ import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val ACTION_SHOW_UPGRADE_PAYWALL = "com.aidictation.app.action.SHOW_UPGRADE_PAYWALL"
+    }
+
     @Inject lateinit var authRepository: AuthRepository
 
     private var shouldStartRecording by mutableStateOf(false)
+    private var shouldShowUpgradePaywall by mutableStateOf(false)
     private var appAccentColor by mutableIntStateOf(OverlayBubblePreferences.DEFAULT_COLOR)
     private var overlayPreferenceListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
@@ -48,7 +53,9 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AIDictationNavHost(
                         shouldStartRecording = shouldStartRecording,
-                        onRecordingStarted = { shouldStartRecording = false }
+                        onRecordingStarted = { shouldStartRecording = false },
+                        shouldShowUpgradePaywall = shouldShowUpgradePaywall,
+                        onUpgradePaywallShown = { shouldShowUpgradePaywall = false }
                     )
                 }
             }
@@ -63,6 +70,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         appAccentColor = OverlayBubblePreferences.getResolvedBubbleColor(this)
+        lifecycleScope.launch {
+            authRepository.refreshRevenueCatEntitlement(force = true)
+        }
     }
 
     override fun onDestroy() {
@@ -77,11 +87,16 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == OverlayDictationAccessibilityService.ACTION_START_DICTATION) {
             shouldStartRecording = true
         }
+        if (intent?.action == ACTION_SHOW_UPGRADE_PAYWALL) {
+            shouldShowUpgradePaywall = true
+        }
         intent?.data?.let { uri ->
-            if (uri.scheme == "aidictation" && uri.host == "auth-callback") {
-                lifecycleScope.launch {
-                    authRepository.handleAuthCallback(uri)
-                }
+            if (
+                uri.scheme.equals("https", ignoreCase = true) &&
+                uri.host.equals("aidictation.com", ignoreCase = true) &&
+                uri.path == "/auth/android-callback"
+            ) {
+                authRepository.handleAuthCallback(uri)
             }
         }
     }

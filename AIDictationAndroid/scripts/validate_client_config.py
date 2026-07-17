@@ -17,6 +17,7 @@ RELEASE_REQUIRED_NAMES = (
     "TRANSCRIPTION_API_KEY",
     "AIDICTATION_POST_PROCESSING_KEY",
     *AUTH_CONFIG_NAMES,
+    "REVENUECAT_GOOGLE_API_KEY",
 )
 URL_CONFIG_NAMES = (
     "TRANSCRIPTION_ENDPOINT",
@@ -75,6 +76,21 @@ def validate_public_supabase_key(url: str, key: str) -> None:
         raise ClientConfigurationError("The Supabase URL and public key belong to different projects.")
 
 
+def validate_public_revenuecat_google_key(key: str) -> None:
+    if key.startswith(("sk_", "atk_")):
+        raise ClientConfigurationError(
+            "REVENUECAT_GOOGLE_API_KEY contains a privileged RevenueCat credential."
+        )
+    if key.startswith("test_"):
+        raise ClientConfigurationError(
+            "REVENUECAT_GOOGLE_API_KEY must not use a RevenueCat Test Store key in a release."
+        )
+    if not key.startswith("goog_") or len(key) <= len("goog_"):
+        raise ClientConfigurationError(
+            "REVENUECAT_GOOGLE_API_KEY must be the public Google Play SDK key (goog_…)."
+        )
+
+
 def validate_client_configuration(
     config: Mapping[str, str],
     required_names: Sequence[str] = RELEASE_REQUIRED_NAMES,
@@ -104,6 +120,10 @@ def validate_client_configuration(
 
     if auth_count == len(AUTH_CONFIG_NAMES):
         validate_public_supabase_key(values["SUPABASE_URL"], values["SUPABASE_ANON_KEY"])
+
+    revenuecat_key = values.get("REVENUECAT_GOOGLE_API_KEY", "")
+    if revenuecat_key:
+        validate_public_revenuecat_google_key(revenuecat_key)
 
 
 def main() -> int:

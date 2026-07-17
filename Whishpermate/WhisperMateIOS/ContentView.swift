@@ -7,6 +7,15 @@ import MediaPlayer
 import SwiftUI
 import WhisperMateShared
 
+private enum SettingsSheetDestination: String, Identifiable {
+    case paywall
+    #if DEBUG
+        case paywallValidation
+    #endif
+
+    var id: String { rawValue }
+}
+
 struct ContentView: View {
     @StateObject private var historyManager = HistoryManager()
     @StateObject private var dictionaryManager = DictionaryManager.shared
@@ -41,6 +50,7 @@ struct ContentView: View {
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
     @State private var showCloudTranscriptionConsent = false
     @State private var keyboardCommandPollTask: Task<Void, Never>?
+    @State private var settingsSheetDestination: SettingsSheetDestination?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -55,6 +65,10 @@ struct ContentView: View {
                 #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-showAccountLoginForValidation") {
                         showLoginSheet = true
+                    }
+                    if ProcessInfo.processInfo.arguments.contains("-showPaywallForValidation") {
+                        showSettings = true
+                        settingsSheetDestination = .paywallValidation
                     }
                 #endif
             }
@@ -91,6 +105,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showLoginSheet) {
                 AccountLoginView(authManager: authManager)
+            }
+            .sheet(isPresented: $subscriptionManager.showUpgradeModal) {
+                RevenueCatPaywallView()
             }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
                 if canDownloadOfflineModelFromAlert {
@@ -625,6 +642,14 @@ struct ContentView: View {
                     )
 
                     if authManager.isAuthenticated {
+                        if authManager.currentUser?.subscriptionTier.isPaid != true {
+                            Button {
+                                settingsSheetDestination = .paywall
+                            } label: {
+                                Label("Upgrade to Pro", systemImage: "sparkles")
+                            }
+                        }
+
                         Button(role: .destructive) {
                             Task {
                                 await authManager.logout()
@@ -746,6 +771,16 @@ struct ContentView: View {
             .navigationTitle("Settings")
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .sheet(item: $settingsSheetDestination) { destination in
+            switch destination {
+            case .paywall:
+                RevenueCatPaywallView()
+            #if DEBUG
+                case .paywallValidation:
+                    RevenueCatPaywallView.validationPreview()
+            #endif
+            }
+        }
     }
 
     // MARK: - Permission Helpers
@@ -2074,7 +2109,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             DebugLog.info("inline start blocked by subscription reason=\(access.reason ?? "nil")", context: "KEYBOARD_DIAG")
-            showError(access.reason ?? "Log in to continue transcribing.")
+            handleTranscriptionLimit(access.reason)
             return
         }
 
@@ -2197,7 +2232,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             try? FileManager.default.removeItem(at: audioURL)
-            showError(access.reason ?? "Log in to continue transcribing.")
+            handleTranscriptionLimit(access.reason)
             return
         }
 
@@ -2248,6 +2283,11 @@ private final class InlineRecordingCoordinator: ObservableObject {
             try? FileManager.default.removeItem(at: audioURL)
             showError("Transcription failed. Please try again.")
         }
+    }
+
+    private func handleTranscriptionLimit(_ reason: String?) {
+        showError(reason ?? "Log in to continue transcribing.")
+        subscriptionManager.openUpgradeAfterLimit()
     }
 
     private func validateRecordingForTranscription(_ audioURL: URL, recordingStartTime: Date?) -> Bool {

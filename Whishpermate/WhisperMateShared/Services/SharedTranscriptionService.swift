@@ -94,14 +94,20 @@ public enum SharedTranscriptionService {
 
         let dictionaryHints = dictionaryManager.transcriptionHints
         if !dictionaryHints.isEmpty {
-            sttPromptComponents.append("Vocabulary: \(dictionaryHints)")
-            postProcessingPromptComponents.append("Vocabulary: \(dictionaryHints)")
+            sttPromptComponents.append(dictionaryHints)
         }
 
         let shortcutHints = shortcutManager.transcriptionHints
         if !shortcutHints.isEmpty {
-            sttPromptComponents.append("Phrases: \(shortcutHints)")
-            postProcessingPromptComponents.append("Phrases: \(shortcutHints)")
+            sttPromptComponents.append(shortcutHints)
+        }
+
+        if let instructions = dictionaryManager.formattingInstructions {
+            postProcessingPromptComponents.append(instructions)
+        }
+
+        if let instructions = shortcutManager.formattingInstructions {
+            postProcessingPromptComponents.append(instructions)
         }
 
         if let selectedPreset, !selectedPreset.isNotesModeRule, !selectedPreset.isMeetingsModeRule {

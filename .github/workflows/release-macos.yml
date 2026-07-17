@@ -82,6 +82,7 @@ jobs:
 
       - name: Validate release transcription secret
         run: |
+          python3 scripts/validate_transcription_prompt_routing.py
           python3 scripts/validate_release_transcription_config.py \
             --secrets Whishpermate/Whispermate/Secrets.plist \
             --config-only

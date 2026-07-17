@@ -94,12 +94,12 @@ public enum SharedTranscriptionService {
 
         let dictionaryHints = dictionaryManager.transcriptionHints
         if !dictionaryHints.isEmpty {
-            sttPromptComponents.append("Vocabulary: \(dictionaryHints)")
+            sttPromptComponents.append(dictionaryHints)
         }
 
         let shortcutHints = shortcutManager.transcriptionHints
         if !shortcutHints.isEmpty {
-            sttPromptComponents.append("Phrases: \(shortcutHints)")
+            sttPromptComponents.append(shortcutHints)
         }
 
         if let instructions = dictionaryManager.formattingInstructions {

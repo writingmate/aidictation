@@ -836,10 +836,10 @@ class AppState: ObservableObject {
         var promptComponents: [String] = []
 
         if !dictionaryManager.transcriptionHints.isEmpty {
-            promptComponents.append("Vocabulary: \(dictionaryManager.transcriptionHints)")
+            promptComponents.append(dictionaryManager.transcriptionHints)
         }
         if !shortcutManager.transcriptionHints.isEmpty {
-            promptComponents.append("Phrases: \(shortcutManager.transcriptionHints)")
+            promptComponents.append(shortcutManager.transcriptionHints)
         }
 
         return promptComponents

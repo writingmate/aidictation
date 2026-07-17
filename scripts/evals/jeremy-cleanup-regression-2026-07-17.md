@@ -48,6 +48,16 @@ the final text and both prompt payloads.
 5. Cleanup receives only generic cleanup instructions and explicit user-defined
    replacements or expansions.
 6. Production prompts contain no customer-specific terms or failure tokens.
+7. The recognition hint contains only dynamic user-provided terms, with no
+   hardcoded vocabulary or phrase label.
 
 This is a prompt-routing and prompt-quality eval. Do not satisfy it by deleting,
 truncating, replacing, or otherwise filtering model output after generation.
+
+## Prompt A/B evidence
+
+Using recognition only, the labeled vocabulary prompt truncated the tail in one
+of three fresh trials (492 bytes). A bare dynamic term list returned the same
+complete 861-byte transcript in all three trials. With that bare term list and
+no raw vocabulary in cleanup, both the current production cleanup prompt and the
+generic preview prompt retained the full tail without a repeated suffix.

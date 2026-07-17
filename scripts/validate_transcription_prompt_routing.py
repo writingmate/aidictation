@@ -30,10 +30,12 @@ if 'postProcessingPromptComponents.append("Vocabulary:' in shared_prompts:
     raise SystemExit("raw vocabulary is still routed to shared cleanup")
 if 'postProcessingPromptComponents.append("Phrases:' in shared_prompts:
     raise SystemExit("raw phrases are still routed to shared cleanup")
-if 'sttPromptComponents.append("Vocabulary:' not in shared_prompts:
+if "sttPromptComponents.append(dictionaryHints)" not in shared_prompts:
     raise SystemExit("shared recognition lost vocabulary hints")
-if 'sttPromptComponents.append("Phrases:' not in shared_prompts:
+if "sttPromptComponents.append(shortcutHints)" not in shared_prompts:
     raise SystemExit("shared recognition lost phrase hints")
+if '"Vocabulary:' in shared_prompts or '"Phrases:' in shared_prompts:
+    raise SystemExit("shared recognition prompt still contains hardcoded hint labels")
 
 cleanup_builder = function_body(
     app_state_source,
@@ -50,6 +52,8 @@ stt_builder = function_body(
 )
 if stt_builder.count("transcriptionHints") < 2:
     raise SystemExit("macOS recognition lost vocabulary or phrase hints")
+if '"Vocabulary:' in stt_builder or '"Phrases:' in stt_builder:
+    raise SystemExit("macOS recognition prompt still contains hardcoded hint labels")
 
 realtime_builder = function_body(
     app_state_source,

@@ -1,7 +1,6 @@
-AI Dictation is now available on the App Store.
+This update makes it clearer how AI Dictation works on iPhone.
 
-• Dictate in any app with the AI Dictation keyboard.
-• Choose private offline mode or cloud mode for extra cleanup and formatting.
-• Switch languages more reliably from the keyboard.
-• See when keyboard dictation is listening and stop it without leaving your current app.
-• Improved setup, sign-in, long dictation handling, and overall stability.
+• More accurate guidance for dictation from the keyboard and inside the app.
+• Clear explanations of offline speech recognition and optional cloud processing.
+• Better details for Dictation, Notes, and Meetings.
+• Updated information about personal vocabulary, voice shortcuts, history, and Live Activity status.

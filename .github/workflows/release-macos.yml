@@ -140,6 +140,11 @@ jobs:
             scripts/validate_text_insertion_formatter.swift \
             -o /tmp/validate_text_insertion_formatter
           /tmp/validate_text_insertion_formatter
+          swiftc \
+            Whishpermate/WhisperMateShared/Services/TranscriptionTextSanitizer.swift \
+            scripts/validate_post_processing_output.swift \
+            -o /tmp/validate_post_processing_output
+          /tmp/validate_post_processing_output
           swift scripts/validate_parakeet_runtime.swift "$APP"
 
       - name: Notarize app

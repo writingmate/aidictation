@@ -1,27 +1,41 @@
-AI Dictation turns your voice into clean text anywhere you type on Android.
+Keep the keyboard you already use. Add fast voice typing with a floating mic.
 
-Tap into a text field, use the floating mic, and speak naturally. AI Dictation records your speech, transcribes it, and places the finished text where you need it.
+AI Dictation is a speech-to-text app for Android that helps you write in messages, email, notes, documents, and web forms. When an editable text field is active, tap the floating microphone, speak naturally, and place the finished text at your cursor.
 
-Built for everyday writing:
-- Fast voice-to-text dictation for messages, notes, email, documents, and web forms
-- Floating microphone bubble that appears when text input is focused
-- Optional offline transcription for speech processing on your device
-- Cloud transcription for accurate speech recognition when you want it
-- AI cleanup for punctuation, formatting, and cleaner prose
-- Custom dictionary entries for names, technical terms, and repeated phrases
-- Context rules so dictation can adapt to different apps and writing styles
-- Voice shortcuts for frequently used text expansions
-- History view for recent recordings and generated text
+VOICE TYPING IN THE APPS YOU USE
 
-Privacy-minded by design:
-- The floating mic stays hidden in password and secure fields
-- On-device transcription can keep speech processing local
-- Cloud transcription is used only when enabled or required by your settings
-- Recordings are temporary unless saved in your local history
+• Keep using your regular Android keyboard
+• Tap the floating mic when a text field is active
+• Insert dictated text at the cursor or replace selected text
+• Select text to fix grammar or rewrite it with AI
+• Choose from 60+ languages for transcription
 
-AccessibilityService disclosure:
-AI Dictation uses Android AccessibilityService to provide dictation in other apps. With your permission, it detects when an editable text field is focused, shows the floating microphone, reads the current text and cursor position in the active field, and inserts or replaces dictated text only when you start dictation or apply a command. AI Dictation does not use AccessibilityService to read passwords, payment fields, or secure screens, and it does not use this access for unrelated tracking or background monitoring.
+OFFLINE AND CLOUD OPTIONS
 
-AI Dictation is useful for people who write a lot from thought: product managers drafting specs, developers writing notes, founders replying to customers, students capturing ideas, and anyone who wants to type less.
+Download the optional offline model for on-device speech recognition. Cloud transcription and AI writing actions are available when you want additional cleanup, formatting, or rewriting. When you use a cloud feature, the audio or relevant text needed to complete that action is sent for processing.
 
-Speak naturally. Get polished text. Keep writing.
+PERSONALIZE YOUR DICTATION
+
+Cloud features can use:
+
+• Dictionary hints for names and specialized terms
+• Context rules for different apps and writing styles
+• Spoken shortcuts that expand into text you use often
+• Automatic punctuation and formatting
+
+RECORD AND REVIEW IN THE APP
+
+Record directly in AI Dictation when you want to keep a local history. Review your transcript, replay the saved recording, and return to previous in-app recordings later. Audio captured through the floating mic is removed after processing and is not added to this history.
+
+WHY ACCESSIBILITY ACCESS IS NEEDED
+
+AI Dictation uses Android AccessibilityService so the floating mic can work with text fields in other apps. With your permission, it detects editable fields and selection state, shows the mic, inserts dictated text, and offers writing actions for selected text. The floating mic is not shown in password fields. This access is used to provide the dictation and editing features you request.
+
+GET STARTED
+
+1. Open AI Dictation and follow the setup guide.
+2. Allow microphone access and enable AI Dictation in Accessibility settings.
+3. Tap a text field in another app.
+4. Use the floating mic and start speaking.
+
+Speak naturally, type less, and keep your regular keyboard.

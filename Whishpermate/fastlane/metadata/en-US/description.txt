@@ -1,37 +1,40 @@
-Speak naturally. Get clean, useful text wherever you type.
+Turn your voice into useful text on your iPhone.
 
-AI Dictation is a voice-to-text app and keyboard for iPhone and iPad. Use your voice for messages, email, notes, documents, and any other app with a text field.
+AI Dictation is a voice-to-text app and keyboard for messages, email, notes, documents, and longer recordings. Start from the keyboard in apps that support third-party keyboards, or record directly in AI Dictation, then insert, copy, or share the finished text.
 
-DICTATE IN ANY APP
+DICTATE WITH LESS TYPING
 
-Enable the AI Dictation keyboard once, then use it anywhere you normally type. Tap the microphone, speak naturally, and continue with text that is ready to use.
+Open a text field, switch to the AI Dictation keyboard, and start speaking. Your finished transcription is ready to insert where you were writing.
 
-OFFLINE OR CLOUD — YOU CHOOSE
+CHOOSE HOW YOUR SPEECH IS PROCESSED
 
-Use offline mode when you want transcription to stay on your device or when you do not have a connection. Choose cloud mode when you want additional cleanup and formatting. AI Dictation asks before sending audio for cloud transcription.
+Use Cloud, Offline, or Automatic mode. On iOS 17 and later, you can download the offline model for on-device speech recognition. Cloud transcription sends audio only after you give permission. Optional cloud formatting may send the transcript to organize or clean up the result, even when speech recognition runs offline.
 
-CLEANER WRITING FROM NATURAL SPEECH
+MORE THAN BASIC VOICE TYPING
 
-AI Dictation adds punctuation and turns rough speech into readable text. Spend less time fixing filler words, sentence breaks, and formatting after you dictate.
+Choose the result that fits what you are recording:
 
-BUILT FOR THE WAY YOU WRITE
+• Dictation for direct speech-to-text
+• Notes for structured ideas and action items
+• Meetings for summaries, speaker labels, timestamps, and action items
 
-• Dictate messages, email, notes, and longer drafts
-• Choose from a broad set of languages
+MAKE IT YOURS
+
 • Add names and specialized terms to your personal dictionary
-• Use context rules to shape the result for different writing situations
-• Review, copy, and share previous transcriptions
-• Keep keyboard recording status visible while you work
+• Create voice shortcuts for text you use often
+• Search your recent transcription history
+• Replay locally saved recordings
+• Copy or share previous results
 
-PRIVATE WHEN IT MATTERS
+KEEP TRACK WHILE YOU DICTATE
 
-Offline mode processes transcription on your device. Cloud mode is optional and clearly identified, so you can choose the right mode for each conversation or draft.
+On iOS 17 and later, a Live Activity shows when AI Dictation is listening or processing and gives you a quick way to stop.
 
-GET STARTED IN MINUTES
+GET STARTED
 
 1. Open AI Dictation and follow the setup guide.
 2. Enable the AI Dictation keyboard in Settings.
-3. Choose offline mode or cloud mode.
-4. Open any text field, switch to AI Dictation, and start speaking.
+3. Choose Cloud, Offline, or Automatic mode.
+4. Open a supported text field, switch keyboards, and start speaking.
 
-Whether you are replying to a message, capturing an idea, or drafting something longer, AI Dictation helps your words keep up with your thoughts.
+Whether you are replying to a message, capturing an idea, or turning a longer conversation into notes, AI Dictation helps your words keep up with your thoughts.

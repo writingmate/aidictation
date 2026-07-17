@@ -819,12 +819,6 @@ class AppState: ObservableObject {
     private func buildTranscriptionPromptComponents() -> [String] {
         var promptComponents: [String] = []
 
-        if !dictionaryManager.transcriptionHints.isEmpty {
-            promptComponents.append("Vocabulary: \(dictionaryManager.transcriptionHints)")
-        }
-        if !shortcutManager.transcriptionHints.isEmpty {
-            promptComponents.append("Phrases: \(shortcutManager.transcriptionHints)")
-        }
         if let instructions = dictionaryManager.formattingInstructions {
             promptComponents.append(instructions)
         }
@@ -852,7 +846,7 @@ class AppState: ObservableObject {
     }
 
     private func buildRealtimePrompt() -> String {
-        buildTranscriptionPromptComponents().joined(separator: "\n")
+        buildSTTHintPromptComponents().joined(separator: "\n")
     }
 
     private func singleAPILanguageCode() -> String? {
@@ -1301,12 +1295,6 @@ class AppState: ObservableObject {
 
         // Build context rules (same as transcription)
         var contextRules: [String] = []
-        if !dictionaryManager.transcriptionHints.isEmpty {
-            contextRules.append("Vocabulary: \(dictionaryManager.transcriptionHints)")
-        }
-        if !shortcutManager.transcriptionHints.isEmpty {
-            contextRules.append("Phrases: \(shortcutManager.transcriptionHints)")
-        }
         if let instructions = dictionaryManager.formattingInstructions {
             contextRules.append(instructions)
         }

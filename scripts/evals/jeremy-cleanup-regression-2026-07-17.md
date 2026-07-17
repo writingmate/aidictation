@@ -1,0 +1,41 @@
+# Cloud cleanup regression eval (2026-07-17)
+
+Keep this customer-provided audio in the private eval store; do not add it to
+the public repository.
+
+## Recording identity
+
+- Original filename: `recording_1784308821.162277 (1).m4a`
+- SHA-256: `664c0e0d793bcdc01a68851c2da54c8627bfd9b3d987cff84b70adbe3179d3e0`
+- Size: 574,812 bytes
+- Duration: 66.362630 seconds
+- Audio: AAC, mono, 44.1 kHz
+
+## Reported result
+
+The returned text ended after "sell it" with `Volac` repeated five times. The
+recording contains about 24 more seconds of speech concerning reuse of a sales
+page or pitch sequencing, standalone use, and integration into an existing
+program.
+
+The request also supplied the same raw custom-vocabulary list to recognition
+and cleanup.
+
+## Eval setup
+
+Run the complete recording through cloud mode with cleanup enabled and a
+non-empty custom vocabulary. Use the production model and temperature. Inspect
+the final text and both prompt payloads.
+
+## Pass criteria
+
+1. The final text retains the speech after "sell it".
+2. The final text has no invented repeated-token or repeated-phrase suffix.
+3. The final text does not echo a vocabulary or phrase list.
+4. Raw vocabulary and phrase lists appear only in the recognition prompt.
+5. Cleanup receives only generic cleanup instructions and explicit user-defined
+   replacements or expansions.
+6. Production prompts contain no customer-specific terms or failure tokens.
+
+This is a prompt-routing and prompt-quality eval. Do not satisfy it by deleting,
+truncating, replacing, or otherwise filtering model output after generation.

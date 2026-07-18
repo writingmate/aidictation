@@ -255,13 +255,25 @@ $$;
 
 
 def wait_until_ready() -> None:
-    for _ in range(40):
-        result = subprocess.run(
+    # The official image briefly accepts connections on its temporary setup
+    # server, then restarts Postgres. Wait for that setup phase to finish before
+    # trusting pg_isready so CI cannot connect during the restart handoff.
+    for _ in range(80):
+        logs = subprocess.run(
+            ["docker", "logs", CONTAINER_NAME],
+            text=True,
+            capture_output=True,
+        )
+        initialization_complete = (
+            "PostgreSQL init process complete; ready for start up."
+            in f"{logs.stdout}\n{logs.stderr}"
+        )
+        readiness = subprocess.run(
             ["docker", "exec", CONTAINER_NAME, "pg_isready", "-U", "postgres"],
             text=True,
             capture_output=True,
         )
-        if result.returncode == 0:
+        if initialization_complete and readiness.returncode == 0:
             return
         time.sleep(0.25)
     raise RuntimeError("Disposable Postgres did not become ready")

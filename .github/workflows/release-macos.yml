@@ -98,6 +98,8 @@ jobs:
               and len(path_segments) == 2
               and path_segments[0] == ""
               and bool(path_segments[1])
+              and path_segments[1] not in {".", ".."}
+              and "\\" not in path_segments[1]
               and not parsed.query
               and not parsed.fragment
           )

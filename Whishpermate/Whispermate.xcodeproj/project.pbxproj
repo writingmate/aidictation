@@ -28,6 +28,8 @@
 		D7A900012F72000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D7A900012F72000100000002 /* AppIntents.framework */; };
 		D800E78DFFA88DCED50EE9F9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC33D501A203B8AEFB7871DF /* Foundation.framework */; };
 		E4C400032F90000100000003 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = E4C400022F90000100000002 /* RevenueCat */; };
+		A9C100072FA0000100000007 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
+		A9C100082FA0000100000008 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = E4C400022F90000100000002 /* RevenueCat */; };
 		DA93F0D2F436F9AF6A241959 /* WhisperMateLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DBA987B2CD71DDC4710889EA /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -56,6 +58,13 @@
 			remoteInfo = ParakeetRuntime;
 		};
 		446CE3EEF1BCA2448C732847 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C1E7D2AC2EBA925200A07338;
+			remoteInfo = WhisperMateShared;
+		};
+		A9C1000A2FA000010000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C18566CB2EA0D31000B46F55 /* Project object */;
 			proxyType = 1;
@@ -155,6 +164,7 @@
 		C1CE64402ED8417000D24235 /* WhisperMateIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperMateIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WhisperMateShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A9C100022FA0000100000002 /* WhisperMateSharedContractTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhisperMateSharedContractTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionFlowRuntimeBridge.swift; sourceTree = "<group>"; };
 		D1B200012F65000200000002 /* PermissionFlowRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = PermissionFlowRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -206,6 +216,13 @@
 			path = WhisperMateShared;
 			sourceTree = "<group>";
 		};
+		A9C100032FA0000100000003 /* WhisperMateSharedContractTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
+			path = WhisperMateSharedContractTests;
+			sourceTree = "<group>";
+		};
 		C1E7D2EF2EBA92A500A07338 /* WhisperMateIOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -250,6 +267,15 @@
 				C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */,
 				C12A3A142ED4D0AA002D97E6 /* Auth in Frameworks */,
 				C12A3A102ED4CFAA002D97E6 /* Supabase in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A9C100052FA0000100000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A9C100072FA0000100000007 /* WhisperMateShared.framework in Frameworks */,
+				A9C100082FA0000100000008 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -328,6 +354,7 @@
 			children = (
 				C18566D52EA0D31000B46F55 /* Whispermate */,
 				C1E7D2AE2EBA925200A07338 /* WhisperMateShared */,
+				A9C100032FA0000100000003 /* WhisperMateSharedContractTests */,
 				C1E7D2EF2EBA92A500A07338 /* WhisperMateIOS */,
 				C1E7D3062EBA92C900A07338 /* WhisperMateKeyboard */,
 				C12A3A0E2ED4CFAA002D97E6 /* Frameworks */,
@@ -341,6 +368,7 @@
 				AE72061A8B5F2469574714D4 /* ParakeetRuntime */,
 				B55B10012F65000200000006 /* PermissionFlowRuntime */,
 				D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */,
+				A9C100022FA0000100000002 /* WhisperMateSharedContractTests.xctest */,
 				F1D579F6CC1A6C2F5518960B /* WhisperMateLiveActivity */,
 			);
 			sourceTree = "<group>";
@@ -479,6 +507,30 @@
 			productReference = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */;
 			productType = "com.apple.product-type.framework";
 		};
+		A9C100012FA0000100000001 /* WhisperMateSharedContractTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A9C1000B2FA000010000000B /* Build configuration list for PBXNativeTarget "WhisperMateSharedContractTests" */;
+			buildPhases = (
+				A9C100042FA0000100000004 /* Sources */,
+				A9C100052FA0000100000005 /* Frameworks */,
+				A9C100062FA0000100000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A9C100092FA0000100000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A9C100032FA0000100000003 /* WhisperMateSharedContractTests */,
+			);
+			name = WhisperMateSharedContractTests;
+			packageProductDependencies = (
+				E4C400022F90000100000002 /* RevenueCat */,
+			);
+			productName = WhisperMateSharedContractTests;
+			productReference = A9C100022FA0000100000002 /* WhisperMateSharedContractTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		C1E7D2ED2EBA92A500A07338 /* WhisperMateIOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C1E7D2F62EBA92A600A07338 /* Build configuration list for PBXNativeTarget "WhisperMateIOS" */;
@@ -565,6 +617,9 @@
 					C1E7D2AC2EBA925200A07338 = {
 						CreatedOnToolsVersion = 26.1;
 					};
+					A9C100012FA0000100000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
 					C1E7D2ED2EBA92A500A07338 = {
 						CreatedOnToolsVersion = 26.1;
 					};
@@ -596,6 +651,7 @@
 			targets = (
 				C18566D22EA0D31000B46F55 /* Whispermate */,
 				C1E7D2AC2EBA925200A07338 /* WhisperMateShared */,
+				A9C100012FA0000100000001 /* WhisperMateSharedContractTests */,
 				C1E7D2ED2EBA92A500A07338 /* WhisperMateIOS */,
 				C1E7D3042EBA92C900A07338 /* WhisperMateKeyboard */,
 				75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */,
@@ -629,6 +685,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C1E7D2AB2EBA925200A07338 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A9C100062FA0000100000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -714,6 +777,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A9C100042FA0000100000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C1E7D2EA2EBA92A500A07338 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -768,6 +838,12 @@
 			name = WhisperMateShared;
 			target = C1E7D2AC2EBA925200A07338 /* WhisperMateShared */;
 			targetProxy = 446CE3EEF1BCA2448C732847 /* PBXContainerItemProxy */;
+		};
+		A9C100092FA0000100000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = WhisperMateShared;
+			target = C1E7D2AC2EBA925200A07338 /* WhisperMateShared */;
+			targetProxy = A9C1000A2FA000010000000A /* PBXContainerItemProxy */;
 		};
 		C1E7D30B2EBA92C900A07338 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1413,6 +1489,52 @@
 			};
 			name = Release;
 		};
+		A9C1000C2FA000010000000C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared.contracttests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphonesimulator macosx";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A9C1000D2FA000010000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared.contracttests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphonesimulator macosx";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1448,6 +1570,15 @@
 			buildConfigurations = (
 				C1E7D2B32EBA925200A07338 /* Debug */,
 				C1E7D2B42EBA925200A07338 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A9C1000B2FA000010000000B /* Build configuration list for PBXNativeTarget "WhisperMateSharedContractTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A9C1000C2FA000010000000C /* Debug */,
+				A9C1000D2FA000010000000D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -22,6 +22,7 @@ playAssetDelivery = "2.3.0"
 litert = "2.0.3"
 gradlePlayPublisher = "3.13.0"
 revenueCat = "9.23.1"
+junit = "4.13.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -73,6 +74,7 @@ onnx-runtime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-androi
 play-asset-delivery = { group = "com.google.android.play", name = "asset-delivery", version.ref = "playAssetDelivery" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 revenuecat-purchases = { group = "com.revenuecat.purchases", name = "purchases", version.ref = "revenueCat" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

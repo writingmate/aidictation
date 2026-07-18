@@ -221,37 +221,14 @@ public partial class AuthService : ObservableObject
             return false;
         }
 
-        if (!Uri.TryCreate(link, UriKind.Absolute, out var purchaseLink))
+        if (!RevenueCatCheckoutLink.TryCreateCheckoutUri(
+                link,
+                CurrentUser.UserId,
+                CurrentUser.Email,
+                out var checkoutUri) ||
+            checkoutUri == null)
         {
             Debug.WriteLine("[AuthService] Checkout handoff failed: purchase link is invalid");
-            errorMessage = "Checkout isn’t available right now. Please try again later.";
-            return false;
-        }
-
-        var pathSegments = purchaseLink.AbsolutePath.Split('/', StringSplitOptions.None);
-        if (purchaseLink.Scheme != Uri.UriSchemeHttps ||
-            !purchaseLink.Host.Equals("pay.rev.cat", StringComparison.OrdinalIgnoreCase) ||
-            !purchaseLink.IsDefaultPort ||
-            !string.IsNullOrEmpty(purchaseLink.UserInfo) ||
-            !string.IsNullOrEmpty(purchaseLink.Query) ||
-            !string.IsNullOrEmpty(purchaseLink.Fragment) ||
-            pathSegments.Length != 2 ||
-            !string.IsNullOrEmpty(pathSegments[0]) ||
-            string.IsNullOrEmpty(pathSegments[1]))
-        {
-            Debug.WriteLine("[AuthService] Checkout handoff failed: purchase link is invalid");
-            errorMessage = "Checkout isn’t available right now. Please try again later.";
-            return false;
-        }
-
-        var urlString =
-            $"{purchaseLink.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(CurrentUser.UserId.ToString().ToLowerInvariant())}" +
-            $"?email={Uri.EscapeDataString(CurrentUser.Email)}";
-
-        if (!Uri.TryCreate(urlString, UriKind.Absolute, out var checkoutUri) ||
-            checkoutUri.Scheme != Uri.UriSchemeHttps)
-        {
-            Debug.WriteLine("[AuthService] Checkout handoff failed: generated URL is invalid");
             errorMessage = "Checkout isn’t available right now. Please try again later.";
             return false;
         }

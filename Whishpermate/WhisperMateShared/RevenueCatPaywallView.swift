@@ -332,27 +332,16 @@ public struct RevenueCatPaywallView: View {
         purchaseManager.clearError()
 
         let options = await purchaseManager.fetchAvailablePurchaseOptions()
-        availableOptions = options.sorted { optionRank($0.period) < optionRank($1.period) }
+        availableOptions = RevenueCatPaywallContract.orderedOptions(options)
 
-        let periods = availableOptions.map(\.period)
-        if periods.contains(.annual) {
-            selectedPeriod = .annual
-        } else if let first = periods.first {
-            selectedPeriod = first
+        if let preferredPeriod = RevenueCatPaywallContract.preferredPeriod(in: availableOptions) {
+            selectedPeriod = preferredPeriod
         }
 
         if availableOptions.isEmpty {
             loadErrorMessage = purchaseManager.errorMessage ?? "Checkout isn’t available right now. Please try again later."
         }
         isLoading = false
-    }
-
-    private func optionRank(_ period: RevenueCatBillingPeriod) -> Int {
-        switch period {
-        case .annual: return 0
-        case .monthly: return 1
-        case .lifetime: return 2
-        }
     }
 
     private func confirmPurchase() {

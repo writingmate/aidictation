@@ -19,10 +19,8 @@ import com.revenuecat.purchases.awaitPurchase
 import com.revenuecat.purchases.awaitRestore
 import com.revenuecat.purchases.getOfferingsWith
 import com.revenuecat.purchases.interfaces.UpdatedCustomerInfoListener
-import com.revenuecat.purchases.models.Period
 import com.whispermate.aidictation.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -373,29 +371,22 @@ class RevenueCatPurchaseManager @Inject constructor(
 
     private fun entitlementState(customerInfo: CustomerInfo): RevenueCatEntitlement {
         val entitlement = customerInfo.entitlements[BuildConfig.REVENUECAT_ENTITLEMENT_ID]
-            ?.takeIf { it.isActive } ?: return RevenueCatEntitlement.Inactive
-        val status = if (entitlement.expirationDate == null) {
-            "lifetime"
-        } else {
-            "pro"
-        }
+            ?: return RevenueCatEntitlement.Inactive
+        val status = activeSubscriptionStatus(
+            isActive = entitlement.isActive,
+            hasExpirationDate = entitlement.expirationDate != null
+        ) ?: return RevenueCatEntitlement.Inactive
         return RevenueCatEntitlement.Active(status)
     }
 
     private fun monthlyPackage(offerings: Offerings): Package? {
         val current = offerings.current ?: return null
-        return current.monthly ?: current.availablePackages.firstOrNull { packageOption ->
-            val period = packageOption.product.period
-            period?.unit == Period.Unit.MONTH && period.value == 1
+        return selectMonthlyPackage(
+            configuredMonthlyPackage = current.monthly,
+            availablePackages = current.availablePackages
+        ) { packageOption ->
+            packageOption.product.period
         }
-    }
-
-    private fun normalizeSupabaseUserID(userID: String): Result<String> {
-        val candidate = userID.trim()
-        if (!SUPABASE_UUID.matches(candidate)) {
-            return Result.failure(IllegalArgumentException("The account identifier is not a Supabase UUID."))
-        }
-        return runCatching { UUID.fromString(candidate).toString() }
     }
 
     private fun requireCurrentUser(purchases: Purchases, expectedUserID: String) {
@@ -424,8 +415,5 @@ class RevenueCatPurchaseManager @Inject constructor(
 
     private companion object {
         const val IDENTITY_TIMEOUT_MS = 10_000L
-        val SUPABASE_UUID = Regex(
-            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-        )
     }
 }

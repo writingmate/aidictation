@@ -12,6 +12,7 @@ on:
     branches: [ main ]
     paths:
       - 'AIDictation.Windows/**'
+      - '.github/workflows/windows-build.yml'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +21,7 @@ permissions:
 env:
   DOTNET_VERSION: '8.0.x'
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
+  CHECKOUT_TEST_PROJECT_PATH: 'AIDictation.Windows/AIDictation.CheckoutContractTests/AIDictation.CheckoutContractTests.csproj'
   PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
   INSTALLER_DIR: 'AIDictation.Windows/artifacts/installer'
   # Backend configuration baked into the build via AssemblyMetadata (see csproj).
@@ -59,17 +61,23 @@ jobs:
           throw "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
         }
         $pathSegments = @($uri.AbsolutePath -split '/')
+        $escapedPath = $uri.GetComponents([UriComponents]::Path, [UriFormat]::UriEscaped)
         if ($uri.Scheme -ne "https" -or
             $uri.Host -ne "pay.rev.cat" -or
             -not $uri.IsDefaultPort -or
+            -not [string]::Equals($env:REVENUECAT_WEB_PURCHASE_LINK, $uri.AbsoluteUri, [StringComparison]::OrdinalIgnoreCase) -or
             -not [string]::IsNullOrEmpty($uri.UserInfo) -or
             -not [string]::IsNullOrEmpty($uri.Query) -or
             -not [string]::IsNullOrEmpty($uri.Fragment) -or
+            $escapedPath -match '(?i)%2f|%5c' -or
             $pathSegments.Count -ne 2 -or
             -not [string]::IsNullOrEmpty($pathSegments[0]) -or
             [string]::IsNullOrEmpty($pathSegments[1])) {
           throw "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
         }
+
+    - name: Test hosted checkout contract
+      run: dotnet test ${{ env.CHECKOUT_TEST_PROJECT_PATH }} --configuration Release
 
     - name: Restore dependencies
       run: dotnet restore ${{ env.PROJECT_PATH }}

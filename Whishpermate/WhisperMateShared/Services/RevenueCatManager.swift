@@ -113,7 +113,7 @@ public final class RevenueCatManager: NSObject, ObservableObject {
         guard !isConfigured else { return }
         #if os(macOS)
             guard let purchaseLink = SecretsLoader.getValue(for: "REVENUECAT_WEB_PURCHASE_LINK"),
-                  validatedWebPurchaseLink(purchaseLink) != nil
+                  RevenueCatPurchaseContract.validatedWebPurchaseLink(purchaseLink) != nil
             else {
                 DebugLog.warning("Purchases are not configured in this build", context: "RevenueCat")
                 return
@@ -122,7 +122,7 @@ public final class RevenueCatManager: NSObject, ObservableObject {
             return
         #else
         guard let apiKey = SecretsLoader.getValue(for: "REVENUECAT_APPLE_API_KEY"),
-              isPublicAppleSDKKey(apiKey)
+              RevenueCatPurchaseContract.isPublicAppleSDKKey(apiKey)
         else {
             DebugLog.warning("Purchases are not configured in this build", context: "RevenueCat")
             return
@@ -249,28 +249,14 @@ public final class RevenueCatManager: NSObject, ObservableObject {
 
         #if os(macOS)
             guard let baseLink = SecretsLoader.getValue(for: "REVENUECAT_WEB_PURCHASE_LINK"),
-                  let validatedBaseURL = validatedWebPurchaseLink(baseLink),
-                  var components = URLComponents(
-                      url: validatedBaseURL
-                          .appendingPathComponent(user.userId.uuidString.lowercased()),
-                      resolvingAgainstBaseURL: false
+                  let url = RevenueCatPurchaseContract.hostedCheckoutURL(
+                      baseLink: baseLink,
+                      userID: user.userId,
+                      email: user.email,
+                      period: period
                   )
             else {
                 errorMessage = "Checkout isn’t available right now. Please try again later."
-                return false
-            }
-            let packageID: String
-            switch period {
-            case .monthly: packageID = "$rc_monthly"
-            case .annual: packageID = "$rc_annual"
-            case .lifetime: packageID = "$rc_lifetime"
-            }
-            components.queryItems = [
-                URLQueryItem(name: "email", value: user.email),
-                URLQueryItem(name: "package_id", value: packageID),
-            ]
-            guard let url = components.url else {
-                errorMessage = "The purchase page could not be opened."
                 return false
             }
             guard NSWorkspace.shared.open(url) else {
@@ -303,12 +289,7 @@ public final class RevenueCatManager: NSObject, ObservableObject {
                     guard let offering = offerings.current else {
                         throw RevenueCatManagerError.noOffering
                     }
-                    let package: Package?
-                    switch period {
-                    case .monthly: package = offering.monthly
-                    case .annual: package = offering.annual
-                    case .lifetime: package = offering.lifetime
-                    }
+                    let package = RevenueCatPurchaseContract.package(in: offering, for: period)
                     guard let package else { throw RevenueCatManagerError.noPackage }
                     guard await AuthManager.shared.hasActiveSession(for: user.userId),
                           hasExactIdentity(for: user)
@@ -466,10 +447,6 @@ public final class RevenueCatManager: NSObject, ObservableObject {
     }
 
     #if !os(macOS)
-    private func isPublicAppleSDKKey(_ key: String) -> Bool {
-        key.hasPrefix("appl_") && key.count > "appl_".count
-    }
-
     private func prepareIdentityForPurchaseWhileHoldingLease(_ user: User) async -> Bool {
         guard await AuthManager.shared.hasActiveSession(for: user.userId) else {
             errorMessage = "Your account could not be verified for this purchase. Please try again."
@@ -507,9 +484,10 @@ public final class RevenueCatManager: NSObject, ObservableObject {
 
     private func entitlementStatus(from customerInfo: CustomerInfo) -> RevenueCatEntitlementStatus {
         let entitlementID = SecretsLoader.getValue(for: "REVENUECAT_ENTITLEMENT_ID") ?? "pro"
-        let entitlement = customerInfo.entitlements.all[entitlementID]
-        guard entitlement?.isActive == true else { return .inactive }
-        return entitlement?.expirationDate == nil ? .lifetime : .pro
+        return RevenueCatPurchaseContract.entitlementStatus(
+            from: customerInfo,
+            entitlementID: entitlementID
+        )
     }
 
     private func acquireIdentityLease() async {
@@ -572,32 +550,6 @@ public final class RevenueCatManager: NSObject, ObservableObject {
     }
     #endif
 
-    #if os(macOS)
-    private func validatedWebPurchaseLink(_ value: String) -> URL? {
-        guard let components = URLComponents(string: value) else {
-            return nil
-        }
-        let pathSegments = components.path.split(
-            separator: "/",
-            omittingEmptySubsequences: false
-        )
-        guard components.scheme?.lowercased() == "https",
-              components.host?.lowercased() == "pay.rev.cat",
-              components.user == nil,
-              components.password == nil,
-              components.port == nil,
-              components.query == nil,
-              components.fragment == nil,
-              pathSegments.count == 2,
-              pathSegments[0].isEmpty,
-              !pathSegments[1].isEmpty,
-              let url = components.url
-        else {
-            return nil
-        }
-        return url
-    }
-    #endif
 }
 
 extension RevenueCatManager: PurchasesDelegate {

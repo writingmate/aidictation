@@ -5,6 +5,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIDictation", "AIDictation\AIDictation.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AIDictation.CheckoutContractTests", "AIDictation.CheckoutContractTests\AIDictation.CheckoutContractTests.csproj", "{D7D5E6C8-4C38-4C5E-97EE-2384C9E2E841}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,5 +17,9 @@ Global
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D7D5E6C8-4C38-4C5E-97EE-2384C9E2E841}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D7D5E6C8-4C38-4C5E-97EE-2384C9E2E841}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D7D5E6C8-4C38-4C5E-97EE-2384C9E2E841}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D7D5E6C8-4C38-4C5E-97EE-2384C9E2E841}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

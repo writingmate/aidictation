@@ -1,0 +1,68 @@
+name: Apple Contract Tests
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Whishpermate/**'
+      - '.github/workflows/apple-contract-tests.yml'
+      - '.github/workflows/release-macos.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Whishpermate/**'
+      - '.github/workflows/apple-contract-tests.yml'
+      - '.github/workflows/release-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-contract-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/Whispermate-*/SourcePackages
+          key: ${{ runner.os }}-spm-${{ hashFiles('Whishpermate/Whispermate.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Test macOS purchase contracts
+        run: |
+          xcodebuild test \
+            -project Whishpermate/Whispermate.xcodeproj \
+            -scheme WhisperMateSharedContractTests \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Test iOS purchase contracts
+        run: |
+          DEVICE_ID="$(
+            xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime in sorted(devices, reverse=True):
+              for device in devices[runtime]:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator found")
+          '
+          )"
+          xcodebuild test \
+            -project Whishpermate/Whispermate.xcodeproj \
+            -scheme WhisperMateSharedContractTests \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            CODE_SIGNING_ALLOWED=NO

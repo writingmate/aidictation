@@ -1,5 +1,7 @@
 import Foundation
 import RevenueCat
+import class StoreKit.SKProduct
+import class StoreKit.SKProductSubscriptionPeriod
 import XCTest
 @testable import WhisperMateShared
 
@@ -113,6 +115,74 @@ final class RevenueCatPurchaseContractTests: XCTestCase {
         for package in mismatches {
             let offering = offering(with: [package])
             XCTAssertNil(RevenueCatPurchaseContract.package(in: offering, for: .lifetime))
+            XCTAssertTrue(RevenueCatPurchaseContract.purchaseOptions(in: offering).isEmpty)
+        }
+    }
+
+    func testOfferingAcceptsStoreKit1AutoRenewableSubscriptionPackages() {
+        let expectations: [(RevenueCatBillingPeriod, Int, SKProduct.PeriodUnit)] = [
+            (.monthly, 1, .month),
+            (.annual, 1, .year),
+            (.annual, 12, .month),
+        ]
+
+        for (period, value, unit) in expectations {
+            let package = storeKit1Package(
+                for: period,
+                subscriptionValue: value,
+                subscriptionUnit: unit
+            )
+            let offering = offering(with: [package])
+
+            XCTAssertNotNil(package.storeProduct.sk1Product)
+            XCTAssertEqual(package.storeProduct.productType, .nonConsumable)
+            XCTAssertIdentical(
+                RevenueCatPurchaseContract.package(in: offering, for: period),
+                package
+            )
+            XCTAssertEqual(
+                RevenueCatPurchaseContract.purchaseOptions(in: offering).map(\.period),
+                [period]
+            )
+        }
+    }
+
+    func testOfferingRejectsStoreKit1ProductsWithoutExactShape() {
+        let mismatches: [(RevenueCatBillingPeriod, Package)] = [
+            (.lifetime, storeKit1Package(for: .lifetime)),
+            (
+                .monthly,
+                storeKit1Package(
+                    for: .monthly,
+                    subscriptionValue: 1,
+                    subscriptionUnit: .month,
+                    subscriptionGroupIdentifier: nil
+                )
+            ),
+            (
+                .monthly,
+                storeKit1Package(
+                    for: .monthly,
+                    subscriptionValue: 2,
+                    subscriptionUnit: .month
+                )
+            ),
+            (
+                .annual,
+                storeKit1Package(
+                    for: .annual,
+                    subscriptionValue: 6,
+                    subscriptionUnit: .month
+                )
+            ),
+            (.annual, storeKit1Package(for: .annual)),
+        ]
+
+        for (period, package) in mismatches {
+            let offering = offering(with: [package])
+
+            XCTAssertNotNil(package.storeProduct.sk1Product)
+            XCTAssertNil(RevenueCatPurchaseContract.package(in: offering, for: period))
             XCTAssertTrue(RevenueCatPurchaseContract.purchaseOptions(in: offering).isEmpty)
         }
     }
@@ -342,6 +412,27 @@ final class RevenueCatPurchaseContractTests: XCTestCase {
         )
     }
 
+    private func storeKit1Package(
+        for period: RevenueCatBillingPeriod,
+        subscriptionValue: Int? = nil,
+        subscriptionUnit: SKProduct.PeriodUnit? = nil,
+        subscriptionGroupIdentifier: String? = "contract-test-subscriptions"
+    ) -> Package {
+        let product = ContractSK1Product(
+            subscriptionValue: subscriptionValue,
+            subscriptionUnit: subscriptionUnit,
+            subscriptionGroupIdentifier: subscriptionGroupIdentifier
+        )
+
+        return Package(
+            identifier: RevenueCatPurchaseContract.packageIdentifier(for: period),
+            packageType: RevenueCatPurchaseContract.packageType(for: period),
+            storeProduct: StoreProduct(sk1Product: product),
+            offeringIdentifier: "contract-test-offering",
+            webCheckoutUrl: nil
+        )
+    }
+
     private func offering(with packages: [Package]) -> Offering {
         Offering(
             identifier: "contract-test-offering",
@@ -350,4 +441,47 @@ final class RevenueCatPurchaseContractTests: XCTestCase {
             webCheckoutUrl: nil
         )
     }
+}
+
+private final class ContractSK1Product: SKProduct, @unchecked Sendable {
+    private let mockSubscriptionPeriod: SKProductSubscriptionPeriod?
+    private let mockSubscriptionGroupIdentifier: String?
+
+    init(
+        subscriptionValue: Int?,
+        subscriptionUnit: SKProduct.PeriodUnit?,
+        subscriptionGroupIdentifier: String?
+    ) {
+        if let subscriptionValue, let subscriptionUnit {
+            mockSubscriptionPeriod = ContractSK1SubscriptionPeriod(
+                numberOfUnits: subscriptionValue,
+                unit: subscriptionUnit
+            )
+            mockSubscriptionGroupIdentifier = subscriptionGroupIdentifier
+        } else {
+            mockSubscriptionPeriod = nil
+            mockSubscriptionGroupIdentifier = nil
+        }
+    }
+
+    override var price: NSDecimalNumber { 10 }
+    override var priceLocale: Locale { Locale(identifier: "en_US") }
+    override var productIdentifier: String { "contract-test-sk1-product" }
+    override var localizedTitle: String { "Contract test product" }
+    override var localizedDescription: String { "Contract test product" }
+    override var subscriptionPeriod: SKProductSubscriptionPeriod? { mockSubscriptionPeriod }
+    override var subscriptionGroupIdentifier: String? { mockSubscriptionGroupIdentifier }
+}
+
+private final class ContractSK1SubscriptionPeriod: SKProductSubscriptionPeriod, @unchecked Sendable {
+    private let mockNumberOfUnits: Int
+    private let mockUnit: SKProduct.PeriodUnit
+
+    init(numberOfUnits: Int, unit: SKProduct.PeriodUnit) {
+        mockNumberOfUnits = numberOfUnits
+        mockUnit = unit
+    }
+
+    override var numberOfUnits: Int { mockNumberOfUnits }
+    override var unit: SKProduct.PeriodUnit { mockUnit }
 }

@@ -124,19 +124,29 @@ enum RevenueCatPurchaseContract {
         _ product: StoreProduct,
         matches period: RevenueCatBillingPeriod
     ) -> Bool {
+        let usesStoreKit1 = product.sk1Product != nil
+        // StoreKit 1 does not expose product type. A subscription group is the
+        // additional signal that the exact period belongs to an auto-renewable plan.
+        let hasVerifiedSubscriptionType = usesStoreKit1
+            ? product.subscriptionGroupIdentifier?.isEmpty == false
+            : product.productType == .autoRenewableSubscription
+
         switch period {
         case .monthly:
-            return product.productType == .autoRenewableSubscription
+            return hasVerifiedSubscriptionType
                 && product.productCategory == .subscription
                 && product.subscriptionPeriod?.value == 1
                 && product.subscriptionPeriod?.unit == .month
         case .annual:
-            return product.productType == .autoRenewableSubscription
+            return hasVerifiedSubscriptionType
                 && product.productCategory == .subscription
                 && product.subscriptionPeriod?.value == 1
                 && product.subscriptionPeriod?.unit == .year
         case .lifetime:
-            return product.productType == .nonConsumable
+            // StoreKit 1 cannot distinguish a consumable from a non-consumable.
+            // Keep subscriptions available there, but never guess on lifetime.
+            return !usesStoreKit1
+                && product.productType == .nonConsumable
                 && product.productCategory == .nonSubscription
                 && product.subscriptionPeriod == nil
         }

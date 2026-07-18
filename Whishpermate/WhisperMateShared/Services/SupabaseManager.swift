@@ -126,9 +126,14 @@ public class SupabaseManager {
     /// Reconciles legacy lifetime/AppSumo access into RevenueCat using the
     /// authenticated server path. The response is validated before callers
     /// treat reconciliation as successful.
-    public func reconcileSubscription() async throws {
+    public func reconcileSubscription(expectedUserID: UUID) async throws {
         let client = try requireClient()
         let session = try await client.auth.session
+        guard session.user.id == expectedUserID else {
+            throw NSError(domain: "SupabaseManager", code: 409, userInfo: [
+                NSLocalizedDescriptionKey: "Your login changed before access could be refreshed",
+            ])
+        }
         let response: SubscriptionReconciliationResponse = try await client.functions.invoke(
             "check-subscription",
             options: FunctionInvokeOptions(headers: [
@@ -143,37 +148,31 @@ public class SupabaseManager {
         }
     }
 
-    public func updateUserWordCount(wordsToAdd: Int) async throws -> User {
+    public func updateUserWordCount(
+        wordsToAdd: Int,
+        expectedUserID: UUID
+    ) async throws -> User {
         let client = try requireClient()
-        // First, fetch current user
-        let currentUser = try await fetchUser()
-        let newTotal = currentUser.monthlyWordCount + wordsToAdd
-
-        // Create update payload
-        struct UserUpdate: Encodable {
-            let monthly_word_count: Int
-            let updated_at: String
-        }
-
-        let updatePayload = UserUpdate(
-            monthly_word_count: newTotal,
-            updated_at: ISO8601DateFormatter().string(from: Date())
-        )
-
-        // Update in database
-        let response: [User] = try await client
-            .from("profiles")
-            .update(updatePayload)
-            .eq("user_id", value: currentUser.userId.uuidString)
-            .select()
-            .execute()
-            .value
-
-        guard let updatedUser = response.first else {
-            throw NSError(domain: "SupabaseManager", code: 500, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to update user word count",
+        guard wordsToAdd > 0 else {
+            throw NSError(domain: "SupabaseManager", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Word count must be greater than zero",
             ])
         }
+
+        struct IncrementWordCountPayload: Encodable {
+            let expected_user_id: UUID
+            let words_to_add: Int
+        }
+
+        let updatedUser: User = try await client.rpc(
+            "increment_monthly_word_count_for_session",
+            params: IncrementWordCountPayload(
+                expected_user_id: expectedUserID,
+                words_to_add: wordsToAdd
+            )
+        )
+        .execute()
+        .value
 
         return updatedUser
     }
@@ -221,14 +220,16 @@ public class SupabaseManager {
         return updatedUser
     }
 
-    public func ensureReferralCode() async throws -> User {
+    public func ensureReferralCode(expectedUserID: UUID) async throws -> User {
         let client = try requireClient()
 
-        struct EmptyPayload: Encodable {}
+        struct SessionIdentityPayload: Encodable {
+            let expected_user_id: UUID
+        }
 
         let updatedUser: User = try await client.rpc(
-            "ensure_referral_code",
-            params: EmptyPayload()
+            "ensure_referral_code_for_session",
+            params: SessionIdentityPayload(expected_user_id: expectedUserID)
         )
         .execute()
         .value
@@ -236,16 +237,23 @@ public class SupabaseManager {
         return updatedUser
     }
 
-    public func redeemReferralCode(_ code: String) async throws -> User {
+    public func redeemReferralCode(
+        _ code: String,
+        expectedUserID: UUID
+    ) async throws -> User {
         let client = try requireClient()
 
         struct RedeemPayload: Encodable {
             let code: String
+            let expected_user_id: UUID
         }
 
         let updatedUser: User = try await client.rpc(
-            "redeem_referral_code",
-            params: RedeemPayload(code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+            "redeem_referral_code_for_session",
+            params: RedeemPayload(
+                code: code.trimmingCharacters(in: .whitespacesAndNewlines),
+                expected_user_id: expectedUserID
+            )
         )
         .execute()
         .value

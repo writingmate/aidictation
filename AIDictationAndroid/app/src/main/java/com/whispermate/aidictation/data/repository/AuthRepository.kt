@@ -19,7 +19,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +71,7 @@ class AuthRepository @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val authStateMutex = Mutex()
     private val revenueCatRefreshMutex = Mutex()
+    private val profileMutationGate = ProfileMutationGate()
     private val jsonMediaType = "application/json".toMediaType()
     private val okHttpClient = OkHttpClient()
     @Volatile
@@ -257,12 +257,18 @@ class AuthRepository @Inject constructor(
             refreshToken = refreshToken,
             replaceTokens = true
         )
-        refreshUserForGeneration(generation)
+        refreshUserAfterProfileMutations(generation)
     }
 
     suspend fun refreshUser() = withContext(Dispatchers.IO) {
         val generation = beginAuthTransition()
-        refreshUserForGeneration(generation)
+        refreshUserAfterProfileMutations(generation)
+    }
+
+    private suspend fun refreshUserAfterProfileMutations(generation: Long) {
+        profileMutationGate.run {
+            refreshUserForGeneration(generation)
+        }
     }
 
     private suspend fun refreshUserForGeneration(generation: Long) {
@@ -380,44 +386,12 @@ class AuthRepository @Inject constructor(
     suspend fun updateWordCount(wordsToAdd: Int): UserProfile? = withContext(Dispatchers.IO) {
         if (wordsToAdd <= 0) return@withContext _authState.value.user
         val snapshot = currentAuthSessionSnapshot() ?: return@withContext null
-        val user = snapshot.user
-        val updatedCount = user.monthlyWordCount + wordsToAdd
-        val body = JSONObject()
-            .put("monthly_word_count", updatedCount)
-            .put("updated_at", Instant.now().toString())
-            .toString()
-            .toRequestBody(jsonMediaType)
-
-        val request = Request.Builder()
-            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/profiles?user_id=eq.${user.userId}&select=*")
-            .addSupabaseHeaders(snapshot.accessToken)
-            .addHeader("Prefer", "return=representation")
-            .patch(body)
-            .build()
-
-        runCatching {
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("Profile update failed: ${response.code}")
-                val responseBody = response.body?.string().orEmpty()
-                val serverProfile = parseProfileArray(responseBody, user.email).firstOrNull()
-                    ?: user.copy(monthlyWordCount = updatedCount)
-                authStateMutex.withLock {
-                    val state = _authState.value
-                    if (
-                        authGeneration == snapshot.generation &&
-                        state.user?.userId.equals(user.userId, ignoreCase = true)
-                    ) {
-                        val updated = overlayCachedRevenueCatEntitlement(serverProfile)
-                        _authState.value = state.copy(user = updated)
-                        updated
-                    } else {
-                        state.user
-                    }
-                }
-            }
-        }.getOrElse { error ->
+        callProfileRpc(
+            incrementWordCountMutation(snapshot.user.userId, wordsToAdd),
+            snapshot
+        ).getOrElse { error ->
             Log.w(TAG, "Failed to update word count", error)
-            user
+            snapshot.user
         }
     }
 
@@ -425,7 +399,7 @@ class AuthRepository @Inject constructor(
         val snapshot = currentAuthSessionSnapshot()
             ?: return@withContext Result.failure(Exception("Sign in to create an invite link."))
 
-        callProfileRpc("ensure_referral_code", JSONObject(), snapshot)
+        callProfileRpc(ensureReferralCodeMutation(snapshot.user.userId), snapshot)
     }
 
     suspend fun redeemReferralCode(code: String): Result<UserProfile> = withContext(Dispatchers.IO) {
@@ -436,37 +410,64 @@ class AuthRepository @Inject constructor(
             return@withContext Result.failure(Exception("Enter an invite code."))
         }
 
-        callProfileRpc("redeem_referral_code", JSONObject().put("code", cleanedCode), snapshot)
+        callProfileRpc(
+            redeemReferralCodeMutation(snapshot.user.userId, cleanedCode),
+            snapshot
+        )
     }
 
     private suspend fun callProfileRpc(
-        functionName: String,
-        payload: JSONObject,
+        mutation: ProfileMutationRpc,
         snapshot: AuthSessionSnapshot
-    ): Result<UserProfile> = runCatching {
-        val request = Request.Builder()
-            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/$functionName")
-            .addSupabaseHeaders(snapshot.accessToken)
-            .post(payload.toString().toRequestBody(jsonMediaType))
-            .build()
+    ): Result<UserProfile> = profileMutationGate.run {
+        runCatching {
+            val snapshotIsCurrent = authStateMutex.withLock {
+                profileMutationSnapshotMatchesActiveIdentity(
+                    expectedUserID = snapshot.user.userId,
+                    expectedGeneration = snapshot.generation,
+                    currentGeneration = authGeneration,
+                    currentUserID = _authState.value.user?.userId
+                )
+            }
+            check(snapshotIsCurrent) {
+                "The signed-in account changed before the profile update started."
+            }
 
-        okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Request failed: ${response.code}")
-            val serverProfile = parseProfile(
-                response.body?.string().orEmpty(),
-                snapshot.user.email
-            )
-            authStateMutex.withLock {
-                val state = _authState.value
+            val request = Request.Builder()
+                .url(
+                    "${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/" +
+                        mutation.functionName
+                )
+                .addSupabaseHeaders(snapshot.accessToken)
+                .post(JSONObject(mutation.parameters).toString().toRequestBody(jsonMediaType))
+                .build()
+
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) error("Request failed: ${response.code}")
+                val serverProfile = parseProfile(
+                    response.body?.string().orEmpty(),
+                    snapshot.user.email
+                )
                 check(
-                    authGeneration == snapshot.generation &&
-                        state.user?.userId.equals(snapshot.user.userId, ignoreCase = true)
+                    profileMutationResultMatchesExpectedUser(
+                        expectedUserID = snapshot.user.userId,
+                        resultUserID = serverProfile.userId
+                    )
                 ) {
-                    "The signed-in account changed before the profile update completed."
+                    "The account update returned data for a different user."
                 }
-                val updated = overlayCachedRevenueCatEntitlement(serverProfile)
-                _authState.value = state.copy(user = updated)
-                updated
+                authStateMutex.withLock {
+                    val state = _authState.value
+                    check(
+                        authGeneration == snapshot.generation &&
+                            state.user?.userId.equals(snapshot.user.userId, ignoreCase = true)
+                    ) {
+                        "The signed-in account changed before the profile update completed."
+                    }
+                    val updated = overlayCachedRevenueCatEntitlement(serverProfile)
+                    _authState.value = state.copy(user = updated)
+                    updated
+                }
             }
         }
     }

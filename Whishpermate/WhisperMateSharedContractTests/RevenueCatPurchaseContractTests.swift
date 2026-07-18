@@ -443,6 +443,239 @@ final class RevenueCatPurchaseContractTests: XCTestCase {
     }
 }
 
+final class AuthManagerSessionContractTests: XCTestCase {
+    func testAccountSwitchClearsOnlyAPreviouslyPublishedDifferentUser() throws {
+        let accountA = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let accountB = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
+
+        XCTAssertFalse(
+            AuthManager.shouldClearPublishedUser(
+                publishedUserID: nil,
+                sessionUserID: accountB
+            )
+        )
+        XCTAssertFalse(
+            AuthManager.shouldClearPublishedUser(
+                publishedUserID: accountA,
+                sessionUserID: accountA
+            )
+        )
+        XCTAssertTrue(
+            AuthManager.shouldClearPublishedUser(
+                publishedUserID: accountA,
+                sessionUserID: accountB
+            )
+        )
+    }
+
+    func testBackendUpdatesRequireTheOriginalPublishedIdentityAndIdentityGeneration() throws {
+        let accountA = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let accountB = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
+
+        let matches: (UInt64, UUID?, UUID, Bool) -> Bool = {
+            currentIdentityGeneration,
+            publishedUserID,
+            resultUserID,
+            isAuthenticated in
+            AuthManager.backendUpdateMatchesActiveIdentity(
+                expectedUserID: accountA,
+                expectedIdentityGeneration: 7,
+                currentIdentityGeneration: currentIdentityGeneration,
+                publishedUserID: publishedUserID,
+                resultUserID: resultUserID,
+                isAuthenticated: isAuthenticated
+            )
+        }
+
+        XCTAssertTrue(matches(7, accountA, accountA, true))
+        XCTAssertFalse(matches(8, accountA, accountA, true))
+        XCTAssertFalse(matches(7, nil, accountA, true))
+        XCTAssertFalse(matches(7, accountB, accountA, true))
+        XCTAssertFalse(matches(7, accountA, accountB, true))
+        XCTAssertFalse(matches(7, accountA, accountA, false))
+    }
+
+    func testBackendMutationContextsRequireTheOriginalPublishedIdentity() throws {
+        let accountA = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let accountB = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
+
+        let matches: (UInt64, UUID?, Bool) -> Bool = {
+            currentIdentityGeneration,
+            publishedUserID,
+            isAuthenticated in
+            AuthManager.backendMutationContextMatchesActiveIdentity(
+                expectedUserID: accountA,
+                expectedIdentityGeneration: 7,
+                currentIdentityGeneration: currentIdentityGeneration,
+                publishedUserID: publishedUserID,
+                isAuthenticated: isAuthenticated
+            )
+        }
+
+        XCTAssertTrue(matches(7, accountA, true))
+        XCTAssertFalse(matches(8, accountA, true))
+        XCTAssertFalse(matches(7, nil, true))
+        XCTAssertFalse(matches(7, accountB, true))
+        XCTAssertFalse(matches(7, accountA, false))
+    }
+
+    func testRefreshCannotOverwriteANewerBackendProfileRevision() {
+        XCTAssertTrue(
+            AuthManager.refreshCanPublishBackendProfile(
+                expectedGeneration: 4,
+                currentGeneration: 4,
+                expectedProfileRevision: 9,
+                currentProfileRevision: 9
+            )
+        )
+        XCTAssertFalse(
+            AuthManager.refreshCanPublishBackendProfile(
+                expectedGeneration: 4,
+                currentGeneration: 5,
+                expectedProfileRevision: 9,
+                currentProfileRevision: 9
+            )
+        )
+        XCTAssertFalse(
+            AuthManager.refreshCanPublishBackendProfile(
+                expectedGeneration: 4,
+                currentGeneration: 4,
+                expectedProfileRevision: 9,
+                currentProfileRevision: 10
+            )
+        )
+    }
+
+    func testBackendMutationGateSerializesDelayedOperations() async {
+        let gate = BackendMutationGate()
+        let events = EventRecorder()
+        let firstEntered = AsyncSignal()
+        let releaseFirst = AsyncSignal()
+
+        let first = Task {
+            await gate.acquire()
+            await events.append("first-start")
+            await firstEntered.open()
+            await releaseFirst.wait()
+            await events.append("first-end")
+            await gate.release()
+        }
+        await firstEntered.wait()
+        let second = Task {
+            await gate.acquire()
+            await events.append("second")
+            await gate.release()
+        }
+
+        await releaseFirst.open()
+        _ = await (first.value, second.value)
+        let recordedEvents = await events.values
+        XCTAssertEqual(recordedEvents, ["first-start", "first-end", "second"])
+    }
+
+    func testQueuedBackendMutationDoesNotStartAfterTheIdentityChanges() async throws {
+        let accountA = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let gate = BackendMutationGate()
+        let firstEntered = AsyncSignal()
+        let releaseFirst = AsyncSignal()
+        let identity = TestIdentityState(
+            generation: 7,
+            publishedUserID: accountA,
+            isAuthenticated: true
+        )
+
+        let first = Task {
+            await gate.acquire()
+            await firstEntered.open()
+            await releaseFirst.wait()
+            await gate.release()
+        }
+        await firstEntered.wait()
+
+        let second = Task {
+            await gate.acquire()
+            let state = await identity.snapshot()
+            let isCurrent = AuthManager.backendMutationContextMatchesActiveIdentity(
+                expectedUserID: accountA,
+                expectedIdentityGeneration: 7,
+                currentIdentityGeneration: state.generation,
+                publishedUserID: state.publishedUserID,
+                isAuthenticated: state.isAuthenticated
+            )
+            guard isCurrent else {
+                await gate.release()
+                return false
+            }
+
+            await identity.markBodyStarted()
+            await gate.release()
+            return true
+        }
+
+        await identity.changeGeneration(to: 8)
+        await releaseFirst.open()
+        _ = await first.value
+
+        let secondDidStart = await second.value
+        let bodyDidStart = await identity.didStartBody
+        XCTAssertFalse(secondDidStart)
+        XCTAssertFalse(bodyDidStart)
+    }
+}
+
+private actor EventRecorder {
+    private(set) var values: [String] = []
+
+    func append(_ value: String) {
+        values.append(value)
+    }
+}
+
+private actor AsyncSignal {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let pendingWaiters = waiters
+        waiters.removeAll()
+        pendingWaiters.forEach { $0.resume() }
+    }
+}
+
+private actor TestIdentityState {
+    private var generation: UInt64
+    private var publishedUserID: UUID?
+    private var isAuthenticated: Bool
+    private(set) var didStartBody = false
+
+    init(generation: UInt64, publishedUserID: UUID?, isAuthenticated: Bool) {
+        self.generation = generation
+        self.publishedUserID = publishedUserID
+        self.isAuthenticated = isAuthenticated
+    }
+
+    func snapshot() -> (generation: UInt64, publishedUserID: UUID?, isAuthenticated: Bool) {
+        (generation, publishedUserID, isAuthenticated)
+    }
+
+    func changeGeneration(to value: UInt64) {
+        generation = value
+    }
+
+    func markBodyStarted() {
+        didStartBody = true
+    }
+}
+
 private final class ContractSK1Product: SKProduct, @unchecked Sendable {
     private let mockSubscriptionPeriod: SKProductSubscriptionPeriod?
     private let mockSubscriptionGroupIdentifier: String?

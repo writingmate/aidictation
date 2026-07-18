@@ -1,0 +1,36 @@
+name: Backend Contract Tests
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'scripts/test_session_bound_profile_mutations.py'
+      - 'supabase/migrations/**'
+      - '.github/workflows/backend-contract-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'scripts/test_session_bound_profile_mutations.py'
+      - 'supabase/migrations/**'
+      - '.github/workflows/backend-contract-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-contract-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile-mutations:
+    name: Session-bound profile mutations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test database contracts
+        run: python3 scripts/test_session_bound_profile_mutations.py

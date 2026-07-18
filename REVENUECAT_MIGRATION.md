@@ -21,7 +21,14 @@ These are public platform SDK keys or hosted purchase URLs. Never put a RevenueC
 
 ## Backend deployment
 
-Apply `website/supabase/migrations/202607160001_revenuecat_subscription_sync.sql`, then deploy the functions from the `website` project. Keep JWT verification disabled only for `revenuecat-webhook` because RevenueCat authenticates with the configured authorization header.
+Deploy the backend before releasing any updated native client:
+
+1. Apply `supabase/migrations/20260718150723_bind_profile_mutations_to_session.sql` to the shared Supabase project. This adds the session-bound profile RPCs used by the Apple and Android apps while keeping the previous referral RPCs available for older clients.
+2. Apply `website/supabase/migrations/202607160001_revenuecat_subscription_sync.sql` to the same project.
+3. Deploy the functions from the `website` project.
+4. Run `python3 scripts/test_session_bound_profile_mutations.py`, verify RevenueCat reconciliation with a test account, then release the native clients.
+
+Do not release the clients before step 1. Keep JWT verification disabled only for `revenuecat-webhook` because RevenueCat authenticates with the configured authorization header.
 
 Set these function secrets:
 

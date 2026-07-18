@@ -40,7 +40,16 @@ public class AuthManager: ObservableObject {
     private var revenueCatEntitlementUserID: UUID?
     private var revenueCatReconciliationUserIDs = Set<UUID>()
     private var authStateGeneration: UInt64 = 0
+    private var authIdentityGeneration: UInt64 = 0
+    private var backendProfileRevision: UInt64 = 0
     private var isLoggingOut = false
+    private let backendMutationGate = BackendMutationGate()
+
+    private struct BackendMutationContext: Sendable {
+        let userID: UUID
+        let identityGeneration: UInt64
+    }
+
     #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
         private let authPresentationContextProvider = AuthPresentationContextProvider()
         private var authSession: ASWebAuthenticationSession?
@@ -96,6 +105,54 @@ public class AuthManager: ObservableObject {
 
     public func hasActiveSession(for userID: UUID) async -> Bool {
         await activeSessionUserID() == userID
+    }
+
+    static func shouldClearPublishedUser(
+        publishedUserID: UUID?,
+        sessionUserID: UUID
+    ) -> Bool {
+        guard let publishedUserID else { return false }
+        return publishedUserID != sessionUserID
+    }
+
+    static func backendUpdateMatchesActiveIdentity(
+        expectedUserID: UUID,
+        expectedIdentityGeneration: UInt64,
+        currentIdentityGeneration: UInt64,
+        publishedUserID: UUID?,
+        resultUserID: UUID,
+        isAuthenticated: Bool
+    ) -> Bool {
+        backendMutationContextMatchesActiveIdentity(
+            expectedUserID: expectedUserID,
+            expectedIdentityGeneration: expectedIdentityGeneration,
+            currentIdentityGeneration: currentIdentityGeneration,
+            publishedUserID: publishedUserID,
+            isAuthenticated: isAuthenticated
+        )
+            && resultUserID == expectedUserID
+    }
+
+    static func backendMutationContextMatchesActiveIdentity(
+        expectedUserID: UUID,
+        expectedIdentityGeneration: UInt64,
+        currentIdentityGeneration: UInt64,
+        publishedUserID: UUID?,
+        isAuthenticated: Bool
+    ) -> Bool {
+        isAuthenticated
+            && expectedIdentityGeneration == currentIdentityGeneration
+            && publishedUserID == expectedUserID
+    }
+
+    static func refreshCanPublishBackendProfile(
+        expectedGeneration: UInt64,
+        currentGeneration: UInt64,
+        expectedProfileRevision: UInt64,
+        currentProfileRevision: UInt64
+    ) -> Bool {
+        expectedGeneration == currentGeneration
+            && expectedProfileRevision == currentProfileRevision
     }
 
     // MARK: - Public API
@@ -290,14 +347,15 @@ public class AuthManager: ObservableObject {
     @discardableResult
     public func refreshUser() async -> UInt64? {
         DebugLog.info("Fetching user data...", context: "AuthManager")
-        let refreshGeneration: UInt64? = await MainActor.run {
+        let refreshContext: (generation: UInt64, profileRevision: UInt64)? = await MainActor.run {
             guard !self.isLoggingOut else { return nil }
             self.authStateGeneration &+= 1
             self.isLoading = true
             self.error = nil
-            return self.authStateGeneration
+            return (self.authStateGeneration, self.backendProfileRevision)
         }
-        guard let refreshGeneration else { return nil }
+        guard let refreshContext else { return nil }
+        let refreshGeneration = refreshContext.generation
 
         guard let sessionUserID = await ensureValidSession() else {
             await MainActor.run {
@@ -307,6 +365,20 @@ public class AuthManager: ObservableObject {
             }
             return refreshGeneration
         }
+
+        let shouldContinue = await MainActor.run {
+            guard self.authStateGeneration == refreshGeneration else { return false }
+            if Self.shouldClearPublishedUser(
+                publishedUserID: self.backendUser?.userId,
+                sessionUserID: sessionUserID
+            ) {
+                // Never expose one account's access while another account loads.
+                self.resetPublishedUser()
+                self.isLoading = true
+            }
+            return true
+        }
+        guard shouldContinue else { return refreshGeneration }
 
         do {
             let user = try await supabase.fetchUser()
@@ -328,7 +400,17 @@ public class AuthManager: ObservableObject {
 
             DebugLog.info("User fetched: \(user.email), tier: \(user.subscriptionTier), words: \(user.totalWordsUsed)", context: "AuthManager")
             let didPublish = await MainActor.run {
-                guard self.authStateGeneration == refreshGeneration else { return false }
+                guard Self.refreshCanPublishBackendProfile(
+                    expectedGeneration: refreshGeneration,
+                    currentGeneration: self.authStateGeneration,
+                    expectedProfileRevision: refreshContext.profileRevision,
+                    currentProfileRevision: self.backendProfileRevision
+                ) else {
+                    if self.authStateGeneration == refreshGeneration {
+                        self.isLoading = false
+                    }
+                    return false
+                }
                 self.acceptBackendUser(user, identification: identification)
                 self.isAuthenticated = true
                 self.isLoading = false
@@ -438,24 +520,82 @@ public class AuthManager: ObservableObject {
     }
 
     public func updateWordCount(wordsToAdd: Int) async throws -> User {
-        let updatedUser = try await supabase.updateUserWordCount(wordsToAdd: wordsToAdd)
-        return await MainActor.run {
-            self.acceptBackendUpdate(updatedUser)
+        try await performBackendMutation { expectedUserID in
+            try await self.supabase.updateUserWordCount(
+                wordsToAdd: wordsToAdd,
+                expectedUserID: expectedUserID
+            )
         }
     }
 
     public func ensureReferralCode() async throws -> User {
-        let updatedUser = try await supabase.ensureReferralCode()
-        return await MainActor.run {
-            self.acceptBackendUpdate(updatedUser)
+        try await performBackendMutation { expectedUserID in
+            try await self.supabase.ensureReferralCode(expectedUserID: expectedUserID)
         }
     }
 
     public func redeemReferralCode(_ code: String) async throws -> User {
-        let updatedUser = try await supabase.redeemReferralCode(code)
-        return await MainActor.run {
-            self.acceptBackendUpdate(updatedUser)
+        try await performBackendMutation { expectedUserID in
+            try await self.supabase.redeemReferralCode(
+                code,
+                expectedUserID: expectedUserID
+            )
         }
+    }
+
+    private func performBackendMutation(
+        _ operation: (UUID) async throws -> User
+    ) async throws -> User {
+        let context = try await MainActor.run {
+            try self.makeBackendMutationContext()
+        }
+        await backendMutationGate.acquire()
+
+        do {
+            try Task.checkCancellation()
+            let contextIsCurrent = await MainActor.run {
+                Self.backendMutationContextMatchesActiveIdentity(
+                    expectedUserID: context.userID,
+                    expectedIdentityGeneration: context.identityGeneration,
+                    currentIdentityGeneration: self.authIdentityGeneration,
+                    publishedUserID: self.backendUser?.userId,
+                    isAuthenticated: self.isAuthenticated
+                )
+            }
+            guard contextIsCurrent else {
+                throw AuthManagerError.sessionChanged
+            }
+            guard await activeSessionUserID() == context.userID else {
+                throw AuthManagerError.sessionChanged
+            }
+
+            // The server compares this original identity with auth.uid() before
+            // performing any side effect, closing the account-switch race.
+            let updatedUser = try await operation(context.userID)
+            guard await activeSessionUserID() == context.userID else {
+                throw AuthManagerError.sessionChanged
+            }
+
+            let acceptedUser = try await MainActor.run {
+                try self.acceptBackendUpdate(updatedUser, context: context)
+            }
+            await backendMutationGate.release()
+            return acceptedUser
+        } catch {
+            await backendMutationGate.release()
+            throw error
+        }
+    }
+
+    @MainActor
+    private func makeBackendMutationContext() throws -> BackendMutationContext {
+        guard isAuthenticated, let userID = backendUser?.userId else {
+            throw AuthManagerError.sessionChanged
+        }
+        return BackendMutationContext(
+            userID: userID,
+            identityGeneration: authIdentityGeneration
+        )
     }
 
     @MainActor
@@ -469,6 +609,7 @@ public class AuthManager: ObservableObject {
         }
 
         backendUser = user
+        backendProfileRevision &+= 1
         if case let .confirmed(entitlement) = identification {
             revenueCatEntitlement = entitlement
             revenueCatEntitlementUserID = user.userId
@@ -479,11 +620,22 @@ public class AuthManager: ObservableObject {
 
     @MainActor
     @discardableResult
-    private func acceptBackendUpdate(_ user: User) -> User {
-        guard backendUser?.userId == nil || backendUser?.userId == user.userId else {
-            return currentUser ?? user
+    private func acceptBackendUpdate(
+        _ user: User,
+        context: BackendMutationContext
+    ) throws -> User {
+        guard Self.backendUpdateMatchesActiveIdentity(
+            expectedUserID: context.userID,
+            expectedIdentityGeneration: context.identityGeneration,
+            currentIdentityGeneration: authIdentityGeneration,
+            publishedUserID: backendUser?.userId,
+            resultUserID: user.userId,
+            isAuthenticated: isAuthenticated
+        ) else {
+            throw AuthManagerError.sessionChanged
         }
         backendUser = user
+        backendProfileRevision &+= 1
         publishEffectiveUser()
         return currentUser ?? user
     }
@@ -504,7 +656,7 @@ public class AuthManager: ObservableObject {
         }
 
         do {
-            try await supabase.reconcileSubscription()
+            try await supabase.reconcileSubscription(expectedUserID: user.userId)
             guard await activeSessionUserID() == user.userId else {
                 throw AuthManagerError.sessionChanged
             }
@@ -562,6 +714,7 @@ public class AuthManager: ObservableObject {
 
     @MainActor
     private func resetPublishedUser() {
+        authIdentityGeneration &+= 1
         backendUser = nil
         currentUser = nil
         isAuthenticated = false
@@ -580,6 +733,31 @@ public class AuthManager: ObservableObject {
         }
 
         return (true, nil)
+    }
+}
+
+actor BackendMutationGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isLocked {
+            isLocked = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+
+        waiters.removeFirst().resume()
     }
 }
 

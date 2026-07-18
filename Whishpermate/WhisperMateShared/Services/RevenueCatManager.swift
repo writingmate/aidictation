@@ -338,24 +338,7 @@ public final class RevenueCatManager: NSObject, ObservableObject {
                 guard let offering = try await Purchases.shared.offerings().current else {
                     throw RevenueCatManagerError.noOffering
                 }
-
-                var options: [RevenueCatPurchaseOption] = []
-                if let package = offering.monthly {
-                    options.append(
-                        RevenueCatPurchaseOption(period: .monthly, price: package.localizedPriceString)
-                    )
-                }
-                if let package = offering.annual {
-                    options.append(
-                        RevenueCatPurchaseOption(period: .annual, price: package.localizedPriceString)
-                    )
-                }
-                if let package = offering.lifetime {
-                    options.append(
-                        RevenueCatPurchaseOption(period: .lifetime, price: package.localizedPriceString)
-                    )
-                }
-                return options
+                return RevenueCatPurchaseContract.purchaseOptions(in: offering)
             } catch {
                 errorMessage = "Purchase options are not available right now."
                 DebugLog.warning("Offering load failed: \(error.localizedDescription)", context: "RevenueCat")

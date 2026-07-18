@@ -29,15 +29,32 @@ enum RevenueCatPurchaseContract {
     }
 
     static func package(in offering: Offering, for period: RevenueCatBillingPeriod) -> Package? {
-        switch packageType(for: period) {
+        let package: Package?
+        switch period {
         case .monthly:
-            return offering.monthly
+            package = offering.monthly
         case .annual:
-            return offering.annual
+            package = offering.annual
         case .lifetime:
-            return offering.lifetime
-        default:
+            package = offering.lifetime
+        }
+
+        guard let package,
+              package.identifier == packageIdentifier(for: period),
+              package.packageType == packageType(for: period),
+              storeProduct(package.storeProduct, matches: period)
+        else {
             return nil
+        }
+        return package
+    }
+
+    static func purchaseOptions(in offering: Offering) -> [RevenueCatPurchaseOption] {
+        RevenueCatBillingPeriod.allCases.compactMap { period in
+            guard let package = package(in: offering, for: period) else {
+                return nil
+            }
+            return RevenueCatPurchaseOption(period: period, price: package.localizedPriceString)
         }
     }
 
@@ -101,6 +118,28 @@ enum RevenueCatPurchaseContract {
         let entitlement = customerInfo.entitlements.all[entitlementID]
         guard entitlement?.isActive == true else { return .inactive }
         return entitlement?.expirationDate == nil ? .lifetime : .pro
+    }
+
+    private static func storeProduct(
+        _ product: StoreProduct,
+        matches period: RevenueCatBillingPeriod
+    ) -> Bool {
+        switch period {
+        case .monthly:
+            return product.productType == .autoRenewableSubscription
+                && product.productCategory == .subscription
+                && product.subscriptionPeriod?.value == 1
+                && product.subscriptionPeriod?.unit == .month
+        case .annual:
+            return product.productType == .autoRenewableSubscription
+                && product.productCategory == .subscription
+                && product.subscriptionPeriod?.value == 1
+                && product.subscriptionPeriod?.unit == .year
+        case .lifetime:
+            return product.productType == .nonConsumable
+                && product.productCategory == .nonSubscription
+                && product.subscriptionPeriod == nil
+        }
     }
 }
 

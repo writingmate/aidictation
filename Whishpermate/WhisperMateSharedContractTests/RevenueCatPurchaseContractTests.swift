@@ -17,6 +17,106 @@ final class RevenueCatPurchaseContractTests: XCTestCase {
         }
     }
 
+    func testOfferingAcceptsOnlyExactPackagesAndBuildsMatchingOptions() {
+        let monthly = validPackage(for: .monthly)
+        let annual = validPackage(for: .annual)
+        let lifetime = validPackage(for: .lifetime)
+        let offering = offering(with: [lifetime, monthly, annual])
+
+        XCTAssertIdentical(RevenueCatPurchaseContract.package(in: offering, for: .monthly), monthly)
+        XCTAssertIdentical(RevenueCatPurchaseContract.package(in: offering, for: .annual), annual)
+        XCTAssertIdentical(RevenueCatPurchaseContract.package(in: offering, for: .lifetime), lifetime)
+        XCTAssertEqual(
+            RevenueCatPurchaseContract.purchaseOptions(in: offering).map(\.period),
+            [.monthly, .annual, .lifetime]
+        )
+    }
+
+    func testOfferingRejectsPackageIdentifierTypeAndSubscriptionMismatches() {
+        let mismatches: [(RevenueCatBillingPeriod, Package)] = [
+            (
+                .monthly,
+                package(
+                    identifier: "$rc_annual",
+                    packageType: .monthly,
+                    productType: .autoRenewableSubscription,
+                    subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .month)
+                )
+            ),
+            (
+                .monthly,
+                package(
+                    identifier: "$rc_monthly",
+                    packageType: .annual,
+                    productType: .autoRenewableSubscription,
+                    subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .month)
+                )
+            ),
+            (
+                .monthly,
+                package(
+                    identifier: "$rc_monthly",
+                    packageType: .monthly,
+                    productType: .nonRenewableSubscription,
+                    subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .month)
+                )
+            ),
+            (
+                .monthly,
+                package(
+                    identifier: "$rc_monthly",
+                    packageType: .monthly,
+                    productType: .autoRenewableSubscription,
+                    subscriptionPeriod: SubscriptionPeriod(value: 2, unit: .month)
+                )
+            ),
+            (
+                .annual,
+                package(
+                    identifier: "$rc_annual",
+                    packageType: .annual,
+                    productType: .autoRenewableSubscription,
+                    subscriptionPeriod: SubscriptionPeriod(value: 12, unit: .month)
+                )
+            ),
+        ]
+
+        for (period, package) in mismatches {
+            let offering = offering(with: [package])
+            XCTAssertNil(RevenueCatPurchaseContract.package(in: offering, for: period))
+            XCTAssertTrue(RevenueCatPurchaseContract.purchaseOptions(in: offering).isEmpty)
+        }
+    }
+
+    func testOfferingRejectsLifetimeProductCategoryAndDurationMismatches() {
+        let mismatches = [
+            package(
+                identifier: "$rc_lifetime",
+                packageType: .lifetime,
+                productType: .consumable,
+                subscriptionPeriod: nil
+            ),
+            package(
+                identifier: "$rc_lifetime",
+                packageType: .lifetime,
+                productType: .autoRenewableSubscription,
+                subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year)
+            ),
+            package(
+                identifier: "$rc_lifetime",
+                packageType: .lifetime,
+                productType: .nonConsumable,
+                subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year)
+            ),
+        ]
+
+        for package in mismatches {
+            let offering = offering(with: [package])
+            XCTAssertNil(RevenueCatPurchaseContract.package(in: offering, for: .lifetime))
+            XCTAssertTrue(RevenueCatPurchaseContract.purchaseOptions(in: offering).isEmpty)
+        }
+    }
+
     func testAppleKeyValidationOnlyAcceptsPublicSDKKeys() {
         XCTAssertTrue(RevenueCatPurchaseContract.isPublicAppleSDKKey("appl_public-key"))
         XCTAssertTrue(RevenueCatPurchaseContract.isPublicAppleSDKKey("appl_a"))
@@ -183,6 +283,71 @@ final class RevenueCatPurchaseContractTests: XCTestCase {
             requestDate: requestDate,
             firstSeen: requestDate,
             originalAppUserId: "contract-test-user"
+        )
+    }
+
+    private func validPackage(for period: RevenueCatBillingPeriod) -> Package {
+        switch period {
+        case .monthly:
+            return package(
+                identifier: "$rc_monthly",
+                packageType: .monthly,
+                productType: .autoRenewableSubscription,
+                subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .month)
+            )
+        case .annual:
+            return package(
+                identifier: "$rc_annual",
+                packageType: .annual,
+                productType: .autoRenewableSubscription,
+                subscriptionPeriod: SubscriptionPeriod(value: 1, unit: .year)
+            )
+        case .lifetime:
+            return package(
+                identifier: "$rc_lifetime",
+                packageType: .lifetime,
+                productType: .nonConsumable,
+                subscriptionPeriod: nil
+            )
+        }
+    }
+
+    private func package(
+        identifier: String,
+        packageType: PackageType,
+        productType: StoreProduct.ProductType,
+        subscriptionPeriod: SubscriptionPeriod?
+    ) -> Package {
+        let product = TestStoreProduct(
+            localizedTitle: "Contract test product",
+            price: Decimal(10),
+            currencyCode: "USD",
+            localizedPriceString: "$10.00",
+            productIdentifier: "contract-test-\(identifier)",
+            productType: productType,
+            localizedDescription: "Contract test product",
+            subscriptionGroupIdentifier: productType == .autoRenewableSubscription
+                ? "contract-test-subscriptions"
+                : nil,
+            subscriptionPeriod: subscriptionPeriod,
+            locale: Locale(identifier: "en_US")
+        ).toStoreProduct()
+
+        return Package(
+            identifier: identifier,
+            packageType: packageType,
+            storeProduct: product,
+            offeringIdentifier: "contract-test-offering",
+            webCheckoutUrl: nil
+        )
+    }
+
+    private func offering(with packages: [Package]) -> Offering {
+        Offering(
+            identifier: "contract-test-offering",
+            serverDescription: "Contract test offering",
+            availablePackages: packages,
+            webCheckoutUrl: nil
         )
     }
 }

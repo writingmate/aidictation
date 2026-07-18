@@ -1,6 +1,5 @@
-This update makes it clearer how AI Dictation works on iPhone.
+This update improves cloud cleanup reliability.
 
-• More accurate guidance for dictation from the keyboard and inside the app.
-• Clear explanations of offline speech recognition and optional cloud processing.
-• Better details for Dictation, Notes, and Meetings.
-• Updated information about personal vocabulary, voice shortcuts, history, and Live Activity status.
+• Personal vocabulary now guides recognition without being copied into your dictation.
+• Longer dictations are preserved through the final sentence.
+• Cleanup is less likely to add invented or repeated words.

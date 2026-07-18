@@ -1,5 +1,7 @@
 package com.whispermate.aidictation.data.repository
 
+import com.revenuecat.purchases.PackageType
+import com.revenuecat.purchases.ProductType
 import com.revenuecat.purchases.models.Period
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -8,67 +10,41 @@ import org.junit.Test
 
 class RevenueCatPurchasePolicyTest {
     @Test
-    fun `uses the configured monthly package before inspecting fallback packages`() {
-        val configured = TestPackage("configured", period(1, Period.Unit.MONTH, "P1M"))
-        val fallback = TestPackage("fallback", period(1, Period.Unit.MONTH, "P1M"))
+    fun `selects the sole package matching the exact monthly contract`() {
+        val exactMonthly = monthlyPackage("exact-monthly")
 
-        val selected = selectMonthlyPackage(
-            configuredMonthlyPackage = configured,
-            availablePackages = listOf(fallback),
-            periodOf = TestPackage::period
-        )
+        val selected = selectPackage(listOf(exactMonthly))
 
-        assertSame(configured, selected)
+        assertSame(exactMonthly, selected)
     }
 
     @Test
-    fun `falls back safely when the configured monthly package is yearly`() {
-        val misconfigured = TestPackage("misconfigured", period(1, Period.Unit.YEAR, "P1Y"))
-        val fallback = TestPackage("fallback", period(1, Period.Unit.MONTH, "P1M"))
-
-        val selected = selectMonthlyPackage(
-            configuredMonthlyPackage = misconfigured,
-            availablePackages = listOf(misconfigured, fallback),
-            periodOf = TestPackage::period
+    fun `rejects a yearly package mapped as monthly`() {
+        val misconfigured = monthlyPackage(
+            name = "misconfigured",
+            period = period(1, Period.Unit.YEAR, "P1Y")
         )
 
-        assertSame(fallback, selected)
-    }
-
-    @Test
-    fun `rejects a misconfigured monthly package when no exact fallback exists`() {
-        val misconfigured = TestPackage("misconfigured", period(1, Period.Unit.YEAR, "P1Y"))
-
-        val selected = selectMonthlyPackage(
-            configuredMonthlyPackage = misconfigured,
-            availablePackages = listOf(
-                misconfigured,
-                TestPackage("two-months", period(2, Period.Unit.MONTH, "P2M"))
-            ),
-            periodOf = TestPackage::period
-        )
+        val selected = selectPackage(listOf(misconfigured))
 
         assertNull(selected)
     }
 
     @Test
-    fun `falls back to the first package with an exact one month period`() {
-        val exactMonthly = TestPackage("one-month", period(1, Period.Unit.MONTH, "P1M"))
-        val anotherMonthly = TestPackage("another-month", period(1, Period.Unit.MONTH, "P1M"))
+    fun `selects the exact monthly package after rejecting malformed packages`() {
+        val exactMonthly = monthlyPackage("one-month")
         val available = listOf(
-            TestPackage("no-period", null),
-            TestPackage("thirty-days", period(30, Period.Unit.DAY, "P30D")),
-            TestPackage("four-weeks", period(4, Period.Unit.WEEK, "P4W")),
-            TestPackage("two-months", period(2, Period.Unit.MONTH, "P2M")),
-            exactMonthly,
-            anotherMonthly
+            monthlyPackage("no-period", period = null),
+            monthlyPackage("thirty-days", period(30, Period.Unit.DAY, "P30D")),
+            monthlyPackage("four-weeks", period(4, Period.Unit.WEEK, "P4W")),
+            monthlyPackage("two-months", period(2, Period.Unit.MONTH, "P2M")),
+            monthlyPackage("wrong-identifier", identifier = "custom_monthly"),
+            monthlyPackage("wrong-package-type", packageType = PackageType.CUSTOM),
+            monthlyPackage("wrong-product-type", productType = ProductType.INAPP),
+            exactMonthly
         )
 
-        val selected = selectMonthlyPackage(
-            configuredMonthlyPackage = null,
-            availablePackages = available,
-            periodOf = TestPackage::period
-        )
+        val selected = selectPackage(available)
 
         assertSame(exactMonthly, selected)
     }
@@ -76,15 +52,76 @@ class RevenueCatPurchasePolicyTest {
     @Test
     fun `does not select an approximate or multi-month package`() {
         val available = listOf(
-            TestPackage("thirty-days", period(30, Period.Unit.DAY, "P30D")),
-            TestPackage("four-weeks", period(4, Period.Unit.WEEK, "P4W")),
-            TestPackage("two-months", period(2, Period.Unit.MONTH, "P2M"))
+            monthlyPackage("thirty-days", period(30, Period.Unit.DAY, "P30D")),
+            monthlyPackage("four-weeks", period(4, Period.Unit.WEEK, "P4W")),
+            monthlyPackage("two-months", period(2, Period.Unit.MONTH, "P2M"))
         )
 
-        val selected = selectMonthlyPackage(
-            configuredMonthlyPackage = null,
-            availablePackages = available,
-            periodOf = TestPackage::period
+        val selected = selectPackage(available)
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `rejects a one month package with the wrong RevenueCat identifier`() {
+        val selected = selectPackage(
+            listOf(
+                monthlyPackage(
+                    name = "wrong-identifier",
+                    identifier = "custom_monthly"
+                )
+            )
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `rejects a one month package with the wrong RevenueCat package type`() {
+        val selected = selectPackage(
+            listOf(
+                monthlyPackage(
+                    name = "wrong-package-type",
+                    packageType = PackageType.CUSTOM
+                )
+            )
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `rejects a one month in-app product`() {
+        val selected = selectPackage(
+            listOf(
+                monthlyPackage(
+                    name = "in-app",
+                    productType = ProductType.INAPP
+                )
+            )
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `rejects a one month period without the exact P1M representation`() {
+        val selected = selectPackage(
+            listOf(
+                monthlyPackage(
+                    name = "noncanonical-period",
+                    period = period(1, Period.Unit.MONTH, "P30D")
+                )
+            )
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `rejects an ambiguous offering with more than one exact monthly package`() {
+        val selected = selectPackage(
+            listOf(monthlyPackage("first"), monthlyPackage("second"))
         )
 
         assertNull(selected)
@@ -120,8 +157,27 @@ class RevenueCatPurchasePolicyTest {
         return Period(value, unit, iso8601)
     }
 
+    private fun monthlyPackage(
+        name: String,
+        period: Period? = period(1, Period.Unit.MONTH, "P1M"),
+        identifier: String = REVENUECAT_MONTHLY_PACKAGE_IDENTIFIER,
+        packageType: PackageType = PackageType.MONTHLY,
+        productType: ProductType = ProductType.SUBS
+    ) = TestPackage(name, identifier, packageType, productType, period)
+
+    private fun selectPackage(availablePackages: List<TestPackage>) = selectMonthlyPackage(
+        availablePackages = availablePackages,
+        identifierOf = TestPackage::identifier,
+        packageTypeOf = TestPackage::packageType,
+        productTypeOf = TestPackage::productType,
+        periodOf = TestPackage::period
+    )
+
     private data class TestPackage(
         val name: String,
+        val identifier: String,
+        val packageType: PackageType,
+        val productType: ProductType,
         val period: Period?
     )
 }

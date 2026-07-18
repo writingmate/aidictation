@@ -382,11 +382,12 @@ class RevenueCatPurchaseManager @Inject constructor(
     private fun monthlyPackage(offerings: Offerings): Package? {
         val current = offerings.current ?: return null
         return selectMonthlyPackage(
-            configuredMonthlyPackage = current.monthly,
-            availablePackages = current.availablePackages
-        ) { packageOption ->
-            packageOption.product.period
-        }
+            availablePackages = current.availablePackages,
+            identifierOf = { it.identifier },
+            packageTypeOf = { it.packageType },
+            productTypeOf = { it.product.type },
+            periodOf = { it.product.period }
+        )
     }
 
     private fun requireCurrentUser(purchases: Purchases, expectedUserID: String) {

@@ -98,6 +98,11 @@ jobs:
               ;;
           esac
 
+          if [ "${REVENUECAT_ENTITLEMENT_ID:-}" != "pro" ]; then
+            echo "::error::REVENUECAT_ENTITLEMENT_ID must be 'pro' so purchases unlock the production plan"
+            missing=1
+          fi
+
           exit "${missing}"
 
       - name: Install App Store Connect API key

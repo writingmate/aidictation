@@ -197,8 +197,10 @@ val validateRevenueCatReleaseConfig by tasks.registering {
                 "REVENUECAT_GOOGLE_API_KEY must be the public Google Play SDK key (goog_...) for release builds."
             )
         }
-        if (revenueCatEntitlementId.isBlank()) {
-            throw GradleException("REVENUECAT_ENTITLEMENT_ID is required for release builds.")
+        if (revenueCatEntitlementId != "pro") {
+            throw GradleException(
+                "REVENUECAT_ENTITLEMENT_ID must be 'pro' so purchases unlock the production plan."
+            )
         }
     }
 }

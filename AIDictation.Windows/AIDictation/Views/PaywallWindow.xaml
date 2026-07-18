@@ -15,6 +15,7 @@
     <Window.Resources>
         <Style x:Key="PaywallPrimaryButton" TargetType="Button"
                BasedOn="{StaticResource AccentButton}">
+            <Setter Property="Foreground" Value="Black"/>
             <Setter Property="MinHeight" Value="42"/>
             <Setter Property="Padding" Value="22,10"/>
             <Style.Triggers>

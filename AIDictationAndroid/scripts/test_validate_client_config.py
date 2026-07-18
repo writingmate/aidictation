@@ -13,6 +13,7 @@ def release_config() -> dict[str, str]:
         "SUPABASE_ANON_KEY": "sb_publishable_example",
         "AUTH_WEB_URL": "https://aidictation.com/auth",
         "REVENUECAT_GOOGLE_API_KEY": "goog_public_sdk_key",
+        "REVENUECAT_ENTITLEMENT_ID": "pro",
     }
 
 
@@ -53,6 +54,20 @@ class ValidateClientConfigurationTests(unittest.TestCase):
         config["REVENUECAT_GOOGLE_API_KEY"] = ""
 
         with self.assertRaisesRegex(ClientConfigurationError, "REVENUECAT_GOOGLE_API_KEY"):
+            validate_client_configuration(config)
+
+    def test_rejects_unexpected_revenuecat_entitlement(self) -> None:
+        config = release_config()
+        config["REVENUECAT_ENTITLEMENT_ID"] = "premium"
+
+        with self.assertRaisesRegex(ClientConfigurationError, "must be 'pro'"):
+            validate_client_configuration(config)
+
+    def test_requires_revenuecat_entitlement_for_release(self) -> None:
+        config = release_config()
+        config["REVENUECAT_ENTITLEMENT_ID"] = ""
+
+        with self.assertRaisesRegex(ClientConfigurationError, "REVENUECAT_ENTITLEMENT_ID"):
             validate_client_configuration(config)
 
 

@@ -18,6 +18,7 @@ RELEASE_REQUIRED_NAMES = (
     "AIDICTATION_POST_PROCESSING_KEY",
     *AUTH_CONFIG_NAMES,
     "REVENUECAT_GOOGLE_API_KEY",
+    "REVENUECAT_ENTITLEMENT_ID",
 )
 URL_CONFIG_NAMES = (
     "TRANSCRIPTION_ENDPOINT",
@@ -91,6 +92,13 @@ def validate_public_revenuecat_google_key(key: str) -> None:
         )
 
 
+def validate_revenuecat_entitlement_id(entitlement_id: str) -> None:
+    if entitlement_id != "pro":
+        raise ClientConfigurationError(
+            "REVENUECAT_ENTITLEMENT_ID must be 'pro' so purchases unlock the production plan."
+        )
+
+
 def validate_client_configuration(
     config: Mapping[str, str],
     required_names: Sequence[str] = RELEASE_REQUIRED_NAMES,
@@ -124,6 +132,10 @@ def validate_client_configuration(
     revenuecat_key = values.get("REVENUECAT_GOOGLE_API_KEY", "")
     if revenuecat_key:
         validate_public_revenuecat_google_key(revenuecat_key)
+
+    revenuecat_entitlement_id = values.get("REVENUECAT_ENTITLEMENT_ID", "")
+    if revenuecat_entitlement_id:
+        validate_revenuecat_entitlement_id(revenuecat_entitlement_id)
 
 
 def main() -> int:

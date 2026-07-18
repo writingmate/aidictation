@@ -208,7 +208,7 @@ public partial class AuthService : ObservableObject
     public bool TryOpenUpgrade(out string? errorMessage)
     {
         errorMessage = null;
-        var link = BuildConfig.RevenueCatWebPurchaseLink.Trim().TrimEnd('/');
+        var link = BuildConfig.RevenueCatWebPurchaseLink.Trim();
         if (string.IsNullOrWhiteSpace(link))
         {
             errorMessage = "Checkout isn’t available right now. Please try again later.";
@@ -221,15 +221,23 @@ public partial class AuthService : ObservableObject
             return false;
         }
 
-        if (!Uri.TryCreate(link, UriKind.Absolute, out var purchaseLink) ||
-            purchaseLink.Scheme != Uri.UriSchemeHttps ||
+        if (!Uri.TryCreate(link, UriKind.Absolute, out var purchaseLink))
+        {
+            Debug.WriteLine("[AuthService] Checkout handoff failed: purchase link is invalid");
+            errorMessage = "Checkout isn’t available right now. Please try again later.";
+            return false;
+        }
+
+        var pathSegments = purchaseLink.AbsolutePath.Split('/', StringSplitOptions.None);
+        if (purchaseLink.Scheme != Uri.UriSchemeHttps ||
             !purchaseLink.Host.Equals("pay.rev.cat", StringComparison.OrdinalIgnoreCase) ||
             !purchaseLink.IsDefaultPort ||
             !string.IsNullOrEmpty(purchaseLink.UserInfo) ||
             !string.IsNullOrEmpty(purchaseLink.Query) ||
             !string.IsNullOrEmpty(purchaseLink.Fragment) ||
-            purchaseLink.AbsolutePath
-                .Split('/', StringSplitOptions.RemoveEmptyEntries).Length != 1)
+            pathSegments.Length != 2 ||
+            !string.IsNullOrEmpty(pathSegments[0]) ||
+            string.IsNullOrEmpty(pathSegments[1]))
         {
             Debug.WriteLine("[AuthService] Checkout handoff failed: purchase link is invalid");
             errorMessage = "Checkout isn’t available right now. Please try again later.";

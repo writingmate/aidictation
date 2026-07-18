@@ -6,16 +6,16 @@ The apps use one RevenueCat customer identity across macOS, Android, and Windows
 
 1. Create Apple, Google Play, and Web apps in one RevenueCat project.
 2. Import the existing products from App Store Connect, Google Play, and Stripe Billing (or RevenueCat Billing).
-3. Attach every paid product, including the lifetime product, to the `pro` entitlement.
-4. Create a current offering. Use the standard `$rc_monthly`, `$rc_annual`, and `$rc_lifetime` packages where applicable.
-5. Create a Web Purchase Link for macOS and Windows and copy its production URL template (`https://pay.rev.cat/...`).
+3. Attach every paid product, including the lifetime product, to the exact `pro` entitlement. Production release checks reject any other entitlement identifier.
+4. Create a current offering with these exact mappings: `$rc_monthly` to the store monthly product and Stripe lookup key `monthly`, `$rc_annual` to the store yearly product and Stripe lookup key `yearly`, and `$rc_lifetime` to the non-expiring store product and Stripe lookup key `lifetime`. Apple and Web use all three packages; the current Android client purchases `$rc_monthly` only.
+5. Create a Web Purchase Link for macOS and Windows and copy its production URL (`https://pay.rev.cat/<production-token>`).
 6. Add a webhook pointing to `https://<project-ref>.supabase.co/functions/v1/revenuecat-webhook`. Set its authorization header to the exact value stored in `REVENUECAT_WEBHOOK_AUTHORIZATION`.
 
 ## Build configuration
 
-- iOS: the public Apple SDK key (`REVENUECAT_APPLE_API_KEY`, beginning with `appl_`) and optional `REVENUECAT_ENTITLEMENT_ID` (default `pro`).
-- macOS and Windows: `REVENUECAT_WEB_PURCHASE_LINK` for the production hosted purchase page (`https://pay.rev.cat/...`, without query or fragment). The direct-distribution macOS build does not initiate App Store purchases.
-- Android: `REVENUECAT_GOOGLE_API_KEY` and optional `REVENUECAT_ENTITLEMENT_ID`.
+- iOS: the public Apple SDK key (`REVENUECAT_APPLE_API_KEY`, beginning with `appl_`) and `REVENUECAT_ENTITLEMENT_ID=pro`.
+- macOS and Windows: `REVENUECAT_WEB_PURCHASE_LINK` for the production hosted purchase page (`https://pay.rev.cat/<production-token>`, with exactly one path segment and no query or fragment). The apps append the signed-in user's ID; the direct-distribution macOS build does not initiate App Store purchases.
+- Android: `REVENUECAT_GOOGLE_API_KEY` and `REVENUECAT_ENTITLEMENT_ID=pro`.
 
 These are public platform SDK keys or hosted purchase URLs. Never put a RevenueCat secret API key in an app build.
 

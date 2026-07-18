@@ -108,7 +108,7 @@ class RevenueCatPurchaseManager @Inject constructor(
     ): Result<RevenueCatEntitlement> {
         configure()
         if (!isConfigured || !Purchases.isConfigured) {
-            return Result.failure(IllegalStateException("Purchases are not available in this build."))
+            return Result.failure(IllegalStateException("Checkout isn't available right now. Please try again later."))
         }
         val normalizedUserID = normalizeSupabaseUserID(userID).getOrElse {
             return Result.failure(it)
@@ -145,7 +145,7 @@ class RevenueCatPurchaseManager @Inject constructor(
     ) {
         configure()
         if (!isConfigured) {
-            onError("Purchases are not available in this build.")
+            onError("Checkout isn't available right now. Please try again later.")
             return
         }
         val normalizedUserID = normalizeSupabaseUserID(expectedUserID).getOrElse {
@@ -190,7 +190,7 @@ class RevenueCatPurchaseManager @Inject constructor(
     ) {
         configure()
         if (!isConfigured) {
-            onError("Purchases are not available in this build.")
+            onError("Checkout isn't available right now. Please try again later.")
             return
         }
 
@@ -237,7 +237,7 @@ class RevenueCatPurchaseManager @Inject constructor(
     ) {
         configure()
         if (!isConfigured) {
-            onError("Purchases are not available in this build.")
+            onError("Checkout isn't available right now. Please try again later.")
             return
         }
         val normalizedUserID = normalizeSupabaseUserID(expectedUserID).getOrElse {
@@ -270,7 +270,7 @@ class RevenueCatPurchaseManager @Inject constructor(
     ): Result<RevenueCatEntitlement> {
         configure()
         if (!isConfigured || !Purchases.isConfigured) {
-            return Result.failure(IllegalStateException("Purchases are not available in this build."))
+            return Result.failure(IllegalStateException("Checkout isn't available right now. Please try again later."))
         }
         val normalizedUserID = normalizeSupabaseUserID(userID).getOrElse {
             return Result.failure(it)

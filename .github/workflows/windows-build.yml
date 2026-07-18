@@ -58,14 +58,16 @@ jobs:
         if (-not [Uri]::TryCreate($env:REVENUECAT_WEB_PURCHASE_LINK, [UriKind]::Absolute, [ref]$uri)) {
           throw "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
         }
-        $pathSegments = @($uri.AbsolutePath.Trim('/') -split '/' | Where-Object { $_ })
+        $pathSegments = @($uri.AbsolutePath -split '/')
         if ($uri.Scheme -ne "https" -or
             $uri.Host -ne "pay.rev.cat" -or
             -not $uri.IsDefaultPort -or
             -not [string]::IsNullOrEmpty($uri.UserInfo) -or
             -not [string]::IsNullOrEmpty($uri.Query) -or
             -not [string]::IsNullOrEmpty($uri.Fragment) -or
-            $pathSegments.Count -ne 1) {
+            $pathSegments.Count -ne 2 -or
+            -not [string]::IsNullOrEmpty($pathSegments[0]) -or
+            [string]::IsNullOrEmpty($pathSegments[1])) {
           throw "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
         }
 

@@ -233,14 +233,16 @@ public final class RevenueCatManager: NSObject, ObservableObject {
 
     @discardableResult
     public func purchase(_ period: RevenueCatBillingPeriod) async -> Bool {
+        errorMessage = nil
         configure()
         guard isConfigured else {
-            errorMessage = "Purchases are not available in this build."
+            errorMessage = "Checkout isn’t available right now. Please try again later."
             return false
         }
         guard AuthManager.shared.isAuthenticated,
               let user = AuthManager.shared.currentUser
         else {
+            errorMessage = "Sign in to continue to checkout."
             AuthManager.shared.openSignUp()
             return false
         }
@@ -254,7 +256,7 @@ public final class RevenueCatManager: NSObject, ObservableObject {
                       resolvingAgainstBaseURL: false
                   )
             else {
-                errorMessage = "Purchases are not available in this build."
+                errorMessage = "Checkout isn’t available right now. Please try again later."
                 return false
             }
             let packageID: String
@@ -342,7 +344,7 @@ public final class RevenueCatManager: NSObject, ObservableObject {
         configure()
         errorMessage = nil
         guard isConfigured else {
-            errorMessage = "Purchases are not available in this build."
+            errorMessage = "Checkout isn’t available right now. Please try again later."
             return []
         }
 
@@ -383,19 +385,26 @@ public final class RevenueCatManager: NSObject, ObservableObject {
 
     @discardableResult
     public func restorePurchases() async -> Bool {
+        errorMessage = nil
         configure()
         guard isConfigured else {
-            errorMessage = "Purchases are not available in this build."
+            errorMessage = "Checkout isn’t available right now. Please try again later."
             return false
         }
         do {
             #if os(macOS)
+                guard AuthManager.shared.isAuthenticated else {
+                    errorMessage = "Sign in to restore your purchases."
+                    AuthManager.shared.openSignUp()
+                    return false
+                }
                 await AuthManager.shared.refreshUser()
                 return AuthManager.shared.currentUser?.subscriptionTier.isPaid == true
             #else
                 guard AuthManager.shared.isAuthenticated,
                       let user = AuthManager.shared.currentUser
                 else {
+                    errorMessage = "Sign in to restore your purchases."
                     AuthManager.shared.openSignUp()
                     return false
                 }
@@ -565,16 +574,23 @@ public final class RevenueCatManager: NSObject, ObservableObject {
 
     #if os(macOS)
     private func validatedWebPurchaseLink(_ value: String) -> URL? {
-        guard let components = URLComponents(string: value),
-              components.scheme?.lowercased() == "https",
+        guard let components = URLComponents(string: value) else {
+            return nil
+        }
+        let pathSegments = components.path.split(
+            separator: "/",
+            omittingEmptySubsequences: false
+        )
+        guard components.scheme?.lowercased() == "https",
               components.host?.lowercased() == "pay.rev.cat",
               components.user == nil,
               components.password == nil,
               components.port == nil,
               components.query == nil,
               components.fragment == nil,
-              !components.path.isEmpty,
-              components.path != "/",
+              pathSegments.count == 2,
+              pathSegments[0].isEmpty,
+              !pathSegments[1].isEmpty,
               let url = components.url
         else {
             return nil

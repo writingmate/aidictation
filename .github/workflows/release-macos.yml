@@ -78,25 +78,32 @@ jobs:
         run: |
           test -n "$SENTRY_DSN"
           test -n "$REVENUECAT_WEB_PURCHASE_LINK"
+          test "$REVENUECAT_ENTITLEMENT_ID" = "pro" || {
+            echo "REVENUECAT_ENTITLEMENT_ID must be 'pro' so purchases unlock the production plan" >&2
+            exit 1
+          }
           python3 - <<'PY'
           import os
-          from urllib.parse import urlparse
+          from urllib.parse import unquote, urlparse
 
           value = os.environ["REVENUECAT_WEB_PURCHASE_LINK"]
           parsed = urlparse(value)
+          path_segments = unquote(parsed.path).split("/")
           valid = (
               parsed.scheme == "https"
               and parsed.hostname == "pay.rev.cat"
               and parsed.port is None
               and parsed.username is None
               and parsed.password is None
-              and parsed.path not in {"", "/"}
+              and len(path_segments) == 2
+              and path_segments[0] == ""
+              and bool(path_segments[1])
               and not parsed.query
               and not parsed.fragment
           )
           if not valid:
               raise SystemExit(
-                  "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/... production link without query or fragment"
+                  "REVENUECAT_WEB_PURCHASE_LINK must be an https://pay.rev.cat/<production-token> link without query or fragment"
               )
           PY
           echo "$SECRETS_PLIST" | base64 --decode > Whishpermate/Whispermate/Secrets.plist

@@ -245,12 +245,13 @@ public struct RevenueCatPaywallView: View {
                 if activeOperation == .purchasing || purchaseManager.isPurchasing {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(Color.dsPrimaryForeground)
+                        .tint(.black)
                 }
 
                 Text(primaryButtonTitle)
             }
             .font(.headline)
+            .foregroundStyle(.black)
             .frame(maxWidth: .infinity, minHeight: 24)
             .padding(.vertical, 8)
         }
@@ -341,7 +342,7 @@ public struct RevenueCatPaywallView: View {
         }
 
         if availableOptions.isEmpty {
-            loadErrorMessage = purchaseManager.errorMessage ?? "Purchase options are not available right now."
+            loadErrorMessage = purchaseManager.errorMessage ?? "Checkout isn’t available right now. Please try again later."
         }
         isLoading = false
     }

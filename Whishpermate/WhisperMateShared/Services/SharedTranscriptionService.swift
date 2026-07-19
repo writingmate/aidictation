@@ -12,6 +12,7 @@ public enum SharedTranscriptionService {
         fileprivate let transcriptionOptions: TranscriptionOptions
         fileprivate let sttPrompt: String
         fileprivate let postProcessingPrompt: String
+        fileprivate let serverPostProcessingPrompt: String
         fileprivate let shortcutExpansions: [ShortcutExpansion]
 
         public static func capture(
@@ -70,6 +71,10 @@ public enum SharedTranscriptionService {
                 transcriptionOptions: transcriptionOptions,
                 sttPrompt: prompts.stt,
                 postProcessingPrompt: prompts.postProcessing,
+                serverPostProcessingPrompt: SharedTranscriptionService.serverPostProcessingPrompt(
+                    outputMode: selectedOutputMode,
+                    referenceContext: prompts.postProcessing
+                ),
                 shortcutExpansions: expansions
             )
         }
@@ -265,11 +270,13 @@ public enum SharedTranscriptionService {
         let dictionaryHints = dictionaryManager.transcriptionHints
         if !dictionaryHints.isEmpty {
             sttPromptComponents.append(dictionaryHints)
+            postProcessingPromptComponents.append("Vocabulary: \(dictionaryHints)")
         }
 
         let shortcutHints = shortcutManager.transcriptionHints
         if !shortcutHints.isEmpty {
             sttPromptComponents.append(shortcutHints)
+            postProcessingPromptComponents.append("Phrases: \(shortcutHints)")
         }
 
         if let instructions = dictionaryManager.formattingInstructions {
@@ -287,6 +294,29 @@ public enum SharedTranscriptionService {
         return (
             stt: sttPromptComponents.joined(separator: "\n"),
             postProcessing: postProcessingPromptComponents.joined(separator: "\n")
+        )
+    }
+
+    private static func serverPostProcessingPrompt(
+        outputMode: TranscriptionOutputMode,
+        referenceContext: String
+    ) -> String {
+        let transformationInstruction: String?
+        switch outputMode {
+        case .dictation:
+            transformationInstruction = nil
+        case .notes:
+            transformationInstruction = TranscriptionOutputMode.notesPostProcessingInstruction
+        case .meetings:
+            transformationInstruction = TranscriptionOutputMode.meetingsPostProcessingInstruction
+        }
+
+        return TranscriptionCleanupPrompt.systemPrompt(
+            formattingContext: referenceContext.isEmpty ? [] : [referenceContext],
+            languageContext: nil,
+            appContext: nil,
+            hasSelectedContent: false,
+            transformationInstruction: transformationInstruction
         )
     }
 
@@ -378,7 +408,7 @@ public enum SharedTranscriptionService {
             audioURL: audioURL,
             prompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
             sttPrompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
-            postProcessingPrompt: nil,
+            postProcessingPrompt: cloud.isOneStage ? request.serverPostProcessingPrompt : nil,
             serverPostProcessingEnabledByDefault: cloud.isOneStage,
             onChunkCheckpoint: { completedLeafIndex, transcript in
                 try await checkpointForwarder.checkpointLeaf(

@@ -13,7 +13,6 @@ public enum SharedTranscriptionService {
         fileprivate let sttPrompt: String
         fileprivate let postProcessingPrompt: String
         fileprivate let serverPostProcessingPrompt: String
-        fileprivate let shortcutExpansions: [ShortcutExpansion]
 
         public static func capture(
             dictionaryManager: DictionaryManager = .shared,
@@ -59,10 +58,6 @@ public enum SharedTranscriptionService {
                 )
             }
 
-            let expansions = shortcutManager.shortcuts
-                .filter(\.isEnabled)
-                .map { ShortcutExpansion(trigger: $0.voiceTrigger, expansion: $0.expansion) }
-
             return RequestSnapshot(
                 useOnDeviceRecognition: useOnDevice,
                 cloud: cloud,
@@ -74,21 +69,8 @@ public enum SharedTranscriptionService {
                 serverPostProcessingPrompt: SharedTranscriptionService.serverPostProcessingPrompt(
                     outputMode: selectedOutputMode,
                     referenceContext: prompts.postProcessing
-                ),
-                shortcutExpansions: expansions
+                )
             )
-        }
-
-        fileprivate func expandShortcuts(in text: String) -> String {
-            shortcutExpansions
-                .sorted { $0.trigger.count > $1.trigger.count }
-                .reduce(text) { result, shortcut in
-                    result.replacingOccurrences(
-                        of: shortcut.trigger,
-                        with: shortcut.expansion,
-                        options: .caseInsensitive
-                    )
-                }
         }
     }
 
@@ -103,11 +85,6 @@ public enum SharedTranscriptionService {
         let endpoint: String
         let model: String
         let apiKey: String
-    }
-
-    fileprivate struct ShortcutExpansion: Sendable {
-        let trigger: String
-        let expansion: String
     }
 
     private struct RecognitionResult: Sendable {
@@ -239,10 +216,7 @@ public enum SharedTranscriptionService {
             }
         }
         let nonemptyModeResult = modeResult.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanupResult = nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult
-        let expandedResult = request.expandShortcuts(in: cleanupResult)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return expandedResult.isEmpty ? durableRawTranscript : expandedResult
+        return nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult
     }
 
     private static func outputModeFor(

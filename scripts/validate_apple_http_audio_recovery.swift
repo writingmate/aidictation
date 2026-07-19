@@ -1,6 +1,263 @@
+import Darwin
 import Foundation
 
-private enum ValidationError: Error, CustomStringConvertible {
+private enum BoundaryServerError: Error, Sendable {
+    case setupFailed(Int32)
+}
+
+private final class HTTPBoundaryState: @unchecked Sendable {
+    enum Scenario: Sendable {
+        case stalled(statusCode: Int)
+        case disconnectTwiceThenSucceed
+        case oversizedSuccess(contentLength: Int)
+    }
+
+    private let lock = NSLock()
+    private var scenario: Scenario = .stalled(statusCode: 500)
+    private var requestCount = 0
+
+    func configure(_ scenario: Scenario) {
+        lock.lock()
+        self.scenario = scenario
+        requestCount = 0
+        lock.unlock()
+    }
+
+    func nextRequest() -> (scenario: Scenario, attempt: Int) {
+        lock.lock()
+        requestCount += 1
+        let snapshot = (scenario, requestCount)
+        lock.unlock()
+        return snapshot
+    }
+
+    func attempts() -> Int {
+        lock.lock()
+        let snapshot = requestCount
+        lock.unlock()
+        return snapshot
+    }
+}
+
+private final class HTTPBoundaryServer: @unchecked Sendable {
+    let state = HTTPBoundaryState()
+    let url: URL
+
+    private let lifecycleLock = NSLock()
+    private let listeningSocket: Int32
+    private var isStopped = false
+
+    init() throws {
+        let socketDescriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socketDescriptor >= 0 else {
+            throw BoundaryServerError.setupFailed(errno)
+        }
+
+        var reuseAddress: Int32 = 1
+        guard setsockopt(
+            socketDescriptor,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &reuseAddress,
+            socklen_t(MemoryLayout<Int32>.size)
+        ) == 0 else {
+            let setupError = errno
+            Darwin.close(socketDescriptor)
+            throw BoundaryServerError.setupFailed(setupError)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                Darwin.bind(
+                    socketDescriptor,
+                    socketAddress,
+                    socklen_t(MemoryLayout<sockaddr_in>.size)
+                )
+            }
+        }
+        guard bindResult == 0, Darwin.listen(socketDescriptor, 8) == 0 else {
+            let setupError = errno
+            Darwin.close(socketDescriptor)
+            throw BoundaryServerError.setupFailed(setupError)
+        }
+
+        var addressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                Darwin.getsockname(socketDescriptor, socketAddress, &addressLength)
+            }
+        }
+        guard nameResult == 0 else {
+            let setupError = errno
+            Darwin.close(socketDescriptor)
+            throw BoundaryServerError.setupFailed(setupError)
+        }
+
+        listeningSocket = socketDescriptor
+        let port = UInt16(bigEndian: address.sin_port)
+        guard let url = URL(string: "http://127.0.0.1:\(port)/transcribe") else {
+            Darwin.close(socketDescriptor)
+            throw BoundaryServerError.setupFailed(EINVAL)
+        }
+        self.url = url
+
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            acceptConnections()
+        }
+    }
+
+    func stop() {
+        lifecycleLock.lock()
+        guard !isStopped else {
+            lifecycleLock.unlock()
+            return
+        }
+        isStopped = true
+        lifecycleLock.unlock()
+        Darwin.shutdown(listeningSocket, SHUT_RDWR)
+        Darwin.close(listeningSocket)
+    }
+
+    private func acceptConnections() {
+        while true {
+            let clientSocket = Darwin.accept(listeningSocket, nil, nil)
+            guard clientSocket >= 0 else { return }
+            let requestSnapshot = state.nextRequest()
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.serve(clientSocket, request: requestSnapshot)
+            }
+        }
+    }
+
+    private static func serve(
+        _ clientSocket: Int32,
+        request: (scenario: HTTPBoundaryState.Scenario, attempt: Int)
+    ) {
+        defer { Darwin.close(clientSocket) }
+
+        var noSignal: Int32 = 1
+        _ = setsockopt(
+            clientSocket,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &noSignal,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
+        var noDelay: Int32 = 1
+        _ = setsockopt(
+            clientSocket,
+            IPPROTO_TCP,
+            TCP_NODELAY,
+            &noDelay,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
+        var receiveTimeout = timeval(tv_sec: 3, tv_usec: 0)
+        _ = setsockopt(
+            clientSocket,
+            SOL_SOCKET,
+            SO_RCVTIMEO,
+            &receiveTimeout,
+            socklen_t(MemoryLayout<timeval>.size)
+        )
+
+        var requestBytes = [UInt8](repeating: 0, count: 4_096)
+        _ = requestBytes.withUnsafeMutableBytes { buffer in
+            Darwin.recv(clientSocket, buffer.baseAddress, buffer.count, 0)
+        }
+
+        switch request.scenario {
+        case .stalled(let statusCode):
+            let reason = statusCode == 413 ? "Payload Too Large" : (statusCode == 200 ? "OK" : "Bad Request")
+            sendResponse(
+                socket: clientSocket,
+                statusCode: statusCode,
+                reason: reason,
+                contentLength: 2_048,
+                body: Data(repeating: 0x78, count: 1_024)
+            )
+            waitForCancellation(on: clientSocket)
+        case .oversizedSuccess(let contentLength):
+            sendResponse(
+                socket: clientSocket,
+                statusCode: 200,
+                reason: "OK",
+                contentLength: contentLength,
+                body: Data(repeating: 0x78, count: 1_024)
+            )
+            waitForCancellation(on: clientSocket)
+        case .disconnectTwiceThenSucceed:
+            let completedBody = Data(String(repeating: "r", count: 2_048).utf8)
+            if request.attempt < 3 {
+                sendResponse(
+                    socket: clientSocket,
+                    statusCode: 200,
+                    reason: "OK",
+                    contentLength: completedBody.count,
+                    body: Data(repeating: 0x70, count: 1_024)
+                )
+            } else {
+                sendResponse(
+                    socket: clientSocket,
+                    statusCode: 200,
+                    reason: "OK",
+                    contentLength: completedBody.count,
+                    body: completedBody
+                )
+            }
+        }
+    }
+
+    private static func sendResponse(
+        socket: Int32,
+        statusCode: Int,
+        reason: String,
+        contentLength: Int,
+        body: Data
+    ) {
+        let headerText =
+            "HTTP/1.1 \(statusCode) \(reason)\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "Content-Length: \(contentLength)\r\n" +
+            "Retry-After: 7\r\n" +
+            "X-AIDictation-Request-ID: boundary-test\r\n" +
+            "Connection: close\r\n\r\n"
+        let headers = Data(headerText.utf8)
+        sendAll(headers, to: socket)
+        sendAll(body, to: socket)
+    }
+
+    private static func sendAll(_ data: Data, to socket: Int32) {
+        data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            var sent = 0
+            while sent < buffer.count {
+                let byteCount = Darwin.send(
+                    socket,
+                    baseAddress.advanced(by: sent),
+                    buffer.count - sent,
+                    0
+                )
+                guard byteCount > 0 else { return }
+                sent += byteCount
+            }
+        }
+    }
+
+    private static func waitForCancellation(on socket: Int32) {
+        var bytes = [UInt8](repeating: 0, count: 256)
+        while bytes.withUnsafeMutableBytes({ buffer in
+            Darwin.recv(socket, buffer.baseAddress, buffer.count, 0)
+        }) > 0 {}
+    }
+}
+
+private enum ValidationError: Error, CustomStringConvertible, Sendable {
     case failed(String)
 
     var description: String {
@@ -26,8 +283,42 @@ private actor StringLog {
     }
 }
 
+private actor HeaderLog {
+    private var headers: [String: String] = [:]
+
+    func record(_ headers: [String: String]) {
+        self.headers = headers
+    }
+
+    func snapshot() -> [String: String] {
+        headers
+    }
+}
+
 private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     guard condition() else { throw ValidationError.failed(message) }
+}
+
+private func completeWithin<T: Sendable>(
+    _ label: String,
+    _ timeoutNanoseconds: UInt64 = 2_000_000_000,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        defer { group.cancelAll() }
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            throw ValidationError.failed("Transport-boundary check timed out: \(label)")
+        }
+
+        guard let result = try await group.next() else {
+            throw ValidationError.failed("A transport-boundary check did not run")
+        }
+        return result
+    }
 }
 
 private func textResponse(
@@ -203,6 +494,106 @@ private func validateTransportFailures() async throws {
         )
     }
     try require(attempts == 1, "Permanent transport failure was retried")
+}
+
+private func validateHeadersFirstTransportBoundary() async throws {
+    let server = try HTTPBoundaryServer()
+    defer { server.stop() }
+    let configuration = URLSessionConfiguration.ephemeral
+    let transport = AppleAudioHTTPTransport(
+        configuration: configuration,
+        maximumSuccessBodyBytes: 4_096
+    )
+    let request: URLRequest = {
+        var request = URLRequest(url: server.url)
+        request.httpMethod = "POST"
+        return request
+    }()
+
+    for (statusCode, expectedFailure) in [
+        (400, AppleAudioHTTPRecovery.Failure.permanentHTTP(statusCode: 400)),
+        (413, AppleAudioHTTPRecovery.Failure.payloadTooLarge),
+    ] {
+        let headerLog = HeaderLog()
+        server.state.configure(.stalled(statusCode: statusCode))
+        try await completeWithin("stalled HTTP \(statusCode)") {
+            try await expectFailure(expectedFailure) {
+                _ = try await AppleAudioHTTPRecovery.transcribe(
+                    sleep: { _ in },
+                    request: { _ in
+                        let response = try await transport.response(for: request)
+                        await headerLog.record(response.headers)
+                        return response
+                    }
+                )
+            }
+        }
+        try require(
+            server.state.attempts() == 1,
+            "Stalled HTTP \(statusCode) response was drained or retried"
+        )
+        let headers = await headerLog.snapshot()
+        try require(headers["retry-after"] == "7", "Retry-After header casing was not normalized")
+        try require(
+            headers["x-aidictation-request-id"] == "boundary-test",
+            "Proxy request header casing was not normalized"
+        )
+    }
+
+    server.state.configure(.disconnectTwiceThenSucceed)
+    let recovered = try await completeWithin("disconnected HTTP 200") {
+        try await AppleAudioHTTPRecovery.transcribe(
+            sleep: { _ in },
+            request: { _ in try await transport.response(for: request) }
+        )
+    }
+    try require(
+        recovered == String(repeating: "r", count: 2_048),
+        "A complete retried 200 body was not returned"
+    )
+    try require(
+        server.state.attempts() == 3,
+        "A disconnected 200 body did not use the bounded three-attempt policy"
+    )
+
+    server.state.configure(.oversizedSuccess(contentLength: 8_192))
+    try await completeWithin("oversized HTTP 200") {
+        try await expectFailure(.invalidTranscriptionResponse) {
+            _ = try await AppleAudioHTTPRecovery.transcribe(
+                sleep: { _ in },
+                request: { _ in try await transport.response(for: request) }
+            )
+        }
+    }
+    try require(
+        server.state.attempts() == 1,
+        "An oversized successful response body was drained or retried"
+    )
+
+    server.state.configure(.stalled(statusCode: 200))
+    let pending = Task {
+        try await transport.response(for: request)
+    }
+    defer { pending.cancel() }
+    try await completeWithin("cancelled HTTP 200 request start") {
+        while server.state.attempts() == 0 {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
+    }
+    pending.cancel()
+    try await completeWithin("cancelled HTTP 200") {
+        do {
+            _ = try await pending.value
+            throw ValidationError.failed("A cancelled transport returned a late response")
+        } catch is CancellationError {
+            return
+        }
+    }
+    try require(
+        server.state.attempts() == 1,
+        "Cancellation started a replacement transport request"
+    )
 }
 
 private func validateReceivedResponseIsTerminal() async throws {
@@ -457,6 +848,10 @@ private func validateClientBulkSourceContract() throws {
             "\(path) cannot declare custom endpoints that clean by default"
         )
         try require(
+            source.contains("AppleAudioHTTPTransport.shared.response(for: request)"),
+            "\(path) does not classify transcription status before reading the response body"
+        )
+        try require(
             source.contains("Never fall back to materializing an already-oversized source"),
             "\(path) can fall back to an unsafe whole-file multipart body"
         )
@@ -481,7 +876,6 @@ private func validateSharedRequestSnapshotAndCleanupContract() throws {
         "public static func capture(",
         "request: RequestSnapshot",
         "cleanup: captureCleanupConfiguration()",
-        "shortcutExpansions: expansions",
         "serverPostProcessingEnabledByDefault: cloud.isOneStage",
         "onMergedRawTranscript: { mergedRaw in",
         "try await onRawTranscript(durableRaw)",
@@ -489,12 +883,17 @@ private func validateSharedRequestSnapshotAndCleanupContract() throws {
         "cleanupMergedTranscript: { mergedRaw in",
         "let rules = postProcessingPrompt.isEmpty ? [] : [postProcessingPrompt]",
         "rawCallbacksCompleted: true",
+        "return nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult",
     ] {
         try require(source.contains(required), "Shared transcription recovery is missing: \(required)")
     }
     try require(
         !source.contains("guard outputMode != .dictation || !prompts.postProcessing.isEmpty"),
         "Core generic cleanup is still skipped for dictation without optional rules"
+    )
+    try require(
+        !source.contains("expandShortcuts") && !source.contains("shortcutExpansions"),
+        "Shared cleanup still mutates successful or raw-fallback text after the LLM decision"
     )
 
     guard let rawCallbackRange = source.range(of: "try await onRawTranscript(durableRaw)"),
@@ -517,6 +916,7 @@ private enum AppleAudioHTTPRecoveryValidator {
             try await validatePayloadTooLargeIsSplitSignal()
             try await validateRetryAfter()
             try await validateTransportFailures()
+            try await validateHeadersFirstTransportBoundary()
             try await validateReceivedResponseIsTerminal()
             try await validateCancellation()
             try await validateSequentialRejectedLeafSplitting()

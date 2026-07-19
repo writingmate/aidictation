@@ -39,28 +39,51 @@ Run the complete recording through cloud mode with cleanup enabled and a
 non-empty custom vocabulary. Use the production model and temperature. Inspect
 the final text and both prompt payloads.
 
+## Current architecture contract
+
+The 2026-07-17 result isolated a failure in the prompt shape used at that time.
+It does not establish that personal vocabulary must be withheld from cleanup.
+The current cross-platform contract in `AGENTS.md` supersedes that temporary
+routing constraint: vocabulary-only entries, phrases, explicit replacements,
+expansions, formatting instructions, and contextual rules must reach cleanup as
+delimited reference data. The cleanup model may use a reference term only when
+the complete source transcript supports it.
+
+No production replay was run while reconciling this document. The private audio
+should be replayed before release when production-eval access is available; the
+deterministic prompt and routing validators enforce the architecture in CI.
+
 ## Pass criteria
 
 1. The final text retains the speech after "sell it".
 2. The final text has no invented repeated-token or repeated-phrase suffix.
 3. The final text does not echo a vocabulary or phrase list.
-4. Raw vocabulary and phrase lists appear only in the recognition prompt.
-5. Cleanup receives only generic cleanup instructions and explicit user-defined
-   replacements or expansions.
-6. Production prompts contain no customer-specific terms or failure tokens.
-7. The recognition hint contains only dynamic user-provided terms, with no
+4. Recognition receives only appropriate bare speech-recognition hints.
+5. Cleanup receives the complete source plus every applicable personal
+   vocabulary term, phrase, explicit replacement, expansion, formatting
+   instruction, and contextual rule in reference blocks separate from source.
+6. Cleanup does not insert a reference term unless the source supports the
+   corresponding spoken term.
+7. Production prompts contain no customer-specific terms or failure tokens.
+8. The recognition hint contains only dynamic user-provided terms, with no
    hardcoded vocabulary or phrase label.
+9. Empty, failed, timed-out, or truncated cleanup returns the complete raw
+   transcript without a second programmatic replacement or expansion pass.
 
 This is a prompt-routing and prompt-quality eval. Do not satisfy it by deleting,
 truncating, replacing, or otherwise filtering model output after generation.
 
-## Prompt A/B evidence
+## Historical prompt A/B evidence
 
 Using recognition only, the labeled vocabulary prompt truncated the tail in one
 of three fresh trials (492 bytes). A bare dynamic term list returned the same
 complete 861-byte transcript in all three trials. With that bare term list and
 no raw vocabulary in cleanup, both the current production cleanup prompt and the
 generic preview prompt retained the full tail without a repeated suffix.
+
+These trials support bare recognition hints and demonstrate that the old
+cleanup payload was unsafe. They are retained as historical evidence, not as a
+current requirement to omit vocabulary from the cleanup model.
 
 The final prompt-only implementation was then replayed three times against the
 preview deployment with the corrected client payload (bare recognition hints,

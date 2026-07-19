@@ -339,27 +339,15 @@ public class OpenAIClient {
 
         let text = try await AppleAudioHTTPRecovery.transcribe { attempt in
             try Task.checkCancellation()
-            let (data, response) = try await Self.urlSession.data(for: request)
+            let response = try await AppleAudioHTTPTransport.shared.response(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AppleAudioHTTPRecovery.Failure.invalidTranscriptionResponse
-            }
-
-            DebugLog.api("Response status: \(httpResponse.statusCode), attempt: \(attempt)")
-            let proxyRequestId = httpResponse.value(forHTTPHeaderField: "x-aidictation-request-id")
-            let proxyTotalMs = httpResponse.value(forHTTPHeaderField: "x-aidictation-total-ms")
+            DebugLog.api("Response status: \(response.statusCode), attempt: \(attempt)")
+            let proxyRequestId = response.headers["x-aidictation-request-id"]
+            let proxyTotalMs = response.headers["x-aidictation-total-ms"]
             if proxyRequestId != nil || proxyTotalMs != nil {
                 DebugLog.info("Proxy timing: requestId=\(proxyRequestId ?? "n/a"), totalMs=\(proxyTotalMs ?? "n/a")", context: "OpenAIClient")
             }
-
-            let headers = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, pair in
-                result[String(describing: pair.key)] = String(describing: pair.value)
-            }
-            return AppleAudioHTTPRecovery.Response(
-                statusCode: httpResponse.statusCode,
-                headers: headers,
-                body: data
-            )
+            return response
         }
 
         let duration = CFAbsoluteTimeGetCurrent() - startTime

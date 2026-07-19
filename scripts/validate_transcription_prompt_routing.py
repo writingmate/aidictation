@@ -13,6 +13,7 @@ SHARED_SERVICE = ROOT / "Whishpermate/WhisperMateShared/Services/SharedTranscrip
 APP_STATE = ROOT / "Whishpermate/Whispermate/Services/AppState.swift"
 MAC_CLIENT = ROOT / "Whishpermate/Whispermate/Services/OpenAIClient.swift"
 SHARED_CLIENT = ROOT / "Whishpermate/WhisperMateShared/Networking/OpenAIClient.swift"
+WINDOWS_SERVICE = ROOT / "AIDictation.Windows/AIDictation/Services/TranscriptionService.cs"
 
 
 def function_body(source: str, signature: str, next_signature: str) -> str:
@@ -33,6 +34,16 @@ shared_source = SHARED_SERVICE.read_text()
 app_state_source = APP_STATE.read_text()
 mac_client_source = MAC_CLIENT.read_text()
 shared_client_source = SHARED_CLIENT.read_text()
+windows_service_source = WINDOWS_SERVICE.read_text()
+
+require(
+    "expandShortcuts" not in shared_source and "shortcutExpansions" not in shared_source,
+    "shared cleanup still mutates successful or raw-fallback text after the LLM decision",
+)
+require(
+    "ApplyLiteralReplacements" not in windows_service_source,
+    "Windows cleanup still mutates successful or raw-fallback text after the LLM decision",
+)
 
 shared_prompts = function_body(
     shared_source,

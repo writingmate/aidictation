@@ -380,3 +380,288 @@ public enum AppleAudioHTTPRecovery {
         try await Task.sleep(nanoseconds: nanoseconds)
     }
 }
+
+/// A reusable URL session transport that exposes HTTP status and headers before
+/// deciding whether a response body should be consumed. Error responses are
+/// cancelled immediately; only successful transcription bodies are drained.
+public final class AppleAudioHTTPTransport: @unchecked Sendable {
+    public static let defaultMaximumSuccessBodyBytes = 4 * 1_024 * 1_024
+
+    public static let shared = AppleAudioHTTPTransport(
+        configuration: makeDefaultConfiguration()
+    )
+
+    private final class RequestState: @unchecked Sendable {
+        typealias Continuation = CheckedContinuation<AppleAudioHTTPRecovery.Response, Error>
+
+        private let lock = NSLock()
+        private let task: URLSessionDataTask
+        private let maximumSuccessBodyBytes: Int
+        private var continuation: Continuation?
+        private var pendingResult: Result<AppleAudioHTTPRecovery.Response, Error>?
+        private var isResolved = false
+        private var statusCode: Int?
+        private var headers: [String: String] = [:]
+        private var body = Data()
+
+        init(task: URLSessionDataTask, maximumSuccessBodyBytes: Int) {
+            self.task = task
+            self.maximumSuccessBodyBytes = maximumSuccessBodyBytes
+        }
+
+        func install(_ continuation: Continuation) {
+            lock.lock()
+            if let pendingResult {
+                self.pendingResult = nil
+                lock.unlock()
+                continuation.resume(with: pendingResult)
+                return
+            }
+            self.continuation = continuation
+            lock.unlock()
+        }
+
+        func begin(statusCode: Int, headers: [String: String], expectedContentLength: Int64) -> Bool {
+            lock.lock()
+            guard !isResolved else {
+                lock.unlock()
+                return false
+            }
+            self.statusCode = statusCode
+            self.headers = headers
+            if expectedContentLength > 0 {
+                body.reserveCapacity(Int(expectedContentLength))
+            }
+            lock.unlock()
+            return true
+        }
+
+        func append(_ data: Data) {
+            lock.lock()
+            guard !isResolved else {
+                lock.unlock()
+                return
+            }
+            guard data.count <= maximumSuccessBodyBytes - body.count else {
+                let continuation = resolveWhileLocked(
+                    .failure(AppleAudioHTTPRecovery.Failure.invalidTranscriptionResponse)
+                )
+                lock.unlock()
+                continuation?.resume(
+                    throwing: AppleAudioHTTPRecovery.Failure.invalidTranscriptionResponse
+                )
+                task.cancel()
+                return
+            }
+            body.append(data)
+            lock.unlock()
+        }
+
+        func finish(with error: Error?) {
+            if let error {
+                resolve(.failure(error))
+                return
+            }
+
+            lock.lock()
+            guard !isResolved else {
+                lock.unlock()
+                return
+            }
+            let result: Result<AppleAudioHTTPRecovery.Response, Error>
+            if let statusCode {
+                result = .success(
+                    AppleAudioHTTPRecovery.Response(
+                        statusCode: statusCode,
+                        headers: headers,
+                        body: body
+                    )
+                )
+            } else {
+                result = .failure(AppleAudioHTTPRecovery.Failure.invalidTranscriptionResponse)
+            }
+            let continuation = resolveWhileLocked(result)
+            lock.unlock()
+            continuation?.resume(with: result)
+        }
+
+        func resolve(_ result: Result<AppleAudioHTTPRecovery.Response, Error>) {
+            lock.lock()
+            let continuation = resolveWhileLocked(result)
+            lock.unlock()
+            continuation?.resume(with: result)
+        }
+
+        func cancel() {
+            resolve(.failure(CancellationError()))
+            task.cancel()
+        }
+
+        private func resolveWhileLocked(
+            _ result: Result<AppleAudioHTTPRecovery.Response, Error>
+        ) -> Continuation? {
+            guard !isResolved else { return nil }
+            isResolved = true
+            if let continuation {
+                self.continuation = nil
+                return continuation
+            }
+            pendingResult = result
+            return nil
+        }
+    }
+
+    private final class SessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private let maximumSuccessBodyBytes: Int
+        private var requests: [Int: RequestState] = [:]
+
+        init(maximumSuccessBodyBytes: Int) {
+            self.maximumSuccessBodyBytes = maximumSuccessBodyBytes
+        }
+
+        func response(
+            for request: URLRequest,
+            using session: URLSession
+        ) async throws -> AppleAudioHTTPRecovery.Response {
+            try Task.checkCancellation()
+            let task = session.dataTask(with: request)
+            let state = RequestState(
+                task: task,
+                maximumSuccessBodyBytes: maximumSuccessBodyBytes
+            )
+            register(state, for: task.taskIdentifier)
+            defer { removeState(for: task.taskIdentifier) }
+
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    state.install(continuation)
+                    if Task.isCancelled {
+                        state.cancel()
+                    } else {
+                        task.resume()
+                    }
+                }
+            } onCancel: {
+                state.cancel()
+            }
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            dataTask: URLSessionDataTask,
+            didReceive response: URLResponse,
+            completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+        ) {
+            guard let state = state(for: dataTask.taskIdentifier),
+                  let httpResponse = response as? HTTPURLResponse
+            else {
+                state(for: dataTask.taskIdentifier)?.resolve(
+                    .failure(AppleAudioHTTPRecovery.Failure.invalidTranscriptionResponse)
+                )
+                completionHandler(.cancel)
+                return
+            }
+
+            let headers = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, pair in
+                result[String(describing: pair.key)] = String(describing: pair.value)
+            }
+
+            guard httpResponse.statusCode == 200 else {
+                state.resolve(
+                    .success(
+                        AppleAudioHTTPRecovery.Response(
+                            statusCode: httpResponse.statusCode,
+                            headers: headers,
+                            body: Data()
+                        )
+                    )
+                )
+                completionHandler(.cancel)
+                return
+            }
+
+            guard httpResponse.expectedContentLength <= Int64(maximumSuccessBodyBytes) else {
+                state.resolve(
+                    .failure(AppleAudioHTTPRecovery.Failure.invalidTranscriptionResponse)
+                )
+                completionHandler(.cancel)
+                return
+            }
+
+            guard state.begin(
+                statusCode: httpResponse.statusCode,
+                headers: headers,
+                expectedContentLength: httpResponse.expectedContentLength
+            ) else {
+                completionHandler(.cancel)
+                return
+            }
+            completionHandler(.allow)
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            dataTask: URLSessionDataTask,
+            didReceive data: Data
+        ) {
+            state(for: dataTask.taskIdentifier)?.append(data)
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didCompleteWithError error: Error?
+        ) {
+            state(for: task.taskIdentifier)?.finish(with: error)
+        }
+
+        private func register(_ state: RequestState, for identifier: Int) {
+            lock.lock()
+            requests[identifier] = state
+            lock.unlock()
+        }
+
+        private func state(for identifier: Int) -> RequestState? {
+            lock.lock()
+            let state = requests[identifier]
+            lock.unlock()
+            return state
+        }
+
+        private func removeState(for identifier: Int) {
+            lock.lock()
+            requests.removeValue(forKey: identifier)
+            lock.unlock()
+        }
+    }
+
+    private let delegate: SessionDelegate
+    private let session: URLSession
+
+    public init(
+        configuration: URLSessionConfiguration,
+        maximumSuccessBodyBytes: Int = defaultMaximumSuccessBodyBytes
+    ) {
+        precondition(maximumSuccessBodyBytes > 0)
+        let delegate = SessionDelegate(maximumSuccessBodyBytes: maximumSuccessBodyBytes)
+        self.delegate = delegate
+        self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+    }
+
+    deinit {
+        session.invalidateAndCancel()
+    }
+
+    public func response(for request: URLRequest) async throws -> AppleAudioHTTPRecovery.Response {
+        try await delegate.response(for: request, using: session)
+    }
+
+    private static func makeDefaultConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 300
+        configuration.httpMaximumConnectionsPerHost = 6
+        return configuration
+    }
+}

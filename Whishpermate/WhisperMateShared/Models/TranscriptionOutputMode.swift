@@ -1,7 +1,7 @@
 import Foundation
 public import Combine
 
-public enum TranscriptionOutputMode: String, CaseIterable, Codable, Identifiable {
+public enum TranscriptionOutputMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case dictation
     case notes
     case meetings

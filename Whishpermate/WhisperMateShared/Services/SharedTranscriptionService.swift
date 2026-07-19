@@ -4,6 +4,123 @@ public enum SharedTranscriptionService {
     private static let diarizationTimeoutSeconds: UInt64 = 75
     private static let llmPostProcessingTimeoutSeconds: UInt64 = 45
 
+    public struct RequestSnapshot: Sendable {
+        fileprivate let useOnDeviceRecognition: Bool
+        fileprivate let cloud: CloudRequestConfiguration?
+        fileprivate let cleanup: CleanupRequestConfiguration?
+        fileprivate let outputMode: TranscriptionOutputMode
+        fileprivate let transcriptionOptions: TranscriptionOptions
+        fileprivate let sttPrompt: String
+        fileprivate let postProcessingPrompt: String
+        fileprivate let shortcutExpansions: [ShortcutExpansion]
+
+        public static func capture(
+            dictionaryManager: DictionaryManager = .shared,
+            toneStyleManager: ToneStyleManager = .shared,
+            shortcutManager: ShortcutManager = .shared,
+            outputMode: TranscriptionOutputMode? = nil,
+            transcriptionOptions: TranscriptionOptions = .default,
+            selectedPreset: ContextRule? = nil
+        ) throws -> RequestSnapshot {
+            let providerManager = TranscriptionProviderManager()
+            let selectedOutputMode = outputMode ?? outputModeFor(
+                selectedPreset: selectedPreset,
+                toneStyleManager: toneStyleManager
+            )
+            let prompts = buildPrompts(
+                dictionaryManager: dictionaryManager,
+                toneStyleManager: toneStyleManager,
+                shortcutManager: shortcutManager,
+                selectedPreset: selectedPreset
+            )
+
+            let useOnDevice = providerManager.shouldUseOnDeviceTranscription
+            let cloud: CloudRequestConfiguration?
+            if useOnDevice {
+                cloud = nil
+            } else {
+                let provider = providerManager.selectedProvider == .onDevice
+                    ? TranscriptionProvider.custom
+                    : providerManager.selectedProvider
+                guard let apiKey = KeychainHelper.get(key: provider.apiKeyName)
+                    ?? SecretsLoader.transcriptionKey(for: provider),
+                    !apiKey.isEmpty
+                else {
+                    throw error("API key not configured")
+                }
+                cloud = CloudRequestConfiguration(
+                    endpoint: providerManager.effectiveEndpoint.isEmpty
+                        ? provider.defaultEndpoint
+                        : providerManager.effectiveEndpoint,
+                    model: providerManager.effectiveModel,
+                    apiKey: apiKey,
+                    isOneStage: provider == .custom
+                )
+            }
+
+            let expansions = shortcutManager.shortcuts
+                .filter(\.isEnabled)
+                .map { ShortcutExpansion(trigger: $0.voiceTrigger, expansion: $0.expansion) }
+
+            return RequestSnapshot(
+                useOnDeviceRecognition: useOnDevice,
+                cloud: cloud,
+                cleanup: captureCleanupConfiguration(),
+                outputMode: selectedOutputMode,
+                transcriptionOptions: transcriptionOptions,
+                sttPrompt: prompts.stt,
+                postProcessingPrompt: prompts.postProcessing,
+                shortcutExpansions: expansions
+            )
+        }
+
+        fileprivate func expandShortcuts(in text: String) -> String {
+            shortcutExpansions
+                .sorted { $0.trigger.count > $1.trigger.count }
+                .reduce(text) { result, shortcut in
+                    result.replacingOccurrences(
+                        of: shortcut.trigger,
+                        with: shortcut.expansion,
+                        options: .caseInsensitive
+                    )
+                }
+        }
+    }
+
+    fileprivate struct CloudRequestConfiguration: Sendable {
+        let endpoint: String
+        let model: String
+        let apiKey: String
+        let isOneStage: Bool
+    }
+
+    fileprivate struct CleanupRequestConfiguration: Sendable {
+        let endpoint: String
+        let model: String
+        let apiKey: String
+    }
+
+    fileprivate struct ShortcutExpansion: Sendable {
+        let trigger: String
+        let expansion: String
+    }
+
+    private struct RecognitionResult: Sendable {
+        let rawTranscript: String
+        let cleanedTranscript: String?
+        let rawCallbacksCompleted: Bool
+
+        init(
+            rawTranscript: String,
+            cleanedTranscript: String? = nil,
+            rawCallbacksCompleted: Bool = false
+        ) {
+            self.rawTranscript = rawTranscript
+            self.cleanedTranscript = cleanedTranscript
+            self.rawCallbacksCompleted = rawCallbacksCompleted
+        }
+    }
+
     public static func transcribe(
         audioURL: URL,
         dictionaryManager: DictionaryManager = .shared,
@@ -11,63 +128,116 @@ public enum SharedTranscriptionService {
         shortcutManager: ShortcutManager = .shared,
         outputMode: TranscriptionOutputMode? = nil,
         transcriptionOptions: TranscriptionOptions = .default,
-        selectedPreset: ContextRule? = nil
+        selectedPreset: ContextRule? = nil,
+        onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
     ) async throws -> String {
-        let providerManager = TranscriptionProviderManager()
-        let selectedOutputMode = outputMode ?? outputModeFor(
-            selectedPreset: selectedPreset,
-            toneStyleManager: toneStyleManager
-        )
-        let prompts = buildPrompts(
+        let request = try RequestSnapshot.capture(
             dictionaryManager: dictionaryManager,
             toneStyleManager: toneStyleManager,
             shortcutManager: shortcutManager,
+            outputMode: outputMode,
+            transcriptionOptions: transcriptionOptions,
             selectedPreset: selectedPreset
         )
+        return try await transcribe(
+            audioURL: audioURL,
+            request: request,
+            onRecognitionCheckpoint: onRecognitionCheckpoint,
+            onRawTranscript: onRawTranscript,
+            onCleanupStarted: onCleanupStarted
+        )
+    }
 
-        let rawTranscript: String
-        if transcriptionOptions.diarization {
+    public static func transcribe(
+        audioURL: URL,
+        request: RequestSnapshot,
+        onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
+    ) async throws -> String {
+        let checkpointForwarder = RecognitionCheckpointForwarder(
+            callback: onRecognitionCheckpoint
+        )
+
+        let recognitionResult: RecognitionResult
+        if request.transcriptionOptions.diarization {
             do {
-                rawTranscript = try await withTimeout(seconds: diarizationTimeoutSeconds) {
+                let transcript = try await withTimeout(seconds: diarizationTimeoutSeconds) {
                     try await SharedParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
                 }
+                recognitionResult = RecognitionResult(rawTranscript: transcript)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 DebugLog.warning("Speaker labels unavailable within time limit - using offline transcript without speaker labels", context: "SharedTranscriptionService")
-                rawTranscript = try await transcribeWithoutDiarization(
+                recognitionResult = try await transcribeWithoutDiarization(
                     audioURL: audioURL,
-                    providerManager: providerManager,
-                    prompts: prompts,
-                    timedOutDiarization: error is TranscriptionTimeoutError
+                    request: request,
+                    timedOutDiarization: error is TranscriptionTimeoutError,
+                    checkpointForwarder: checkpointForwarder,
+                    onRawTranscript: onRawTranscript,
+                    onCleanupStarted: onCleanupStarted
                 )
             }
-        } else if providerManager.shouldUseOnDeviceTranscription {
-            rawTranscript = try await SharedParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+        } else if request.useOnDeviceRecognition {
+            recognitionResult = RecognitionResult(
+                rawTranscript: try await SharedParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+            )
         } else {
             guard CloudTranscriptionConsent.isGranted else {
                 throw error(CloudTranscriptionConsent.requiredErrorMessage)
             }
-            rawTranscript = try await transcribeWithCloud(
+            recognitionResult = try await transcribeWithCloud(
                 audioURL: audioURL,
-                providerManager: providerManager,
-                prompts: prompts
+                request: request,
+                checkpointForwarder: checkpointForwarder,
+                onRawTranscript: onRawTranscript,
+                onCleanupStarted: onCleanupStarted
             )
         }
 
-        let modeResult: String
-        do {
-            modeResult = try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
-                try await applyLLMPassIfAvailable(
-                    transcript: rawTranscript,
-                    outputMode: selectedOutputMode,
-                    prompts: prompts
-                )
-            }
-        } catch {
-            DebugLog.warning("Mode post-processing unavailable within time limit - using transcript", context: "SharedTranscriptionService")
-            modeResult = rawTranscript
+        try Task.checkCancellation()
+        let durableRawTranscript = recognitionResult.rawTranscript
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !durableRawTranscript.isEmpty else {
+            throw error("No speech was recognized. Your recording was kept.")
         }
-        let processedResult = shortcutManager.expandShortcuts(in: modeResult)
-        return TranscriptionTextSanitizer.cleanedText(processedResult)
+        if !recognitionResult.rawCallbacksCompleted {
+            try await checkpointForwarder.checkpoint(durableRawTranscript)
+            try Task.checkCancellation()
+            try await onRawTranscript(durableRawTranscript)
+            try Task.checkCancellation()
+            try await onCleanupStarted()
+            try Task.checkCancellation()
+        }
+
+        let modeResult: String
+        if let cleanedTranscript = recognitionResult.cleanedTranscript {
+            modeResult = cleanedTranscript
+        } else {
+            do {
+                modeResult = try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
+                    try await applyLLMPassIfAvailable(
+                        transcript: durableRawTranscript,
+                        outputMode: request.outputMode,
+                        postProcessingPrompt: request.postProcessingPrompt,
+                        cleanupConfiguration: request.cleanup
+                    )
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                DebugLog.warning("Mode post-processing unavailable within time limit - using transcript", context: "SharedTranscriptionService")
+                modeResult = durableRawTranscript
+            }
+        }
+        let nonemptyModeResult = modeResult.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanupResult = nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult
+        let expandedResult = request.expandShortcuts(in: cleanupResult)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return expandedResult.isEmpty ? durableRawTranscript : expandedResult
     }
 
     private static func outputModeFor(
@@ -123,23 +293,25 @@ public enum SharedTranscriptionService {
     private static func applyLLMPassIfAvailable(
         transcript: String,
         outputMode: TranscriptionOutputMode,
-        prompts: (stt: String, postProcessing: String)
+        postProcessingPrompt: String,
+        cleanupConfiguration: CleanupRequestConfiguration?
     ) async throws -> String {
-        guard outputMode != .dictation || !prompts.postProcessing.isEmpty else {
-            return transcript
-        }
-
         guard CloudTranscriptionConsent.isGranted else {
             DebugLog.info("Skipping cloud post-processing because cloud transcription is not allowed", context: "SharedTranscriptionService")
             return transcript
         }
 
-        guard let client = makeLLMClientIfAvailable() else {
+        guard let cleanupConfiguration else {
             DebugLog.warning("LLM post-processing unavailable - using transcript without mode formatting", context: "SharedTranscriptionService")
             return transcript
         }
+        let client = OpenAIClient(config: OpenAIClient.Configuration(
+            chatCompletionEndpoint: cleanupConfiguration.endpoint,
+            chatCompletionModel: cleanupConfiguration.model,
+            apiKey: cleanupConfiguration.apiKey
+        ))
 
-        let rules = prompts.postProcessing.isEmpty ? [] : [prompts.postProcessing]
+        let rules = postProcessingPrompt.isEmpty ? [] : [postProcessingPrompt]
         switch outputMode {
         case .dictation:
             return try await client.applyFormattingRules(transcription: transcript, rules: rules)
@@ -152,15 +324,19 @@ public enum SharedTranscriptionService {
 
     private static func transcribeWithoutDiarization(
         audioURL: URL,
-        providerManager: TranscriptionProviderManager,
-        prompts: (stt: String, postProcessing: String),
-        timedOutDiarization: Bool
-    ) async throws -> String {
-        if !providerManager.shouldUseOnDeviceTranscription {
+        request: RequestSnapshot,
+        timedOutDiarization: Bool,
+        checkpointForwarder: RecognitionCheckpointForwarder,
+        onRawTranscript: @escaping @Sendable (String) async throws -> Void,
+        onCleanupStarted: @escaping @Sendable () async throws -> Void
+    ) async throws -> RecognitionResult {
+        if !request.useOnDeviceRecognition {
             return try await transcribeWithCloud(
                 audioURL: audioURL,
-                providerManager: providerManager,
-                prompts: prompts
+                request: request,
+                checkpointForwarder: checkpointForwarder,
+                onRawTranscript: onRawTranscript,
+                onCleanupStarted: onCleanupStarted
             )
         }
 
@@ -168,51 +344,101 @@ public enum SharedTranscriptionService {
             throw error("Speaker labels are still preparing. Try again in a moment.")
         }
 
-        return try await SharedParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+        return RecognitionResult(
+            rawTranscript: try await SharedParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+        )
     }
 
     private static func transcribeWithCloud(
         audioURL: URL,
-        providerManager: TranscriptionProviderManager,
-        prompts: (stt: String, postProcessing: String)
-    ) async throws -> String {
+        request: RequestSnapshot,
+        checkpointForwarder: RecognitionCheckpointForwarder,
+        onRawTranscript: @escaping @Sendable (String) async throws -> Void,
+        onCleanupStarted: @escaping @Sendable () async throws -> Void
+    ) async throws -> RecognitionResult {
         guard CloudTranscriptionConsent.isGranted else {
             throw error(CloudTranscriptionConsent.requiredErrorMessage)
         }
 
-        let provider = providerManager.selectedProvider == .onDevice ? TranscriptionProvider.custom : providerManager.selectedProvider
-        let apiKey = KeychainHelper.get(key: provider.apiKeyName) ?? SecretsLoader.transcriptionKey(for: provider)
-
-        guard let apiKey else {
+        guard let cloud = request.cloud else {
             throw error("API key not configured")
         }
 
         let config = OpenAIClient.Configuration(
-            transcriptionEndpoint: providerManager.effectiveEndpoint.isEmpty ? provider.defaultEndpoint : providerManager.effectiveEndpoint,
-            transcriptionModel: providerManager.effectiveModel,
+            transcriptionEndpoint: cloud.endpoint,
+            transcriptionModel: cloud.model,
             chatCompletionEndpoint: "",
             chatCompletionModel: "",
-            apiKey: apiKey
+            apiKey: cloud.apiKey
         )
 
         let openAIClient = OpenAIClient(config: config)
-        return try await openAIClient.transcribe(
+        let mergedCapture = MergedRawCapture()
+        let transcript = try await openAIClient.transcribe(
             audioURL: audioURL,
-            prompt: prompts.stt.isEmpty ? nil : prompts.stt,
-            sttPrompt: prompts.stt.isEmpty ? nil : prompts.stt,
-            postProcessingPrompt: nil
+            prompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
+            sttPrompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
+            postProcessingPrompt: nil,
+            serverPostProcessingEnabledByDefault: cloud.isOneStage,
+            onChunkCheckpoint: { completedLeafIndex, transcript in
+                try await checkpointForwarder.checkpointLeaf(
+                    completedLeafIndex: completedLeafIndex,
+                    transcript: transcript
+                )
+            },
+            onMergedRawTranscript: { mergedRaw in
+                let durableRaw = mergedRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !durableRaw.isEmpty else {
+                    throw error("No speech was recognized. Your recording was kept.")
+                }
+                try await checkpointForwarder.checkpoint(durableRaw)
+                try Task.checkCancellation()
+                try await onRawTranscript(durableRaw)
+                try Task.checkCancellation()
+                try await onCleanupStarted()
+                try Task.checkCancellation()
+                await mergedCapture.store(durableRaw)
+            },
+            cleanupMergedTranscript: { mergedRaw in
+                try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
+                    try await applyLLMPassIfAvailable(
+                        transcript: mergedRaw,
+                        outputMode: request.outputMode,
+                        postProcessingPrompt: request.postProcessingPrompt,
+                        cleanupConfiguration: request.cleanup
+                    )
+                }
+            }
         )
+
+        if let mergedRaw = await mergedCapture.value() {
+            return RecognitionResult(
+                rawTranscript: mergedRaw,
+                cleanedTranscript: transcript,
+                rawCallbacksCompleted: true
+            )
+        }
+
+        if cloud.isOneStage {
+            // A one-stage endpoint exposes only its final transcription. It is
+            // both the recoverable text and the already-cleaned candidate.
+            return RecognitionResult(
+                rawTranscript: transcript,
+                cleanedTranscript: transcript
+            )
+        }
+        return RecognitionResult(rawTranscript: transcript)
     }
 
-    private static func makeLLMClientIfAvailable() -> OpenAIClient? {
+    private static func captureCleanupConfiguration() -> CleanupRequestConfiguration? {
         if let endpoint = SecretsLoader.aidictationPostProcessingEndpoint(),
            let apiKey = SecretsLoader.aidictationPostProcessingKey()
         {
-            return OpenAIClient(config: OpenAIClient.Configuration(
-                chatCompletionEndpoint: endpoint,
-                chatCompletionModel: "openai/gpt-oss-20b",
+            return CleanupRequestConfiguration(
+                endpoint: endpoint,
+                model: "openai/gpt-oss-20b",
                 apiKey: apiKey
-            ))
+            )
         }
 
         let llmProviderManager = LLMProviderManager()
@@ -222,11 +448,11 @@ public enum SharedTranscriptionService {
             return nil
         }
 
-        return OpenAIClient(config: OpenAIClient.Configuration(
-            chatCompletionEndpoint: llmProviderManager.effectiveEndpoint,
-            chatCompletionModel: llmProviderManager.effectiveModel,
+        return CleanupRequestConfiguration(
+            endpoint: llmProviderManager.effectiveEndpoint,
+            model: llmProviderManager.effectiveModel,
             apiKey: apiKey
-        ))
+        )
     }
 
     private static func error(_ message: String) -> NSError {
@@ -244,18 +470,28 @@ public enum SharedTranscriptionService {
         let gate = TimeoutGate<T>()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                Task {
+                Task { await gate.install(continuation) }
+
+                let operationTask = Task {
                     do {
                         let result = try await operation()
-                        await gate.resume(.success(result), continuation: continuation)
+                        await gate.resolve(.success(result))
                     } catch {
-                        await gate.resume(.failure(error), continuation: continuation)
+                        await gate.resolve(.failure(error))
                     }
                 }
 
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                    } catch {
+                        return
+                    }
+                    await gate.resolve(.failure(TranscriptionTimeoutError()))
+                }
+
                 Task {
-                    try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                    await gate.resume(.failure(TranscriptionTimeoutError()), continuation: continuation)
+                    await gate.installTasks(operation: operationTask, timeout: timeoutTask)
                 }
             }
         } onCancel: {
@@ -273,21 +509,109 @@ private struct TranscriptionTimeoutError: LocalizedError {
 }
 
 private actor TimeoutGate<T> {
-    private var didResume = false
+    private var continuation: CheckedContinuation<T, Error>?
+    private var pendingResult: Result<T, Error>?
+    private var didResolve = false
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
 
-    func resume(_ result: Result<T, Error>, continuation: CheckedContinuation<T, Error>) {
-        guard !didResume else { return }
-        didResume = true
-
-        switch result {
-        case .success(let value):
-            continuation.resume(returning: value)
-        case .failure(let error):
-            continuation.resume(throwing: error)
+    func install(_ continuation: CheckedContinuation<T, Error>) {
+        if let pendingResult {
+            self.pendingResult = nil
+            continuation.resume(with: pendingResult)
+            return
         }
+        guard !didResolve else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+    }
+
+    func installTasks(
+        operation: Task<Void, Never>,
+        timeout: Task<Void, Never>
+    ) {
+        guard !didResolve else {
+            operation.cancel()
+            timeout.cancel()
+            return
+        }
+        operationTask = operation
+        timeoutTask = timeout
+    }
+
+    func resolve(_ result: Result<T, Error>) {
+        guard !didResolve else { return }
+        didResolve = true
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        operationTask = nil
+        timeoutTask = nil
+
+        guard let continuation else {
+            pendingResult = result
+            return
+        }
+        self.continuation = nil
+        continuation.resume(with: result)
     }
 
     func cancel() {
-        didResume = true
+        resolve(.failure(CancellationError()))
+    }
+}
+
+private actor RecognitionCheckpointForwarder {
+    private let callback: @Sendable (String) async throws -> Void
+    private var lastCheckpoint: String?
+    private var completedLeafTranscripts: [String] = []
+
+    init(callback: @escaping @Sendable (String) async throws -> Void) {
+        self.callback = callback
+    }
+
+    func checkpoint(_ text: String) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != lastCheckpoint else { return }
+        try await callback(trimmed)
+        lastCheckpoint = trimmed
+    }
+
+    func checkpointLeaf(completedLeafIndex: Int, transcript: String) async throws {
+        guard completedLeafIndex == completedLeafTranscripts.count else {
+            throw NSError(
+                domain: "SharedTranscriptionService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Audio parts completed out of order. Your recording was kept."]
+            )
+        }
+
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(
+                domain: "SharedTranscriptionService",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "An audio part returned no text. Your recording was kept."]
+            )
+        }
+
+        let cumulativeTranscript = (completedLeafTranscripts + [trimmed])
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try await checkpoint(cumulativeTranscript)
+        completedLeafTranscripts.append(trimmed)
+    }
+}
+
+private actor MergedRawCapture {
+    private var rawTranscript: String?
+
+    func store(_ transcript: String) {
+        rawTranscript = transcript
+    }
+
+    func value() -> String? {
+        rawTranscript
     }
 }

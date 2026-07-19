@@ -39,7 +39,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
     }
 
     private var initializationTask: Task<Void, Error>?
-    private var runtimeBridge: NSObject?
+    private let runtimeBridgeSlot = RuntimeBridgeSlot()
 
     private init() {}
 
@@ -77,6 +77,13 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
                     state = .ready
                     isModelDownloaded = true
                 }
+            } catch is CancellationError {
+                retireRuntimeBridge(bridge)
+                await MainActor.run {
+                    state = .notInitialized
+                    isModelDownloaded = false
+                }
+                throw CancellationError()
             } catch {
                 await MainActor.run {
                     state = .error(error.localizedDescription)
@@ -88,7 +95,11 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         initializationTask = task
 
         do {
-            try await task.value
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
             initializationTask = nil
         } catch {
             initializationTask = nil
@@ -102,16 +113,10 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             throw runtimeError(Self.unavailableMessage)
         }
 
-        let currentState = await MainActor.run { state }
-        if case .notInitialized = currentState {
-            try await initialize()
-        } else if case .downloading = currentState {
-            try await initialize()
-        } else if case .initializing = currentState {
-            try await initialize()
-        }
-
         let bridge = try loadRuntimeBridge()
+        // The published state can lag a synchronously retired generation.
+        // Initializing the exact loaded bridge is idempotent when already ready.
+        try await initializeRuntimeBridge(bridge)
 
         await MainActor.run {
             state = .transcribing
@@ -123,6 +128,13 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
                 state = .ready
             }
             return text
+        } catch is CancellationError {
+            retireRuntimeBridge(bridge)
+            await MainActor.run {
+                state = .notInitialized
+                isModelDownloaded = false
+            }
+            throw CancellationError()
         } catch {
             await MainActor.run {
                 state = .error(error.localizedDescription)
@@ -137,16 +149,8 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             throw runtimeError(Self.unavailableMessage)
         }
 
-        let currentState = await MainActor.run { state }
-        if case .notInitialized = currentState {
-            try await initialize()
-        } else if case .downloading = currentState {
-            try await initialize()
-        } else if case .initializing = currentState {
-            try await initialize()
-        }
-
         let bridge = try loadRuntimeBridge()
+        try await initializeRuntimeBridge(bridge)
 
         await MainActor.run {
             state = .transcribing
@@ -158,6 +162,13 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
                 state = .ready
             }
             return text
+        } catch is CancellationError {
+            retireRuntimeBridge(bridge)
+            await MainActor.run {
+                state = .notInitialized
+                isModelDownloaded = false
+            }
+            throw CancellationError()
         } catch {
             await MainActor.run {
                 state = .error(error.localizedDescription)
@@ -171,8 +182,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
     }
 
     public func cleanup() {
-        let bridge = runtimeBridge
-        runtimeBridge = nil
+        let bridge = runtimeBridgeSlot.take()
 
         if let bridge {
             callVoidSelector("cleanupRuntime", on: bridge)
@@ -184,6 +194,15 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
     }
 
+    /// Retire the cancelled runtime generation immediately. Native work in the
+    /// old framework may ignore Task cancellation, but it owns only the old
+    /// bridge/managers and its callbacks are attempt-fenced. An explicit retry
+    /// therefore initializes a fresh generation instead of remaining busy.
+    private func retireRuntimeBridge(_ bridge: NSObject) {
+        guard runtimeBridgeSlot.retire(bridge) else { return }
+        callVoidSelector("cleanupRuntime", on: bridge)
+    }
+
     private func setUnavailableState() async {
         await MainActor.run {
             state = .error(Self.unavailableMessage)
@@ -192,7 +211,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
     }
 
     private func loadRuntimeBridge() throws -> NSObject {
-        if let runtimeBridge {
+        if let runtimeBridge = runtimeBridgeSlot.current() {
             return runtimeBridge
         }
 
@@ -215,8 +234,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
 
         let bridge = bridgeClass.init()
-        runtimeBridge = bridge
-        return bridge
+        return runtimeBridgeSlot.installIfEmpty(bridge)
     }
 
     private func runtimeFrameworkBundle() -> Bundle? {
@@ -238,71 +256,121 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
     }
 
     private func initializeRuntimeBridge(_ bridge: NSObject) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let selector = NSSelectorFromString("initializeWithCompletion:")
-            guard bridge.responds(to: selector),
-                  let method = bridge.method(for: selector)
-            else {
-                continuation.resume(throwing: runtimeError("Offline runtime does not support initialization."))
-                return
-            }
+        let attemptID = UUID().uuidString
+        let gate = RuntimeCallbackAttempt<Void>()
+        let cancellation = RuntimeAttemptCancellation(
+            bridge: bridge,
+            attemptID: attemptID,
+            bridgeSlot: runtimeBridgeSlot
+        )
 
-            let completion: @convention(block) (Bool, NSString?) -> Void = { success, message in
-                if success {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Offline model initialization failed."))
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard gate.install(continuation) else {
+                    cancellation.cancel()
+                    return
                 }
-            }
 
-            typealias Function = @convention(c) (AnyObject, Selector, @escaping @convention(block) (Bool, NSString?) -> Void) -> Void
-            unsafeBitCast(method, to: Function.self)(bridge, selector, completion)
+                guard !Task<Never, Never>.isCancelled else {
+                    gate.resolve(.failure(CancellationError()))
+                    cancellation.cancel()
+                    return
+                }
+
+                let selector = NSSelectorFromString("initializeAttempt:completion:")
+                guard bridge.responds(to: selector),
+                      let method = bridge.method(for: selector)
+                else {
+                    gate.resolve(.failure(runtimeError("Offline runtime does not support cancellable initialization.")))
+                    return
+                }
+
+                let completion: @convention(block) (Bool, NSString?) -> Void = { success, message in
+                    if success {
+                        gate.resolve(.success(()))
+                    } else {
+                        gate.resolve(.failure(self.runtimeError((message as String?) ?? "Offline model initialization failed.")))
+                    }
+                }
+
+                typealias Function = @convention(c) (AnyObject, Selector, NSString, @escaping @convention(block) (Bool, NSString?) -> Void) -> Void
+                unsafeBitCast(method, to: Function.self)(bridge, selector, attemptID as NSString, completion)
+            }
+        } onCancel: {
+            gate.resolve(.failure(CancellationError()))
+            cancellation.cancel()
         }
     }
 
     private func transcribeWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let selector = NSSelectorFromString("transcribeAudioAtPath:completion:")
-            guard bridge.responds(to: selector),
-                  let method = bridge.method(for: selector)
-            else {
-                continuation.resume(throwing: runtimeError("Offline runtime does not support transcription."))
-                return
-            }
-
-            let completion: @convention(block) (NSString?, NSString?) -> Void = { text, message in
-                if let text {
-                    continuation.resume(returning: text as String)
-                } else {
-                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Offline transcription failed."))
-                }
-            }
-
-            typealias Function = @convention(c) (AnyObject, Selector, NSString, @escaping @convention(block) (NSString?, NSString?) -> Void) -> Void
-            unsafeBitCast(method, to: Function.self)(bridge, selector, audioPath as NSString, completion)
-        }
+        try await performTextOperation(
+            on: bridge,
+            selectorName: "transcribeAudioAtPath:attemptID:completion:",
+            audioPath: audioPath,
+            failureMessage: "Offline transcription failed."
+        )
     }
 
     private func transcribeDiarizedWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let selector = NSSelectorFromString("transcribeDiarizedAudioAtPath:completion:")
-            guard bridge.responds(to: selector),
-                  let method = bridge.method(for: selector)
-            else {
-                continuation.resume(throwing: runtimeError("Offline runtime does not support meeting transcription."))
-                return
-            }
+        try await performTextOperation(
+            on: bridge,
+            selectorName: "transcribeDiarizedAudioAtPath:attemptID:completion:",
+            audioPath: audioPath,
+            failureMessage: "Meeting transcription failed."
+        )
+    }
 
-            let completion: @convention(block) (NSString?, NSString?) -> Void = { text, message in
-                if let text {
-                    continuation.resume(returning: text as String)
-                } else {
-                    continuation.resume(throwing: self.runtimeError((message as String?) ?? "Meeting transcription failed."))
+    private func performTextOperation(
+        on bridge: NSObject,
+        selectorName: String,
+        audioPath: String,
+        failureMessage: String
+    ) async throws -> String {
+        let attemptID = UUID().uuidString
+        let gate = RuntimeCallbackAttempt<String>()
+        let cancellation = RuntimeAttemptCancellation(
+            bridge: bridge,
+            attemptID: attemptID,
+            bridgeSlot: runtimeBridgeSlot
+        )
+
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                guard gate.install(continuation) else {
+                    cancellation.cancel()
+                    return
                 }
-            }
 
-            typealias Function = @convention(c) (AnyObject, Selector, NSString, @escaping @convention(block) (NSString?, NSString?) -> Void) -> Void
-            unsafeBitCast(method, to: Function.self)(bridge, selector, audioPath as NSString, completion)
+                guard !Task<Never, Never>.isCancelled else {
+                    gate.resolve(.failure(CancellationError()))
+                    cancellation.cancel()
+                    return
+                }
+
+                let selector = NSSelectorFromString(selectorName)
+                guard bridge.responds(to: selector),
+                      let method = bridge.method(for: selector)
+                else {
+                    gate.resolve(.failure(runtimeError("Offline runtime does not support cancellable transcription.")))
+                    return
+                }
+
+                let completion: @convention(block) (NSString?, NSString?) -> Void = { text, message in
+                    if let text {
+                        gate.resolve(.success(text as String))
+                    } else {
+                        gate.resolve(.failure(self.runtimeError((message as String?) ?? failureMessage)))
+                    }
+                }
+
+                typealias Function = @convention(c) (AnyObject, Selector, NSString, NSString, @escaping @convention(block) (NSString?, NSString?) -> Void) -> Void
+                unsafeBitCast(method, to: Function.self)(bridge, selector, audioPath as NSString, attemptID as NSString, completion)
+            }
+        } onCancel: {
+            gate.resolve(.failure(CancellationError()))
+            cancellation.cancel()
         }
     }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 from pathlib import Path
 
 
@@ -10,65 +11,225 @@ args = parser.parse_args()
 ROOT = args.root.resolve()
 SHARED_SERVICE = ROOT / "Whishpermate/WhisperMateShared/Services/SharedTranscriptionService.swift"
 APP_STATE = ROOT / "Whishpermate/Whispermate/Services/AppState.swift"
+MAC_CLIENT = ROOT / "Whishpermate/Whispermate/Services/OpenAIClient.swift"
+SHARED_CLIENT = ROOT / "Whishpermate/WhisperMateShared/Networking/OpenAIClient.swift"
 
 
 def function_body(source: str, signature: str, next_signature: str) -> str:
-    start = source.index(signature)
-    end = source.index(next_signature, start)
+    try:
+        start = source.index(signature)
+        end = source.index(next_signature, start)
+    except ValueError as error:
+        raise SystemExit(f"validator could not locate {signature!r} before {next_signature!r}") from error
     return source[start:end]
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(message)
 
 
 shared_source = SHARED_SERVICE.read_text()
 app_state_source = APP_STATE.read_text()
+mac_client_source = MAC_CLIENT.read_text()
+shared_client_source = SHARED_CLIENT.read_text()
 
 shared_prompts = function_body(
     shared_source,
     "private static func buildPrompts(",
+    "private static func serverPostProcessingPrompt(",
+)
+require(
+    'postProcessingPromptComponents.append("Vocabulary:' in shared_prompts,
+    "shared cleanup lost personal vocabulary",
+)
+require(
+    'postProcessingPromptComponents.append("Phrases:' in shared_prompts,
+    "shared cleanup lost personal phrases",
+)
+require(
+    "sttPromptComponents.append(dictionaryHints)" in shared_prompts,
+    "shared recognition lost vocabulary hints",
+)
+require(
+    "sttPromptComponents.append(shortcutHints)" in shared_prompts,
+    "shared recognition lost phrase hints",
+)
+require(
+    'sttPromptComponents.append("Vocabulary:' not in shared_prompts
+    and 'sttPromptComponents.append("Phrases:' not in shared_prompts,
+    "shared recognition prompt contains cleanup-only labels",
+)
+
+shared_server_prompt = function_body(
+    shared_source,
+    "private static func serverPostProcessingPrompt(",
     "private static func applyLLMPassIfAvailable(",
 )
-if 'postProcessingPromptComponents.append("Vocabulary:' in shared_prompts:
-    raise SystemExit("raw vocabulary is still routed to shared cleanup")
-if 'postProcessingPromptComponents.append("Phrases:' in shared_prompts:
-    raise SystemExit("raw phrases are still routed to shared cleanup")
-if "sttPromptComponents.append(dictionaryHints)" not in shared_prompts:
-    raise SystemExit("shared recognition lost vocabulary hints")
-if "sttPromptComponents.append(shortcutHints)" not in shared_prompts:
-    raise SystemExit("shared recognition lost phrase hints")
-if '"Vocabulary:' in shared_prompts or '"Phrases:' in shared_prompts:
-    raise SystemExit("shared recognition prompt still contains hardcoded hint labels")
+require(
+    "TranscriptionCleanupPrompt.systemPrompt(" in shared_server_prompt,
+    "shared one-request cleanup is not using the generic prompt contract",
+)
+require(
+    "transformationInstruction: transformationInstruction" in shared_server_prompt,
+    "shared one-request cleanup lost Notes/Meetings output-mode routing",
+)
+
+shared_cleanup = function_body(
+    shared_source,
+    "private static func applyLLMPassIfAvailable(",
+    "private static func transcribeWithoutDiarization(",
+)
+for method in ("applyFormattingRules", "applyNotesFormatting", "applyMeetingFormatting"):
+    require(
+        f"client.{method}(transcription: transcript, rules: rules)" in shared_cleanup,
+        f"shared two-stage cleanup lost {method} context routing",
+    )
+
+shared_cloud = function_body(
+    shared_source,
+    "private static func transcribeWithCloud(",
+    "private static func captureCleanupConfiguration(",
+)
+require(
+    "postProcessingPrompt: cloud.isOneStage ? request.serverPostProcessingPrompt : nil" in shared_cloud,
+    "shared one-request transcription lost cleanup context",
+)
+require(
+    "cleanupMergedTranscript:" in shared_cloud and "applyLLMPassIfAvailable(" in shared_cloud,
+    "shared chunked/two-stage transcription lost merged cleanup",
+)
 
 cleanup_builder = function_body(
     app_state_source,
     "private func buildTranscriptionPromptComponents()",
     "private func buildSTTHintPromptComponents()",
 )
-if "transcriptionHints" in cleanup_builder:
-    raise SystemExit("raw recognition hints are still routed to macOS cleanup")
+require(
+    "dictionaryManager.transcriptionHints" in cleanup_builder
+    and 'promptComponents.append("Vocabulary:' in cleanup_builder,
+    "macOS cleanup lost personal vocabulary",
+)
+require(
+    "shortcutManager.transcriptionHints" in cleanup_builder
+    and 'promptComponents.append("Phrases:' in cleanup_builder,
+    "macOS cleanup lost personal phrases",
+)
 
 stt_builder = function_body(
     app_state_source,
     "private func buildSTTHintPromptComponents()",
     "private func buildRealtimePrompt()",
 )
-if stt_builder.count("transcriptionHints") < 2:
-    raise SystemExit("macOS recognition lost vocabulary or phrase hints")
-if '"Vocabulary:' in stt_builder or '"Phrases:' in stt_builder:
-    raise SystemExit("macOS recognition prompt still contains hardcoded hint labels")
+require(
+    "dictionaryManager.transcriptionHints" in stt_builder
+    and "shortcutManager.transcriptionHints" in stt_builder,
+    "macOS recognition lost vocabulary or phrase hints",
+)
+require(
+    '"Vocabulary:' not in stt_builder and '"Phrases:' not in stt_builder,
+    "macOS recognition prompt contains cleanup-only labels",
+)
 
 realtime_builder = function_body(
     app_state_source,
     "private func buildRealtimePrompt()",
     "private func singleAPILanguageCode()",
 )
-if "buildSTTHintPromptComponents()" not in realtime_builder:
-    raise SystemExit("realtime recognition is not using recognition-only hints")
+require(
+    "buildSTTHintPromptComponents()" in realtime_builder,
+    "realtime recognition is not using recognition-only hints",
+)
 
 command_context = function_body(
     app_state_source,
     "// Build context rules (same as transcription)",
     "// Execute the command (with or without target text)",
 )
-if "transcriptionHints" in command_context:
-    raise SystemExit("raw recognition hints are still routed to command cleanup")
+require(
+    "dictionaryManager.transcriptionHints" in command_context
+    and 'contextRules.append("Vocabulary:' in command_context,
+    "command cleanup lost personal vocabulary",
+)
+require(
+    "shortcutManager.transcriptionHints" in command_context
+    and 'contextRules.append("Phrases:' in command_context,
+    "command cleanup lost personal phrases",
+)
 
-print("transcription prompt routing validation passed")
+mac_pipeline = function_body(
+    app_state_source,
+    "private func performTranscription(",
+    "private func providerPostProcessingPrompt(",
+)
+require(
+    "postProcessingPrompt: customCleanupPrompt" in mac_pipeline,
+    "macOS one-request transcription lost cleanup context",
+)
+require(
+    "cleanupMergedTranscript: mergedCleanup" in mac_pipeline,
+    "macOS chunked transcription lost merged cleanup",
+)
+for method in ("applyFormattingRules", "applyNotesFormatting", "applyMeetingFormatting"):
+    require(
+        re.search(
+            rf"client\.{method}\(\s*transcription: mergedRaw,\s*rules: promptComponents,",
+            mac_pipeline,
+        )
+        is not None,
+        f"macOS merged cleanup lost {method} mode routing",
+    )
+
+mac_server_prompt = function_body(
+    app_state_source,
+    "private func providerPostProcessingPrompt(",
+    "private func applyLLMPassWithFallback(",
+)
+require(
+    "TranscriptionCleanupPrompt.systemPrompt(" in mac_server_prompt,
+    "macOS one-request cleanup is not using the generic prompt contract",
+)
+for context in (
+    "formattingContext:",
+    "languageContext: languageContext",
+    "appContext: appContext",
+    "transformationInstruction: transformationInstruction",
+):
+    require(context in mac_server_prompt, f"macOS one-request cleanup lost {context}")
+
+for platform, source in (("macOS", mac_client_source), ("shared/iOS", shared_client_source)):
+    methods = (
+        ("func applyFormattingRules(", "func applyNotesFormatting(", None),
+        (
+            "func applyNotesFormatting(",
+            "func applyMeetingFormatting(",
+            "TranscriptionOutputMode.notesPostProcessingInstruction",
+        ),
+    )
+    for signature, next_signature, transformation in methods:
+        body = function_body(source, signature, next_signature)
+        require(
+            "TranscriptionCleanupPrompt.systemPrompt(" in body,
+            f"{platform} {signature} is not using the generic prompt contract",
+        )
+        require(
+            "formattingContext: rules" in body,
+            f"{platform} {signature} lost personal/reference context",
+        )
+        require(
+            "TranscriptionCleanupPrompt.userMessage(" in body,
+            f"{platform} {signature} is not delimiting source text",
+        )
+        if transformation:
+            require(transformation in body, f"{platform} Notes cleanup lost its output-mode instruction")
+
+    meeting_body = source[source.index("func applyMeetingFormatting(") :]
+    require(
+        "TranscriptionCleanupPrompt.systemPrompt(" in meeting_body
+        and "formattingContext: rules" in meeting_body
+        and "TranscriptionCleanupPrompt.userMessage(" in meeting_body
+        and "meetingsPostProcessingInstruction" in meeting_body,
+        f"{platform} Meetings cleanup lost the generic prompt contract or context",
+    )
+
+print("transcription and cleanup context validation passed")

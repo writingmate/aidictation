@@ -1456,21 +1456,23 @@ class AppState: ObservableObject {
         }
         NotificationCenter.default.post(name: .recordingCompleted, object: success)
 
-        let wordCount = success.wordCount ?? 0
-        Task { await SubscriptionManager.shared.recordWords(wordCount) }
-        guard isLiveRecording else { return }
-
-        let wasCommandMode = recordingMode == .command
-        let commandTargetText = CommandModeManager.shared.targetText
-        if wasCommandMode {
-            await processCommandResult(instruction: trimmed, targetText: commandTargetText)
-        } else {
-            await processDictationResult(transcription: trimmed)
+        if isLiveRecording {
+            let wasCommandMode = recordingMode == .command
+            let commandTargetText = CommandModeManager.shared.targetText
+            if wasCommandMode {
+                await processCommandResult(instruction: trimmed, targetText: commandTargetText)
+            } else {
+                await processDictationResult(transcription: trimmed)
+            }
+            recordingMode = .dictation
+            shouldAutoPaste = false
+            recordingStartTime = nil
+            finalizedRecordingDuration = nil
         }
-        recordingMode = .dictation
-        shouldAutoPaste = false
-        recordingStartTime = nil
-        finalizedRecordingDuration = nil
+
+        // Keep accounting owned by this completion, but do it only after the
+        // transcript has been delivered so a slow account service cannot delay paste.
+        await SubscriptionManager.shared.recordWords(success.wordCount ?? 0)
     }
 
     private func finishStoredTranscriptionFailure(
@@ -1875,12 +1877,7 @@ class AppState: ObservableObject {
     ) -> MacTranscriptionAttemptSnapshot {
         let provider = transcriptionProviderManager.selectedProvider
         let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
-        var cleanupComponents = buildTranscriptionPromptComponents()
-        if !sttHintPrompt.isEmpty {
-            cleanupComponents.append(
-                "Reference vocabulary and spoken phrases (use only when supported by the transcript): \(sttHintPrompt)"
-            )
-        }
+        let cleanupComponents = buildTranscriptionPromptComponents()
         let replacements = dictionaryManager.entries
             .filter { $0.isEnabled && $0.replacement != nil }
             .sorted { $0.trigger.count > $1.trigger.count }
@@ -1926,6 +1923,12 @@ class AppState: ObservableObject {
     private func buildTranscriptionPromptComponents() -> [String] {
         var promptComponents: [String] = []
 
+        if !dictionaryManager.transcriptionHints.isEmpty {
+            promptComponents.append("Vocabulary: \(dictionaryManager.transcriptionHints)")
+        }
+        if !shortcutManager.transcriptionHints.isEmpty {
+            promptComponents.append("Phrases: \(shortcutManager.transcriptionHints)")
+        }
         if let instructions = dictionaryManager.formattingInstructions {
             promptComponents.append(instructions)
         }
@@ -2114,7 +2117,9 @@ class AppState: ObservableObject {
             let customCleanupPrompt = provider == .custom
                 ? providerPostProcessingPrompt(
                     outputMode: outputMode,
-                    basePrompt: postProcessingPrompt
+                    basePrompt: postProcessingPrompt,
+                    languageContext: snapshot.languageCode,
+                    appContext: snapshot.appContext
                 )
                 : nil
             let mergedCleanup: ((String) async throws -> String)?
@@ -2125,13 +2130,32 @@ class AppState: ObservableObject {
                         rawText: mergedRaw,
                         label: "Transcription cleanup"
                     ) {
-                        try await client.applyFormattingRules(
-                            transcription: mergedRaw,
-                            rules: customCleanupPrompt.map { [$0] } ?? [],
-                            languageCodes: snapshot.languageCode,
-                            appContext: snapshot.appContext,
-                            clipboardContent: nil
-                        )
+                        switch outputMode {
+                        case .dictation:
+                            return try await client.applyFormattingRules(
+                                transcription: mergedRaw,
+                                rules: promptComponents,
+                                languageCodes: snapshot.languageCode,
+                                appContext: snapshot.appContext,
+                                clipboardContent: nil
+                            )
+                        case .notes:
+                            return try await client.applyNotesFormatting(
+                                transcription: mergedRaw,
+                                rules: promptComponents,
+                                languageCodes: snapshot.languageCode,
+                                appContext: snapshot.appContext
+                            )
+                        case .meetings:
+                            return try await client.applyMeetingFormatting(
+                                transcription: mergedRaw,
+                                rules: promptComponents,
+                                languageCodes: snapshot.languageCode,
+                                appContext: snapshot.appContext
+                            )
+                        @unknown default:
+                            return mergedRaw
+                        }
                     }
                 }
             } else {
@@ -2187,18 +2211,31 @@ class AppState: ObservableObject {
         }
     }
 
-    private func providerPostProcessingPrompt(outputMode: TranscriptionOutputMode, basePrompt: String) -> String? {
-        var components: [String] = []
-        if !basePrompt.isEmpty {
-            components.append(basePrompt)
+    private func providerPostProcessingPrompt(
+        outputMode: TranscriptionOutputMode,
+        basePrompt: String,
+        languageContext: String?,
+        appContext: String?
+    ) -> String {
+        let transformationInstruction: String?
+        switch outputMode {
+        case .dictation:
+            transformationInstruction = nil
+        case .notes:
+            transformationInstruction = TranscriptionOutputMode.notesPostProcessingInstruction
+        case .meetings:
+            transformationInstruction = TranscriptionOutputMode.meetingsPostProcessingInstruction
+        @unknown default:
+            transformationInstruction = nil
         }
-        if outputMode == .notes {
-            components.append(TranscriptionOutputMode.notesPostProcessingInstruction)
-        } else if outputMode == .meetings {
-            components.append(TranscriptionOutputMode.meetingsPostProcessingInstruction)
-        }
-        let prompt = components.joined(separator: "\n\n")
-        return prompt.isEmpty ? nil : prompt
+
+        return TranscriptionCleanupPrompt.systemPrompt(
+            formattingContext: basePrompt.isEmpty ? [] : [basePrompt],
+            languageContext: languageContext,
+            appContext: appContext,
+            hasSelectedContent: false,
+            transformationInstruction: transformationInstruction
+        )
     }
 
     private func applyLLMPassWithFallback(
@@ -2453,6 +2490,12 @@ class AppState: ObservableObject {
 
         // Build context rules (same as transcription)
         var contextRules: [String] = []
+        if !dictionaryManager.transcriptionHints.isEmpty {
+            contextRules.append("Vocabulary: \(dictionaryManager.transcriptionHints)")
+        }
+        if !shortcutManager.transcriptionHints.isEmpty {
+            contextRules.append("Phrases: \(shortcutManager.transcriptionHints)")
+        }
         if let instructions = dictionaryManager.formattingInstructions {
             contextRules.append(instructions)
         }

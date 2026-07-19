@@ -18,6 +18,7 @@ import com.whispermate.aidictation.data.remote.AudioSplitException
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.domain.model.audioUsageClaimId
 import com.whispermate.aidictation.util.AudioRecorder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -97,7 +98,8 @@ data class FinalizedAndroidCapture(
 data class AndroidProcessingResult(
     val recordingId: String,
     val rawText: String,
-    val text: String
+    val text: String,
+    val usageClaimId: String?
 )
 
 private class AudioAttemptUnavailableException(message: String) : IllegalStateException(message)
@@ -306,7 +308,8 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
                 recordingRepository.beginCapture(
                     start.provisionalLease.recordingId,
                     start.provisionalLease.attemptId,
-                    partial.absolutePath
+                    partial.absolutePath,
+                    usageEligible = owner.recordsUsage
                 )
             }
             start.lease.set(lease)
@@ -840,7 +843,14 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
             ) {
                 throw IllegalStateException("The transcription finished after this attempt was replaced")
             }
-            Result.success(AndroidProcessingResult(finalized.lease.recordingId, raw, recognized))
+            Result.success(
+                AndroidProcessingResult(
+                    finalized.lease.recordingId,
+                    raw,
+                    recognized,
+                    finalized.usageClaimId
+                )
+            )
         } catch (error: Throwable) {
             worker.cancel()
             Log.e("AndroidAudioProcessing", "Transcription attempt failed", error)
@@ -863,7 +873,12 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
                 if (error is CancellationException && error !is TimeoutCancellationException) throw error
                 if (saved) {
                     return Result.success(
-                        AndroidProcessingResult(finalized.lease.recordingId, durableRaw, durableRaw)
+                        AndroidProcessingResult(
+                            finalized.lease.recordingId,
+                            durableRaw,
+                            durableRaw,
+                            finalized.usageClaimId
+                        )
                     )
                 }
             } else if (finalized.transcriptionConfiguration.useLocalRecognition) {
@@ -998,7 +1013,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
                         )
                     }
                 }
-            ) { recordingRepository.claimRetry(recordingId) }
+            ) { recordingRepository.claimRetry(recordingId, usageEligible = owner.recordsUsage) }
                 ?: throw AudioAttemptUnavailableException(
                     "This recording is already active or cannot be retried"
                 )
@@ -1528,6 +1543,16 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
 
     private fun managedSourceFile(recordingId: String): File =
         File(File(context.filesDir, "audio/recordings"), "$recordingId.m4a")
+
+    private val AndroidAudioAttemptOwner.recordsUsage: Boolean
+        get() = this == AndroidAudioAttemptOwner.MAIN || this == AndroidAudioAttemptOwner.OVERLAY
+
+    private val FinalizedAndroidCapture.usageClaimId: String?
+        get() = if (owner.recordsUsage) {
+            audioUsageClaimId(lease.recordingId, lease.generation)
+        } else {
+            null
+        }
 
     private fun newNativeExecutor(recordingId: String): ExecutorService {
         val counter = AtomicInteger()

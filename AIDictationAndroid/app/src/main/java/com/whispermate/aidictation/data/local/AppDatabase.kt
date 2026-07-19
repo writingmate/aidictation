@@ -4,10 +4,11 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import com.whispermate.aidictation.data.local.dao.RecordingDao
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
+import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
 
 @Database(
-    entities = [RecordingEntity::class],
-    version = 2,
+    entities = [RecordingEntity::class, UsageClaimEntity::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

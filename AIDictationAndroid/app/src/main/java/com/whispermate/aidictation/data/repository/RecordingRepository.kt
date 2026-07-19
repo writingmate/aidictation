@@ -1,7 +1,10 @@
 package com.whispermate.aidictation.data.repository
 
+import android.content.Context
+import com.whispermate.aidictation.data.local.ManagedAudioTemporaryFiles
 import com.whispermate.aidictation.data.local.dao.RecordingDao
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
+import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.AudioSourceIntegrity
@@ -23,6 +26,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -90,7 +94,8 @@ internal fun readFinalizedAudioMarker(source: File): FinalizedAudioMarker? {
 
 @Singleton
 class RecordingRepository @Inject constructor(
-    private val recordingDao: RecordingDao
+    private val recordingDao: RecordingDao,
+    @ApplicationContext private val context: Context
 ) {
     companion object {
         private const val RECOVERY_OPERATION_TIMEOUT_MS = 5_000L
@@ -98,6 +103,7 @@ class RecordingRepository @Inject constructor(
 
     private val startupRecoveryComplete = CompletableDeferred<Unit>()
     private val recoveryOperationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val managedAudioDirectory = File(context.filesDir, "audio/recordings")
 
     val recordings: Flow<List<Recording>> = flow {
         startupRecoveryComplete.await()
@@ -107,10 +113,13 @@ class RecordingRepository @Inject constructor(
         )
     }
 
+    val pendingUsageClaimCount: Flow<Int> = recordingDao.observePendingUsageClaimCount()
+
     suspend fun beginCapture(
         recordingId: String,
         attemptId: String,
         partialSourcePath: String,
+        usageEligible: Boolean,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease {
         val row = Recording(
@@ -121,7 +130,8 @@ class RecordingRepository @Inject constructor(
             attemptId = attemptId,
             generation = 1,
             sourceIntegrity = AudioSourceIntegrity.PARTIAL,
-            updatedAt = now
+            updatedAt = now,
+            usageEligible = usageEligible
         )
         recordingDao.insertRecording(RecordingEntity.fromDomain(row))
         return AudioAttemptLease(recordingId, attemptId, 1, partialSourcePath, AudioProcessingStatus.CAPTURING)
@@ -172,7 +182,11 @@ class RecordingRepository @Inject constructor(
         }
     }
 
-    suspend fun claimRetry(recordingId: String, now: Long = System.currentTimeMillis()): AudioAttemptLease? {
+    suspend fun claimRetry(
+        recordingId: String,
+        usageEligible: Boolean,
+        now: Long = System.currentTimeMillis()
+    ): AudioAttemptLease? {
         val current = recordingDao.getRecordingById(recordingId) ?: return null
         val source = current.audioFilePath ?: return null
         if (current.sourceIntegrity != AudioSourceIntegrity.COMPLETE.persistedValue || !File(source).isFile) return null
@@ -182,6 +196,7 @@ class RecordingRepository @Inject constructor(
             expectedGeneration = current.generation,
             attemptId = attemptId,
             nextStatus = AudioProcessingStatus.RETRYING.persistedValue,
+            usageEligible = usageEligible,
             updatedAt = now
         )
         return if (updated == 1) {
@@ -259,6 +274,11 @@ class RecordingRepository @Inject constructor(
         var lastFailure: Throwable? = null
         repeat(3) { attempt ->
             try {
+                withRecoveryOperationDeadline {
+                    if (!ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)) {
+                        throw IOException("Temporary audio cleanup did not finish")
+                    }
+                }
                 retryTombstonedSourceCleanup(now)
                 recoverFinalizedSources(now)
                 val normalized = withRecoveryOperationDeadline {
@@ -296,7 +316,10 @@ class RecordingRepository @Inject constructor(
             ) != 1
         ) return false
         val sourcePath = current.audioFilePath ?: return true
-        val removed = removeManagedSource(File(sourcePath))
+        val source = File(sourcePath)
+        val temporaryRemoved = ManagedAudioTemporaryFiles.retireAndSweepForSource(source)
+        val sourceRemoved = removeManagedSource(source)
+        val removed = temporaryRemoved && sourceRemoved
         if (removed) {
             runCatching {
                 recordingDao.clearDeletedSourcePath(
@@ -316,10 +339,13 @@ class RecordingRepository @Inject constructor(
         } catch (_: RecordingDao.ActiveRecordingConflictException) {
             return false
         }
-        var allRemoved = true
+        var allRemoved = ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)
         inactive.forEach { row ->
             val sourcePath = row.audioFilePath ?: return@forEach
-            val removed = removeManagedSource(File(sourcePath))
+            val source = File(sourcePath)
+            val temporaryRemoved = ManagedAudioTemporaryFiles.retireAndSweepForSource(source)
+            val sourceRemoved = removeManagedSource(source)
+            val removed = temporaryRemoved && sourceRemoved
             allRemoved = allRemoved && removed
             if (removed) {
                 runCatching {
@@ -337,6 +363,15 @@ class RecordingRepository @Inject constructor(
     suspend fun getRecordingById(id: String): Recording? {
         return recordingDao.getRecordingById(id)?.toDomain()
     }
+
+    suspend fun claimUsage(
+        id: String,
+        now: Long = System.currentTimeMillis()
+    ): UsageClaimEntity? = recordingDao.claimUsage(id, now)
+
+    suspend fun claimNextUsage(
+        now: Long = System.currentTimeMillis()
+    ): UsageClaimEntity? = recordingDao.claimNextUsage(now)
 
     suspend fun recoverFinalizedSource(
         lease: AudioAttemptLease,
@@ -383,8 +418,11 @@ class RecordingRepository @Inject constructor(
         withRecoveryOperationDeadline { recordingDao.getDeletedRecordingsWithSources() }
             .forEach { row ->
                 val sourcePath = row.audioFilePath ?: return@forEach
+                val source = File(sourcePath)
                 val removed = withRecoveryOperationDeadline {
-                    removeManagedSource(File(sourcePath))
+                    val temporaryRemoved = ManagedAudioTemporaryFiles.retireAndSweepForSource(source)
+                    val sourceRemoved = removeManagedSource(source)
+                    temporaryRemoved && sourceRemoved
                 }
                 if (!removed) return@forEach
                 withRecoveryOperationDeadline {

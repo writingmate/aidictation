@@ -34,6 +34,34 @@ object AppModule {
         }
     }
 
+    private val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL(
+                "ALTER TABLE recordings ADD COLUMN usageEligible INTEGER NOT NULL DEFAULT 0"
+            )
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS usage_claims (
+                    id TEXT NOT NULL,
+                    recordingId TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    wordCount INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    claimedAt INTEGER,
+                    PRIMARY KEY(id)
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_usage_claims_state ON usage_claims(state)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_usage_claims_recordingId ON usage_claims(recordingId)"
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideMoshi(): Moshi = Moshi.Builder().build()
@@ -45,7 +73,7 @@ object AppModule {
             context,
             AppDatabase::class.java,
             "aidictation_db"
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
 
     @Provides
     @Singleton

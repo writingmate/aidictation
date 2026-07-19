@@ -22,7 +22,8 @@ data class RecordingEntity(
     @ColumnInfo(defaultValue = "0") val generation: Long = 0,
     val errorMessage: String? = null,
     @ColumnInfo(defaultValue = "'complete'") val sourceIntegrity: String = "complete",
-    @ColumnInfo(defaultValue = "0") val updatedAt: Long = timestamp
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = timestamp,
+    @ColumnInfo(defaultValue = "0") val usageEligible: Boolean = false
 ) {
     fun toDomain(): Recording = Recording(
         id = id,
@@ -39,7 +40,8 @@ data class RecordingEntity(
         generation = generation,
         errorMessage = errorMessage,
         sourceIntegrity = com.whispermate.aidictation.domain.model.AudioSourceIntegrity.fromPersisted(sourceIntegrity),
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        usageEligible = usageEligible
     )
 
     companion object {
@@ -58,7 +60,8 @@ data class RecordingEntity(
             generation = recording.generation,
             errorMessage = recording.errorMessage,
             sourceIntegrity = recording.sourceIntegrity.persistedValue,
-            updatedAt = recording.updatedAt
+            updatedAt = recording.updatedAt,
+            usageEligible = recording.usageEligible
         )
     }
 }

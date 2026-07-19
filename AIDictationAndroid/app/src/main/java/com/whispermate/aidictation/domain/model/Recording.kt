@@ -20,7 +20,8 @@ data class Recording(
     val generation: Long = 0,
     val errorMessage: String? = null,
     val sourceIntegrity: AudioSourceIntegrity = AudioSourceIntegrity.COMPLETE,
-    val updatedAt: Long = timestamp
+    val updatedAt: Long = timestamp,
+    val usageEligible: Boolean = false
 ) {
     val isProcessing: Boolean get() = status.isActive
     val availableText: String get() = transcription.ifBlank { checkpointText }

@@ -1735,6 +1735,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 ).show()
                 return
             }
+        subscriptionRepository.recordUsageClaim(processed.usageClaimId)
         if (!beginDeliveryPhase(token)) return
 
         // Command detection and execution (separate from transcription)
@@ -1772,7 +1773,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         if (applied) {
             lastDictatedText = finalText
-            subscriptionRepository.recordWords(finalText)
         } else {
             copyTextForManualPaste(finalText)
             Toast.makeText(
@@ -1825,6 +1825,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 ).show()
                 return
             }
+        subscriptionRepository.recordUsageClaim(processing.usageClaimId)
         if (!beginDeliveryPhase(token)) return
 
         val instruction = processing.text
@@ -1873,7 +1874,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             ).show()
         } else {
             lastDictatedText = transformed
-            subscriptionRepository.recordWords(transformed)
         }
     }
 

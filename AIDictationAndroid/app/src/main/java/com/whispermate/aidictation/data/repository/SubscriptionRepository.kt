@@ -2,6 +2,7 @@ package com.whispermate.aidictation.data.repository
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.FREE_MONTHLY_WORD_LIMIT
@@ -15,17 +16,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import com.whispermate.aidictation.domain.model.countUsageWords
 
 @Singleton
 class SubscriptionRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val appPreferences: AppPreferences,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val recordingRepository: RecordingRepository
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val usageDispatchMutex = Mutex()
 
     val usageStatus: StateFlow<UsageStatus> = combine(
         appPreferences.localUsage,
@@ -66,6 +74,15 @@ class SubscriptionRepository @Inject constructor(
     init {
         scope.launch {
             appPreferences.checkAndResetLocalUsageIfNeeded()
+            runCatching {
+                authRepository.authState.first { !it.isLoading }
+                recordingRepository.awaitStartupRecovery()
+                recordingRepository.pendingUsageClaimCount.collect { pendingCount ->
+                    if (pendingCount > 0) drainPendingUsageClaims()
+                }
+            }.onFailure { error ->
+                Log.e("SubscriptionRepository", "Pending usage monitoring stopped", error)
+            }
         }
     }
 
@@ -84,9 +101,50 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun recordWords(text: String) {
-        val count = countWords(text)
+        val count = countUsageWords(text)
         if (count <= 0) return
 
+        usageDispatchMutex.withLock {
+            dispatchWordsOnce(count)
+        }
+    }
+
+    /**
+     * The Room claim is consumed before the current non-idempotent sink is invoked. A crash or an
+     * ambiguous network failure after this point is intentionally never retried, so undercount is
+     * possible but the same successful transcription cannot be charged twice by this device.
+     */
+    fun recordUsageClaim(claimId: String?) {
+        if (claimId == null) return
+        scope.launch {
+            authRepository.authState.first { !it.isLoading }
+            dispatchPersistedUsageClaim(claimId)
+        }
+    }
+
+    private suspend fun dispatchPersistedUsageClaim(claimId: String) {
+        usageDispatchMutex.withLock {
+            val claim = recordingRepository.claimUsage(claimId) ?: return@withLock
+            runCatching { dispatchWordsOnce(claim.wordCount) }
+                .onFailure { error ->
+                    Log.e("SubscriptionRepository", "Claimed usage could not be dispatched", error)
+                }
+        }
+    }
+
+    private suspend fun drainPendingUsageClaims() {
+        usageDispatchMutex.withLock {
+            while (true) {
+                val claim = recordingRepository.claimNextUsage() ?: break
+                runCatching { dispatchWordsOnce(claim.wordCount) }
+                    .onFailure { error ->
+                        Log.e("SubscriptionRepository", "Claimed usage could not be dispatched", error)
+                    }
+            }
+        }
+    }
+
+    private suspend fun dispatchWordsOnce(count: Int) {
         if (authRepository.authState.value.user != null) {
             authRepository.updateWordCount(count)
         } else {
@@ -143,9 +201,4 @@ class SubscriptionRepository @Inject constructor(
         return "Try AI Dictation with my invite link. We both get ${REFERRAL_BONUS_WORDS} extra words: $inviteUrl"
     }
 
-    private fun countWords(text: String): Int {
-        return text.trim()
-            .split(Regex("\\s+"))
-            .count { token -> token.any { it.isLetterOrDigit() } }
-    }
 }

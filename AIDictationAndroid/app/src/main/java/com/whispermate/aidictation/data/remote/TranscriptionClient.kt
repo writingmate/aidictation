@@ -6,6 +6,8 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.util.Log
 import com.whispermate.aidictation.BuildConfig
+import com.whispermate.aidictation.data.local.ManagedAudioTemporaryFiles
+import com.whispermate.aidictation.data.local.ManagedAudioTemporaryWorkspace
 import com.whispermate.aidictation.data.preferences.ApiConfigManager
 import com.whispermate.aidictation.domain.model.Command
 import kotlinx.coroutines.Dispatchers
@@ -98,6 +100,7 @@ object TranscriptionClient {
         rawComplete: suspend (rawText: String) -> Boolean = { true }
     ): Result<String> = withContext(Dispatchers.IO) {
         val temporaryFiles = linkedSetOf<File>()
+        val temporaryWorkspace = ManagedAudioTemporaryFiles.openWorkspace(audioFile)
         try {
             Log.d(TAG, "Transcribing audio, size: ${audioFile.length()} bytes")
             Log.d(
@@ -120,7 +123,7 @@ object TranscriptionClient {
                         onLateResult = { chunks ->
                             chunks.filter { it.isTemporary }.forEach { it.file.delete() }
                         }
-                    ) { makeUploadChunks(audioFile) }
+                    ) { makeUploadChunks(audioFile, temporaryWorkspace) }
                 } else {
                     listOf(AudioUploadChunk(audioFile, isTemporary = false))
                 }
@@ -153,7 +156,7 @@ object TranscriptionClient {
                     val children = withTimeout(CHUNK_EXPORT_TIMEOUT_MS) {
                         runDisposableBlocking(
                             onLateResult = { late -> late?.forEach { it.file.delete() } }
-                        ) { splitRejectedLeaf(rejected.file) }
+                        ) { splitRejectedLeaf(rejected.file, temporaryWorkspace) }
                     }
                     children?.onEach { child -> if (child.isTemporary) temporaryFiles += child.file }
                 }
@@ -183,6 +186,7 @@ object TranscriptionClient {
             Result.failure(e)
         } finally {
             temporaryFiles.forEach { file -> runCatching { file.delete() } }
+            temporaryWorkspace.retire()
         }
     }
 
@@ -305,7 +309,10 @@ object TranscriptionClient {
         }
     }
 
-    private fun makeUploadChunks(audioFile: File): List<AudioUploadChunk> {
+    private fun makeUploadChunks(
+        audioFile: File,
+        temporaryWorkspace: ManagedAudioTemporaryWorkspace
+    ): List<AudioUploadChunk> {
         if (audioFile.length() <= MAX_SINGLE_UPLOAD_AUDIO_BYTES) {
             return listOf(AudioUploadChunk(audioFile, isTemporary = false))
         }
@@ -326,7 +333,12 @@ object TranscriptionClient {
 
         var largestChunkBytes = 0L
         repeat(5) {
-            val chunks = writeAudioChunks(audioFile, metadata.durationUs, segmentDurationUs)
+            val chunks = writeAudioChunks(
+                audioFile,
+                metadata.durationUs,
+                segmentDurationUs,
+                temporaryWorkspace
+            )
             largestChunkBytes = chunks.maxOfOrNull { it.file.length() } ?: 0L
             if (largestChunkBytes <= MAX_SINGLE_UPLOAD_AUDIO_BYTES) {
                 return chunks
@@ -345,7 +357,8 @@ object TranscriptionClient {
     private fun writeAudioChunks(
         audioFile: File,
         durationUs: Long,
-        segmentDurationUs: Long
+        segmentDurationUs: Long,
+        temporaryWorkspace: ManagedAudioTemporaryWorkspace
     ): List<AudioUploadChunk> {
         val chunks = mutableListOf<AudioUploadChunk>()
         try {
@@ -355,10 +368,9 @@ object TranscriptionClient {
                 val endUs = nextChunkEndUs(startUs, durationUs, segmentDurationUs)
                 check(endUs > startUs) { "Audio chunking stopped making progress" }
 
-                val chunkFile = File.createTempFile(
+                val chunkFile = temporaryWorkspace.createTemporaryFile(
                     "${audioFile.nameWithoutExtension}_chunk_${index}_",
-                    ".m4a",
-                    audioFile.parentFile
+                    ".m4a"
                 )
                 val chunk = AudioUploadChunk(chunkFile, isTemporary = true)
                 chunks += chunk
@@ -393,14 +405,23 @@ object TranscriptionClient {
         }
     }
 
-    private fun splitRejectedLeaf(audioFile: File): List<AudioUploadChunk>? {
+    private fun splitRejectedLeaf(
+        audioFile: File,
+        temporaryWorkspace: ManagedAudioTemporaryWorkspace
+    ): List<AudioUploadChunk>? {
         val metadata = readAudioMetadata(audioFile)
         if (metadata.durationUs < 1_000_000L || audioFile.length() < 64_000L) return null
         val midpointUs = metadata.durationUs / 2
         if (midpointUs < 250_000L || metadata.durationUs - midpointUs < 250_000L) return null
 
-        val left = File.createTempFile("${audioFile.nameWithoutExtension}_left_", ".m4a", audioFile.parentFile)
-        val right = File.createTempFile("${audioFile.nameWithoutExtension}_right_", ".m4a", audioFile.parentFile)
+        val left = temporaryWorkspace.createTemporaryFile(
+            "${audioFile.nameWithoutExtension}_left_",
+            ".m4a"
+        )
+        val right = temporaryWorkspace.createTemporaryFile(
+            "${audioFile.nameWithoutExtension}_right_",
+            ".m4a"
+        )
         return try {
             writeAudioChunk(audioFile, left, 0, midpointUs)
             writeAudioChunk(audioFile, right, midpointUs, metadata.durationUs)

@@ -349,7 +349,7 @@ class MainViewModel @Inject constructor(
             activeCaptureWorkflowToken = null
             outcome
                 .onSuccess { result ->
-                    subscriptionRepository.recordWords(result.text)
+                    subscriptionRepository.recordUsageClaim(result.usageClaimId)
                     _selectedRecording.value = try {
                         recordingRepository.getRecordingById(result.recordingId)
                     } catch (error: CancellationException) {
@@ -429,7 +429,7 @@ class MainViewModel @Inject constructor(
                 // History refresh and usage accounting are delivery work, not processing state.
                 finishPreflight(requestId)
                 outcome.onSuccess { result ->
-                        subscriptionRepository.recordWords(result.text)
+                        subscriptionRepository.recordUsageClaim(result.usageClaimId)
                         _selectedRecording.value = try {
                             recordingRepository.getRecordingById(result.recordingId)
                         } catch (error: CancellationException) {

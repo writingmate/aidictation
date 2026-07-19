@@ -6,6 +6,9 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
+import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
+import com.whispermate.aidictation.domain.model.audioUsageClaimId
+import com.whispermate.aidictation.domain.model.countUsageWords
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -45,6 +48,7 @@ interface RecordingDao {
             attemptId = :attemptId,
             generation = generation + 1,
             recognitionComplete = 0,
+            usageEligible = :usageEligible,
             errorMessage = NULL,
             updatedAt = :updatedAt
         WHERE id = :id
@@ -58,6 +62,7 @@ interface RecordingDao {
         expectedGeneration: Long,
         attemptId: String,
         nextStatus: String,
+        usageEligible: Boolean,
         updatedAt: Long
     ): Int
 
@@ -164,7 +169,7 @@ interface RecordingDao {
           AND status IN ('capturing', 'finalizing', 'processing', 'retrying')
         """
     )
-    suspend fun finishAttempt(
+    suspend fun finishAttemptRow(
         id: String,
         attemptId: String,
         generation: Long,
@@ -176,6 +181,37 @@ interface RecordingDao {
         errorMessage: String?,
         updatedAt: Long
     ): Int
+
+    @Transaction
+    suspend fun finishAttempt(
+        id: String,
+        attemptId: String,
+        generation: Long,
+        status: String,
+        transcription: String,
+        rawTranscription: String,
+        checkpointText: String,
+        completedLeafCount: Int,
+        errorMessage: String?,
+        updatedAt: Long
+    ): Int {
+        val updated = finishAttemptRow(
+            id = id,
+            attemptId = attemptId,
+            generation = generation,
+            status = status,
+            transcription = transcription,
+            rawTranscription = rawTranscription,
+            checkpointText = checkpointText,
+            completedLeafCount = completedLeafCount,
+            errorMessage = errorMessage,
+            updatedAt = updatedAt
+        )
+        if (updated == 1 && status == "success") {
+            queueUsageClaimIfEligible(id, generation, transcription, updatedAt)
+        }
+        return updated
+    }
 
     @Query(
         """
@@ -191,7 +227,7 @@ interface RecordingDao {
           AND status IN ('processing', 'retrying')
         """
     )
-    suspend fun finishRecognitionPreservingProgress(
+    suspend fun finishRecognitionPreservingProgressRow(
         id: String,
         attemptId: String,
         generation: Long,
@@ -199,6 +235,32 @@ interface RecordingDao {
         errorMessage: String?,
         updatedAt: Long
     ): Int
+
+    @Transaction
+    suspend fun finishRecognitionPreservingProgress(
+        id: String,
+        attemptId: String,
+        generation: Long,
+        status: String,
+        errorMessage: String?,
+        updatedAt: Long
+    ): Int {
+        val updated = finishRecognitionPreservingProgressRow(
+            id = id,
+            attemptId = attemptId,
+            generation = generation,
+            status = status,
+            errorMessage = errorMessage,
+            updatedAt = updatedAt
+        )
+        if (updated == 1) {
+            val current = getRecordingById(id)
+            if (current?.status == "success") {
+                queueUsageClaimIfEligible(id, generation, current.transcription, updatedAt)
+            }
+        }
+        return updated
+    }
 
     @Query(
         """
@@ -218,7 +280,25 @@ interface RecordingDao {
         WHERE status IN ('capturing', 'finalizing', 'processing', 'retrying')
         """
     )
-    suspend fun normalizeAbandonedAttempts(message: String, updatedAt: Long): Int
+    suspend fun normalizeAbandonedAttemptRows(message: String, updatedAt: Long): Int
+
+    @Transaction
+    suspend fun normalizeAbandonedAttempts(message: String, updatedAt: Long): Int {
+        val recognizedCandidates = getActiveRecordings().filter { it.recognitionComplete }
+        val updated = normalizeAbandonedAttemptRows(message, updatedAt)
+        recognizedCandidates.forEach { candidate ->
+            val current = getRecordingById(candidate.id)
+            if (current?.status == "success" && current.generation == candidate.generation) {
+                queueUsageClaimIfEligible(
+                    id = current.id,
+                    generation = current.generation,
+                    text = current.transcription,
+                    createdAt = updatedAt
+                )
+            }
+        }
+        return updated
+    }
 
     @Query(
         """
@@ -291,9 +371,66 @@ interface RecordingDao {
     )
     suspend fun clearDeletedSourcePath(id: String, generation: Long, updatedAt: Long): Int
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertUsageClaim(claim: UsageClaimEntity): Long
+
+    @Query("SELECT * FROM usage_claims WHERE id = :id")
+    suspend fun getUsageClaimById(id: String): UsageClaimEntity?
+
+    @Query("SELECT id FROM usage_claims WHERE state = 'pending' ORDER BY createdAt, id LIMIT 1")
+    suspend fun getNextPendingUsageClaimId(): String?
+
+    @Query("SELECT COUNT(*) FROM usage_claims WHERE state = 'pending'")
+    fun observePendingUsageClaimCount(): Flow<Int>
+
+    @Query(
+        """
+        UPDATE usage_claims SET state = 'claimed', claimedAt = :claimedAt
+        WHERE id = :id AND state = 'pending'
+        """
+    )
+    suspend fun markUsageClaimed(id: String, claimedAt: Long): Int
+
+    @Transaction
+    suspend fun claimUsage(id: String, claimedAt: Long): UsageClaimEntity? {
+        if (markUsageClaimed(id, claimedAt) != 1) return null
+        return getUsageClaimById(id)
+    }
+
+    @Transaction
+    suspend fun claimNextUsage(claimedAt: Long): UsageClaimEntity? {
+        val id = getNextPendingUsageClaimId() ?: return null
+        if (markUsageClaimed(id, claimedAt) != 1) return null
+        return getUsageClaimById(id)
+    }
+
+    @Query("SELECT COUNT(*) FROM usage_claims WHERE state = :state")
+    suspend fun getUsageClaimCount(state: String): Int
+
     @Query("SELECT COUNT(*) FROM recordings WHERE status IN ('capturing', 'finalizing', 'processing', 'retrying')")
     suspend fun activeCount(): Int
 
     @Query("SELECT COUNT(*) FROM recordings WHERE status != 'deleted'")
     suspend fun getRecordingCount(): Int
+
+    private suspend fun queueUsageClaimIfEligible(
+        id: String,
+        generation: Long,
+        text: String,
+        createdAt: Long
+    ) {
+        val current = getRecordingById(id) ?: return
+        if (!current.usageEligible || current.generation != generation || current.status != "success") return
+        val wordCount = countUsageWords(text)
+        if (wordCount <= 0) return
+        insertUsageClaim(
+            UsageClaimEntity(
+                id = audioUsageClaimId(id, generation),
+                recordingId = id,
+                generation = generation,
+                wordCount = wordCount,
+                createdAt = createdAt
+            )
+        )
+    }
 }

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -151,7 +152,13 @@ fun RecordingDetailScreen(
 
             // Transcription text (scrollable)
             Text(
-                text = recording.transcription,
+                text = when {
+                    recording.isProcessing ->
+                        recording.checkpointText.ifBlank { "Processing recording…" }
+                    recording.transcription.isNotBlank() -> recording.transcription
+                    recording.checkpointText.isNotBlank() -> recording.checkpointText
+                    else -> recording.errorMessage ?: "Audio saved — retry transcription"
+                },
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier
                     .weight(1f)
@@ -165,12 +172,23 @@ fun RecordingDetailScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (recording.canRetry) {
+                    OutlinedButton(
+                        onClick = { viewModel.retryRecording(recording) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Retry")
+                    }
+                }
                 // Delete button
                 OutlinedButton(
                     onClick = {
                         viewModel.deleteRecording(recording)
                         onNavigateBack()
                     },
+                    enabled = !recording.isProcessing,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
@@ -184,9 +202,10 @@ fun RecordingDetailScreen(
                 // Copy button
                 Button(
                     onClick = {
-                        copyToClipboard(context, recording.transcription)
+                        copyToClipboard(context, recording.availableText)
                         onNavigateBack()
                     },
+                    enabled = recording.availableText.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = null)

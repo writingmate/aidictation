@@ -22,11 +22,13 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -40,15 +42,11 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,9 +62,6 @@ import com.whispermate.aidictation.ui.components.CircularMicButton
 import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.components.MicButtonState
 import com.whispermate.aidictation.ui.screens.settings.SettingsScreen
-import com.whispermate.aidictation.util.AudioRecorder
-import java.io.File
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,31 +82,11 @@ fun MainScreen(
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val currentRecordingState by rememberUpdatedState(recordingState)
-    val currentAutoStopOnSilenceEnabled by rememberUpdatedState(autoStopOnSilenceEnabled)
-
-    // Audio recorder state
-    var audioRecorder by remember { mutableStateOf<AudioRecorder?>(null) }
-    var activeRecordingFile by remember { mutableStateOf<File?>(null) }
-    val audioLevel = audioRecorder?.audioLevel?.collectAsState()?.value ?: 0f
-    val frequencyBands = audioRecorder?.frequencyBands?.collectAsState()?.value
-    val shouldAutoStop = audioRecorder?.shouldAutoStop?.collectAsState()?.value ?: false
-
-    fun createAudioRecorder() = AudioRecorder(
-        context = context,
-        autoStopOnSilenceEnabled = currentAutoStopOnSilenceEnabled
-    )
-
-    fun finalizeRecording() {
-        val recorder = audioRecorder
-        val expectedAudioFile = activeRecordingFile
-        if (viewModel.finalizeRecording(recorder, expectedAudioFile)) {
-            audioRecorder = null
-            activeRecordingFile = null
-        }
-    }
+    val audioLevel by viewModel.audioLevel.collectAsState()
+    val frequencyBands by viewModel.frequencyBands.collectAsState()
+    val shouldAutoStop by viewModel.shouldAutoStop.collectAsState()
+    val routeChangesEnabled = recordingState == RecordingState.Idle
 
     // Keep the screen awake while dictation is recording or processing
     KeepScreenOn(enabled = recordingState != RecordingState.Idle)
@@ -127,36 +102,14 @@ fun MainScreen(
     // Handle external start recording trigger
     LaunchedEffect(Unit) {
         viewModel.startRecordingTrigger.collect {
-            if (currentRecordingState == RecordingState.Idle) {
-                val recorder = createAudioRecorder()
-                audioRecorder = recorder
-                val file = recorder.start()
-                if (file != null) {
-                    activeRecordingFile = file
-                    viewModel.startRecording()
-                } else {
-                    audioRecorder = null
-                    activeRecordingFile = null
-                    viewModel.reportRecordingStartFailure()
-                }
-            }
+            viewModel.startRecording()
         }
     }
 
     // Handle initial start recording from navigation
     LaunchedEffect(shouldStartRecording) {
         if (shouldStartRecording && recordingState == RecordingState.Idle) {
-            val recorder = createAudioRecorder()
-            audioRecorder = recorder
-            val file = recorder.start()
-            if (file != null) {
-                activeRecordingFile = file
-                viewModel.startRecording()
-            } else {
-                audioRecorder = null
-                activeRecordingFile = null
-                viewModel.reportRecordingStartFailure()
-            }
+            viewModel.startRecording()
             onRecordingStarted()
         }
     }
@@ -164,35 +117,21 @@ fun MainScreen(
     // Auto-stop when VAD detects silence after speech
     LaunchedEffect(shouldAutoStop) {
         if (shouldAutoStop && recordingState == RecordingState.Recording) {
-            finalizeRecording()
+            viewModel.finalizeRecording()
         }
     }
 
-    // Cleanup audio recorder
-    DisposableEffect(Unit) {
-        onDispose {
-            audioRecorder?.release()
-            viewModel.cancelRecording(activeRecordingFile)
-        }
+    LaunchedEffect(recordingState) {
+        if (recordingState != RecordingState.Idle) selectedTab = 0
     }
 
     fun toggleRecording() {
         when (recordingState) {
             RecordingState.Idle -> {
-                val recorder = createAudioRecorder()
-                audioRecorder = recorder
-                val file = recorder.start()
-                if (file != null) {
-                    activeRecordingFile = file
-                    viewModel.startRecording()
-                } else {
-                    audioRecorder = null
-                    activeRecordingFile = null
-                    viewModel.reportRecordingStartFailure()
-                }
+                viewModel.startRecording()
             }
             RecordingState.Recording -> {
-                finalizeRecording()
+                viewModel.finalizeRecording()
             }
             RecordingState.Processing -> Unit
         }
@@ -237,6 +176,7 @@ fun MainScreen(
                     label = { Text(stringResource(R.string.tab_settings)) },
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
+                    enabled = routeChangesEnabled,
                     colors = aidictationNavigationItemColors()
                 )
             }
@@ -246,15 +186,21 @@ fun MainScreen(
             0 -> HistoryTab(
                 recordings = recordings,
                 onDelete = { viewModel.deleteRecording(it) },
-                onCopy = { copyToClipboard(context, it.transcription) },
+                onCopy = { copyToClipboard(context, it.availableText) },
                 onSelect = { onNavigateToRecordingDetail(it.id) },
+                onRetry = { viewModel.retryRecording(it) },
+                routeChangesEnabled = routeChangesEnabled,
                 modifier = Modifier.padding(paddingValues)
             )
             1 -> SettingsScreen(
                 recordings = recordings,
                 onClearHistory = { viewModel.clearAllHistory() },
-                onNavigateToPostProcessingSettings = onNavigateToPostProcessingSettings,
-                onNavigateToLanguageSettings = onNavigateToLanguageSettings,
+                onNavigateToPostProcessingSettings = { index ->
+                    if (routeChangesEnabled) onNavigateToPostProcessingSettings(index)
+                },
+                onNavigateToLanguageSettings = {
+                    if (routeChangesEnabled) onNavigateToLanguageSettings()
+                },
                 onDeviceTranscriptionEnabled = onDeviceTranscriptionEnabled,
                 onDeviceModelState = onDeviceModelState,
                 onOnDeviceTranscriptionToggled = { viewModel.setOnDeviceTranscriptionEnabled(it) },
@@ -288,6 +234,8 @@ private fun HistoryTab(
     onDelete: (Recording) -> Unit,
     onCopy: (Recording) -> Unit,
     onSelect: (Recording) -> Unit,
+    onRetry: (Recording) -> Unit,
+    routeChangesEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
     if (recordings.isEmpty()) {
@@ -326,8 +274,8 @@ private fun HistoryTab(
                     confirmValueChange = { value ->
                         when (value) {
                             SwipeToDismissBoxValue.EndToStart -> {
-                                onDelete(recording)
-                                true
+                                if (!recording.isProcessing) onDelete(recording)
+                                !recording.isProcessing
                             }
                             SwipeToDismissBoxValue.StartToEnd -> {
                                 onCopy(recording)
@@ -374,7 +322,9 @@ private fun HistoryTab(
                 ) {
                     RecordingItem(
                         recording = recording,
-                        onClick = { onSelect(recording) }
+                        onClick = { onSelect(recording) },
+                        onRetry = { onRetry(recording) },
+                        routeChangesEnabled = routeChangesEnabled
                     )
                 }
             }
@@ -385,12 +335,14 @@ private fun HistoryTab(
 @Composable
 private fun RecordingItem(
     recording: Recording,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onRetry: () -> Unit,
+    routeChangesEnabled: Boolean
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(enabled = routeChangesEnabled, onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
@@ -401,7 +353,13 @@ private fun RecordingItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = recording.transcription,
+                    text = when {
+                        recording.isProcessing ->
+                            recording.checkpointText.ifBlank { "Processing recording…" }
+                        recording.transcription.isNotBlank() -> recording.transcription
+                        recording.checkpointText.isNotBlank() -> recording.checkpointText
+                        else -> recording.errorMessage ?: "Audio saved — retry transcription"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
@@ -417,6 +375,15 @@ private fun RecordingItem(
                         text = duration,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (recording.canRetry) {
+                IconButton(onClick = onRetry) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Retry transcription",
+                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }

@@ -61,10 +61,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.service.AndroidAudioAttemptOwner
 import com.whispermate.aidictation.ui.components.CircularMicButton
 import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.components.MicButtonState
-import com.whispermate.aidictation.util.AudioRecorder
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -84,42 +84,80 @@ fun RecordingSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var state by remember { mutableStateOf(RecordingState.Recording) }
+    var state by remember { mutableStateOf(RecordingState.Processing) }
     var transcription by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
     var durationMs by remember { mutableStateOf<Long?>(null) }
+    var savedRecording by remember { mutableStateOf<Recording?>(null) }
     var isCopied by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
 
-    val audioRecorder = remember { AudioRecorder(context) }
-    val audioLevel by audioRecorder.audioLevel.collectAsState()
-    val frequencyBands by audioRecorder.frequencyBands.collectAsState()
+    val audioLevel by viewModel.audioLevel.collectAsState()
+    val frequencyBands by viewModel.frequencyBands.collectAsState()
+    val shouldAutoStop by viewModel.shouldAutoStop.collectAsState()
 
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
 
+    fun finishRecording() {
+        if (state != RecordingState.Recording) return
+        state = RecordingState.Processing
+        scope.launch {
+            viewModel.stopAndTranscribe().fold(
+                onSuccess = { recording ->
+                    savedRecording = recording
+                    transcription = recording.transcription
+                    durationMs = recording.durationMs
+                    audioFile = recording.audioFilePath?.let(::File)
+                    state = RecordingState.Viewing
+                },
+                onFailure = { failure ->
+                    error = failure.message
+                    state = RecordingState.Viewing
+                }
+            )
+        }
+    }
+
     // Start recording when sheet opens
     LaunchedEffect(Unit) {
-        audioFile = audioRecorder.start()
+        viewModel.start().fold(
+            onSuccess = { state = RecordingState.Recording },
+            onFailure = {
+                error = "The microphone could not start."
+                state = RecordingState.Viewing
+            }
+        )
+    }
+    LaunchedEffect(Unit) {
+        viewModel.failureEvents.collect { event ->
+            if (event.owner == AndroidAudioAttemptOwner.RECORDING_SHEET &&
+                (state == RecordingState.Recording || state == RecordingState.Processing)
+            ) {
+                error = event.message
+                state = RecordingState.Viewing
+            }
+        }
+    }
+    LaunchedEffect(shouldAutoStop) {
+        if (shouldAutoStop) finishRecording()
     }
 
     // Cleanup on dismiss
     DisposableEffect(Unit) {
         onDispose {
-            audioRecorder.release()
+            viewModel.cancel()
             mediaPlayer?.release()
         }
     }
 
     Dialog(
         onDismissRequest = {
-            if (state != RecordingState.Processing) {
-                audioRecorder.release()
-                onDismiss()
-            }
+            viewModel.cancel()
+            onDismiss()
         },
         properties = DialogProperties(
-            dismissOnBackPress = state != RecordingState.Processing,
+            dismissOnBackPress = true,
             dismissOnClickOutside = false,
             usePlatformDefaultWidth = false
         )
@@ -140,44 +178,18 @@ fun RecordingSheet(
                         audioLevel = audioLevel,
                         frequencyBands = frequencyBands,
                         onCancel = {
-                            audioRecorder.release()
+                            viewModel.cancel()
                             onDismiss()
                         },
-                        onStop = {
-                            scope.launch {
-                                val result = audioRecorder.stop()
-                                if (result != null) {
-                                    audioFile = result.first
-                                    durationMs = result.second
-
-                                    // Skip if too short
-                                    if (result.second < 300) {
-                                        onDismiss()
-                                        return@launch
-                                    }
-
-                                    state = RecordingState.Processing
-
-                                    // Transcribe
-                                    result.first?.let { file ->
-                                        val transcribeResult = viewModel.transcribe(file)
-                                        transcribeResult.fold(
-                                            onSuccess = { text ->
-                                                transcription = text
-                                                state = RecordingState.Viewing
-                                            },
-                                            onFailure = { e ->
-                                                error = e.message
-                                                state = RecordingState.Viewing
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        onStop = ::finishRecording
                     )
 
-                    RecordingState.Processing -> ProcessingContent()
+                    RecordingState.Processing -> ProcessingContent(
+                        onCancel = {
+                            viewModel.cancel()
+                            onDismiss()
+                        }
+                    )
 
                     RecordingState.Viewing -> ViewingContent(
                         transcription = transcription,
@@ -215,13 +227,8 @@ fun RecordingSheet(
                             }
                         },
                         onDone = {
-                            if (transcription.isNotEmpty()) {
-                                val recording = Recording(
-                                    transcription = transcription,
-                                    durationMs = durationMs,
-                                    audioFilePath = audioFile?.absolutePath
-                                )
-                                onRecordingComplete(recording)
+                            if (transcription.isNotEmpty() && savedRecording != null) {
+                                onRecordingComplete(savedRecording!!)
                             } else {
                                 onDismiss()
                             }
@@ -287,11 +294,23 @@ private fun RecordingContent(
 }
 
 @Composable
-private fun ProcessingContent() {
+private fun ProcessingContent(onCancel: () -> Unit) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
+        IconButton(
+            onClick = onCancel,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = stringResource(R.string.cancel),
+                tint = Color.White
+            )
+        }
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {

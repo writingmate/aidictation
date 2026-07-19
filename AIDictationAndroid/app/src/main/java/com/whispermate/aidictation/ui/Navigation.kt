@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
@@ -18,6 +19,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.whispermate.aidictation.ui.screens.language.LanguageSettingsScreen
 import com.whispermate.aidictation.ui.screens.main.MainScreen
+import com.whispermate.aidictation.ui.screens.main.MainViewModel
 import com.whispermate.aidictation.ui.screens.main.RecordingDetailScreen
 import com.whispermate.aidictation.ui.screens.onboarding.OnboardingScreen
 import com.whispermate.aidictation.ui.screens.onboarding.OnboardingViewModel
@@ -84,7 +86,9 @@ fun AIDictationNavHost(
                     onDeviceModelState = onboardingOnDeviceModelState,
                     onSetOnDeviceTranscriptionEnabled = onboardingViewModel::setOnDeviceTranscriptionEnabled,
                     demoState = onboardingDemoState,
-                    onTranscribeDemo = onboardingViewModel::transcribeDemo
+                    onStartDemoRecording = onboardingViewModel::startDemoRecording,
+                    onStopDemoRecording = onboardingViewModel::stopDemoRecording,
+                    onCancelDemoRecording = onboardingViewModel::cancelDemoRecording
                 )
             }
         }
@@ -128,9 +132,14 @@ fun AIDictationNavHost(
             arguments = listOf(navArgument("recordingId") { type = NavType.StringType })
         ) { backStackEntry ->
             val recordingId = backStackEntry.arguments?.getString("recordingId") ?: return@composable
+            val mainEntry = remember(backStackEntry) {
+                navController.getBackStackEntry(Screen.Main.route)
+            }
+            val mainViewModel: MainViewModel = hiltViewModel(mainEntry)
             RecordingDetailScreen(
                 recordingId = recordingId,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                viewModel = mainViewModel
             )
         }
     }

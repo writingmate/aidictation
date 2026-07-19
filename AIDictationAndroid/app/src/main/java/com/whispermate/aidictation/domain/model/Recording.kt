@@ -8,10 +8,25 @@ import java.util.UUID
 data class Recording(
     val id: String = UUID.randomUUID().toString(),
     val timestamp: Long = System.currentTimeMillis(),
-    val transcription: String,
+    val transcription: String = "",
     val durationMs: Long? = null,
-    val audioFilePath: String? = null
+    val audioFilePath: String? = null,
+    val status: AudioProcessingStatus = AudioProcessingStatus.SUCCESS,
+    val rawTranscription: String = "",
+    val checkpointText: String = "",
+    val completedLeafCount: Int = 0,
+    val recognitionComplete: Boolean = false,
+    val attemptId: String? = null,
+    val generation: Long = 0,
+    val errorMessage: String? = null,
+    val sourceIntegrity: AudioSourceIntegrity = AudioSourceIntegrity.COMPLETE,
+    val updatedAt: Long = timestamp
 ) {
+    val isProcessing: Boolean get() = status.isActive
+    val availableText: String get() = transcription.ifBlank { checkpointText }
+    val canRetry: Boolean
+        get() = status.isRetryable && sourceIntegrity == AudioSourceIntegrity.COMPLETE && !audioFilePath.isNullOrBlank()
+
     val formattedDate: String
         get() {
             val instant = Instant.ofEpochMilli(timestamp)

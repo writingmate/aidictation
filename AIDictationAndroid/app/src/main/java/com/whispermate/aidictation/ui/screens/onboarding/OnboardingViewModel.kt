@@ -8,7 +8,11 @@ import com.whispermate.aidictation.data.local.ParakeetModelAssets
 import com.whispermate.aidictation.data.local.ParakeetRuntime
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
+import com.whispermate.aidictation.service.AndroidAudioAttemptOwner
+import com.whispermate.aidictation.service.AndroidAudioProcessingCoordinator
+import com.whispermate.aidictation.service.ExclusiveRequestFence
 import com.whispermate.aidictation.domain.model.WhisperLanguages
+import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,7 +23,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import javax.inject.Inject
 
 data class OnboardingOnDeviceModelState(
@@ -30,16 +33,20 @@ data class OnboardingOnDeviceModelState(
 )
 
 data class OnboardingDemoUiState(
+    val isRecording: Boolean = false,
     val isProcessing: Boolean = false,
     val resultText: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val audioLevel: Float = 0f,
+    val frequencyBands: FloatArray = FloatArray(6)
 )
 
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val appPreferences: AppPreferences,
     private val parakeetModelAssets: ParakeetModelAssets,
-    private val transcriptionRepository: TranscriptionRepository
+    private val transcriptionRepository: TranscriptionRepository,
+    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator
 ) : ViewModel() {
     private companion object {
         const val TAG = "OnboardingViewModel"
@@ -47,6 +54,8 @@ class OnboardingViewModel @Inject constructor(
 
     private val parakeetRuntime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
     private var onDeviceSetupRequestId = 0
+    private val demoFence = ExclusiveRequestFence()
+    private var demoCaptureLease: AudioAttemptLease? = null
 
     val hasCompletedOnboarding: StateFlow<Boolean> = appPreferences.hasCompletedOnboarding
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -65,6 +74,39 @@ class OnboardingViewModel @Inject constructor(
 
     init {
         refreshOnDeviceModelState()
+        viewModelScope.launch {
+            audioProcessingCoordinator.audioLevel.collect { level ->
+                _demoState.value = _demoState.value.copy(audioLevel = level)
+            }
+        }
+        viewModelScope.launch {
+            audioProcessingCoordinator.frequencyBands.collect { bands ->
+                _demoState.value = _demoState.value.copy(frequencyBands = bands)
+            }
+        }
+        viewModelScope.launch {
+            audioProcessingCoordinator.failureEvents.collect { event ->
+                val token = demoFence.currentToken()
+                if (event.matches(
+                        AndroidAudioAttemptOwner.ONBOARDING,
+                        demoCaptureLease,
+                        token
+                    ) &&
+                    (_demoState.value.isRecording || _demoState.value.isProcessing)
+                ) {
+                    token ?: return@collect
+                    if (demoFence.finish(token)) {
+                        demoCaptureLease = null
+                        _demoState.value = OnboardingDemoUiState(errorMessage = event.message)
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            audioProcessingCoordinator.shouldAutoStop.collect { shouldStop ->
+                if (shouldStop && _demoState.value.isRecording) stopDemoRecording()
+            }
+        }
     }
 
     fun completeOnboarding() {
@@ -146,26 +188,111 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    fun transcribeDemo(audioFile: File?, durationMs: Long) {
-        if (audioFile == null || durationMs < 300) {
-            _demoState.value = OnboardingDemoUiState(errorMessage = "Try speaking for a little longer.")
-            return
-        }
-
+    fun startDemoRecording() {
+        if (_demoState.value.isRecording || _demoState.value.isProcessing) return
+        val token = demoFence.reserve() ?: return
+        _demoState.value = OnboardingDemoUiState(isProcessing = true)
         viewModelScope.launch {
-            _demoState.value = OnboardingDemoUiState(isProcessing = true)
-            val prompt = transcriptionRepository.buildPrompt()
-            val result = transcriptionRepository.transcribe(audioFile, prompt.ifEmpty { null })
-            audioFile.delete()
+            val result = audioProcessingCoordinator.startCapture(
+                owner = AndroidAudioAttemptOwner.ONBOARDING,
+                workflowToken = token,
+                autoStopOnSilence = false
+            )
+            if (!demoFence.owns(token)) {
+                result.getOrNull()?.let { staleLease ->
+                    audioProcessingCoordinator.cancelCapture(
+                        AndroidAudioAttemptOwner.ONBOARDING,
+                        "Onboarding demo was cancelled before recording started",
+                        expectedLease = staleLease,
+                        expectedWorkflowToken = token
+                    )
+                }
+                return@launch
+            }
+            val lease = result.getOrElse {
+                demoFence.finish(token)
+                demoCaptureLease = null
+                _demoState.value = OnboardingDemoUiState(
+                    errorMessage = "The microphone could not start. Try again."
+                )
+                return@launch
+            }
+            demoCaptureLease = lease
+            val captureIsCurrent = audioProcessingCoordinator.isCaptureCurrent(
+                AndroidAudioAttemptOwner.ONBOARDING,
+                lease
+            )
+            if (!captureIsCurrent || !demoFence.owns(token)) {
+                if (captureIsCurrent) {
+                    audioProcessingCoordinator.cancelCapture(
+                        AndroidAudioAttemptOwner.ONBOARDING,
+                        "Onboarding demo was replaced before its UI became active",
+                        expectedLease = lease,
+                        expectedWorkflowToken = token
+                    )
+                }
+                if (demoFence.finish(token)) _demoState.value = OnboardingDemoUiState()
+                demoCaptureLease = null
+                return@launch
+            }
+            _demoState.value = OnboardingDemoUiState(isRecording = true)
+        }
+    }
+
+    fun stopDemoRecording() {
+        if (!_demoState.value.isRecording) return
+        val token = demoFence.currentToken() ?: return
+        if (!demoFence.beginTerminal(token)) return
+        _demoState.value = _demoState.value.copy(isRecording = false, isProcessing = true)
+        viewModelScope.launch {
+            val finalized = audioProcessingCoordinator.stopCapture(AndroidAudioAttemptOwner.ONBOARDING).getOrElse {
+                if (demoFence.finish(token)) {
+                    demoCaptureLease = null
+                    _demoState.value = OnboardingDemoUiState(
+                        errorMessage = "The recording could not be finalized. Its recoverable audio was kept."
+                    )
+                }
+                return@launch
+            }
+            demoCaptureLease = finalized.lease
+            if (!demoFence.owns(token)) return@launch
+            if (finalized.durationMs < 300 || !finalized.speechDetected) {
+                audioProcessingCoordinator.failBeforeRecognition(
+                    finalized,
+                    "No speech was heard. The saved audio is available in History."
+                )
+                if (demoFence.finish(token)) {
+                    demoCaptureLease = null
+                    _demoState.value = OnboardingDemoUiState(errorMessage = "Try speaking for a little longer.")
+                }
+                return@launch
+            }
+            val result = audioProcessingCoordinator.processRecognition(finalized)
+            if (!demoFence.finish(token)) return@launch
+            demoCaptureLease = null
             _demoState.value = result.fold(
-                onSuccess = { text ->
-                    OnboardingDemoUiState(resultText = text.ifBlank { "I did not catch that. Try again." })
+                onSuccess = { processed ->
+                    OnboardingDemoUiState(resultText = processed.text.ifBlank { "I did not catch that. Try again." })
                 },
                 onFailure = { error ->
                     OnboardingDemoUiState(errorMessage = error.message ?: "Transcription failed. Try again.")
                 }
             )
         }
+    }
+
+    fun cancelDemoRecording() {
+        val lease = demoCaptureLease
+        val token = demoFence.currentToken()
+        demoFence.cancelCurrent()
+        demoCaptureLease = null
+        _demoState.value = OnboardingDemoUiState()
+        audioProcessingCoordinator.cancelCaptureFromLifecycle(
+            AndroidAudioAttemptOwner.ONBOARDING,
+            "Onboarding demo cancelled",
+            expectedLease = lease,
+            expectedWorkflowToken = token
+        )
     }
 
     private fun refreshOnDeviceModelState() {
@@ -194,5 +321,18 @@ class OnboardingViewModel @Inject constructor(
                     Log.w(TAG, "Unable to prewarm on-device transcription during onboarding", error)
                 }
         }
+    }
+
+    override fun onCleared() {
+        val lease = demoCaptureLease
+        val token = demoFence.currentToken()
+        demoFence.cancelCurrent()
+        audioProcessingCoordinator.cancelCaptureFromLifecycle(
+            AndroidAudioAttemptOwner.ONBOARDING,
+            "Onboarding recording closed",
+            expectedLease = lease,
+            expectedWorkflowToken = token
+        )
+        super.onCleared()
     }
 }

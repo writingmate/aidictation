@@ -7,7 +7,7 @@ import com.whispermate.aidictation.data.local.entity.RecordingEntity
 
 @Database(
     entities = [RecordingEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

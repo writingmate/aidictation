@@ -39,22 +39,23 @@ import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
+import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
-import com.whispermate.aidictation.util.AudioRecorder
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
-import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
@@ -67,6 +68,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         const val ACTION_START_DICTATION = "com.aidictation.app.action.START_DICTATION"
         private const val TAG = "OverlayDictationSvc"
         private const val MIN_RECORDING_MS = 500L
+        private const val ACCESS_CHECK_TIMEOUT_MS = 15_000L
+        private const val SETTINGS_SNAPSHOT_TIMEOUT_MS = 5_000L
         private const val BUBBLE_SIZE_DP = 55
         private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
@@ -77,8 +80,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val INSERT_RESOLVE_RETRY_MS = 250L
         private const val INSERT_VERIFY_ATTEMPTS = 5
         private const val INSERT_VERIFY_RETRY_MS = 150L
-        private const val RECORDING_FINALIZE_TIMEOUT_MS = 10_000L
-        private const val DICTATION_PROCESSING_TIMEOUT_MS = 75_000L
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
@@ -137,6 +138,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     @Inject lateinit var appPreferences: AppPreferences
     @Inject lateinit var transcriptionRepository: com.whispermate.aidictation.data.repository.TranscriptionRepository
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
+    @Inject lateinit var audioProcessingCoordinator: AndroidAudioProcessingCoordinator
     private lateinit var windowManager: WindowManager
 
     private var bubbleView: OverlayMicButtonView? = null
@@ -154,8 +156,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private var recordingState: RecordingState = RecordingState.Idle
     private var recordingMode: RecordingMode = RecordingMode.Dictation
-    private var audioRecorder: AudioRecorder? = null
-    private var activeRecordingFile: java.io.File? = null
+    private val overlayWorkflowFence = ReplaceableDeliveryFence()
+    private var audioWorkflowLease: AudioAttemptLease? = null
+    private var audioWorkflowJob: Job? = null
+    private var deliveryJob: Job? = null
     private var vadJob: Job? = null
     private var autoStopOnSilenceEnabled = false
     private var bubbleAnimationJob: Job? = null
@@ -195,6 +199,27 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 autoStopOnSilenceEnabled = enabled
             }
         }
+        serviceScope.launch {
+            audioProcessingCoordinator.failureEvents.collect { event ->
+                val failedToken = overlayWorkflowFence.currentToken()
+                if (event.matches(
+                        AndroidAudioAttemptOwner.OVERLAY,
+                        audioWorkflowLease,
+                        failedToken
+                    ) &&
+                    recordingState != RecordingState.Idle
+                ) {
+                    failedToken ?: return@collect
+                    val failedMode = recordingMode
+                    Toast.makeText(
+                        this@OverlayDictationAccessibilityService,
+                        event.message,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    resetAfterRecording(failedMode, failedToken)
+                }
+            }
+        }
 
         prewarmOnDeviceTranscriber()
         refreshOverlayVisibility(null)
@@ -223,7 +248,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        stopRecording(discard = true)
+        cancelOverlayAudio("Dictation was interrupted")
         dictationTargetNode = null
         hideBubble()
         hideCommandActions()
@@ -263,7 +288,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopRecording(discard = true)
+        val workflowToken = overlayWorkflowFence.currentToken()
+        audioProcessingCoordinator.cancelCaptureFromLifecycle(
+            AndroidAudioAttemptOwner.OVERLAY,
+            "Dictation service stopped",
+            expectedLease = audioWorkflowLease,
+            expectedWorkflowToken = workflowToken
+        )
+        serviceScope.cancel()
         dictationTargetNode = null
         hideBubble()
         hideCommandActions()
@@ -294,7 +326,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun scheduleDeferredHide() {
         if (pendingHideJob?.isActive == true) return
 
-        if (!isBubbleAttached && !isCommandActionsAttached && recordingState != RecordingState.Recording) {
+        if (!isBubbleAttached && !isCommandActionsAttached && !hasOverlayWorkflow()) {
             bubbleShouldBeVisible = false
             return
         }
@@ -304,9 +336,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             if (shouldShowBubble(null)) return@launch
 
             bubbleShouldBeVisible = false
-            if (recordingState == RecordingState.Recording) {
-                stopRecording(discard = true)
-            }
+            if (hasOverlayWorkflow()) cancelOverlayAudio("The target text field was closed")
             hideBubble()
             hideCommandActions()
         }
@@ -458,9 +488,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun suppressBubbleNow(messageRes: Int) {
         hideDismissActions()
-        if (recordingState == RecordingState.Recording) {
-            stopRecording(discard = true)
-        }
+        if (hasOverlayWorkflow()) cancelOverlayAudio("Dictation bubble was hidden")
         hideBubble()
         hideCommandActions()
         Toast.makeText(this, messageRes, Toast.LENGTH_SHORT).show()
@@ -1308,15 +1336,24 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private suspend fun replaceSelectionOrMatchedText(
         targetText: String,
-        replacement: String
+        replacement: String,
+        requiredDeliveryToken: Long? = null
     ): Boolean {
         val node = acquireInsertTarget() ?: return false
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
             val selStart = snapshot.selectionStart
             val selEnd = snapshot.selectionEnd
             if (selEnd > selStart) {
-                return replaceRange(node, snapshot.text, selStart, selEnd, replacement)
+                return replaceRange(
+                    node,
+                    snapshot.text,
+                    selStart,
+                    selEnd,
+                    replacement,
+                    requiredDeliveryToken
+                )
             }
 
             val matchStart = snapshot.text.lastIndexOf(targetText)
@@ -1326,7 +1363,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     currentText = snapshot.text,
                     start = matchStart,
                     end = matchStart + targetText.length,
-                    replacement = replacement
+                    replacement = replacement,
+                    requiredDeliveryToken = requiredDeliveryToken
                 )
             }
 
@@ -1394,33 +1432,109 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val recorder = AudioRecorder(
-            context = this,
-            autoStopOnSilenceEnabled = autoStopOnSilenceEnabled
-        )
-        val file = recorder.start()
-        if (file == null) {
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-                updateBubbleUi()
-            }
-            Toast.makeText(this, "Could not start recording", Toast.LENGTH_SHORT).show()
-            recorder.release()
-            return
+        val startSnapshot = if (mode == RecordingMode.Dictation) {
+            focusedNode?.let { captureEditableTextSnapshot(it) }
+        } else {
+            null
         }
+        val cursorContext = startSnapshot
+            ?.text
+            ?.take(startSnapshot.selectionStart)
+            ?.takeLast(200)
+            ?.ifEmpty { null }
+        val contextPackageAtStart = lastFocusedPackage
 
-        audioRecorder = recorder
-        activeRecordingFile = file
+        cancelDeliveryForReplacement()
+        val token = overlayWorkflowFence.beginAudio()
         recordingMode = mode
-        recordingState = RecordingState.Recording
+        recordingState = RecordingState.Processing
         updateBubbleUi()
 
-        vadJob?.cancel()
-        vadJob = serviceScope.launch {
-            recorder.shouldAutoStop.collectLatest { shouldStop ->
-                if (shouldStop && recordingState == RecordingState.Recording) {
-                    stopRecording(discard = false)
+        audioWorkflowJob = serviceScope.launch {
+            val contextRules = if (mode == RecordingMode.Dictation) {
+                try {
+                    withTimeout(SETTINGS_SNAPSHOT_TIMEOUT_MS) {
+                        appPreferences.getInstructionsForApp(contextPackageAtStart)
+                    }
+                } catch (error: CancellationException) {
+                    if (error is kotlinx.coroutines.TimeoutCancellationException) {
+                        Toast.makeText(
+                            this@OverlayDictationAccessibilityService,
+                            "Your transcription settings could not be loaded. Try again.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        resetAfterRecording(mode, token)
+                        return@launch
+                    }
+                    throw error
+                } catch (error: Throwable) {
+                    Toast.makeText(
+                        this@OverlayDictationAccessibilityService,
+                        "Your transcription settings could not be loaded. Try again.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    resetAfterRecording(mode, token)
+                    return@launch
+                }
+            } else {
+                null
+            }
+            val started = audioProcessingCoordinator.startCapture(
+                owner = AndroidAudioAttemptOwner.OVERLAY,
+                workflowToken = token,
+                autoStopOnSilence = autoStopOnSilenceEnabled,
+                additionalPrompt = cursorContext,
+                contextRules = contextRules
+            )
+            if (!ownsAudioPhase(token)) {
+                started.getOrNull()?.let { staleLease ->
+                    audioProcessingCoordinator.cancelCapture(
+                        AndroidAudioAttemptOwner.OVERLAY,
+                        "Dictation was replaced before recording started",
+                        expectedLease = staleLease,
+                        expectedWorkflowToken = token
+                    )
+                }
+                return@launch
+            }
+            started.onFailure {
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    R.string.dictation_recording_not_saved,
+                    Toast.LENGTH_LONG
+                ).show()
+                resetAfterRecording(mode, token)
+                return@launch
+            }
+            val lease = started.getOrThrow()
+            audioWorkflowLease = lease
+            val captureIsCurrent = audioProcessingCoordinator.isCaptureCurrent(
+                AndroidAudioAttemptOwner.OVERLAY,
+                lease
+            )
+            if (!captureIsCurrent || !ownsAudioPhase(token)) {
+                if (captureIsCurrent) {
+                    audioProcessingCoordinator.cancelCapture(
+                        AndroidAudioAttemptOwner.OVERLAY,
+                        "Dictation was replaced before its UI became active",
+                        expectedLease = lease,
+                        expectedWorkflowToken = token
+                    )
+                }
+                resetAfterRecording(mode, token)
+                return@launch
+            }
+
+            recordingState = RecordingState.Recording
+            updateBubbleUi()
+            vadJob?.cancel()
+            vadJob = serviceScope.launch {
+                audioProcessingCoordinator.shouldAutoStop.collectLatest { shouldStop ->
+                    if (shouldStop && ownsAudioPhase(token) &&
+                        recordingState == RecordingState.Recording
+                    ) {
+                        stopRecording(discard = false)
+                    }
                 }
             }
         }
@@ -1429,29 +1543,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun stopRecording(discard: Boolean) {
         if (recordingState != RecordingState.Recording) return
         val mode = recordingMode
+        val token = overlayWorkflowFence.currentToken() ?: return
+        if (!ownsAudioPhase(token)) return
 
         vadJob?.cancel()
         vadJob = null
 
-        val recorder = audioRecorder ?: run {
-            if (!discard) {
-                Toast.makeText(this, R.string.dictation_recording_not_saved, Toast.LENGTH_LONG).show()
-            }
-            resetAfterRecording(mode)
-            return
-        }
-
-        audioRecorder = null
-        val expectedAudioFile = activeRecordingFile
-        activeRecordingFile = null
-
         if (discard) {
-            expectedAudioFile?.delete()
-            serviceScope.launch(Dispatchers.IO) {
-                recorder.release()
-                expectedAudioFile?.delete()
-            }
-            resetAfterRecording(mode)
+            audioProcessingCoordinator.cancelCaptureFromLifecycle(
+                AndroidAudioAttemptOwner.OVERLAY,
+                "Dictation discarded",
+                expectedLease = audioWorkflowLease,
+                expectedWorkflowToken = token
+            )
+            resetAfterRecording(mode, token)
             return
         }
 
@@ -1461,54 +1566,25 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         recordingState = RecordingState.Processing
         updateBubbleUi()
 
-        serviceScope.launch {
-            val speechDetected = recorder.hasSpeechBeenDetected()
-            val stopJob = serviceScope.async(Dispatchers.IO) { recorder.stop() }
-            val result = try {
-                withTimeout(RECORDING_FINALIZE_TIMEOUT_MS) { stopJob.await() }
-            } catch (error: TimeoutCancellationException) {
-                stopJob.cancel()
-                expectedAudioFile?.delete()
-                Log.e(TAG, "Recording finalization timed out", error)
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    R.string.dictation_recording_not_saved,
-                    Toast.LENGTH_LONG
-                ).show()
-                resetAfterRecording(mode)
-                return@launch
-            } catch (error: CancellationException) {
-                stopJob.cancel()
-                expectedAudioFile?.delete()
-                throw error
-            } catch (error: Throwable) {
-                stopJob.cancel()
-                expectedAudioFile?.delete()
-                Log.e(TAG, "Unable to finalize recording", error)
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    R.string.dictation_recording_not_saved,
-                    Toast.LENGTH_LONG
-                ).show()
-                resetAfterRecording(mode)
-                return@launch
-            }
-            val audioFile = result?.first
-            val duration = result?.second ?: 0L
+        audioWorkflowJob = serviceScope.launch {
+            val finalized = audioProcessingCoordinator.stopCapture(AndroidAudioAttemptOwner.OVERLAY)
+                .getOrElse { error ->
+                    Log.e(TAG, "Unable to finalize recording", error)
+                    Toast.makeText(
+                        this@OverlayDictationAccessibilityService,
+                        R.string.dictation_recording_not_saved,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    resetAfterRecording(mode, token)
+                    return@launch
+                }
+            audioWorkflowLease = finalized.lease
 
-            if (audioFile == null || !audioFile.exists()) {
-                expectedAudioFile?.delete()
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    R.string.dictation_recording_not_saved,
-                    Toast.LENGTH_LONG
-                ).show()
-                resetAfterRecording(mode)
-                return@launch
-            }
-
-            if (duration < MIN_RECORDING_MS || !speechDetected) {
-                audioFile.delete()
+            if (finalized.durationMs < MIN_RECORDING_MS || !finalized.speechDetected) {
+                audioProcessingCoordinator.failBeforeRecognition(
+                    finalized,
+                    "No speech was heard. The saved audio is available in History."
+                )
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
                     if (mode == RecordingMode.RewriteInstruction) {
@@ -1518,39 +1594,34 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     },
                     Toast.LENGTH_LONG
                 ).show()
-                resetAfterRecording(mode)
+                resetAfterRecording(mode, token)
                 return@launch
             }
 
             val focusedNode = currentDictationNode()
             if (focusedNode == null && !stickyEditableFocusArmed) {
-                audioFile.delete()
+                audioProcessingCoordinator.failBeforeRecognition(
+                    finalized,
+                    "The target text field was lost. The saved audio is available in History."
+                )
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
                     R.string.dictation_text_field_lost,
                     Toast.LENGTH_LONG
                 ).show()
-                resetAfterRecording(mode)
+                resetAfterRecording(mode, token)
                 return@launch
             }
 
             try {
-                withTimeout(DICTATION_PROCESSING_TIMEOUT_MS) {
-                    when (mode) {
-                        RecordingMode.Dictation -> processRecording(audioFile)
-                        RecordingMode.RewriteInstruction -> processRewriteInstructionRecording(
-                            audioFile = audioFile,
-                            target = pendingRewriteTarget
-                        )
-                    }
+                when (mode) {
+                    RecordingMode.Dictation -> processRecording(finalized, token)
+                    RecordingMode.RewriteInstruction -> processRewriteInstructionRecording(
+                        finalized = finalized,
+                        target = pendingRewriteTarget,
+                        token = token
+                    )
                 }
-            } catch (error: TimeoutCancellationException) {
-                Log.e(TAG, "Dictation timed out", error)
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    R.string.dictation_timed_out,
-                    Toast.LENGTH_LONG
-                ).show()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -1561,15 +1632,42 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     Toast.LENGTH_LONG
                 ).show()
             } finally {
-                audioFile.delete()
-                resetAfterRecording(mode)
+                resetAfterRecording(mode, token)
             }
         }
     }
 
-    private fun resetAfterRecording(mode: RecordingMode) {
-        activeRecordingFile?.delete()
-        activeRecordingFile = null
+    private fun hasOverlayWorkflow(): Boolean =
+        overlayWorkflowFence.currentPhase() != ReplaceableDeliveryFence.Phase.IDLE
+
+    private fun ownsAudioPhase(token: Long): Boolean =
+        overlayWorkflowFence.ownsAudio(token)
+
+    private fun ownsDelivery(token: Long): Boolean =
+        overlayWorkflowFence.ownsDelivery(token)
+
+    private suspend fun beginDeliveryPhase(token: Long): Boolean {
+        if (!overlayWorkflowFence.beginDelivery(token)) return false
+        val currentJob = kotlin.coroutines.coroutineContext[Job] ?: return false
+        audioWorkflowJob = null
+        deliveryJob = currentJob
+        recordingState = RecordingState.Idle
+        updateBubbleUi()
+        refreshOverlayVisibility(null)
+        return true
+    }
+
+    private fun cancelDeliveryForReplacement() {
+        val previous = deliveryJob
+        deliveryJob = null
+        previous?.cancel(CancellationException("A new dictation replaced the previous delivery"))
+    }
+
+    private fun resetAfterRecording(mode: RecordingMode, token: Long) {
+        if (!overlayWorkflowFence.finish(token)) return
+        audioWorkflowJob = null
+        deliveryJob = null
+        audioWorkflowLease = null
         recordingState = RecordingState.Idle
         dictationTargetNode = null
         if (mode == RecordingMode.RewriteInstruction) {
@@ -1581,8 +1679,35 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         refreshOverlayVisibility(null)
     }
 
-    private suspend fun processRecording(audioFile: java.io.File) {
-        subscriptionRepository.checkCanTranscribe().onFailure { error ->
+    private fun cancelOverlayAudio(reason: String) {
+        val token = overlayWorkflowFence.currentToken() ?: return
+        val lease = audioWorkflowLease
+        val wasAudio = overlayWorkflowFence.currentPhase() == ReplaceableDeliveryFence.Phase.AUDIO
+        val mode = recordingMode
+        audioWorkflowJob?.cancel()
+        audioWorkflowJob = null
+        deliveryJob?.cancel(CancellationException(reason))
+        deliveryJob = null
+        vadJob?.cancel()
+        vadJob = null
+        if (wasAudio) {
+            audioProcessingCoordinator.cancelCaptureFromLifecycle(
+                AndroidAudioAttemptOwner.OVERLAY,
+                reason,
+                expectedLease = lease,
+                expectedWorkflowToken = token
+            )
+        }
+        resetAfterRecording(mode, token)
+    }
+
+    private suspend fun processRecording(finalized: FinalizedAndroidCapture, token: Long) {
+        val access = checkAccessForFinalizedRecording(finalized)
+        access.onFailure { error ->
+            audioProcessingCoordinator.failBeforeRecognition(
+                finalized,
+                error.message ?: "Transcription is not available right now. Your audio was saved."
+            )
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
                 error.message ?: getString(R.string.usage_limit_reached),
@@ -1591,43 +1716,37 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val node = currentDictationNode()
-        val snapshot = node?.let { captureEditableTextSnapshot(it) } ?: EditableTextSnapshot("", 0, 0)
-
-        val contextText = snapshot.text.take(snapshot.selectionStart).takeLast(200)
-        val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
-        val enabledCommands = appPreferences.getEnabledCommands()
-
-        // Build Whisper prompt: dictionary/shortcut hints + cursor context (NO context rules)
-        val repoPrompt = transcriptionRepository.buildPrompt()
-        val whisperPrompt = listOfNotNull(
-            contextText.ifEmpty { null },
-            repoPrompt.ifEmpty { null }
-        ).joinToString("\n\n").ifEmpty { null }
+        val contextRules = finalized.transcriptionConfiguration.contextRules
 
         Log.d(
             "OverlayDictation",
-            "Prepared transcription context: promptLength=${whisperPrompt?.length ?: 0}, " +
+            "Using captured transcription context: " +
+                "promptLength=${finalized.transcriptionConfiguration.transcriptionPrompt?.length ?: 0}, " +
                 "rulesLength=${contextRules?.length ?: 0}"
         )
 
-        // Transcription + LLM post-processing (context rules go to LLM, not Whisper)
-        val rawText = transcriptionRepository.transcribe(audioFile, whisperPrompt, contextRules)
+        val processed = audioProcessingCoordinator.processRecognition(finalized)
             .getOrElse { e ->
                 Log.e("OverlayDictation", "Transcription failed", e)
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
-                    R.string.dictation_transcription_failed,
+                    e.message ?: getString(R.string.dictation_transcription_failed),
                     Toast.LENGTH_LONG
                 ).show()
                 return
             }
+        if (!beginDeliveryPhase(token)) return
 
         // Command detection and execution (separate from transcription)
+        val enabledCommands = runCatching {
+            withTimeout(SETTINGS_SNAPSHOT_TIMEOUT_MS) { appPreferences.getEnabledCommands() }
+        }.getOrDefault(emptyList())
         val result: Result<com.whispermate.aidictation.data.remote.TranscriptionResult> =
-            TranscriptionClient.detectAndExecuteCommands(rawText, lastDictatedText, enabledCommands, contextRules)
+            TranscriptionClient.detectAndExecuteCommands(processed.text, lastDictatedText, enabledCommands, contextRules)
+        if (!ownsDelivery(token)) return
 
         val transcription = result.getOrElse { error ->
+            if (!ownsDelivery(token)) return
             Log.e(TAG, "Transcription failed", error)
             Toast.makeText(this@OverlayDictationAccessibilityService, "Transcription failed", Toast.LENGTH_SHORT).show()
             return
@@ -1641,17 +1760,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val finalText = if (transcription.executedCommand != null) {
-            transcription.text
-        } else {
-            transcriptionRepository.applyPostProcessing(transcription.text)
-        }
+        val finalText = transcription.text
+        if (!ownsDelivery(token)) return
 
         val applied = if (transcription.executedCommand != null) {
-            applyCommandResult(finalText)
+            applyCommandResult(finalText, token)
         } else {
-            insertDictationText(finalText)
+            insertDictationText(finalText, token)
         }
+        if (!ownsDelivery(token)) return
 
         if (applied) {
             lastDictatedText = finalText
@@ -1667,10 +1784,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun processRewriteInstructionRecording(
-        audioFile: java.io.File,
-        target: SelectionCommandTarget?
+        finalized: FinalizedAndroidCapture,
+        target: SelectionCommandTarget?,
+        token: Long
     ) {
-        subscriptionRepository.checkCanTranscribe().onFailure { error ->
+        val access = checkAccessForFinalizedRecording(finalized)
+        access.onFailure { error ->
+            audioProcessingCoordinator.failBeforeRecognition(
+                finalized,
+                error.message ?: "Transcription is not available right now. Your audio was saved."
+            )
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
                 error.message ?: getString(R.string.usage_limit_reached),
@@ -1680,6 +1803,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         if (target == null) {
+            audioProcessingCoordinator.failBeforeRecognition(
+                finalized,
+                "The selected text was no longer available. Your audio was saved."
+            )
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
                 R.string.overlay_command_apply_failed,
@@ -1688,62 +1815,102 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        val transcriptionResult = TranscriptionClient.transcribe(audioFile = audioFile, prompt = null)
-        transcriptionResult.onSuccess { instruction ->
-            if (instruction.isBlank()) {
+        val processing = audioProcessingCoordinator.processRecognition(finalized)
+            .getOrElse { error ->
+                Log.e(TAG, "Instruction transcription failed", error)
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
-                    R.string.overlay_command_no_instruction,
-                    Toast.LENGTH_SHORT
+                    error.message ?: "Transcription failed. Your audio is available in History.",
+                    Toast.LENGTH_LONG
                 ).show()
-                return@onSuccess
+                return
             }
+        if (!beginDeliveryPhase(token)) return
 
-            val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
-            val commandResult = CommandClient.executeInstruction(
-                instruction = instruction,
-                targetText = target.selectedText,
-                context = target.contextBefore,
-                additionalInstructions = contextRules
-            )
-
-            commandResult.onSuccess { transformed ->
-                if (transformed.isBlank()) return@onSuccess
-
-                val applied = replaceSelectionOrMatchedText(
-                    targetText = target.selectedText,
-                    replacement = transformed
-                )
-                if (!applied) {
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        R.string.overlay_command_apply_failed,
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else {
-                    lastDictatedText = transformed
-                    subscriptionRepository.recordWords(transformed)
-                }
-            }.onFailure { error ->
-                Log.e(TAG, "Rewrite instruction failed", error)
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    getString(R.string.overlay_command_failed, getString(R.string.overlay_action_rewrite_ai)),
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }.onFailure { error ->
-            Log.e(TAG, "Instruction transcription failed", error)
+        val instruction = processing.text
+        if (instruction.isBlank()) {
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
-                "Transcription failed",
+                R.string.overlay_command_no_instruction,
                 Toast.LENGTH_SHORT
             ).show()
+            return
+        }
+
+        val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
+        if (!ownsDelivery(token)) return
+        val commandResult = CommandClient.executeInstruction(
+            instruction = instruction,
+            targetText = target.selectedText,
+            context = target.contextBefore,
+            additionalInstructions = contextRules
+        )
+        if (!ownsDelivery(token)) return
+
+        val transformed = commandResult.getOrElse { error ->
+            if (!ownsDelivery(token)) return
+            Log.e(TAG, "Rewrite instruction failed", error)
+            Toast.makeText(
+                this@OverlayDictationAccessibilityService,
+                getString(R.string.overlay_command_failed, getString(R.string.overlay_action_rewrite_ai)),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        if (transformed.isBlank() || !ownsDelivery(token)) return
+
+        val applied = replaceSelectionOrMatchedText(
+            targetText = target.selectedText,
+            replacement = transformed,
+            requiredDeliveryToken = token
+        )
+        if (!ownsDelivery(token)) return
+        if (!applied) {
+            Toast.makeText(
+                this@OverlayDictationAccessibilityService,
+                R.string.overlay_command_apply_failed,
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            lastDictatedText = transformed
+            subscriptionRepository.recordWords(transformed)
         }
     }
 
-    private suspend fun applyCommandResult(transformedText: String): Boolean {
+    private suspend fun checkAccessForFinalizedRecording(
+        finalized: FinalizedAndroidCapture
+    ): Result<Unit> = try {
+        withTimeout(ACCESS_CHECK_TIMEOUT_MS) {
+            subscriptionRepository.checkCanTranscribe()
+        }
+    } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+        Result.failure(IllegalStateException("Access check timed out. Your audio was saved.", error))
+    } catch (error: CancellationException) {
+        withContext(NonCancellable) {
+            audioProcessingCoordinator.failBeforeRecognition(
+                finalized,
+                "Transcription was cancelled. Your audio was saved."
+            )
+        }
+        throw error
+    } catch (error: Throwable) {
+        Result.failure(
+            IllegalStateException(
+                "Transcription access could not be checked. Your audio was saved.",
+                error
+            )
+        )
+    }
+
+    private fun deliveryAllows(requiredDeliveryToken: Long?): Boolean =
+        requiredDeliveryToken == null || ownsDelivery(requiredDeliveryToken)
+
+    private suspend fun applyCommandResult(
+        transformedText: String,
+        requiredDeliveryToken: Long? = null
+    ): Boolean {
         val node = acquireInsertTarget() ?: return false
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         try {
             val snapshot = captureEditableTextSnapshot(node)
             val current = snapshot.text
@@ -1751,7 +1918,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             val selEnd = snapshot.selectionEnd
 
             if (selEnd > selStart) {
-                return replaceRange(node, current, selStart, selEnd, transformedText)
+                return replaceRange(
+                    node,
+                    current,
+                    selStart,
+                    selEnd,
+                    transformedText,
+                    requiredDeliveryToken
+                )
             }
 
             if (lastDictatedText.isNotBlank()) {
@@ -1762,18 +1936,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         currentText = current,
                         start = start,
                         end = start + lastDictatedText.length,
-                        replacement = transformedText
+                        replacement = transformedText,
+                        requiredDeliveryToken = requiredDeliveryToken
                     )
                 }
             }
 
-            return insertDictationText(transformedText)
+            return insertDictationText(transformedText, requiredDeliveryToken)
         } finally {
         }
     }
 
-    private suspend fun insertDictationText(text: String): Boolean {
+    private suspend fun insertDictationText(
+        text: String,
+        requiredDeliveryToken: Long? = null
+    ): Boolean {
         val node = acquireInsertTarget() ?: return false
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         try {
             var snapshot = captureEditableTextSnapshot(node)
             Log.i(
@@ -1795,7 +1974,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             val selEnd = snapshot.selectionEnd
 
             val insertText = withLeadingSpaceIfNeeded(current, selStart, text)
-            return replaceRange(node, current, selStart, selEnd, insertText)
+            return replaceRange(
+                node,
+                current,
+                selStart,
+                selEnd,
+                insertText,
+                requiredDeliveryToken
+            )
         } finally {
         }
     }
@@ -1805,8 +1991,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         currentText: String,
         start: Int,
         end: Int,
-        replacement: String
+        replacement: String,
+        requiredDeliveryToken: Long? = null
     ): Boolean {
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         val safeStart = start.coerceIn(0, currentText.length)
         val safeEnd = end.coerceIn(safeStart, currentText.length)
 
@@ -1817,11 +2005,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         val setTextAccepted = setNodeText(node, updated)
-        if (setTextAccepted && verifyInsertedText(node, updated)) {
+        if (setTextAccepted && verifyInsertedText(node, updated, requiredDeliveryToken)) {
+            if (!deliveryAllows(requiredDeliveryToken)) return false
             val cursor = safeStart + replacement.length
             setNodeSelection(node, cursor, cursor)
             return true
         }
+
+        if (!deliveryAllows(requiredDeliveryToken)) return false
 
         if (setTextAccepted) {
             // The editor may have applied the action while its accessibility tree is still
@@ -1836,6 +2027,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // failed. Only try a paste after a fresh compatible snapshot proves that the original
         // text is still present.
         val refreshedText = readCompatibleEditableText(node)
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         if (refreshedText != currentText) {
             copyTextForManualPaste(replacement)
             Log.w(TAG, "Target text changed after ACTION_SET_TEXT; skipping paste fallback")
@@ -1852,7 +2044,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
         }
 
-        return pasteFallback(node, replacement, pasteStart, pasteEnd, updated)
+        return pasteFallback(
+            node,
+            replacement,
+            pasteStart,
+            pasteEnd,
+            updated,
+            requiredDeliveryToken
+        )
     }
 
     private suspend fun readCompatibleEditableText(
@@ -1921,15 +2120,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         text: String,
         start: Int,
         end: Int,
-        expectedText: String
+        expectedText: String,
+        requiredDeliveryToken: Long? = null
     ): Boolean {
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         copyTextForManualPaste(text)
 
+        if (!deliveryAllows(requiredDeliveryToken)) return false
         setNodeSelection(node, start, end)
         val pasteAccepted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
         if (!pasteAccepted) return false
 
-        val verified = verifyInsertedText(node, expectedText)
+        val verified = verifyInsertedText(node, expectedText, requiredDeliveryToken)
         if (!verified) {
             Log.w(TAG, "Target accepted ACTION_PASTE but did not expose the updated text")
         }
@@ -1938,9 +2140,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private suspend fun verifyInsertedText(
         originalNode: AccessibilityNodeInfo,
-        expectedText: String
+        expectedText: String,
+        requiredDeliveryToken: Long? = null
     ): Boolean {
         repeat(INSERT_VERIFY_ATTEMPTS) { attempt ->
+            if (!deliveryAllows(requiredDeliveryToken)) return false
             val candidate = when {
                 refreshNode(originalNode) && isEligibleEditableNode(originalNode) -> originalNode
                 else -> resolveFocusedEditableNode(null)
@@ -2209,12 +2413,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleAnimationJob?.cancel()
         bubbleAnimationJob = serviceScope.launch {
             while (recordingState == RecordingState.Recording) {
-                val recorder = audioRecorder
-                if (recorder == null) {
-                    break
-                }
-                bubbleView?.setAudioLevel(recorder.audioLevel.value)
-                bubbleView?.setFrequencyBands(recorder.frequencyBands.value)
+                bubbleView?.setAudioLevel(audioProcessingCoordinator.audioLevel.value)
+                bubbleView?.setFrequencyBands(audioProcessingCoordinator.frequencyBands.value)
                 delay(50)
             }
         }

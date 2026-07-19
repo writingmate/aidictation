@@ -4,16 +4,28 @@ import android.app.Application
 import android.util.Log
 import com.whispermate.aidictation.data.local.ParakeetModelAssets
 import com.whispermate.aidictation.data.preferences.ApiConfigManager
+import com.whispermate.aidictation.data.repository.RecordingRepository
 import dagger.hilt.android.HiltAndroidApp
 import java.io.File
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class AIDictationApp : Application() {
     @Inject lateinit var apiConfigManager: ApiConfigManager
+    @Inject lateinit var recordingRepository: RecordingRepository
+
+    private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
+        recoveryScope.launch {
+            runCatching { recordingRepository.normalizeAbandonedAttempts() }
+                .onFailure { Log.e("AIDictationApp", "Unable to normalize interrupted audio work", it) }
+        }
         removeStaleInternalParakeetCache()
     }
 

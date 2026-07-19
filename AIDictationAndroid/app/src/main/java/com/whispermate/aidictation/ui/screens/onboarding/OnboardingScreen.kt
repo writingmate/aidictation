@@ -95,8 +95,6 @@ import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.components.KeepScreenOn
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
-import com.whispermate.aidictation.util.AudioRecorder
-import java.io.File
 import kotlinx.coroutines.launch
 
 private val OnboardingSupportedLanguageCodes = listOf(
@@ -211,7 +209,9 @@ fun OnboardingScreen(
     onDeviceModelState: OnboardingOnDeviceModelState = OnboardingOnDeviceModelState(),
     onSetOnDeviceTranscriptionEnabled: (Boolean) -> Unit = {},
     demoState: OnboardingDemoUiState = OnboardingDemoUiState(),
-    onTranscribeDemo: (File?, Long) -> Unit = { _, _ -> }
+    onStartDemoRecording: () -> Unit = {},
+    onStopDemoRecording: () -> Unit = {},
+    onCancelDemoRecording: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -220,6 +220,7 @@ fun OnboardingScreen(
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
+    var demoLaunchRequested by remember { mutableStateOf(false) }
     val colors = onboardingColors()
 
     OnboardingSystemBars()
@@ -239,6 +240,19 @@ fun OnboardingScreen(
 
     val contextRulesEnabled = remember {
         AppPreferences.defaultContextRules.map { false }.toMutableStateList()
+    }
+
+    LaunchedEffect(
+        demoState.isRecording,
+        demoState.isProcessing,
+        demoState.resultText,
+        demoState.errorMessage
+    ) {
+        if (!demoState.isRecording && !demoState.isProcessing &&
+            (demoState.resultText != null || demoState.errorMessage != null)
+        ) {
+            demoLaunchRequested = false
+        }
     }
 
     LaunchedEffect(onboardingSteps.size) {
@@ -345,7 +359,12 @@ fun OnboardingScreen(
                     OnboardingStep.ButtonDemo -> ButtonDemoStep(
                         selectedColor = selectedBubbleColor,
                         demoState = demoState,
-                        onTranscribeDemo = onTranscribeDemo
+                        onStartRecording = {
+                            demoLaunchRequested = true
+                            onStartDemoRecording()
+                        },
+                        onStopRecording = onStopDemoRecording,
+                        onCancelRecording = onCancelDemoRecording
                     )
                     OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep()
                 }
@@ -413,6 +432,8 @@ fun OnboardingScreen(
                     .height(56.dp),
                 enabled = when (currentOnboardingStep) {
                     OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
+                    OnboardingStep.ButtonDemo ->
+                        !demoLaunchRequested && !demoState.isRecording && !demoState.isProcessing
                     else -> true
                 },
                 colors = ButtonDefaults.buttonColors(
@@ -657,19 +678,19 @@ private fun OnboardingBubbleColorSwatch(
 private fun ButtonDemoStep(
     selectedColor: Int,
     demoState: OnboardingDemoUiState,
-    onTranscribeDemo: (File?, Long) -> Unit
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit,
+    onCancelRecording: () -> Unit
 ) {
     val colors = onboardingColors()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var demoStage by remember { mutableIntStateOf(0) }
-    var audioRecorder by remember { mutableStateOf<AudioRecorder?>(null) }
-    val audioLevel by (audioRecorder?.audioLevel ?: remember { kotlinx.coroutines.flow.MutableStateFlow(0f) }).collectAsState()
-    val frequencyBands by (audioRecorder?.frequencyBands ?: remember { kotlinx.coroutines.flow.MutableStateFlow(FloatArray(6) { 0f }) }).collectAsState()
-    val isRecording = audioRecorder != null
-    val previewState = when (demoStage) {
-        2 -> if (demoState.isProcessing) OverlayMicButtonView.State.Processing else OverlayMicButtonView.State.Recording
-        3 -> if (demoState.isProcessing) OverlayMicButtonView.State.Processing else OverlayMicButtonView.State.Idle
+    val audioLevel = demoState.audioLevel
+    val frequencyBands = demoState.frequencyBands
+    val isRecording = demoState.isRecording
+    val previewState = when {
+        demoState.isProcessing -> OverlayMicButtonView.State.Processing
+        isRecording -> OverlayMicButtonView.State.Recording
         else -> OverlayMicButtonView.State.Idle
     }
     val resolvedColor = when (selectedColor) {
@@ -682,17 +703,13 @@ private fun ButtonDemoStep(
 
     DisposableEffect(Unit) {
         onDispose {
-            audioRecorder?.release()
+            onCancelRecording()
         }
     }
 
     fun stopDemoRecording() {
-        scope.launch {
-            val result = audioRecorder?.stop()
-            audioRecorder = null
-            demoStage = 3
-            onTranscribeDemo(result?.first, result?.second ?: 0L)
-        }
+        demoStage = 3
+        onStopRecording()
     }
 
     fun handleDemoMicTap() {
@@ -700,14 +717,8 @@ private fun ButtonDemoStep(
             demoState.isProcessing -> Unit
             isRecording -> stopDemoRecording()
             demoStage >= 1 -> {
-                val recorder = AudioRecorder(context)
-                val file = recorder.start()
-                if (file != null) {
-                    audioRecorder = recorder
-                    demoStage = 2
-                } else {
-                    recorder.release()
-                }
+                demoStage = 2
+                onStartRecording()
             }
         }
     }

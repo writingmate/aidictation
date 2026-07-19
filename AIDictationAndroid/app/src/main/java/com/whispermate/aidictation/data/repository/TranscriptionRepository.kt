@@ -6,17 +6,46 @@ import com.whispermate.aidictation.data.preferences.ApiProvider
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.remote.LanguagePostProcessClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
+import com.whispermate.aidictation.data.remote.CapturedTranscriptionCleanupContext
+import com.whispermate.aidictation.data.remote.CleanupReplacement
+import com.whispermate.aidictation.data.remote.TranscriptionCleanupPrompt
+import com.whispermate.aidictation.data.remote.preserveRawOnCleanupFailure
 import com.whispermate.aidictation.domain.model.WhisperLanguages
+import com.whispermate.aidictation.domain.model.DictionaryEntry
+import com.whispermate.aidictation.domain.model.Shortcut
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * Immutable transcription settings captured before the recorder starts. An in-flight attempt must
+ * never switch provider, model, language, vocabulary, cleanup rules, or shortcut expansions when the
+ * user changes Settings while audio is being captured or processed.
+ */
+data class TranscriptionAttemptConfiguration(
+    val provider: ApiProvider,
+    val useLocalRecognition: Boolean,
+    val cleanupEnabled: Boolean,
+    val languageNames: List<String>,
+    val cleanupLanguageNames: List<String>,
+    val transcriptionPrompt: String?,
+    val postProcessingPrompt: String?,
+    val contextRules: String?,
+    val requestSnapshot: TranscriptionClient.RequestSnapshot,
+    val cleanupContext: CapturedTranscriptionCleanupContext
+)
 
 @Singleton
 class TranscriptionRepository @Inject constructor(
     private val appPreferences: AppPreferences,
     private val parakeetTranscriber: ParakeetTranscriber
 ) {
+    private companion object {
+        const val CLEANUP_TIMEOUT_MS = 35_000L
+    }
+
     suspend fun prewarmOnDeviceIfEnabled(): Result<Unit> {
         val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
@@ -29,17 +58,23 @@ class TranscriptionRepository @Inject constructor(
         return parakeetTranscriber.prewarm()
     }
 
-    suspend fun transcribe(
-        audioFile: File,
-        prompt: String? = null,
+    fun abandonLocalRecognition() {
+        parakeetTranscriber.abandonCurrentGeneration()
+    }
+
+    suspend fun captureAttemptConfiguration(
+        additionalPrompt: String? = null,
         contextRules: String? = null
-    ): Result<String> {
+    ): TranscriptionAttemptConfiguration {
         val languages = appPreferences.selectedLanguages.first()
             .filter { WhisperLanguages.getLanguage(it) != null }
             .distinct()
-        val multilingual = true
-        val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
-        val postProcess = !onDeviceTranscription
+        val onDeviceRequested = appPreferences.onDeviceTranscriptionEnabled.first()
+        val dictionary = appPreferences.dictionaryEntries.first()
+            .filter { it.isEnabled }
+        val shortcuts = appPreferences.shortcuts.first()
+            .filter { it.isEnabled }
+
         val requiresCloud = languages.any { WhisperLanguages.requiresCloudTranscription(it) }
         if (requiresCloud) {
             appPreferences.setOnDeviceTranscriptionEnabled(false)
@@ -47,106 +82,163 @@ class TranscriptionRepository @Inject constructor(
         }
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
         val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
+        val useLocalRecognition = !requiresCloud && (onDeviceRequested || provider == ApiProvider.PARAKEET)
+        // Cleanup remains core infrastructure after both local and cloud recognition. If its
+        // separately bounded request is unavailable, preserveRawOnCleanupFailure returns raw text.
+        val cleanupEnabled = true
+        val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
+        val cleanupLanguageNames = if (useLocalRecognition) {
+            languages
+                .filter { WhisperLanguages.isReliableOffline(it) }
+                .mapNotNull { WhisperLanguages.getName(it) }
+                .takeIf { it.isNotEmpty() }
+                ?: listOf("English")
+        } else {
+            languageNames.takeIf { it.isNotEmpty() } ?: listOf("auto")
+        }
+        val cleanupContext = captureTranscriptionCleanupContext(
+            dictionary = dictionary,
+            shortcuts = shortcuts,
+            formattingInstructions = listOfNotNull(contextRules?.takeIf(String::isNotBlank)),
+            appContext = additionalPrompt,
+            languageContext = cleanupLanguageNames
+        )
+        val transcriptionPrompt = TranscriptionCleanupPrompt.speechRecognitionHints(cleanupContext)
+        val postProcessingPrompt = if (cleanupEnabled) {
+            TranscriptionCleanupPrompt.systemPrompt(cleanupContext)
+        } else {
+            null
+        }
 
-        if (!requiresCloud && (onDeviceTranscription || provider == ApiProvider.PARAKEET)) {
+        return TranscriptionAttemptConfiguration(
+            provider = provider,
+            useLocalRecognition = useLocalRecognition,
+            cleanupEnabled = cleanupEnabled,
+            languageNames = languageNames.toList(),
+            cleanupLanguageNames = cleanupLanguageNames.toList(),
+            transcriptionPrompt = transcriptionPrompt,
+            postProcessingPrompt = postProcessingPrompt,
+            contextRules = contextRules?.takeIf(String::isNotBlank),
+            requestSnapshot = TranscriptionClient.captureRequestSnapshot(),
+            cleanupContext = cleanupContext
+        )
+    }
+
+    suspend fun transcribe(
+        audioFile: File,
+        configuration: TranscriptionAttemptConfiguration,
+        checkpoint: suspend (mergedText: String, completedLeafCount: Int) -> Boolean = { _, _ -> true },
+        rawComplete: suspend (rawText: String) -> Boolean = { true }
+    ): Result<String> {
+        val transcriptionPrompt = configuration.transcriptionPrompt
+
+        if (configuration.useLocalRecognition) {
             val raw = parakeetTranscriber.transcribe(audioFile)
                 .getOrElse { return Result.failure(it) }
-            return if (postProcess) {
-                val languageNames = languages
-                    .filter { WhisperLanguages.isReliableOffline(it) }
-                    .mapNotNull { WhisperLanguages.getName(it) }
-                    .takeIf { it.isNotEmpty() }
-                    ?: listOf("English")
-                Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), languageNames, contextRules))
+            if (raw.isBlank()) return Result.failure(IllegalStateException("No speech was recognized"))
+            if (!checkpoint(raw, 1)) return Result.failure(IllegalStateException("Transcription could not be saved"))
+            if (!rawComplete(raw)) return Result.failure(IllegalStateException("Transcription could not be saved"))
+            return if (configuration.cleanupEnabled) {
+                val cleaned = preserveRawOnCleanupFailure(raw) {
+                    withTimeout(CLEANUP_TIMEOUT_MS) {
+                        LanguagePostProcessClient.postProcess(
+                            candidates = mapOf("auto" to raw),
+                            languageNames = configuration.cleanupLanguageNames,
+                            cleanupInstructions = configuration.postProcessingPrompt,
+                            requestSnapshot = configuration.requestSnapshot
+                        )
+                    }
+                }
+                Result.success(cleaned)
             } else {
                 Result.success(raw)
             }
         }
 
-        val language: String? = null
-        val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
-        val transcriptionPrompt = buildLanguageAwarePrompt(prompt, languageNames)
-        val postProcessingPrompt = if (postProcess) {
-            buildPostProcessingPrompt(transcriptionPrompt, contextRules)
-        } else {
-            null
-        }
-        if (provider == ApiProvider.WRITINGMATE) {
+        if (configuration.provider == ApiProvider.WRITINGMATE) {
             return TranscriptionClient.transcribe(
                 audioFile = audioFile,
                 prompt = transcriptionPrompt,
-                language = language,
+                language = null,
                 sttPrompt = transcriptionPrompt,
-                postProcessingPrompt = postProcessingPrompt
+                postProcessingPrompt = configuration.postProcessingPrompt,
+                oneStageCleanup = true,
+                requestSnapshot = configuration.requestSnapshot,
+                checkpoint = checkpoint,
+                rawComplete = rawComplete
             )
         }
 
-        return if (postProcess) {
-            val raw = TranscriptionClient.transcribe(audioFile, transcriptionPrompt, language, sttPrompt = transcriptionPrompt)
+        return if (configuration.cleanupEnabled) {
+            val raw = TranscriptionClient.transcribe(
+                audioFile,
+                transcriptionPrompt,
+                null,
+                sttPrompt = transcriptionPrompt,
+                requestSnapshot = configuration.requestSnapshot,
+                checkpoint = checkpoint,
+                rawComplete = rawComplete
+            )
                 .getOrElse { return Result.failure(it) }
-            val postProcessLanguageNames = languageNames.takeIf { multilingual && it.isNotEmpty() } ?: listOf("auto")
-            Result.success(LanguagePostProcessClient.postProcess(mapOf("auto" to raw), postProcessLanguageNames, contextRules))
+            val cleaned = preserveRawOnCleanupFailure(raw) {
+                withTimeout(CLEANUP_TIMEOUT_MS) {
+                    LanguagePostProcessClient.postProcess(
+                        candidates = mapOf("auto" to raw),
+                        languageNames = configuration.cleanupLanguageNames,
+                        cleanupInstructions = configuration.postProcessingPrompt,
+                        requestSnapshot = configuration.requestSnapshot
+                    )
+                }
+            }
+            Result.success(cleaned)
         } else {
-            TranscriptionClient.transcribe(audioFile, transcriptionPrompt, language, sttPrompt = transcriptionPrompt)
+            TranscriptionClient.transcribe(
+                audioFile,
+                transcriptionPrompt,
+                null,
+                sttPrompt = transcriptionPrompt,
+                requestSnapshot = configuration.requestSnapshot,
+                checkpoint = checkpoint,
+                rawComplete = rawComplete
+            )
         }
     }
 
     suspend fun buildPrompt(): String {
-        val dictionary = appPreferences.dictionaryEntries.first()
-            .filter { it.isEnabled }
-            .map { it.replacement?.takeIf { replacement -> replacement.isNotBlank() } ?: it.trigger }
-
-        val shortcuts = appPreferences.shortcuts.first()
-            .filter { it.isEnabled }
-            .map { it.voiceTrigger }
-
-        val parts = mutableListOf<String>()
-
-        if (dictionary.isNotEmpty()) {
-            parts.add("Vocabulary: ${dictionary.joinToString(", ")}")
-        }
-
-        if (shortcuts.isNotEmpty()) {
-            parts.add("Phrases: ${shortcuts.joinToString(", ")}")
-        }
-
-        return parts.joinToString(". ")
+        val dictionary = appPreferences.dictionaryEntries.first().filter { it.isEnabled }
+        val shortcuts = appPreferences.shortcuts.first().filter { it.isEnabled }
+        val context = captureTranscriptionCleanupContext(
+            dictionary = dictionary,
+            shortcuts = shortcuts,
+            formattingInstructions = emptyList(),
+            appContext = null,
+            languageContext = emptyList()
+        )
+        return TranscriptionCleanupPrompt.speechRecognitionHints(context).orEmpty()
     }
 
-    private fun buildPostProcessingPrompt(prompt: String?, contextRules: String?): String? {
-        return listOfNotNull(
-            "Preserve the language that was spoken. Do not translate the transcription into another language.",
-            prompt?.takeIf { it.isNotBlank() },
-            contextRules?.takeIf { it.isNotBlank() }
-        ).joinToString("\n").ifBlank { null }
-    }
+}
 
-    private fun buildLanguageAwarePrompt(prompt: String?, languageNames: List<String>): String? {
-        val languageHint = languageNames
-            .takeIf { it.size > 1 }
-            ?.joinToString(", ")
-            ?.let { "The speaker will use one of these selected languages: $it. Detect the spoken language from the audio and transcribe it in that same language." }
+private fun containsWhitespace(value: String): Boolean = value.any(Char::isWhitespace)
 
-        return listOfNotNull(
-            languageHint,
-            prompt?.takeIf { it.isNotBlank() }
-        ).joinToString("\n").ifBlank { null }
-    }
-
-    suspend fun applyPostProcessing(text: String): String {
-        return applyLocalTextExpansions(text)
-    }
-
-    private suspend fun applyLocalTextExpansions(text: String): String {
-        var result = text
-        val shortcuts = appPreferences.shortcuts.first()
-            .filter { it.isEnabled }
-            .sortedByDescending { it.voiceTrigger.length }
-
-        for (shortcut in shortcuts) {
-            result = result.replace(shortcut.voiceTrigger, shortcut.expansion, ignoreCase = true)
-        }
-
-        return result
-    }
+internal fun captureTranscriptionCleanupContext(
+    dictionary: List<DictionaryEntry>,
+    shortcuts: List<Shortcut>,
+    formattingInstructions: List<String>,
+    appContext: String?,
+    languageContext: List<String>
+): CapturedTranscriptionCleanupContext {
+    val vocabularyOnly = dictionary.filter { it.replacement.isNullOrBlank() }
+    return CapturedTranscriptionCleanupContext(
+        vocabulary = vocabularyOnly.map { it.trigger }.filterNot(::containsWhitespace),
+        phrases = vocabularyOnly.map { it.trigger }.filter(::containsWhitespace),
+        explicitReplacements = dictionary.mapNotNull { entry ->
+            entry.replacement?.takeIf(String::isNotBlank)
+                ?.let { CleanupReplacement(entry.trigger, it) }
+        },
+        shortcutExpansions = shortcuts.map { CleanupReplacement(it.voiceTrigger, it.expansion) },
+        formattingInstructions = formattingInstructions,
+        appContext = appContext?.takeIf(String::isNotBlank),
+        languageContext = languageContext
+    )
 }

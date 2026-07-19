@@ -1,23 +1,25 @@
 package com.whispermate.aidictation.data.remote
 
 import android.util.Log
-import com.whispermate.aidictation.BuildConfig
-import com.whispermate.aidictation.data.preferences.ApiConfigManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.io.IOException
 
 /**
- * LLM-based post-processing for transcription results.
- * When multiple language candidates are provided, picks the best match and corrects errors.
- * When a single candidate is provided, corrects transcription errors only.
- * Context rules are appended to the prompt when present.
+ * LLM-based post-processing for a complete raw transcription. The same generic prompt string is
+ * also sent as `post_processing_prompt` by the one-stage cloud path.
  */
 object LanguagePostProcessClient {
     private const val TAG = "LanguagePostProcessClient"
@@ -33,65 +35,44 @@ object LanguagePostProcessClient {
     /**
      * Post-processes one or more transcription candidates via LLM.
      *
-     * With multiple candidates: picks the one that matches the language actually spoken,
-     * then lightly corrects obvious speech-to-text errors in the winner.
-     * With a single candidate: corrects errors only (no language selection).
-     * Context rules are appended to the prompt when provided.
-     *
      * @param candidates Map of language name → transcription text (e.g. "Ukrainian" → "Добре")
-     * @param languageNames Ordered list of language names the user speaks
-     * @param contextRules Optional additional instructions from context rules (e.g. app-specific rules)
+     * @param languageNames Ordered language snapshot used only if a legacy caller omitted a prompt
+     * @param cleanupInstructions Captured generic cleanup prompt with delimited reference context
      * @return The corrected winning transcription, or the best-looking candidate on failure
      */
     suspend fun postProcess(
         candidates: Map<String, String>,
         languageNames: List<String>,
-        contextRules: String? = null
+        cleanupInstructions: String? = null,
+        requestSnapshot: TranscriptionClient.RequestSnapshot = TranscriptionClient.captureRequestSnapshot()
     ): String = withContext(Dispatchers.IO) {
         if (candidates.isEmpty()) return@withContext ""
 
-        val config = ApiConfigManager.instance?.getPostProcessingConfig()
-        val apiKey = config?.apiKey ?: BuildConfig.AIDICTATION_POST_PROCESSING_KEY
-        val endpoint = config?.endpoint ?: BuildConfig.AIDICTATION_POST_PROCESSING_ENDPOINT
-        val model = config?.model ?: BuildConfig.AIDICTATION_POST_PROCESSING_MODEL
-        if (apiKey.isEmpty()) {
+        if (requestSnapshot.cleanupApiKey.isEmpty()) {
             Log.w(TAG, "Post-processing API key not configured, returning best candidate")
             return@withContext bestCandidate(candidates)
         }
 
-        val languageList = languageNames.joinToString(", ")
-        val numberedEntries = candidates.entries.toList()
-        val candidateLines = numberedEntries.mapIndexed { i, (lang, text) ->
-            "${i + 1}. [$lang] $text"
-        }.joinToString("\n")
-
-        val systemPrompt = buildString {
-            if (candidates.size > 1) {
-                append("The user is speaking one of the following languages: $languageList.\n")
-                append("You will receive numbered Whisper transcriptions of the exact same audio clip, each forced to a different language.\n")
-                append("Identify the best match: Determine which numbered transcription accurately reflects the language that was actually spoken.\n\n")
-            }
-            append("Correct basic errors in the transcription:\n")
-            append("Split improperly merged words (e.g., \"заросмова\" → \"зараз мова\").\n")
-            append("Correct obvious spelling and grammatical forms (e.g., \"украинська\" → \"українська\").\n")
-            append("Fix missing apostrophes and capitalization (e.g., \"dont\" → \"don't\").\n")
-            append("Clean up stutters and repeated words or phrases.\n\n")
-            append("STRICT CONSTRAINTS:\n")
-            append("DO NOT translate, rephrase, or summarize the text.\n")
-            append("DO NOT remove any spoken concepts or skip unrecognizable words. If unsure about a word, leave it exactly as-is.\n")
-            append("Keep the corrected text in the original language spoken.\n\n")
-            if (!contextRules.isNullOrBlank()) {
-                append("Additional instructions: $contextRules\n\n")
-            }
-            append("OUTPUT FORMAT:\n")
-            append("Return ONLY the corrected transcription text. Do not include the transcription number, language labels, explanations, or quotation marks.")
-        }
+        val fallback = bestCandidate(candidates)
+        if (fallback.isBlank()) return@withContext ""
+        val systemPrompt = cleanupInstructions?.takeIf(String::isNotBlank)
+            ?: TranscriptionCleanupPrompt.systemPrompt(
+                CapturedTranscriptionCleanupContext(
+                    vocabulary = emptyList(),
+                    phrases = emptyList(),
+                    explicitReplacements = emptyList(),
+                    shortcutExpansions = emptyList(),
+                    formattingInstructions = emptyList(),
+                    appContext = null,
+                    languageContext = languageNames
+                )
+            )
 
         Log.d(TAG, "Starting language post-processing with ${candidates.size} candidates")
 
         try {
             val requestJson = JSONObject().apply {
-                put("model", model)
+                put("model", requestSnapshot.cleanupModel)
                 put("messages", JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
@@ -99,52 +80,70 @@ object LanguagePostProcessClient {
                     })
                     put(JSONObject().apply {
                         put("role", "user")
-                        put("content", candidateLines)
+                        put("content", TranscriptionCleanupPrompt.userMessage(fallback))
                     })
                 })
-                put("max_tokens", 300)
+                put("max_tokens", 8192)
                 put("temperature", 0.0)
             }
 
             val request = Request.Builder()
-                .url(endpoint)
-                .addHeader("Authorization", "Bearer $apiKey")
+                .url(requestSnapshot.cleanupEndpoint)
+                .addHeader("Authorization", "Bearer ${requestSnapshot.cleanupApiKey}")
                 .addHeader("Content-Type", "application/json")
                 .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            val rawResponse = executeCancellable(request) { response ->
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "Post-process request failed: ${response.code}")
+                    return@executeCancellable null
+                }
+                response.body?.string()
+            } ?: return@withContext bestCandidate(candidates)
 
-            if (!response.isSuccessful) {
-                Log.e(TAG, "Post-process request failed: ${response.code}")
-                return@withContext bestCandidate(candidates)
-            }
-
-            val rawResponse = response.body?.string() ?: "{}"
-
-            val rawResult = JSONObject(rawResponse)
+            val choice = JSONObject(rawResponse)
                 .getJSONArray("choices")
                 .getJSONObject(0)
+            val rawResult = choice
                 .getJSONObject("message")
                 .getString("content")
-                .trim()
-                .trimQuotes()
 
-            // Validate: if the LLM hallucinated something that doesn't resemble any candidate,
-            // fall back to the best candidate without correction
-            val result = if (rawResult.isNotEmpty() && resemblesAnyCandidate(rawResult, candidates)) {
-                rawResult
-            } else {
-                Log.w(TAG, "LLM output doesn't resemble any candidate, using best fallback")
-                bestCandidate(candidates)
-            }
-
-            result.ifEmpty { bestCandidate(candidates) }
+            completedCleanupTextOrFallback(
+                fallbackText = fallback,
+                cleanupText = rawResult,
+                finishReason = choice.optString("finish_reason")
+            )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Post-process failed, returning best candidate", e)
             bestCandidate(candidates)
         }
     }
+
+    private suspend fun <T> executeCancellable(request: Request, transform: (Response) -> T): T =
+        suspendCancellableCoroutine { continuation ->
+            val call = okHttpClient.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, error: IOException) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(error))
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.use {
+                        if (!continuation.isActive) return
+                        try {
+                            val value = transform(it)
+                            if (continuation.isActive) continuation.resumeWith(Result.success(value))
+                        } catch (error: Throwable) {
+                            if (continuation.isActive) continuation.resumeWith(Result.failure(error))
+                        }
+                    }
+                }
+            })
+        }
 
     /**
      * Heuristic fallback: pick the candidate with the highest ratio of letter characters.
@@ -162,21 +161,4 @@ object LanguagePostProcessClient {
             ""
         }
     }
-
-    /**
-     * Returns true if the LLM output loosely resembles at least one candidate —
-     * i.e. shares enough words to not be a hallucination.
-     * Uses a simple word-overlap heuristic: at least 40% of LLM words appear in some candidate.
-     */
-    private fun resemblesAnyCandidate(llmOutput: String, candidates: Map<String, String>): Boolean {
-        val llmWords = llmOutput.lowercase().split(Regex("\\W+")).filter { it.length > 2 }.toSet()
-        if (llmWords.isEmpty()) return true // short output, give benefit of the doubt
-        return candidates.values.any { candidate ->
-            val candidateWords = candidate.lowercase().split(Regex("\\W+")).filter { it.length > 2 }.toSet()
-            val overlap = llmWords.intersect(candidateWords).size
-            overlap.toDouble() / llmWords.size >= 0.4
-        }
-    }
-
-    private fun String.trimQuotes() = trim('"', '\'', '\u201C', '\u201D')
 }

@@ -16,9 +16,58 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.pow
 
-class AudioRecorder(
+/** A one-shot ownership fence: retirement wins even when it happens before registration. */
+internal class TerminalResourceFence<T : Any>(
+    private val releaseResource: (T) -> Unit
+) {
+    private val lock = Any()
+    private var terminal = false
+    private var resource: T? = null
+
+    fun register(candidate: T): Boolean {
+        val accepted = synchronized(lock) {
+            if (terminal || resource != null) {
+                false
+            } else {
+                resource = candidate
+                true
+            }
+        }
+        if (!accepted) releaseSafely(candidate)
+        return accepted
+    }
+
+    fun current(): T? = synchronized(lock) { resource }
+
+    fun publishIfCurrent(candidate: T, publish: () -> Unit): Boolean = synchronized(lock) {
+        if (terminal || resource !== candidate) {
+            false
+        } else {
+            publish()
+            true
+        }
+    }
+
+    fun retire() {
+        val retired = synchronized(lock) {
+            terminal = true
+            resource.also { resource = null }
+        }
+        retired?.let(::releaseSafely)
+    }
+
+    private fun releaseSafely(candidate: T) {
+        try {
+            releaseResource(candidate)
+        } catch (_: Exception) {
+        }
+    }
+}
+
+internal class AudioRecorder(
     private val context: Context,
     private val autoStopOnSilenceEnabled: Boolean = false
 ) {
@@ -38,14 +87,15 @@ class AudioRecorder(
         private const val FRAME_LOG_INTERVAL = 20
     }
 
-    private var mediaRecorder: MediaRecorder? = null
+    private val recorderFence = TerminalResourceFence<MediaRecorder> { it.release() }
     private var audioLevelJob: Job? = null
     private var outputFile: File? = null
     private var startTime: Long = 0
     private var frequencyAnalyzer: FrequencyAnalyzer? = null
+    private val captureFailure = AtomicReference<Throwable?>(null)
 
     // Speech detection with adaptive thresholding
-    private var speechDetected = false
+    @Volatile private var speechDetected = false
     private var speechActive = false
     private var silenceStartTime: Long = 0
     private val silenceDurationMs = 1500L
@@ -84,19 +134,32 @@ class AudioRecorder(
     }
 
     @SuppressLint("MissingPermission")
-    fun start(): File? {
+    fun start(managedOutputFile: File? = null): File? {
         try {
-            val recordingsDir = File(context.filesDir, "recordings")
-            recordingsDir.mkdirs()
-            outputFile = File(recordingsDir, "recording_${System.currentTimeMillis()}.m4a")
+            val recordingsDir = File(context.filesDir, "recordings").apply { mkdirs() }
+            outputFile = managedOutputFile ?: File(recordingsDir, "recording_${System.currentTimeMillis()}.m4a")
+            outputFile?.parentFile?.mkdirs()
 
-            // Start MediaRecorder for high-quality output
-            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            captureFailure.set(null)
+            // Publish the native recorder before any potentially blocking setup call. A release
+            // that races construction is remembered by recorderFence and immediately retires it.
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(context)
             } else {
                 @Suppress("DEPRECATION")
                 MediaRecorder()
-            }.apply {
+            }
+            if (!recorderFence.register(recorder)) {
+                throw IllegalStateException("Recording start was already cancelled")
+            }
+            recorder.apply {
+                setOnErrorListener { _, what, extra ->
+                    captureFailure.compareAndSet(
+                        null,
+                        IllegalStateException("Audio capture failed ($what/$extra)")
+                    )
+                    _isRecording.value = false
+                }
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
@@ -104,11 +167,14 @@ class AudioRecorder(
                 setAudioEncodingBitRate(128000)
                 setOutputFile(outputFile?.absolutePath)
                 prepare()
+                if (recorderFence.current() !== recorder) {
+                    throw IllegalStateException("Recording start was cancelled during setup")
+                }
                 start()
             }
 
             startTime = System.currentTimeMillis()
-            _isRecording.value = true
+            captureFailure.get()?.let { throw it }
             _shouldAutoStop.value = false
             speechDetected = false
             speechActive = false
@@ -127,12 +193,21 @@ class AudioRecorder(
             metricSpeechAmplitudeSum = 0
             frequencyAnalyzer?.reset()
 
+            captureFailure.get()?.let { throw it }
+            if (!recorderFence.publishIfCurrent(recorder) { _isRecording.value = true }) {
+                throw IllegalStateException("Recording start was cancelled")
+            }
+            captureFailure.get()?.let { error ->
+                _isRecording.value = false
+                throw error
+            }
+
             // Start audio level monitoring and speech detection
             audioLevelJob = CoroutineScope(Dispatchers.Default).launch {
                 var smoothedLevel = 0f
                 while (isActive && _isRecording.value) {
                     try {
-                        val maxAmplitude = mediaRecorder?.maxAmplitude ?: 0
+                        val maxAmplitude = recorderFence.current()?.maxAmplitude ?: 0
                         metricFrameCount++
                         metricMaxAmplitude = maxOf(metricMaxAmplitude, maxAmplitude)
                         metricAmplitudeSum += maxAmplitude.toLong()
@@ -226,7 +301,6 @@ class AudioRecorder(
                     delay(50)
                 }
             }
-
             return outputFile
         } catch (e: Exception) {
             e.printStackTrace()
@@ -246,11 +320,11 @@ class AudioRecorder(
             _shouldAutoStop.value = false
             _isRecording.value = false
 
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-            mediaRecorder = null
+            // A successful stop closes the MP4 container. Resource release is intentionally
+            // separate: release() can stall or throw, but must not make finalized audio look
+            // truncated or prevent the coordinator from durably committing it.
+            recorderFence.current()?.stop()
+                ?: throw IllegalStateException("The recorder was released before finalization")
 
             val avgAmplitude = if (metricFrameCount > 0) {
                 metricAmplitudeSum.toFloat() / metricFrameCount
@@ -286,7 +360,6 @@ class AudioRecorder(
             Pair(outputFile, duration)
         } catch (e: Exception) {
             e.printStackTrace()
-            release()
             null
         }
     }
@@ -302,16 +375,15 @@ class AudioRecorder(
         speechActive = false
         aboveStartFrames = 0
 
-        try {
-            mediaRecorder?.release()
-        } catch (_: Exception) { }
-        mediaRecorder = null
+        recorderFence.retire()
     }
 
     /**
      * Check if speech was detected during recording.
      */
     fun hasSpeechBeenDetected(): Boolean = speechDetected
+
+    fun captureError(): Throwable? = captureFailure.get()
 
     private fun format2(value: Float): String {
         return String.format(Locale.US, "%.2f", value)

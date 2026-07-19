@@ -5,7 +5,12 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.util.Log
 import com.whispermate.aidictation.BuildConfig
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -13,9 +18,23 @@ import java.io.File
 import java.nio.FloatBuffer
 import java.nio.IntBuffer
 import java.nio.LongBuffer
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.min
+
+internal enum class ParakeetAbandonAction { IGNORE_IDLE, RETIRE, QUARANTINE }
+
+internal fun parakeetAbandonAction(
+    activeTranscriptions: Int,
+    retiredGenerations: Int,
+    maximumRetiredGenerations: Int = 1
+): ParakeetAbandonAction = when {
+    activeTranscriptions == 0 -> ParakeetAbandonAction.IGNORE_IDLE
+    retiredGenerations >= maximumRetiredGenerations -> ParakeetAbandonAction.QUARANTINE
+    else -> ParakeetAbandonAction.RETIRE
+}
 
 @Singleton
 class ParakeetTranscriber @Inject constructor(
@@ -30,69 +49,179 @@ class ParakeetTranscriber @Inject constructor(
         private const val DECODER_STATE_LAYERS = 2
         private const val DECODER_STATE_SIZE = 640
         private const val ENCODER_SIZE = 1024
+        private const val MAX_RETIRED_GENERATIONS = 1
     }
 
-    private val mutex = Mutex()
-    private val audioDecoder = AndroidAudioDecoder()
-    private val ortEnvironment: OrtEnvironment = OrtEnvironment.getEnvironment()
-    private var onnxModel: LoadedParakeetModel? = null
-    private var onnxEncoderModel: LoadedParakeetModel? = null
-    private var liteRtModel: ParakeetLiteRtModel? = null
+    private class Generation(id: Int) {
+        val mutex = Mutex()
+        val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "parakeet-generation-$id").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        var onnxModel: LoadedParakeetModel? = null
+        var onnxEncoderModel: LoadedParakeetModel? = null
+        var liteRtModel: ParakeetLiteRtModel? = null
+        var activeUsers: Int = 0
+        var activeTranscriptions: Int = 0
+        var retired: Boolean = false
+        var quarantined: Boolean = false
+        var closeScheduled: Boolean = false
 
-    suspend fun prewarm(): Result<Unit> = withContext(Dispatchers.Default) {
-        runCatching {
-            mutex.withLock {
-                val runtime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
-                val startMs = System.currentTimeMillis()
-                Log.d(TAG, "Prewarming Parakeet ${runtime.displayName}")
-                when (runtime) {
-                    ParakeetRuntime.ONNX -> {
-                        if (onnxModel == null) {
-                            onnxModel = loadOnnxModel()
-                        }
-                    }
-                    ParakeetRuntime.LITERT -> {
-                        if (onnxEncoderModel == null) {
-                            onnxEncoderModel = loadOnnxModel(
-                                loadDecoder = false,
-                                runtime = ParakeetRuntime.LITERT
-                            )
-                        }
-                        if (liteRtModel == null) {
-                            liteRtModel = loadLiteRtModel()
-                        }
-                    }
-                }
-                Log.d(TAG, "Prewarmed Parakeet ${runtime.displayName} in ${System.currentTimeMillis() - startMs}ms")
-                Unit
-            }
+        fun closeModels() {
+            val fullOnnx = onnxModel.also { onnxModel = null }
+            val encoderOnnx = onnxEncoderModel.also { onnxEncoderModel = null }
+            val liteRt = liteRtModel.also { liteRtModel = null }
+            runCatching { liteRt?.close() }
+            runCatching { encoderOnnx?.close() }
+            runCatching { fullOnnx?.close() }
+            dispatcher.close()
         }
     }
 
-    suspend fun transcribe(audioFile: File): Result<String> = withContext(Dispatchers.Default) {
-        runCatching {
-            mutex.withLock {
-                val runtime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
-                val samples = audioDecoder.decodeToMono16k(audioFile)
-                if (samples.isEmpty()) return@withLock ""
+    private val generationLock = Any()
+    private val generationCounter = AtomicInteger()
+    private val retiredGenerations = mutableSetOf<Generation>()
+    private val retirementScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var generation = newGeneration()
+    private val audioDecoder = AndroidAudioDecoder()
+    private val ortEnvironment: OrtEnvironment = OrtEnvironment.getEnvironment()
 
-                Log.d(TAG, "Running Parakeet ${runtime.displayName} on ${samples.size} samples at ${SAMPLE_RATE}Hz")
-                val text = when (runtime) {
-                    ParakeetRuntime.ONNX -> {
-                        val loadedModel = onnxModel ?: loadOnnxModel().also { onnxModel = it }
-                        val encoded = loadedModel.encodeSamples(samples)
-                        val tokenIds = loadedModel.decode(encoded)
-                        loadedModel.decodeTokens(tokenIds)
-                    }
-                    ParakeetRuntime.LITERT -> {
-                        val encoderModel = onnxEncoderModel
-                            ?: loadOnnxModel(loadDecoder = false, runtime = ParakeetRuntime.LITERT).also { onnxEncoderModel = it }
-                        val loadedModel = liteRtModel ?: loadLiteRtModel().also { liteRtModel = it }
-                        encoderModel.decodeWithLiteRt(samples, loadedModel)
+    /**
+     * Detaches native work that ignored cancellation. At most one stuck generation is retained;
+     * further local attempts fail fast instead of repeatedly loading models and consuming workers.
+     */
+    fun abandonCurrentGeneration(): Boolean {
+        synchronized(generationLock) {
+            val current = generation
+            when (parakeetAbandonAction(
+                current.activeTranscriptions,
+                retiredGenerations.size,
+                MAX_RETIRED_GENERATIONS
+            )) {
+                ParakeetAbandonAction.IGNORE_IDLE -> return false
+                ParakeetAbandonAction.QUARANTINE -> {
+                    current.quarantined = true
+                    return false
+                }
+                ParakeetAbandonAction.RETIRE -> Unit
+            }
+            current.retired = true
+            retiredGenerations += current
+            generation = newGeneration()
+            return true
+        }
+    }
+
+    suspend fun prewarm(): Result<Unit> {
+        val activeGeneration = runCatching { acquireGeneration(transcription = false) }
+            .getOrElse { return Result.failure(it) }
+        return try {
+            withContext(activeGeneration.dispatcher) {
+                runCatching {
+                    activeGeneration.mutex.withLock {
+                        val runtime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
+                        val startMs = System.currentTimeMillis()
+                        Log.d(TAG, "Prewarming Parakeet ${runtime.displayName}")
+                        when (runtime) {
+                            ParakeetRuntime.ONNX -> {
+                                if (activeGeneration.onnxModel == null) {
+                                    activeGeneration.onnxModel = loadOnnxModel()
+                                }
+                            }
+                            ParakeetRuntime.LITERT -> {
+                                if (activeGeneration.onnxEncoderModel == null) {
+                                    activeGeneration.onnxEncoderModel = loadOnnxModel(
+                                        loadDecoder = false,
+                                        runtime = ParakeetRuntime.LITERT
+                                    )
+                                }
+                                if (activeGeneration.liteRtModel == null) {
+                                    activeGeneration.liteRtModel = loadLiteRtModel()
+                                }
+                            }
+                        }
+                        Log.d(TAG, "Prewarmed Parakeet ${runtime.displayName} in ${System.currentTimeMillis() - startMs}ms")
+                        Unit
                     }
                 }
-                Log.d(TAG, "Local transcription succeeded")
-                text
+            }
+        } finally {
+            releaseGeneration(activeGeneration, transcription = false)
+        }
+    }
+
+    suspend fun transcribe(audioFile: File): Result<String> {
+        val activeGeneration = runCatching { acquireGeneration(transcription = true) }
+            .getOrElse { return Result.failure(it) }
+        return try {
+            withContext(activeGeneration.dispatcher) {
+                runCatching {
+                    activeGeneration.mutex.withLock {
+                        val runtime = ParakeetRuntime.fromConfig(BuildConfig.PARAKEET_RUNTIME)
+                        val samples = audioDecoder.decodeToMono16k(audioFile)
+                        if (samples.isEmpty()) return@withLock ""
+
+                        Log.d(TAG, "Running Parakeet ${runtime.displayName} on ${samples.size} samples at ${SAMPLE_RATE}Hz")
+                        val text = when (runtime) {
+                            ParakeetRuntime.ONNX -> {
+                                val loadedModel = activeGeneration.onnxModel
+                                    ?: loadOnnxModel().also { activeGeneration.onnxModel = it }
+                                val encoded = loadedModel.encodeSamples(samples)
+                                val tokenIds = loadedModel.decode(encoded)
+                                loadedModel.decodeTokens(tokenIds)
+                            }
+                            ParakeetRuntime.LITERT -> {
+                                val encoderModel = activeGeneration.onnxEncoderModel
+                                    ?: loadOnnxModel(loadDecoder = false, runtime = ParakeetRuntime.LITERT)
+                                        .also { activeGeneration.onnxEncoderModel = it }
+                                val loadedModel = activeGeneration.liteRtModel
+                                    ?: loadLiteRtModel().also { activeGeneration.liteRtModel = it }
+                                encoderModel.decodeWithLiteRt(samples, loadedModel)
+                            }
+                        }
+                        Log.d(TAG, "Local transcription succeeded")
+                        text
+                    }
+                }
+            }
+        } finally {
+            releaseGeneration(activeGeneration, transcription = true)
+        }
+    }
+
+    private fun newGeneration(): Generation = Generation(generationCounter.incrementAndGet())
+
+    private fun acquireGeneration(transcription: Boolean): Generation = synchronized(generationLock) {
+        val current = generation
+        check(!current.quarantined) {
+            "Offline transcription is recovering from an earlier attempt. Switch to cloud mode or restart the app."
+        }
+        current.activeUsers += 1
+        if (transcription) current.activeTranscriptions += 1
+        current
+    }
+
+    private fun releaseGeneration(released: Generation, transcription: Boolean) {
+        var shouldClose = false
+        synchronized(generationLock) {
+            released.activeUsers = (released.activeUsers - 1).coerceAtLeast(0)
+            if (transcription) {
+                released.activeTranscriptions = (released.activeTranscriptions - 1).coerceAtLeast(0)
+            }
+            if (!released.retired && released.activeTranscriptions == 0) {
+                released.quarantined = false
+            }
+            if (released.retired && released.activeUsers == 0 && !released.closeScheduled) {
+                released.closeScheduled = true
+                shouldClose = true
+            }
+        }
+        if (shouldClose) {
+            retirementScope.launch {
+                try {
+                    released.closeModels()
+                } finally {
+                    synchronized(generationLock) { retiredGenerations.remove(released) }
+                }
             }
         }
     }
@@ -120,7 +249,7 @@ class ParakeetTranscriber @Inject constructor(
         private val environment: OrtEnvironment,
         directory: File,
         loadDecoder: Boolean
-    ) {
+    ) : AutoCloseable {
         private val sessionOptions = OrtSession.SessionOptions().apply {
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
             setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceAtMost(4))
@@ -132,6 +261,13 @@ class ParakeetTranscriber @Inject constructor(
         private val blankIndex = vocab.indexOf(BLANK_TOKEN).takeIf { it >= 0 }
             ?: error("Parakeet vocabulary is missing $BLANK_TOKEN")
         private val vocabSize = vocab.size
+
+        override fun close() {
+            runCatching { decoderJoint?.close() }
+            runCatching { encoder.close() }
+            runCatching { preprocessor.close() }
+            runCatching { sessionOptions.close() }
+        }
 
         fun encodeSamples(samples: FloatArray): EncodedAudio {
             val chunks = mutableListOf<EncodedAudio>()

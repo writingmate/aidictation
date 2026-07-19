@@ -41,7 +41,7 @@ class AndroidAudioDecoder {
             codec.configure(format, null, null, 0)
             codec.start()
 
-            val pcm = ArrayList<Float>(estimateCapacity(format))
+            val pcm = FloatSampleBuffer(estimateCapacity(format))
             val info = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
@@ -145,7 +145,7 @@ class AndroidAudioDecoder {
         buffer: ByteBuffer,
         encoding: Int,
         channelCount: Int,
-        output: MutableList<Float>
+        output: FloatSampleBuffer
     ) {
         val channels = channelCount.coerceAtLeast(1)
         when (encoding) {
@@ -155,7 +155,7 @@ class AndroidAudioDecoder {
         }
     }
 
-    private fun append16BitPcm(buffer: ByteBuffer, channels: Int, output: MutableList<Float>) {
+    private fun append16BitPcm(buffer: ByteBuffer, channels: Int, output: FloatSampleBuffer) {
         val frameBytes = channels * 2
         while (buffer.remaining() >= frameBytes) {
             var sum = 0f
@@ -166,7 +166,7 @@ class AndroidAudioDecoder {
         }
     }
 
-    private fun appendFloatPcm(buffer: ByteBuffer, channels: Int, output: MutableList<Float>) {
+    private fun appendFloatPcm(buffer: ByteBuffer, channels: Int, output: FloatSampleBuffer) {
         val frameBytes = channels * 4
         while (buffer.remaining() >= frameBytes) {
             var sum = 0f
@@ -177,7 +177,7 @@ class AndroidAudioDecoder {
         }
     }
 
-    private fun append8BitPcm(buffer: ByteBuffer, channels: Int, output: MutableList<Float>) {
+    private fun append8BitPcm(buffer: ByteBuffer, channels: Int, output: FloatSampleBuffer) {
         val frameBytes = channels
         while (buffer.remaining() >= frameBytes) {
             var sum = 0f
@@ -209,4 +209,21 @@ class AndroidAudioDecoder {
         val samples: FloatArray,
         val sampleRate: Int
     )
+
+    private class FloatSampleBuffer(initialCapacity: Int) {
+        private var values = FloatArray(initialCapacity.coerceIn(TARGET_SAMPLE_RATE, 8_000_000))
+        private var size = 0
+
+        fun add(value: Float) {
+            if (size == values.size) {
+                val nextSize = (values.size + values.size / 2)
+                    .coerceAtLeast(values.size + 1)
+                values = values.copyOf(nextSize)
+            }
+            values[size] = value
+            size += 1
+        }
+
+        fun toFloatArray(): FloatArray = values.copyOf(size)
+    }
 }

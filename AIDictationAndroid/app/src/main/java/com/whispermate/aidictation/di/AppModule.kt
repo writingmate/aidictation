@@ -2,6 +2,8 @@ package com.whispermate.aidictation.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.squareup.moshi.Moshi
 import com.whispermate.aidictation.data.local.AppDatabase
 import com.whispermate.aidictation.data.local.dao.RecordingDao
@@ -16,6 +18,22 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppModule {
 
+    private val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE recordings ADD COLUMN status TEXT NOT NULL DEFAULT 'success'")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN rawTranscription TEXT NOT NULL DEFAULT ''")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN checkpointText TEXT NOT NULL DEFAULT ''")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN completedLeafCount INTEGER NOT NULL DEFAULT 0")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN recognitionComplete INTEGER NOT NULL DEFAULT 0")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN attemptId TEXT")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN errorMessage TEXT")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN sourceIntegrity TEXT NOT NULL DEFAULT 'complete'")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+            database.execSQL("UPDATE recordings SET rawTranscription = transcription, checkpointText = transcription, updatedAt = timestamp")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideMoshi(): Moshi = Moshi.Builder().build()
@@ -27,7 +45,7 @@ object AppModule {
             context,
             AppDatabase::class.java,
             "aidictation_db"
-        ).build()
+        ).addMigrations(MIGRATION_1_2).build()
 
     @Provides
     @Singleton

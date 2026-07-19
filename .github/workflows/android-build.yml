@@ -10,6 +10,8 @@ on:
     branches: [ main ]
     paths:
       - 'AIDictationAndroid/**'
+      - 'docs/audio-processing-failure-contract.md'
+      - 'AGENTS.md'
       - '.github/workflows/android-build.yml'
       - '.github/workflows/android-play-release.yml'
 
@@ -196,7 +198,6 @@ jobs:
 
       - name: Lint
         run: ./gradlew lint --stacktrace
-        continue-on-error: true
 
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace

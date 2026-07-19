@@ -43,6 +43,15 @@ private struct ValidateTranscriptionCleanupPrompt {
         for context in [vocabulary, replacements, phrases, expansions] {
             require(prompt.contains(context), "cleanup prompt lost context: \(context)")
         }
+        let formattingStart = prompt.range(of: "<formatting_context>")!.lowerBound
+        let formattingEnd = prompt.range(of: "</formatting_context>")!.lowerBound
+        for context in [vocabulary, replacements, phrases, expansions] {
+            let range = prompt.range(of: context)!
+            require(
+                range.lowerBound > formattingStart && range.upperBound < formattingEnd,
+                "cleanup reference escaped the formatting-context boundary: \(context)"
+            )
+        }
 
         let source = "please send the final NovaFlow summary tomorrow"
         let message = TranscriptionCleanupPrompt.userMessage(
@@ -54,6 +63,29 @@ private struct ValidateTranscriptionCleanupPrompt {
             "complete transcript is not delimited"
         )
         require(!message.contains("<selected_content>"), "empty selected content was added")
+        let selectedMessage = TranscriptionCleanupPrompt.userMessage(
+            transcription: source,
+            selectedContent: "selected draft"
+        )
+        require(
+            selectedMessage.contains(
+                "<selected_content>\nselected draft\n</selected_content>"
+            ),
+            "selected content is not delimited"
+        )
+
+        let genericPrompt = TranscriptionCleanupPrompt.systemPrompt(
+            formattingContext: [],
+            languageContext: nil,
+            appContext: nil,
+            hasSelectedContent: false
+        )
+        for fixtureTerm in ["NovaFlow", "KestrelWorks"] {
+            require(
+                !genericPrompt.contains(fixtureTerm),
+                "generic cleanup prompt contains fixture vocabulary: \(fixtureTerm)"
+            )
+        }
 
         let selectedPrompt = TranscriptionCleanupPrompt.systemPrompt(
             formattingContext: [],

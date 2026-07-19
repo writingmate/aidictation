@@ -7,11 +7,16 @@ on:
       - 'windows-v*'
     paths:
       - 'AIDictation.Windows/**'
+      - 'docs/audio-processing-failure-contract.md'
+      - 'AGENTS.md'
       - '.github/workflows/windows-build.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'AIDictation.Windows/**'
+      - 'docs/audio-processing-failure-contract.md'
+      - 'AGENTS.md'
+      - '.github/workflows/windows-build.yml'
   workflow_dispatch:
 
 permissions:
@@ -46,6 +51,10 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Validate audio recovery contracts
+      shell: pwsh
+      run: pwsh -File AIDictation.Windows/scripts/validate-audio-recovery.ps1
 
     - name: Restore dependencies
       run: dotnet restore ${{ env.PROJECT_PATH }}

@@ -1,0 +1,94 @@
+name: Apple Audio Recovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Whishpermate/**'
+      - 'scripts/validate_apple_http_audio_recovery.swift'
+      - 'scripts/validate_apple_audio_recovery.sh'
+      - 'scripts/validate_ios_audio_processing_recovery.swift'
+      - 'scripts/validate_keyboard_audio_recovery.swift'
+      - 'scripts/validate_macos_audio_processing_store.swift'
+      - 'scripts/validate_macos_recording_recovery.swift'
+      - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
+      - 'scripts/validate_macos_vad_recovery.swift'
+      - 'scripts/validate_parakeet_runtime_recovery.swift'
+      - 'docs/audio-processing-failure-contract.md'
+      - 'AGENTS.md'
+      - '.github/workflows/apple-audio-recovery.yml'
+      - '.github/workflows/release-macos.yml'
+      - '.github/workflows/ios-appstore-connect.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Whishpermate/**'
+      - 'scripts/validate_apple_http_audio_recovery.swift'
+      - 'scripts/validate_apple_audio_recovery.sh'
+      - 'scripts/validate_ios_audio_processing_recovery.swift'
+      - 'scripts/validate_keyboard_audio_recovery.swift'
+      - 'scripts/validate_macos_audio_processing_store.swift'
+      - 'scripts/validate_macos_recording_recovery.swift'
+      - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
+      - 'scripts/validate_macos_vad_recovery.swift'
+      - 'scripts/validate_parakeet_runtime_recovery.swift'
+      - 'docs/audio-processing-failure-contract.md'
+      - 'AGENTS.md'
+      - '.github/workflows/apple-audio-recovery.yml'
+      - '.github/workflows/release-macos.yml'
+      - '.github/workflows/ios-appstore-connect.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-audio-recovery-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Recovery contracts
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run deterministic recovery matrix
+        run: bash scripts/validate_apple_audio_recovery.sh
+
+  builds:
+    name: macOS and iOS builds
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build macOS universal app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Whishpermate/Whispermate.xcodeproj \
+            -scheme Whispermate \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-macOS" \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build iOS simulator app and keyboard extension
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Whishpermate/Whispermate.xcodeproj \
+            -scheme WhisperMateIOS \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build

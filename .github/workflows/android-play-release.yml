@@ -303,7 +303,6 @@ jobs:
           rm /tmp/secrets.plist
 
       - name: Validate release client configuration
-        if: env.PLAY_PUBLISH_MODE != 'promote'
         run: python3 scripts/validate_client_config.py
 
       - name: Write local.properties
@@ -350,11 +349,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Unit tests
-        if: env.PLAY_PUBLISH_MODE != 'promote'
         run: ./gradlew testDebugUnitTest --stacktrace
 
       - name: Validate release bundle
-        if: env.PLAY_PUBLISH_MODE != 'promote'
         run: |
           ./gradlew :app:bundleRelease -PPARAKEET_RUNTIME="${PARAKEET_RUNTIME}" --stacktrace
 

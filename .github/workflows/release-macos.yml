@@ -83,9 +83,18 @@ jobs:
       - name: Validate release transcription secret
         run: |
           python3 scripts/validate_transcription_prompt_routing.py
+          swiftc \
+            -module-cache-path /tmp/aidictation-swift-module-cache \
+            Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupPrompt.swift \
+            scripts/validate_transcription_cleanup_prompt.swift \
+            -o /tmp/validate_transcription_cleanup_prompt
+          /tmp/validate_transcription_cleanup_prompt
           python3 scripts/validate_release_transcription_config.py \
             --secrets Whishpermate/Whispermate/Secrets.plist \
             --config-only
+
+      - name: Validate audio recovery contracts
+        run: bash scripts/validate_apple_audio_recovery.sh
 
       - name: Resolve Swift package dependencies
         run: |

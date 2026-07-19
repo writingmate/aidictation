@@ -645,13 +645,16 @@
                                                           Command="{Binding PlacementTarget.Tag.CopyHistoryTextCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                           CommandParameter="{Binding}"/>
                                                 <MenuItem Header="Re-transcribe with Cloud"
+                                                          IsEnabled="{Binding CanRetry}"
                                                           Command="{Binding PlacementTarget.Tag.RetranscribeCloudCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                           CommandParameter="{Binding}"/>
                                                 <MenuItem Header="Re-transcribe On-device"
+                                                          IsEnabled="{Binding CanRetry}"
                                                           Command="{Binding PlacementTarget.Tag.RetranscribeLocalCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                           CommandParameter="{Binding}"/>
                                                 <Separator/>
                                                 <MenuItem Header="Delete"
+                                                          IsEnabled="{Binding CanDelete}"
                                                           Command="{Binding PlacementTarget.Tag.DeleteHistoryRowCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                           CommandParameter="{Binding}"/>
                                             </ContextMenu>

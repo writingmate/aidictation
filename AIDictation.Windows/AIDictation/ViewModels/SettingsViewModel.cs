@@ -147,6 +147,11 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private double _modelDownloadProgress;
 
+    // Device enumeration is asynchronous. Until it has reconciled the saved
+    // endpoint ID, selecting the temporary "Default" row is initialization,
+    // not a user request to erase the configured microphone.
+    private bool _audioDeviceSelectionReady;
+
     public string VersionText => $"v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.1"} · win-x64";
 
     // History
@@ -167,7 +172,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel()
     {
-        LoadAudioDevices();
+        _ = LoadAudioDevicesAsync();
         LoadLanguages();
         LoadModes();
         LoadOverlayOptions();
@@ -339,10 +344,12 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void DeleteHistoryRow(HistoryRowItem? row)
+    private async Task DeleteHistoryRowAsync(HistoryRowItem? row)
     {
         if (row == null) return;
-        HistoryService.Instance.Delete(row.Id);
+        var result = await AudioProcessingCoordinator.Instance.DeleteAsync(row.Id);
+        if (!result.Deleted && !string.IsNullOrWhiteSpace(result.ErrorMessage))
+            MessageBox.Show(result.ErrorMessage, "Recording not deleted", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     [RelayCommand]
@@ -354,14 +361,16 @@ public partial class SettingsViewModel : ObservableObject
         await RetranscribeAsync(row, AppSettings.LocalTranscriptionProvider);
 
     [RelayCommand]
-    private void ClearHistory()
+    private async Task ClearHistoryAsync()
     {
         var confirm = MessageBox.Show(
             "Delete all recordings and transcriptions?", "Clear History",
             MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (confirm == MessageBoxResult.Yes)
         {
-            HistoryService.Instance.Clear();
+            var result = await AudioProcessingCoordinator.Instance.ClearAsync();
+            if (!result.Cleared && !string.IsNullOrWhiteSpace(result.ErrorMessage))
+                MessageBox.Show(result.ErrorMessage, "History not cleared", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 
@@ -386,8 +395,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         if (row == null) return;
         var recording = HistoryService.Instance.Get(row.Id);
-        if (recording == null || string.IsNullOrEmpty(recording.AudioFilePath) ||
-            !System.IO.File.Exists(recording.AudioFilePath))
+        if (recording == null || !recording.CanRetry || row.IsBusy)
         {
             return;
         }
@@ -395,17 +403,15 @@ public partial class SettingsViewModel : ObservableObject
         row.IsBusy = true;
         try
         {
-            var result = await TranscriptionService.Instance.TranscribeAsync(
-                recording.AudioFilePath, default, provider);
+            var result = await AudioProcessingCoordinator.Instance.RetryAsync(recording.Id, provider);
 
             if (result.IsSuccess && !string.IsNullOrWhiteSpace(result.Text))
             {
-                recording.Transcription = result.Text;
-                recording.Status = TranscriptionStatus.Success;
-                recording.ErrorMessage = null;
-                recording.WordCount = result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
-                HistoryService.Instance.Update(recording);
                 TrySetClipboard(result.Text);
+            }
+            else if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            {
+                MessageBox.Show(result.ErrorMessage, "Retry finished", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
         finally
@@ -448,7 +454,7 @@ public partial class SettingsViewModel : ObservableObject
 
     partial void OnSelectedAudioDeviceChanged(AudioDeviceItem? value)
     {
-        if (value == null) return;
+        if (value == null || !_audioDeviceSelectionReady) return;
         var settings = SettingsService.Instance;
         settings.Settings.SelectedAudioDeviceId = value.DeviceId;
         settings.SaveSettings();
@@ -595,7 +601,7 @@ public partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(CanUpgrade));
     }
 
-    private void LoadAudioDevices()
+    private async Task LoadAudioDevicesAsync()
     {
         AudioDevices.Clear();
         AudioDevices.Add(new AudioDeviceItem { DeviceId = null, DisplayName = "Default Input Device" });
@@ -604,14 +610,23 @@ public partial class SettingsViewModel : ObservableObject
             // Use the same WASAPI enumeration the recorder uses so the stored
             // DeviceId is a real endpoint id (not a WaveIn index, which the
             // recorder cannot resolve) and names are full, not 31-char truncated.
-            foreach (var device in AudioRecorderService.Instance.GetInputDevices())
+            var devices = await AudioRecorderService.Instance.GetInputDevicesAsync();
+            foreach (var device in devices)
             {
                 AudioDevices.Add(new AudioDeviceItem { DeviceId = device.Id, DisplayName = device.Name });
             }
+            var selectedId = SettingsService.Instance.Settings.SelectedAudioDeviceId;
+            SelectedAudioDevice = selectedId == null
+                ? AudioDevices.FirstOrDefault()
+                : AudioDevices.FirstOrDefault(item => item.DeviceId == selectedId) ?? AudioDevices.FirstOrDefault();
         }
         catch
         {
             // Silently fail if audio devices can't be enumerated
+        }
+        finally
+        {
+            _audioDeviceSelectionReady = true;
         }
     }
 
@@ -904,6 +919,8 @@ public partial class HistoryRowItem : ObservableObject
     public string MetaText { get; }
     public string Text { get; }
     public bool IsFailed { get; }
+    public bool CanRetry { get; }
+    public bool CanDelete { get; }
     public string GroupLabel { get; set; } = string.Empty;
     public bool ShowGroup { get; set; }
 
@@ -915,11 +932,24 @@ public partial class HistoryRowItem : ObservableObject
         Id = recording.Id;
         TimeText = recording.Timestamp.ToString("h:mm tt");
         IsFailed = recording.IsFailed;
-        MetaText = IsFailed
-            ? "failed"
-            : $"{recording.FormattedDuration ?? "—"} · {recording.WordCount ?? 0} words";
-        Text = IsFailed
-            ? (recording.ErrorMessage ?? "Transcription failed — click to retry.")
-            : (recording.Transcription ?? string.Empty);
+        CanRetry = recording.CanRetry;
+        CanDelete = !recording.IsInProgress;
+        MetaText = recording.Status switch
+        {
+            TranscriptionStatus.Processing => "processing",
+            TranscriptionStatus.Retrying => "retrying",
+            TranscriptionStatus.Cancelled => "cancelled · audio kept",
+            TranscriptionStatus.Failed => recording.SourceIntegrity == RecordingSourceIntegrity.Complete
+                ? "failed · ready to retry"
+                : "failed · audio incomplete",
+            _ => $"{recording.FormattedDuration ?? "—"} · {recording.WordCount ?? 0} words"
+        };
+        // A failed retry must not hide (or make Copy replace) the last complete
+        // transcript. The status line carries the retry failure separately.
+        Text = !string.IsNullOrWhiteSpace(recording.Transcription)
+            ? recording.Transcription
+            : recording.Status is TranscriptionStatus.Failed or TranscriptionStatus.Cancelled
+                ? (recording.ErrorMessage ?? "Transcription stopped. The recording was kept.")
+                : string.Empty;
     }
 }

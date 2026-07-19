@@ -7,7 +7,7 @@ namespace AIDictation.Services;
 /// Central state machine for the application, managing recording states,
 /// transcription results, and audio visualization data.
 /// </summary>
-public partial class AppState : ObservableObject
+public partial class AppState : ObservableObject, IAudioAppState
 {
     // MARK: - Singleton
     
@@ -19,7 +19,9 @@ public partial class AppState : ObservableObject
     public enum State
     {
         Idle,
+        Starting,
         Recording,
+        Finalizing,
         Processing,
         Result,
         Error
@@ -88,6 +90,41 @@ public partial class AppState : ObservableObject
     // MARK: - Public API
     
     /// <summary>
+    /// Allocates the UI attempt while the journal and microphone are prepared.
+    /// The recording indicator is not shown until the first frame is durable.
+    /// </summary>
+    public bool StartPreparing(bool isCommandMode = false)
+    {
+        lock (_stateLock)
+        {
+            if (CurrentState != State.Idle && CurrentState != State.Result && CurrentState != State.Error)
+                return false;
+            var oldState = CurrentState;
+            IsCommandMode = isCommandMode;
+            TranscriptionText = string.Empty;
+            ErrorMessage = string.Empty;
+            RecordingDuration = TimeSpan.Zero;
+            CurrentAudioLevel = Constants.DefaultAudioLevel;
+            PeakAudioLevel = Constants.DefaultAudioLevel;
+            CurrentState = State.Starting;
+            OnStateChanged(oldState, CurrentState);
+            return true;
+        }
+    }
+
+    public bool RecordingBecameReady()
+    {
+        lock (_stateLock)
+        {
+            if (CurrentState != State.Starting) return false;
+            var oldState = CurrentState;
+            CurrentState = State.Recording;
+            OnStateChanged(oldState, CurrentState);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Transitions to the recording state
     /// </summary>
     public bool StartRecording(bool isCommandMode = false)
@@ -118,10 +155,37 @@ public partial class AppState : ObservableObject
     {
         lock (_stateLock)
         {
-            if (CurrentState != State.Recording)
+            if (CurrentState != State.Recording && CurrentState != State.Finalizing)
                 return false;
             
             var oldState = CurrentState;
+            CurrentState = State.Processing;
+            OnStateChanged(oldState, CurrentState);
+            return true;
+        }
+    }
+
+    public bool StartFinalizing()
+    {
+        lock (_stateLock)
+        {
+            if (CurrentState != State.Recording) return false;
+            var oldState = CurrentState;
+            CurrentState = State.Finalizing;
+            OnStateChanged(oldState, CurrentState);
+            return true;
+        }
+    }
+
+    public bool StartRetrying()
+    {
+        lock (_stateLock)
+        {
+            if (CurrentState is State.Starting or State.Recording or State.Finalizing or State.Processing)
+                return false;
+            var oldState = CurrentState;
+            TranscriptionText = string.Empty;
+            ErrorMessage = string.Empty;
             CurrentState = State.Processing;
             OnStateChanged(oldState, CurrentState);
             return true;
@@ -217,7 +281,7 @@ public partial class AppState : ObservableObject
     
     public bool IsRecording => CurrentState == State.Recording;
     public bool IsProcessing => CurrentState == State.Processing;
-    public bool IsBusy => CurrentState == State.Recording || CurrentState == State.Processing;
+    public bool IsBusy => CurrentState is State.Starting or State.Recording or State.Finalizing or State.Processing;
     public bool HasError => CurrentState == State.Error;
     public bool HasResult => CurrentState == State.Result && !string.IsNullOrEmpty(TranscriptionText);
     

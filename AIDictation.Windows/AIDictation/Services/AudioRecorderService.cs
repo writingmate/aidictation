@@ -1,331 +1,499 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace AIDictation.Services;
 
 /// <summary>
-/// Manages audio recording using WASAPI capture for voice dictation.
-/// Provides device enumeration, recording controls, and audio level monitoring.
+/// Owns exactly one WASAPI capture session. Every callback closes over its
+/// immutable session token, and only one stop callback/deadline may finalize it.
 /// </summary>
-public sealed class AudioRecorderService : IDisposable
+public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
 {
-    // MARK: - Singleton
-
-    private static readonly Lazy<AudioRecorderService> _instance = new(() => new AudioRecorderService());
-    public static AudioRecorderService Instance => _instance.Value;
-
-    // MARK: - Events
-
-    /// <summary>
-    /// Fired when audio level changes during recording. Value is 0.0 to 1.0.
-    /// </summary>
-    public event EventHandler<float>? AudioLevelChanged;
-
-    /// <summary>
-    /// Fired when recording state changes.
-    /// </summary>
-    public event EventHandler<bool>? RecordingStateChanged;
-
-    /// <summary>
-    /// Fired when recording completes with the file path.
-    /// </summary>
-    public event EventHandler<string>? RecordingCompleted;
-
-    /// <summary>
-    /// Fired when an error occurs during recording.
-    /// </summary>
-    public event EventHandler<string>? RecordingError;
-
-    // MARK: - Constants
-
-    private static class Constants
+    private sealed class CaptureSession
     {
-        public const int Channels = 1; // Mono
-        public const int BitsPerSample = 16;
-        public const string RecordingsFolderName = "Recordings";
-        public const string AppFolderName = "AIDictation";
+        public required AudioAttemptLease Lease { get; init; }
+        public required string PartialSourcePath { get; init; }
+        public readonly object WriterLock = new();
+        public readonly TaskCompletionSource<bool> FirstWrite =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<RecorderFinalizationResult> Finalized =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public WasapiCapture? Capture;
+        public WaveFileWriter? Writer;
+        public EventHandler<WaveInEventArgs>? DataHandler;
+        public EventHandler<StoppedEventArgs>? StoppedHandler;
+        public Exception? WriteFailure;
+        public AudioCaptureTerminalFence TerminalFence { get; } = new();
     }
 
-    // MARK: - Private Properties
-
-    private WasapiCapture? _capture;
-    private WaveFileWriter? _writer;
-    private string? _currentFilePath;
-    private bool _isRecording;
+    private static readonly TimeSpan FirstWriteDeadline = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultFinalizationDeadline = TimeSpan.FromSeconds(10);
+    private readonly object _sessionLock = new();
+    private CaptureSession? _session;
     private bool _disposed;
-    private string? _selectedDeviceId;
-    private readonly object _lock = new();
 
-    // MARK: - Public Properties
+    public static AudioRecorderService Instance { get; } = new();
 
-    public bool IsRecording
+    public event EventHandler<float>? AudioLevelChanged;
+    public event EventHandler<RecorderCaptureFailedEventArgs>? CaptureTerminatedUnexpectedly;
+
+    private AudioRecorderService() { }
+
+    public bool IsCapturing
     {
         get
         {
-            lock (_lock)
-            {
-                return _isRecording;
-            }
+            lock (_sessionLock) return _session != null;
         }
-        private set
+    }
+
+    public Task<List<AudioDevice>> GetInputDevicesAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(GetInputDevicesCore, cancellationToken);
+
+    // Kept for non-UI callers. UI code uses GetInputDevicesAsync.
+    public List<AudioDevice> GetInputDevices() => GetInputDevicesCore();
+
+    public Task<AudioDevice?> GetDefaultDeviceAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() =>
         {
-            lock (_lock)
+            try
             {
-                if (_isRecording != value)
-                {
-                    _isRecording = value;
-                    RecordingStateChanged?.Invoke(this, value);
-                }
+                using var enumerator = new MMDeviceEnumerator();
+                using var device = GetDefaultCaptureDevice(enumerator);
+                return device == null
+                    ? null
+                    : new AudioDevice { Id = device.ID, Name = device.FriendlyName, IsDefault = true };
             }
+            catch { return null; }
+        }, cancellationToken);
+
+    public async Task<RecorderStartResult> StartRecordingAsync(
+        AudioAttemptLease lease,
+        string partialSourcePath,
+        string? selectedDeviceId,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var session = new CaptureSession { Lease = lease, PartialSourcePath = partialSourcePath };
+        lock (_sessionLock)
+        {
+            if (_session != null)
+                return RecorderStartResult.Failure("Another recording is already active.");
+            _session = session;
         }
-    }
-
-    public string? SelectedDeviceId
-    {
-        get => _selectedDeviceId;
-        set => _selectedDeviceId = value;
-    }
-
-    public string RecordingsFolder { get; }
-
-    // MARK: - Initialization
-
-    private AudioRecorderService()
-    {
-        RecordingsFolder = GetRecordingsFolder();
-        EnsureRecordingsFolderExists();
-    }
-
-    // MARK: - Public API
-
-    /// <summary>
-    /// Gets available audio input devices.
-    /// </summary>
-    public List<AudioDevice> GetInputDevices()
-    {
-        var devices = new List<AudioDevice>();
 
         try
         {
-            using var enumerator = new MMDeviceEnumerator();
-            var collection = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
-
-            foreach (var device in collection)
+            var setupTask = Task.Run(() => StartWasapiSession(session, selectedDeviceId), cancellationToken);
+            try
             {
-                devices.Add(new AudioDevice
-                {
-                    Id = device.ID,
-                    Name = device.FriendlyName,
-                    IsDefault = IsDefaultDevice(device, enumerator)
-                });
+                await setupTask.WaitAsync(FirstWriteDeadline, cancellationToken).ConfigureAwait(false);
             }
+            catch (TimeoutException)
+            {
+                ObserveLateTask(setupTask);
+                await AbandonSessionAsync(
+                    session,
+                    "The microphone took too long to start.",
+                    timedOut: true).ConfigureAwait(false);
+                return RecorderStartResult.Failure("The microphone took too long to start. Check the selected input and try again.");
+            }
+
+            try
+            {
+                await session.FirstWrite.Task
+                    .WaitAsync(FirstWriteDeadline, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                await AbandonSessionAsync(
+                    session,
+                    "The microphone did not provide audio in time.",
+                    timedOut: true).ConfigureAwait(false);
+                return RecorderStartResult.Failure("The microphone did not provide audio. Check the selected input and try again.");
+            }
+
+            if (session.TerminalFence.IsTerminal || session.WriteFailure != null)
+            {
+                return RecorderStartResult.Failure(
+                    session.WriteFailure == null
+                        ? "Recording stopped before audio was ready."
+                        : "Audio could not be saved. Check available storage and try again.");
+            }
+
+            return RecorderStartResult.Ready();
+        }
+        catch (OperationCanceledException)
+        {
+            await AbandonSessionAsync(session, "Recording was cancelled.").ConfigureAwait(false);
+            throw;
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Error enumerating audio devices: {ex.Message}");
-        }
-
-        return devices;
-    }
-
-    /// <summary>
-    /// Gets the default input device.
-    /// </summary>
-    public AudioDevice? GetDefaultDevice()
-    {
-        try
-        {
-            using var enumerator = new MMDeviceEnumerator();
-            var device = GetDefaultCaptureDevice(enumerator);
-            return device == null
-                ? null
-                : new AudioDevice { Id = device.ID, Name = device.FriendlyName, IsDefault = true };
-        }
-        catch
-        {
-            return null;
+            await AbandonSessionAsync(session, ex.Message).ConfigureAwait(false);
+            return RecorderStartResult.Failure(
+                "Unable to start the microphone. Check Windows microphone access and the selected input.");
         }
     }
 
-    /// <summary>
-    /// Starts recording audio.
-    /// </summary>
-    /// <returns>True if recording started successfully.</returns>
-    public bool StartRecording()
+    public async Task<RecorderFinalizationResult> StopRecordingAsync(
+        AudioAttemptLease lease,
+        TimeSpan? deadline = null,
+        CancellationToken cancellationToken = default)
     {
-        if (IsRecording) return false;
+        var session = CurrentMatchingSession(lease);
+        if (session == null)
+            return new RecorderFinalizationResult(false, string.Empty, "This recording attempt is no longer active.");
 
+        var finalizationDeadline = deadline ?? DefaultFinalizationDeadline;
+        var stopwatch = Stopwatch.StartNew();
+        session.TerminalFence.MarkStopRequested();
         try
         {
-            var device = GetSelectedOrDefaultDevice();
-            if (device == null)
+            var stopTask = Task.Run(() => session.Capture?.StopRecording(), cancellationToken);
+            try
             {
-                RecordingError?.Invoke(this,
-                    "No microphone found or access is blocked. Check Windows microphone privacy settings.");
-                return false;
+                await stopTask.WaitAsync(finalizationDeadline, cancellationToken).ConfigureAwait(false);
             }
-
-            _currentFilePath = GenerateFilePath();
-            
-            // Create WASAPI capture
-            _capture = new WasapiCapture(device, true, 50); // 50ms buffer
-
-            // The conversion below changes bit depth and channel count but never
-            // resamples, so the WAV header must carry the device mix rate or the
-            // file plays (and transcribes) pitch-shifted.
-            var targetFormat = new WaveFormat(_capture.WaveFormat.SampleRate, Constants.BitsPerSample, Constants.Channels);
-
-            _writer = new WaveFileWriter(_currentFilePath, targetFormat);
-
-            _capture.DataAvailable += OnDataAvailable;
-            _capture.RecordingStopped += OnRecordingStopped;
-
-            _capture.StartRecording();
-            IsRecording = true;
-
-            return true;
+            catch (TimeoutException)
+            {
+                ObserveLateTask(stopTask);
+                await AbandonSessionAsync(
+                    session,
+                    "The microphone did not finish closing the recording.",
+                    timedOut: true).ConfigureAwait(false);
+                return await session.Finalized.Task.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await AbandonSessionAsync(session, "Recording finalization was cancelled.").ConfigureAwait(false);
+            throw;
         }
         catch (Exception ex)
         {
-            Cleanup();
-            RecordingError?.Invoke(this, $"Failed to start recording: {ex.Message}");
-            return false;
+            await AbandonSessionAsync(session, ex.Message).ConfigureAwait(false);
         }
-    }
-
-    /// <summary>
-    /// Stops the current recording.
-    /// </summary>
-    public void StopRecording()
-    {
-        if (!IsRecording) return;
 
         try
         {
-            _capture?.StopRecording();
+            var remaining = finalizationDeadline - stopwatch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                await AbandonSessionAsync(
+                    session,
+                    "The microphone did not finish closing the recording.",
+                    timedOut: true).ConfigureAwait(false);
+                return await session.Finalized.Task.ConfigureAwait(false);
+            }
+            return await session.Finalized.Task
+                .WaitAsync(remaining, cancellationToken)
+                .ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (TimeoutException)
         {
-            System.Diagnostics.Debug.WriteLine($"Error stopping recording: {ex.Message}");
-            Cleanup();
-            IsRecording = false;
+            await AbandonSessionAsync(
+                session,
+                "The microphone did not finish closing the recording.",
+                timedOut: true).ConfigureAwait(false);
+            return await session.Finalized.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await AbandonSessionAsync(session, "Recording finalization was cancelled.").ConfigureAwait(false);
+            throw;
         }
     }
 
-    /// <summary>
-    /// Forcibly tears down a capture session that failed to stop cleanly.
-    /// Fires no completion events.
-    /// </summary>
-    public void AbortRecording()
+    public async Task AbortRecordingAsync(
+        AudioAttemptLease lease,
+        string reason,
+        CancellationToken cancellationToken = default)
     {
-        Cleanup();
-        IsRecording = false;
+        var session = CurrentMatchingSession(lease);
+        if (session == null) return;
+        await AbandonSessionAsync(session, reason).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Calculates RMS level from audio samples.
-    /// </summary>
-    /// <param name="buffer">Audio buffer</param>
-    /// <param name="bytesRecorded">Number of bytes in buffer</param>
-    /// <param name="bitsPerSample">Bits per sample (typically 16 or 32)</param>
-    /// <returns>RMS level from 0.0 to 1.0</returns>
     public static float CalculateRmsLevel(byte[] buffer, int bytesRecorded, int bitsPerSample)
     {
         if (bytesRecorded == 0) return 0;
-
         double sumSquares = 0;
-        int sampleCount = 0;
-
+        var sampleCount = 0;
         if (bitsPerSample == 16)
         {
-            for (int i = 0; i < bytesRecorded - 1; i += 2)
+            for (var index = 0; index < bytesRecorded - 1; index += 2)
             {
-                short sample = BitConverter.ToInt16(buffer, i);
-                double normalized = sample / 32768.0;
-                sumSquares += normalized * normalized;
+                var sample = BitConverter.ToInt16(buffer, index) / 32768.0;
+                sumSquares += sample * sample;
                 sampleCount++;
             }
         }
         else if (bitsPerSample == 32)
         {
-            for (int i = 0; i < bytesRecorded - 3; i += 4)
+            for (var index = 0; index < bytesRecorded - 3; index += 4)
             {
-                float sample = BitConverter.ToSingle(buffer, i);
+                var sample = BitConverter.ToSingle(buffer, index);
                 sumSquares += sample * sample;
                 sampleCount++;
             }
         }
-
-        if (sampleCount == 0) return 0;
-
-        double rms = Math.Sqrt(sumSquares / sampleCount);
-        return (float)Math.Min(1.0, rms);
+        return sampleCount == 0 ? 0 : (float)Math.Min(1, Math.Sqrt(sumSquares / sampleCount));
     }
 
-    // MARK: - Private Methods
-
-    private static string GetRecordingsFolder()
+    private void StartWasapiSession(CaptureSession session, string? selectedDeviceId)
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        return Path.Combine(appData, Constants.AppFolderName, Constants.RecordingsFolderName);
-    }
+        using var device = GetSelectedOrDefaultDevice(selectedDeviceId);
+        if (device == null)
+            throw new InvalidOperationException("No microphone is available.");
 
-    private void EnsureRecordingsFolderExists()
-    {
-        if (!Directory.Exists(RecordingsFolder))
+        WasapiCapture? capture = null;
+        WaveFileWriter? writer = null;
+        FileStream? outputStream = null;
+        try
         {
-            Directory.CreateDirectory(RecordingsFolder);
+            capture = new WasapiCapture(device, true, 50);
+            var targetFormat = new WaveFormat(capture.WaveFormat.SampleRate, 16, 1);
+            outputStream = new FileStream(
+                session.PartialSourcePath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read,
+                64 * 1024,
+                FileOptions.WriteThrough);
+            writer = new WaveFileWriter(outputStream, targetFormat);
+            outputStream = null; // WaveFileWriter owns the stream after construction.
+            if (session.TerminalFence.IsTerminal || !IsCurrent(session))
+            {
+                writer.Dispose();
+                capture.Dispose();
+                return;
+            }
+            session.Capture = capture;
+            session.Writer = writer;
+            session.DataHandler = (_, args) => OnDataAvailable(session, args);
+            session.StoppedHandler = (_, args) => OnRecordingStopped(session, args);
+            capture.DataAvailable += session.DataHandler;
+            capture.RecordingStopped += session.StoppedHandler;
+            capture.StartRecording();
+            if (session.TerminalFence.IsTerminal || !IsCurrent(session))
+            {
+                capture.DataAvailable -= session.DataHandler;
+                capture.RecordingStopped -= session.StoppedHandler;
+                try { capture.StopRecording(); } catch { }
+                lock (session.WriterLock)
+                {
+                    try { writer.Dispose(); } catch { }
+                    session.Writer = null;
+                }
+                try { capture.Dispose(); } catch { }
+                session.Capture = null;
+            }
+        }
+        catch
+        {
+            _ = session.TerminalFence.TryClaimTerminal();
+            if (capture != null)
+            {
+                if (session.DataHandler != null) capture.DataAvailable -= session.DataHandler;
+                if (session.StoppedHandler != null) capture.RecordingStopped -= session.StoppedHandler;
+            }
+            lock (session.WriterLock)
+            {
+                try { writer?.Dispose(); } catch { }
+                try { outputStream?.Dispose(); } catch { }
+                session.Writer = null;
+            }
+            try { capture?.Dispose(); } catch { }
+            session.Capture = null;
+            throw;
         }
     }
 
-    private string GenerateFilePath()
+    private void OnDataAvailable(CaptureSession session, WaveInEventArgs args)
     {
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var fileName = $"recording_{timestamp}.wav";
-        return Path.Combine(RecordingsFolder, fileName);
+        if (args.BytesRecorded <= 0 || !session.TerminalFence.IsAcceptingFrames ||
+            session.TerminalFence.IsTerminal || !IsCurrent(session))
+            return;
+
+        try
+        {
+            var format = session.Capture?.WaveFormat;
+            if (format == null) throw new InvalidOperationException("The microphone format became unavailable.");
+            var (buffer, count, level) = ConvertCaptureBuffer(args.Buffer, args.BytesRecorded, format);
+            lock (session.WriterLock)
+            {
+                if (!session.TerminalFence.IsAcceptingFrames ||
+                    session.TerminalFence.IsTerminal || !IsCurrent(session))
+                    return;
+                session.Writer?.Write(buffer, 0, count);
+                if (!session.FirstWrite.Task.IsCompleted)
+                    session.Writer?.Flush();
+            }
+            session.FirstWrite.TrySetResult(true);
+            if (IsCurrent(session)) AudioLevelChanged?.Invoke(this, level);
+        }
+        catch (Exception ex)
+        {
+            session.WriteFailure ??= ex;
+            session.FirstWrite.TrySetException(ex);
+            _ = HandleCaptureWriteFailureAsync(session, ex);
+        }
     }
 
-    private MMDevice? GetSelectedOrDefaultDevice()
+    private async Task HandleCaptureWriteFailureAsync(CaptureSession session, Exception error)
+    {
+        var wonTerminal = await AbandonSessionAsync(
+            session,
+            "Audio could not be saved. The recoverable source was kept.").ConfigureAwait(false);
+        if (wonTerminal && !session.TerminalFence.StopWasRequested)
+        {
+            CaptureTerminatedUnexpectedly?.Invoke(this, new RecorderCaptureFailedEventArgs(
+                session.Lease,
+                "The microphone or storage stopped during recording. The recoverable source was kept."));
+        }
+        _ = error; // retained on the session for finalization diagnostics.
+    }
+
+    private void OnRecordingStopped(CaptureSession session, StoppedEventArgs args)
+    {
+        _ = Task.Run(async () =>
+        {
+            if (!session.TerminalFence.TryClaimTerminal()) return;
+            await DisposeSessionResourcesAsync(session).ConfigureAwait(false);
+            ClearCurrent(session);
+            var failure = session.WriteFailure ?? args.Exception;
+            session.Finalized.TrySetResult(new RecorderFinalizationResult(
+                failure == null,
+                session.PartialSourcePath,
+                failure == null
+                    ? null
+                    : "The recording could not be finalized. The recoverable source was kept."));
+            if (failure != null) session.FirstWrite.TrySetException(failure);
+            if (!session.TerminalFence.StopWasRequested)
+            {
+                CaptureTerminatedUnexpectedly?.Invoke(this, new RecorderCaptureFailedEventArgs(
+                    session.Lease,
+                    failure == null
+                        ? "The microphone stopped unexpectedly. The recoverable source was kept."
+                        : "The microphone or storage stopped during recording. The recoverable source was kept."));
+            }
+        });
+    }
+
+    private async Task<bool> AbandonSessionAsync(CaptureSession session, string message, bool timedOut = false)
+    {
+        var wonTerminal = session.TerminalFence.TryClaimTerminal();
+        ClearCurrent(session);
+        session.FirstWrite.TrySetCanceled();
+        // Complete the UI-facing deadline immediately even when native WASAPI
+        // teardown ignores cancellation or stalls. Resource cleanup is fenced
+        // and detached; it cannot win a later attempt.
+        session.Finalized.TrySetResult(new RecorderFinalizationResult(
+            false,
+            session.PartialSourcePath,
+            message,
+            timedOut));
+        if (wonTerminal) _ = DisposeSessionResourcesAsync(session);
+        await Task.CompletedTask;
+        return wonTerminal;
+    }
+
+    private static Task DisposeSessionResourcesAsync(CaptureSession session) => Task.Run(() =>
+    {
+        lock (session.WriterLock)
+        {
+            try { session.Writer?.Dispose(); } catch (Exception ex) { session.WriteFailure ??= ex; }
+            session.Writer = null;
+        }
+        var capture = session.Capture;
+        if (capture != null)
+        {
+            if (session.DataHandler != null) capture.DataAvailable -= session.DataHandler;
+            if (session.StoppedHandler != null) capture.RecordingStopped -= session.StoppedHandler;
+            try { capture.Dispose(); } catch { }
+            session.Capture = null;
+        }
+    });
+
+    private CaptureSession? CurrentMatchingSession(AudioAttemptLease lease)
+    {
+        lock (_sessionLock)
+        {
+            return _session != null && _session.Lease.RecordingId == lease.RecordingId &&
+                   _session.Lease.AttemptId == lease.AttemptId &&
+                   _session.Lease.DeletionGeneration == lease.DeletionGeneration &&
+                   _session.Lease.ClearGeneration == lease.ClearGeneration
+                ? _session
+                : null;
+        }
+    }
+
+    private bool IsCurrent(CaptureSession session)
+    {
+        lock (_sessionLock) return ReferenceEquals(_session, session);
+    }
+
+    private void ClearCurrent(CaptureSession session)
+    {
+        lock (_sessionLock)
+        {
+            if (ReferenceEquals(_session, session)) _session = null;
+        }
+    }
+
+    private static List<AudioDevice> GetInputDevicesCore()
+    {
+        var devices = new List<AudioDevice>();
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            var collection = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+            foreach (var device in collection)
+            {
+                using (device)
+                {
+                    devices.Add(new AudioDevice
+                    {
+                        Id = device.ID,
+                        Name = device.FriendlyName,
+                        IsDefault = IsDefaultDevice(device, enumerator)
+                    });
+                }
+            }
+        }
+        catch { }
+        return devices;
+    }
+
+    private static MMDevice? GetSelectedOrDefaultDevice(string? selectedDeviceId)
     {
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-
-            // An explicitly chosen device is a WASAPI endpoint id (same scheme
-            // GetInputDevices reports); honor it when it is still active.
-            if (!string.IsNullOrEmpty(_selectedDeviceId))
+            if (!string.IsNullOrWhiteSpace(selectedDeviceId))
             {
                 try
                 {
-                    var selected = enumerator.GetDevice(_selectedDeviceId);
-                    if (selected is { State: DeviceState.Active })
-                    {
-                        return selected;
-                    }
+                    var selected = enumerator.GetDevice(selectedDeviceId);
+                    if (selected.State == DeviceState.Active) return selected;
+                    selected.Dispose();
                 }
-                catch
-                {
-                    // Device unplugged or id stale; fall back to the default.
-                }
+                catch { }
             }
-
             return GetDefaultCaptureDevice(enumerator);
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
     }
 
-    /// <summary>
-    /// Resolves a usable capture device, preferring the one the user sees as
-    /// "Default" in Windows sound settings (Multimedia/Console) over the
-    /// communications default, then any active microphone.
-    /// </summary>
     private static MMDevice? GetDefaultCaptureDevice(MMDeviceEnumerator enumerator)
     {
         foreach (var role in new[] { Role.Multimedia, Role.Console, Role.Communications })
@@ -333,221 +501,115 @@ public sealed class AudioRecorderService : IDisposable
             try
             {
                 var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, role);
-                if (device is { State: DeviceState.Active })
-                {
-                    return device;
-                }
+                if (device.State == DeviceState.Active) return device;
+                device.Dispose();
             }
-            catch
-            {
-                // No default for this role; try the next.
-            }
+            catch { }
         }
-
-        try
-        {
-            return enumerator
-                .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
-                .FirstOrDefault();
-        }
-        catch
-        {
-            return null;
-        }
+        try { return enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).FirstOrDefault(); }
+        catch { return null; }
     }
 
     private static bool IsDefaultDevice(MMDevice device, MMDeviceEnumerator enumerator)
     {
         try
         {
-            var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
+            using var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
             return device.ID == defaultDevice.ID;
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }
 
-    private void OnDataAvailable(object? sender, WaveInEventArgs e)
+    private static (byte[] Buffer, int Count, float Level) ConvertCaptureBuffer(
+        byte[] source,
+        int count,
+        WaveFormat format)
     {
-        if (_writer == null || e.BytesRecorded == 0) return;
-
-        try
+        // WASAPI commonly exposes ordinary PCM/IEEE-float mix formats through
+        // WAVE_FORMAT_EXTENSIBLE. Normalize its SubFormat before dispatch so a
+        // valid first buffer is not rejected solely because of the wrapper.
+        var normalizedFormat = format is WaveFormatExtensible extensible
+            ? extensible.ToStandardWaveFormat()
+            : format;
+        if (normalizedFormat.Encoding == WaveFormatEncoding.IeeeFloat &&
+            normalizedFormat.BitsPerSample == 32)
+            return (ConvertFloat32ToInt16Mono(source, count, normalizedFormat.Channels),
+                (count / 4 / normalizedFormat.Channels) * 2,
+                CalculateRmsLevel(source, count, 32));
+        if (normalizedFormat.Encoding == WaveFormatEncoding.Pcm &&
+            normalizedFormat.BitsPerSample == 16)
         {
-            // Get the capture format
-            var captureFormat = _capture?.WaveFormat;
-            if (captureFormat == null) return;
-
-            // Convert to target format if needed
-            byte[] convertedBuffer;
-            int convertedBytes;
-
-            if (captureFormat.Encoding == WaveFormatEncoding.IeeeFloat && captureFormat.BitsPerSample == 32)
-            {
-                // Convert 32-bit float to 16-bit PCM mono
-                convertedBuffer = ConvertFloat32ToInt16Mono(e.Buffer, e.BytesRecorded, captureFormat.Channels);
-                convertedBytes = convertedBuffer.Length;
-
-                // Calculate level from original float data
-                var level = CalculateRmsLevel(e.Buffer, e.BytesRecorded, 32);
-                AudioLevelChanged?.Invoke(this, level);
-            }
-            else if (captureFormat.BitsPerSample == 16)
-            {
-                // Already 16-bit, just convert to mono if needed
-                if (captureFormat.Channels > 1)
-                {
-                    convertedBuffer = ConvertToMono(e.Buffer, e.BytesRecorded, captureFormat.Channels);
-                    convertedBytes = convertedBuffer.Length;
-                }
-                else
-                {
-                    convertedBuffer = e.Buffer;
-                    convertedBytes = e.BytesRecorded;
-                }
-
-                var level = CalculateRmsLevel(e.Buffer, e.BytesRecorded, 16);
-                AudioLevelChanged?.Invoke(this, level);
-            }
-            else
-            {
-                // Unsupported format, write raw
-                convertedBuffer = e.Buffer;
-                convertedBytes = e.BytesRecorded;
-
-                var level = CalculateRmsLevel(e.Buffer, e.BytesRecorded, captureFormat.BitsPerSample);
-                AudioLevelChanged?.Invoke(this, level);
-            }
-
-            _writer.Write(convertedBuffer, 0, convertedBytes);
+            var buffer = normalizedFormat.Channels > 1
+                ? ConvertToMono(source, count, normalizedFormat.Channels)
+                : source;
+            return (buffer,
+                normalizedFormat.Channels > 1 ? buffer.Length : count,
+                CalculateRmsLevel(source, count, 16));
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Error writing audio data: {ex.Message}");
-        }
+        throw new InvalidOperationException("The selected microphone uses an unsupported audio format.");
     }
 
     private static byte[] ConvertFloat32ToInt16Mono(byte[] buffer, int bytesRecorded, int channels)
     {
-        int floatSamples = bytesRecorded / 4;
-        int monoSamples = floatSamples / channels;
+        var monoSamples = bytesRecorded / 4 / channels;
         var output = new byte[monoSamples * 2];
-
-        for (int i = 0; i < monoSamples; i++)
+        for (var sampleIndex = 0; sampleIndex < monoSamples; sampleIndex++)
         {
-            // Average channels for mono
             float sum = 0;
-            for (int ch = 0; ch < channels; ch++)
-            {
-                int floatIndex = (i * channels + ch) * 4;
-                sum += BitConverter.ToSingle(buffer, floatIndex);
-            }
-            float monoSample = sum / channels;
-
-            // Clamp and convert to 16-bit
-            monoSample = Math.Clamp(monoSample, -1.0f, 1.0f);
-            short int16Sample = (short)(monoSample * 32767);
-
-            byte[] int16Bytes = BitConverter.GetBytes(int16Sample);
-            output[i * 2] = int16Bytes[0];
-            output[i * 2 + 1] = int16Bytes[1];
+            for (var channel = 0; channel < channels; channel++)
+                sum += BitConverter.ToSingle(buffer, (sampleIndex * channels + channel) * 4);
+            var value = (short)(Math.Clamp(sum / channels, -1f, 1f) * 32767);
+            output[sampleIndex * 2] = (byte)(value & 0xff);
+            output[sampleIndex * 2 + 1] = (byte)((value >> 8) & 0xff);
         }
-
         return output;
     }
 
     private static byte[] ConvertToMono(byte[] buffer, int bytesRecorded, int channels)
     {
-        int bytesPerSample = 2; // 16-bit
-        int samplesPerChannel = bytesRecorded / (bytesPerSample * channels);
-        var output = new byte[samplesPerChannel * bytesPerSample];
-
-        for (int i = 0; i < samplesPerChannel; i++)
+        var sampleCount = bytesRecorded / 2 / channels;
+        var output = new byte[sampleCount * 2];
+        for (var sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
         {
-            int sum = 0;
-            for (int ch = 0; ch < channels; ch++)
-            {
-                int index = (i * channels + ch) * bytesPerSample;
-                short sample = BitConverter.ToInt16(buffer, index);
-                sum += sample;
-            }
-            short monoSample = (short)(sum / channels);
-
-            byte[] monoBytes = BitConverter.GetBytes(monoSample);
-            output[i * bytesPerSample] = monoBytes[0];
-            output[i * bytesPerSample + 1] = monoBytes[1];
+            var sum = 0;
+            for (var channel = 0; channel < channels; channel++)
+                sum += BitConverter.ToInt16(buffer, (sampleIndex * channels + channel) * 2);
+            var value = (short)(sum / channels);
+            output[sampleIndex * 2] = (byte)(value & 0xff);
+            output[sampleIndex * 2 + 1] = (byte)((value >> 8) & 0xff);
         }
-
         return output;
     }
 
-    private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+    private void ThrowIfDisposed()
     {
-        // A stop event from a previous capture session (still tearing down
-        // asynchronously) must not clean up the current one.
-        if (sender is WasapiCapture stopped && !ReferenceEquals(stopped, _capture))
-        {
-            stopped.Dispose();
-            return;
-        }
-
-        var filePath = _currentFilePath;
-        
-        Cleanup();
-        IsRecording = false;
-
-        if (e.Exception != null)
-        {
-            RecordingError?.Invoke(this, $"Recording stopped with error: {e.Exception.Message}");
-            
-            // Delete partial file
-            if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
-            {
-                try { File.Delete(filePath); } catch { }
-            }
-        }
-        else if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
-        {
-            RecordingCompleted?.Invoke(this, filePath);
-        }
+        if (_disposed) throw new ObjectDisposedException(nameof(AudioRecorderService));
     }
 
-    private void Cleanup()
+    private static void ObserveLateTask(Task task)
     {
-        if (_capture != null)
-        {
-            _capture.DataAvailable -= OnDataAvailable;
-            _capture.RecordingStopped -= OnRecordingStopped;
-            _capture.Dispose();
-            _capture = null;
-        }
-
-        _writer?.Dispose();
-        _writer = null;
-        _currentFilePath = null;
+        _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
-
-    // MARK: - IDisposable
 
     public void Dispose()
     {
         if (_disposed) return;
-        
-        StopRecording();
-        Cleanup();
         _disposed = true;
+        CaptureSession? session;
+        lock (_sessionLock) session = _session;
+        if (session != null)
+            AbandonSessionAsync(session, "The app closed during recording.").GetAwaiter().GetResult();
     }
 }
 
-/// <summary>
-/// Represents an audio input device.
-/// </summary>
-public class AudioDevice
+public sealed class AudioDevice
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
-
     public override string ToString() => Name;
 }

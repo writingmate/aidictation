@@ -47,6 +47,7 @@ public partial class OverlayWindow : Window
         IdleExpanded,
         Recording,
         RecordingControls,
+        ActiveControls,
         Processing
     }
 
@@ -69,6 +70,8 @@ public partial class OverlayWindow : Window
     private bool _isHovering;
     private DateTime _sweepStart = DateTime.Now;
     private DispatcherOperation? _pendingReveal;
+    private readonly TerminalStateResetFence<AppState.State> _resetFence = new();
+    private TerminalStateResetFence<AppState.State>.Token? _resetToken;
 
     private static readonly KeySpline MorphSpline = new(0.2, 0.8, 0.2, 1);
 
@@ -92,7 +95,7 @@ public partial class OverlayWindow : Window
         _sweepTimer.Tick += (_, _) => UpdateSweep();
 
         _resetTimer = new DispatcherTimer();
-        _resetTimer.Tick += (_, _) => { _resetTimer.Stop(); _appState.Reset(); };
+        _resetTimer.Tick += OnResetTimerTick;
 
         _appState.StateChanged += OnAppStateChanged;
         _appState.AudioLevelUpdated += OnAudioLevel;
@@ -189,8 +192,18 @@ public partial class OverlayWindow : Window
 
     private void SyncToAppState()
     {
+        // Any nonterminal transition immediately disarms an older Result/Error
+        // collapse. Tick also verifies the exact terminal generation so a late
+        // timer cannot reset a newer recording.
+        _resetTimer.Stop();
+        _resetFence.Disarm();
+        _resetToken = null;
         switch (_appState.CurrentState)
         {
+            case AppState.State.Starting:
+            case AppState.State.Finalizing:
+                ApplyState(PillState.ActiveControls);
+                break;
             case AppState.State.Recording:
                 ApplyState(_isHovering ? PillState.RecordingControls : PillState.Recording);
                 break;
@@ -200,6 +213,7 @@ public partial class OverlayWindow : Window
             case AppState.State.Result:
             case AppState.State.Error:
                 ApplyState(PillState.Collapsed);
+                _resetToken = _resetFence.Arm(_appState.CurrentState);
                 _resetTimer.Interval = TimeSpan.FromSeconds(1.5);
                 _resetTimer.Start();
                 break;
@@ -234,7 +248,7 @@ public partial class OverlayWindow : Window
         double width = target switch
         {
             PillState.Collapsed => Metrics.CollapsedWidth,
-            PillState.RecordingControls => Metrics.ControlsWidth,
+            PillState.RecordingControls or PillState.ActiveControls => Metrics.ControlsWidth,
             _ => Metrics.ActiveWidth
         };
         double height = collapsing ? Metrics.CollapsedHeight : Metrics.ActiveHeight;
@@ -263,22 +277,29 @@ public partial class OverlayWindow : Window
             IdleDots.Visibility = target == PillState.IdleExpanded ? Visibility.Visible : Visibility.Collapsed;
             WaveBars.Visibility = target is PillState.Recording or PillState.RecordingControls
                 ? Visibility.Visible : Visibility.Collapsed;
-            SweepDots.Visibility = target == PillState.Processing ? Visibility.Visible : Visibility.Collapsed;
-            ControlsRow.Visibility = target == PillState.RecordingControls ? Visibility.Visible : Visibility.Collapsed;
+            SweepDots.Visibility = target is PillState.Processing or PillState.ActiveControls
+                ? Visibility.Visible : Visibility.Collapsed;
+            ControlsRow.Visibility = target is PillState.RecordingControls or PillState.ActiveControls
+                ? Visibility.Visible : Visibility.Collapsed;
+            CancelButton.Visibility = target is PillState.RecordingControls or PillState.ActiveControls
+                ? Visibility.Visible : Visibility.Collapsed;
+            StopButton.Visibility = target == PillState.RecordingControls
+                ? Visibility.Visible : Visibility.Collapsed;
 
             if (target is PillState.Recording or PillState.RecordingControls)
             {
                 _waveTimer.Start();
             }
-            if (target == PillState.Processing)
+            if (target is PillState.Processing or PillState.ActiveControls)
             {
                 _sweepStart = DateTime.Now;
                 _sweepTimer.Start();
             }
-            if (target == PillState.RecordingControls)
+            if (target is PillState.RecordingControls or PillState.ActiveControls)
             {
                 RevealButton(CancelScale, CancelButton);
-                RevealButton(StopScale, StopButton);
+                if (target == PillState.RecordingControls)
+                    RevealButton(StopScale, StopButton);
             }
 
             var fade = new DoubleAnimation(1, TimeSpan.FromMilliseconds(Metrics.ContentFadeMs))
@@ -507,7 +528,17 @@ public partial class OverlayWindow : Window
 
     private void OnAppStateChanged(object? sender, AppState.StateChangedEventArgs e)
     {
-        Dispatcher.Invoke(SyncToAppState);
+        _ = Dispatcher.BeginInvoke(new Action(SyncToAppState));
+    }
+
+    private void OnResetTimerTick(object? sender, EventArgs e)
+    {
+        _resetTimer.Stop();
+        var token = _resetToken;
+        _resetToken = null;
+        if (token == null || !_resetFence.TryConsume(token.Value, _appState.CurrentState))
+            return;
+        _appState.Reset();
     }
 
     private void OnAudioLevel(object? sender, float level)

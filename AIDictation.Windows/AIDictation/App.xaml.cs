@@ -32,7 +32,6 @@ public partial class App : Application
 
         // Caps the upload below the transcription API's file-size limit.
         public static readonly TimeSpan MaxRecordingDuration = TimeSpan.FromMinutes(4);
-        public static readonly TimeSpan StopWatchdogTimeout = TimeSpan.FromSeconds(10);
     }
 
     // MARK: - Private Properties
@@ -40,13 +39,10 @@ public partial class App : Application
     private static Mutex? _singleInstanceMutex;
     private TaskbarIcon? _trayIcon;
     private readonly DispatcherTimer _recordingTimer = new();
-    private readonly DispatcherTimer _stopWatchdog = new();
     private DateTime _recordingStartedAt;
-    private bool _isStoppingRecording;
-    private bool _discardNextRecording;
-    private bool _awaitingStopCallback;
     private bool _mutedSystemAudioForRecording;
     private IntPtr _dictationTargetWindow;
+    private Task<CaptureStartOutcome>? _captureStartTask;
     private bool _isValidationOnly;
     private bool _servicesReady;
     private bool _ownsMutex;
@@ -480,7 +476,8 @@ public partial class App : Application
     {
         // Load settings first
         SettingsService.Instance.Load();
-        HistoryService.Instance.Load();
+        await HistoryService.Instance.LoadAsync();
+        await AudioProcessingCoordinator.Instance.RecoverOnLaunchAsync();
 
         // Initialize authentication
         await AuthService.Instance.InitializeAsync();
@@ -499,8 +496,7 @@ public partial class App : Application
         HotkeyService.Instance.CommandHotkeyPressed += OnCommandHotkeyPressed;
         HotkeyService.Instance.CommandHotkeyReleased += OnCommandHotkeyReleased;
         AudioRecorderService.Instance.AudioLevelChanged += OnAudioLevelChanged;
-        AudioRecorderService.Instance.RecordingCompleted += OnRecordingCompleted;
-        AudioRecorderService.Instance.RecordingError += OnRecordingError;
+        AppState.Shared.StateChanged += OnRuntimeStateChanged;
         OverlayService.Shared.RecordingStartRequested += OnOverlayRecordingStartRequested;
         OverlayService.Shared.RecordingStopRequested += OnOverlayRecordingStopRequested;
         OverlayService.Shared.RecordingCancelRequested += OnOverlayRecordingCancelRequested;
@@ -508,8 +504,6 @@ public partial class App : Application
         _recordingTimer.Interval = TimeSpan.FromMilliseconds(100);
         _recordingTimer.Tick += OnRecordingTimerTick;
 
-        _stopWatchdog.Interval = Constants.StopWatchdogTimeout;
-        _stopWatchdog.Tick += OnStopWatchdogTick;
     }
 
     private void UnsubscribeRuntimeEvents()
@@ -519,23 +513,23 @@ public partial class App : Application
         HotkeyService.Instance.CommandHotkeyPressed -= OnCommandHotkeyPressed;
         HotkeyService.Instance.CommandHotkeyReleased -= OnCommandHotkeyReleased;
         AudioRecorderService.Instance.AudioLevelChanged -= OnAudioLevelChanged;
-        AudioRecorderService.Instance.RecordingCompleted -= OnRecordingCompleted;
-        AudioRecorderService.Instance.RecordingError -= OnRecordingError;
+        AppState.Shared.StateChanged -= OnRuntimeStateChanged;
         OverlayService.Shared.RecordingStartRequested -= OnOverlayRecordingStartRequested;
         OverlayService.Shared.RecordingStopRequested -= OnOverlayRecordingStopRequested;
         OverlayService.Shared.RecordingCancelRequested -= OnOverlayRecordingCancelRequested;
         _recordingTimer.Tick -= OnRecordingTimerTick;
         _recordingTimer.Stop();
-        _stopWatchdog.Tick -= OnStopWatchdogTick;
-        _stopWatchdog.Stop();
     }
 
     private void CleanupServices()
     {
         // Stop any active recording
-        if (AppState.Shared.IsRecording)
+        if (AudioProcessingCoordinator.Instance.HasActiveAttempt)
         {
-            AudioRecorderService.Instance.StopRecording();
+            // Do not block the WPF dispatcher waiting for callbacks that may
+            // themselves dispatch UI work. The durable active journal is
+            // normalized to a recoverable failure on the next launch.
+            try { AudioRecorderService.Instance.Dispose(); } catch { }
         }
         RestoreSystemAudioAfterRecording();
 
@@ -605,7 +599,8 @@ public partial class App : Application
     private void HandleHotkeyPressed(bool isCommandMode)
     {
         // Toggle mode: the same press starts and stops; releases are ignored.
-        if (!SettingsService.Instance.Settings.PushToTalk && AppState.Shared.IsRecording)
+        if (!SettingsService.Instance.Settings.PushToTalk &&
+            AppState.Shared.CurrentState is AppState.State.Starting or AppState.State.Recording)
         {
             StopRecording();
             return;
@@ -632,19 +627,16 @@ public partial class App : Application
 
     private void OnOverlayRecordingCancelRequested(object? sender, EventArgs e)
     {
-        if (!AppState.Shared.IsRecording || _isStoppingRecording) return;
-
-        // Discard the recording: stop capture but skip transcription entirely.
-        _discardNextRecording = true;
-        _isStoppingRecording = true;
-        _recordingTimer.Stop();
-        ArmStopWatchdog();
-        AudioRecorderService.Instance.StopRecording();
-        AppState.Shared.Reset();
+        _ = CancelRecordingAsync();
     }
 
     private void StartRecording(bool isCommandMode)
     {
+        // A rejected start must not overwrite the foreground window captured
+        // by the attempt that is currently being finalized or transcribed.
+        if (AppState.Shared.IsBusy || AudioProcessingCoordinator.Instance.HasActiveAttempt)
+            return;
+
         if (!TranscriptionService.Instance.IsConfigured)
         {
             AppState.Shared.SetError("Transcription is not configured in this build");
@@ -657,25 +649,35 @@ public partial class App : Application
             return;
         }
 
-        if (!AppState.Shared.StartRecording(isCommandMode)) return;
-
         // Remember where the user is dictating so the paste cannot land in a
         // window focused later (e.g. after Alt-Tab during transcription).
         _dictationTargetWindow = Helpers.ForegroundWindowHelper.GetForegroundWindowHandle();
-
-        AudioRecorderService.Instance.SelectedDeviceId = SettingsService.Instance.Settings.SelectedAudioDeviceId;
         _recordingStartedAt = DateTime.Now;
-        _isStoppingRecording = false;
-        _recordingTimer.Start();
+        _captureStartTask = StartRecordingCoreAsync(isCommandMode);
+    }
 
-        if (!AudioRecorderService.Instance.StartRecording())
+    private async Task<CaptureStartOutcome> StartRecordingCoreAsync(bool isCommandMode)
+    {
+        try
         {
-            _recordingTimer.Stop();
-            AppState.Shared.SetError("Unable to start recording");
-            return;
+            var outcome = await AudioProcessingCoordinator.Instance.StartCaptureAsync(
+                isCommandMode,
+                SettingsService.Instance.Settings.SelectedAudioDeviceId);
+            if (outcome.Started && AudioProcessingCoordinator.Instance.IsCapturing)
+            {
+                _recordingTimer.Start();
+                MuteSystemAudioForRecording();
+            }
+            return outcome;
         }
-
-        MuteSystemAudioForRecording();
+        catch (Exception ex)
+        {
+            LogException("StartRecordingCoreAsync", ex);
+            try { await AudioProcessingCoordinator.Instance.CancelAsync("Recording was interrupted during startup."); }
+            catch { }
+            AppState.Shared.SetError("The microphone could not start. Check microphone access and available storage.");
+            return new CaptureStartOutcome(false, null, ex.Message);
+        }
     }
 
     /// <summary>
@@ -724,37 +726,75 @@ public partial class App : Application
 
     private void StopRecording()
     {
-        if (!AppState.Shared.IsRecording || _isStoppingRecording) return;
+        if (AppState.Shared.CurrentState == AppState.State.Starting)
+        {
+            // No audio has become durable yet. Treat the stop gesture as an
+            // immediate startup cancellation instead of waiting for a native
+            // microphone call that may ignore cancellation.
+            _ = CancelRecordingAsync();
+            return;
+        }
+        if (AppState.Shared.CurrentState != AppState.State.Recording) return;
+        _ = StopRecordingAsync();
+    }
 
-        _isStoppingRecording = true;
+    private async Task StopRecordingAsync()
+    {
+        var dictationTargetWindow = _dictationTargetWindow;
+        var pendingStart = _captureStartTask;
+        if (pendingStart != null)
+        {
+            try { await pendingStart; } catch (OperationCanceledException) { return; }
+        }
+        if (!AudioProcessingCoordinator.Instance.IsCapturing) return;
         _recordingTimer.Stop();
-        AppState.Shared.StartProcessing();
-        ArmStopWatchdog();
-        AudioRecorderService.Instance.StopRecording();
-    }
-
-    /// <summary>
-    /// If the device never raises RecordingStopped the app would sit in
-    /// Processing forever with a dead hotkey; the watchdog forces a reset.
-    /// </summary>
-    private void ArmStopWatchdog()
-    {
-        _awaitingStopCallback = true;
-        _stopWatchdog.Stop();
-        _stopWatchdog.Start();
-    }
-
-    private void OnStopWatchdogTick(object? sender, EventArgs e)
-    {
-        _stopWatchdog.Stop();
-        if (!_awaitingStopCallback) return;
-
-        _awaitingStopCallback = false;
-        _isStoppingRecording = false;
-        _discardNextRecording = false;
         RestoreSystemAudioAfterRecording();
-        AudioRecorderService.Instance.AbortRecording();
-        AppState.Shared.SetError("The audio device did not stop cleanly. Please try again.");
+        var duration = DateTime.Now - _recordingStartedAt;
+        try
+        {
+            var result = await AudioProcessingCoordinator.Instance.StopAndTranscribeAsync(duration);
+            if (!result.IsSuccess || string.IsNullOrWhiteSpace(result.Text)) return;
+
+            var pasted = await ClipboardService.Instance.PasteTextAsync(result.Text, dictationTargetWindow);
+            if (!pasted)
+            {
+                LogException("StopRecordingAsync",
+                    new InvalidOperationException("Paste was not delivered; transcript left on clipboard"));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A concurrent CancelAsync owns the persisted cancellation and UI
+            // reset. Do not replace that user action with a generic error.
+        }
+        catch (Exception ex)
+        {
+            LogException("StopRecordingAsync", ex);
+            try { await AudioProcessingCoordinator.Instance.CancelAsync("Audio processing was interrupted."); }
+            catch { }
+            AppState.Shared.SetError("Audio processing stopped unexpectedly. The recording was kept for recovery.");
+        }
+    }
+
+    private async Task CancelRecordingAsync()
+    {
+        _recordingTimer.Stop();
+        RestoreSystemAudioAfterRecording();
+        // Cancellation owns the workflow immediately. The coordinator fences a
+        // late first buffer/start completion; waiting here would leave the UI in
+        // Starting while a microphone call ignores cancellation.
+        await AudioProcessingCoordinator.Instance.CancelAsync(
+            "Recording was cancelled. The recoverable audio was kept in History.");
+        var pendingStart = _captureStartTask;
+        _captureStartTask = null;
+        if (pendingStart != null)
+        {
+            _ = pendingStart.ContinueWith(
+                completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
     }
 
     private void OnRecordingTimerTick(object? sender, EventArgs e)
@@ -773,102 +813,17 @@ public partial class App : Application
 
     private void OnAudioLevelChanged(object? sender, float level)
     {
-        Dispatcher.Invoke(() => AppState.Shared.UpdateAudioLevel(level));
+        _ = Dispatcher.BeginInvoke(() => AppState.Shared.UpdateAudioLevel(level));
     }
 
-    private void OnRecordingError(object? sender, string message)
+    private void OnRuntimeStateChanged(object? sender, AppState.StateChangedEventArgs args)
     {
-        Dispatcher.Invoke(() =>
+        if (args.NewState is AppState.State.Starting or AppState.State.Recording) return;
+        _ = Dispatcher.BeginInvoke(() =>
         {
             _recordingTimer.Stop();
-            _stopWatchdog.Stop();
-            _awaitingStopCallback = false;
-            _isStoppingRecording = false;
-            _discardNextRecording = false;
             RestoreSystemAudioAfterRecording();
-            AppState.Shared.SetError(message);
-            HistoryService.Instance.Add(new Recording
-            {
-                Timestamp = DateTime.Now,
-                Status = TranscriptionStatus.Failed,
-                ErrorMessage = message,
-                Duration = AppState.Shared.RecordingDuration.TotalSeconds
-            });
         });
-    }
-
-    private void OnRecordingCompleted(object? sender, string filePath)
-    {
-        _ = Dispatcher.InvokeAsync(async () => await CompleteRecordingAsync(filePath));
-    }
-
-    private async Task CompleteRecordingAsync(string filePath)
-    {
-        _stopWatchdog.Stop();
-        _awaitingStopCallback = false;
-        RestoreSystemAudioAfterRecording();
-
-        if (_discardNextRecording)
-        {
-            _discardNextRecording = false;
-            _isStoppingRecording = false;
-            try { File.Delete(filePath); } catch { }
-            return;
-        }
-
-        try
-        {
-            var result = await TranscriptionService.Instance.TranscribeAsync(filePath);
-            if (!result.IsSuccess || string.IsNullOrWhiteSpace(result.Text))
-            {
-                var message = result.ErrorMessage ?? "Transcription failed";
-                AppState.Shared.SetError(message);
-                HistoryService.Instance.Add(CreateRecording(filePath, null, TranscriptionStatus.Failed, message));
-                return;
-            }
-
-            AppState.Shared.SetResult(result.Text);
-            HistoryService.Instance.Add(CreateRecording(filePath, result.Text, TranscriptionStatus.Success, null));
-
-            var pasted = await ClipboardService.Instance.PasteTextAsync(result.Text, _dictationTargetWindow);
-            if (!pasted)
-            {
-                // The transcript intentionally stays on the clipboard for a
-                // manual paste; record the delivery failure for diagnostics.
-                LogException("CompleteRecordingAsync",
-                    new InvalidOperationException("Paste was not delivered; transcript left on clipboard"));
-            }
-        }
-        catch (Exception ex)
-        {
-            LogException("CompleteRecordingAsync", ex);
-            AppState.Shared.SetError(ex.Message);
-            HistoryService.Instance.Add(CreateRecording(filePath, null, TranscriptionStatus.Failed, ex.Message));
-        }
-        finally
-        {
-            _isStoppingRecording = false;
-        }
-    }
-
-    private static Recording CreateRecording(
-        string filePath,
-        string? transcription,
-        TranscriptionStatus status,
-        string? errorMessage)
-    {
-        return new Recording
-        {
-            Timestamp = DateTime.Now,
-            AudioFilePath = filePath,
-            Transcription = transcription,
-            Status = status,
-            ErrorMessage = errorMessage,
-            Duration = AppState.Shared.RecordingDuration.TotalSeconds,
-            WordCount = string.IsNullOrWhiteSpace(transcription)
-                ? 0
-                : transcription.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length
-        };
     }
 
     // MARK: - Window Management

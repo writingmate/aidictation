@@ -117,21 +117,21 @@ public partial class MainWindow : Window
     
     private void AppState_StateChanged(object? sender, AppState.StateChangedEventArgs e)
     {
-        Dispatcher.Invoke(() => UpdateUIForState(e.NewState));
+        _ = Dispatcher.BeginInvoke(() => UpdateUIForState(e.NewState));
     }
     
     private void AppState_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(AppState.TranscriptionText))
         {
-            Dispatcher.Invoke(() =>
+            _ = Dispatcher.BeginInvoke(() =>
             {
                 ResultTextBox.Text = _appState.TranscriptionText;
             });
         }
         else if (e.PropertyName == nameof(AppState.ErrorMessage))
         {
-            Dispatcher.Invoke(() =>
+            _ = Dispatcher.BeginInvoke(() =>
             {
                 ErrorText.Text = _appState.ErrorMessage;
             });
@@ -164,12 +164,24 @@ public partial class MainWindow : Window
                 CopyButton.Visibility = Visibility.Collapsed;
                 HotkeyHint.Text = "Press Fn to record";
                 break;
+
+            case AppState.State.Starting:
+                IdlePanel.Visibility = Visibility.Visible;
+                CopyButton.Visibility = Visibility.Collapsed;
+                HotkeyHint.Text = "Starting microphone…";
+                break;
                 
             case AppState.State.Recording:
                 RecordingPanel.Visibility = Visibility.Visible;
                 CopyButton.Visibility = Visibility.Collapsed;
                 HotkeyHint.Text = "Release Fn to stop";
                 StartRecordingAnimations();
+                break;
+
+            case AppState.State.Finalizing:
+                RecordingPanel.Visibility = Visibility.Visible;
+                CopyButton.Visibility = Visibility.Collapsed;
+                HotkeyHint.Text = "Finishing recording…";
                 break;
                 
             case AppState.State.Processing:

@@ -40,12 +40,15 @@ public sealed class WhisperLocalService : IDisposable
     // MARK: - Private Properties
 
     private readonly SemaphoreSlim _modelLock = new(1, 1);
-    private readonly object _factoryLock = new();
-    private WhisperFactory? _factory;
+    private readonly ResettableResourceGeneration<WhisperFactory> _factoryGenerations;
 
     // MARK: - Initialization
 
-    private WhisperLocalService() { }
+    private WhisperLocalService()
+    {
+        _factoryGenerations = new ResettableResourceGeneration<WhisperFactory>(
+            () => WhisperFactory.FromPath(ModelPath));
+    }
 
     // MARK: - Public API
 
@@ -148,11 +151,7 @@ public sealed class WhisperLocalService : IDisposable
             File.Move(tempPath, ModelPath, overwrite: true);
 
             // A factory created from an earlier model file must not survive the swap.
-            lock (_factoryLock)
-            {
-                _factory?.Dispose();
-                _factory = null;
-            }
+            _factoryGenerations.Reset();
 
             ModelDownloadProgress?.Invoke(this, 1.0);
         }
@@ -175,7 +174,8 @@ public sealed class WhisperLocalService : IDisposable
     {
         await EnsureModelAsync(cancellationToken);
 
-        var factory = GetFactory();
+        using var factoryLease = _factoryGenerations.Acquire();
+        var factory = factoryLease.Resource;
         var whisperLanguage = NormalizeLanguage(languageCode);
 
         var resampledPath = Path.Combine(
@@ -207,23 +207,13 @@ public sealed class WhisperLocalService : IDisposable
 
     public void Dispose()
     {
-        _factory?.Dispose();
-        _factory = null;
+        _factoryGenerations.Dispose();
         _modelLock.Dispose();
     }
 
-    // MARK: - Private Methods
+    public void ResetAfterAbandonedAttempt() => _factoryGenerations.Reset();
 
-    private WhisperFactory GetFactory()
-    {
-        // EnsureModelAsync disposes the factory after a model swap; without the
-        // lock a concurrent transcription could grab a disposed instance.
-        lock (_factoryLock)
-        {
-            _factory ??= WhisperFactory.FromPath(ModelPath);
-            return _factory;
-        }
-    }
+    // MARK: - Private Methods
 
     private static void ResampleToWhisperFormat(string inputPath, string outputPath)
     {

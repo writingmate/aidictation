@@ -3,267 +3,297 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using AIDictation.Models;
 using Newtonsoft.Json;
 
 namespace AIDictation.Services;
 
 /// <summary>
-/// Manages recording history persistence and retrieval.
-/// Stores recordings in %APPDATA%\AIDictation\history.json with auto-save on changes.
+/// Persists History away from the WPF dispatcher. A mutation becomes visible
+/// to readers and the bound collection only after its write-then-rename has
+/// completed. Revisions and publication generations fence late completions.
 /// </summary>
-public sealed class HistoryService
+public sealed class HistoryService : IRecordingHistory
 {
-    // MARK: - Singleton
-
     public static HistoryService Instance { get; } = new();
-
-    // MARK: - Constants
 
     private static class Constants
     {
         public const string AppFolderName = "AIDictation";
         public const string HistoryFileName = "history.json";
-        public const string AudioFolderName = "recordings";
-        public const int MaxRecordings = 100;
-        public const long MaxAudioBytes = 500L * 1024 * 1024;
     }
 
-    // MARK: - Public Properties
-
-    /// <summary>
-    /// Observable collection of recordings for UI binding.
-    /// </summary>
     public ObservableCollection<Recording> Recordings { get; } = new();
-
-    // MARK: - Events
-
     public event EventHandler? HistoryChanged;
-
-    // MARK: - Private Properties
 
     private readonly string _appDataPath;
     private readonly string _historyPath;
-    private readonly string _audioPath;
     private readonly JsonSerializerSettings _jsonSettings;
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
+    private readonly HistoryTombstoneFence _tombstoneFence = new();
+    private List<Recording> _durableRecordings = new();
     private bool _isLoaded;
+    private volatile bool _persistenceHealthy = true;
+    private long _publicationGeneration;
+    private long _publishedGeneration;
 
-    // MARK: - Initialization
+    public bool PersistenceHealthy => _persistenceHealthy;
 
     private HistoryService()
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _appDataPath = Path.Combine(appData, Constants.AppFolderName);
         _historyPath = Path.Combine(_appDataPath, Constants.HistoryFileName);
-        _audioPath = Path.Combine(_appDataPath, Constants.AudioFolderName);
-
         _jsonSettings = new JsonSerializerSettings
         {
             Formatting = Formatting.Indented,
             NullValueHandling = NullValueHandling.Ignore
         };
 
-        EnsureDirectoriesExist();
+        try { EnsureDirectoriesExist(); }
+        catch { _persistenceHealthy = false; }
     }
 
-    // MARK: - Public API
-
-    /// <summary>
-    /// Loads history from disk. Safe to call multiple times.
-    /// </summary>
-    public void Load()
+    /// <summary>Loads and normalizes History without blocking the dispatcher.</summary>
+    public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
-        RunOnUiThread(() =>
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
             lock (_lock)
             {
                 if (_isLoaded) return;
-
-                var recordings = LoadFromFile();
-                Recordings.Clear();
-                foreach (var recording in recordings.OrderByDescending(r => r.Timestamp))
-                {
-                    Recordings.Add(recording);
-                }
-
-                _isLoaded = true;
             }
-        });
 
-        CleanupOrphanedAudioFiles();
-        EnforceAudioStorageCap();
-    }
+            var recordings = await Task.Run(LoadFromFile, CancellationToken.None)
+                .ConfigureAwait(false);
+            var normalized = false;
+            foreach (var recording in recordings)
+            {
+                if (recording.Status is not (TranscriptionStatus.Processing or TranscriptionStatus.Retrying))
+                    continue;
+                recording.Status = TranscriptionStatus.Failed;
+                recording.ErrorMessage = "Audio processing was interrupted. Retry from History.";
+                normalized = true;
+            }
+            recordings = recordings.OrderByDescending(recording => recording.Timestamp).ToList();
 
-    /// <summary>
-    /// Adds a new recording to history.
-    /// </summary>
-    public void Add(Recording recording)
-    {
-        RunOnUiThread(() =>
-        {
+            if (normalized && _persistenceHealthy &&
+                !await SaveSnapshotAsync(recordings, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            long generation;
             lock (_lock)
             {
-                // Insert at the beginning (most recent first)
-                Recordings.Insert(0, recording);
-
-                // Enforce max limit
-                while (Recordings.Count > Constants.MaxRecordings)
-                {
-                    var oldest = Recordings[^1];
-                    DeleteAudioFile(oldest.AudioFilePath);
-                    Recordings.RemoveAt(Recordings.Count - 1);
-                }
-
-                Save();
+                _durableRecordings = recordings.Select(CloneRecording).ToList();
+                _isLoaded = true;
+                generation = ++_publicationGeneration;
             }
-        });
-
-        HistoryChanged?.Invoke(this, EventArgs.Empty);
+            await PublishSnapshotAsync(recordings, generation).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
     }
 
-    /// <summary>
-    /// Gets a recording by its ID.
-    /// </summary>
     public Recording? Get(Guid id)
     {
         lock (_lock)
         {
-            return Recordings.FirstOrDefault(r => r.Id == id);
+            var recording = _durableRecordings.FirstOrDefault(item => item.Id == id);
+            return recording == null ? null : CloneRecording(recording);
         }
     }
 
-    /// <summary>
-    /// Gets all recordings.
-    /// </summary>
     public IReadOnlyList<Recording> GetAll()
     {
         lock (_lock)
-        {
-            return Recordings.ToList().AsReadOnly();
-        }
+            return _durableRecordings.Select(CloneRecording).ToList().AsReadOnly();
     }
 
-    /// <summary>
-    /// Updates an existing recording.
-    /// </summary>
-    public void Update(Recording recording)
+    public Task<bool> UpdateAsync(
+        Recording recording,
+        CancellationToken cancellationToken = default) =>
+        PersistMutationAsync(rows =>
+        {
+            if (!_tombstoneFence.CanPublish(recording.Id)) return Mutation.Rejected;
+            var index = rows.FindIndex(item => item.Id == recording.Id);
+            if (index < 0) return Mutation.Rejected;
+            if (rows[index].Revision > recording.Revision) return Mutation.AcceptedUnchanged;
+            rows[index] = CloneRecording(recording);
+            return Mutation.AcceptedChanged;
+        }, cancellationToken);
+
+    public Task<bool> UpsertAsync(
+        Recording recording,
+        CancellationToken cancellationToken = default) =>
+        PersistMutationAsync(rows =>
+        {
+            if (!_tombstoneFence.CanPublish(recording.Id)) return Mutation.Rejected;
+            var index = rows.FindIndex(item => item.Id == recording.Id);
+            if (index >= 0 && rows[index].Revision > recording.Revision)
+                return Mutation.AcceptedUnchanged;
+            if (index >= 0) rows[index] = CloneRecording(recording);
+            else rows.Insert(0, CloneRecording(recording));
+            return Mutation.AcceptedChanged;
+        }, cancellationToken);
+
+    public Task<bool> RemoveMetadataAfterTombstoneAsync(
+        Guid id,
+        CancellationToken cancellationToken = default) =>
+        PersistMutationAsync(rows =>
+        {
+            var removed = rows.RemoveAll(item => item.Id == id) > 0;
+            return removed ? Mutation.AcceptedChanged : Mutation.AcceptedUnchanged;
+        }, cancellationToken, () => _tombstoneFence.Commit(id));
+
+    public async Task<bool> ClearMetadataAfterTombstoneAsync(
+        CancellationToken cancellationToken = default)
     {
-        RunOnUiThread(() =>
+        IReadOnlyList<Guid> clearedIds = Array.Empty<Guid>();
+        return await PersistMutationAsync(rows =>
         {
-            lock (_lock)
-            {
-                var index = IndexOf(recording.Id);
-                if (index >= 0)
-                {
-                    Recordings[index] = recording;
-                    Save();
-                }
-            }
-        });
-
-        HistoryChanged?.Invoke(this, EventArgs.Empty);
+            if (rows.Count == 0) return Mutation.AcceptedUnchanged;
+            clearedIds = rows.Select(item => item.Id).ToArray();
+            rows.Clear();
+            return Mutation.AcceptedChanged;
+        }, cancellationToken, () => _tombstoneFence.Commit(clearedIds)).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Deletes a recording by its ID.
-    /// </summary>
-    public bool Delete(Guid id)
-    {
-        var deleted = false;
-        RunOnUiThread(() =>
-        {
-            lock (_lock)
-            {
-                var recording = Recordings.FirstOrDefault(r => r.Id == id);
-                if (recording == null) return;
-
-                DeleteAudioFile(recording.AudioFilePath);
-                Recordings.Remove(recording);
-                Save();
-                deleted = true;
-            }
-        });
-
-        if (deleted)
-        {
-            HistoryChanged?.Invoke(this, EventArgs.Empty);
-        }
-        return deleted;
-    }
-
-    /// <summary>
-    /// Clears all recordings and their audio files.
-    /// </summary>
-    public void Clear()
-    {
-        RunOnUiThread(() =>
-        {
-            lock (_lock)
-            {
-                foreach (var recording in Recordings)
-                {
-                    DeleteAudioFile(recording.AudioFilePath);
-                }
-
-                Recordings.Clear();
-                Save();
-            }
-        });
-
-        HistoryChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>
-    /// Searches recordings by transcription text.
-    /// </summary>
     public IReadOnlyList<Recording> Search(string query)
     {
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return GetAll();
-        }
-
+        if (string.IsNullOrWhiteSpace(query)) return GetAll();
         lock (_lock)
         {
-            return Recordings
-                .Where(r => r.Transcription?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
+            return _durableRecordings
+                .Where(recording => recording.Transcription?.Contains(
+                    query,
+                    StringComparison.OrdinalIgnoreCase) == true)
+                .Select(CloneRecording)
                 .ToList()
                 .AsReadOnly();
         }
     }
 
-    /// <summary>
-    /// Gets the path for storing audio files.
-    /// </summary>
-    public string GetAudioStoragePath()
+    private async Task<bool> PersistMutationAsync(
+        Func<List<Recording>, Mutation> mutation,
+        CancellationToken cancellationToken,
+        Action? onCommitted = null)
     {
-        return _audioPath;
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!_persistenceHealthy) return false;
+            List<Recording> candidate;
+            lock (_lock)
+                candidate = _durableRecordings.Select(CloneRecording).ToList();
+
+            var decision = mutation(candidate);
+            if (!decision.Accepted) return false;
+            if (!decision.Changed)
+            {
+                onCommitted?.Invoke();
+                return true;
+            }
+            if (!await SaveSnapshotAsync(candidate, cancellationToken).ConfigureAwait(false))
+                return false;
+
+            long generation;
+            lock (_lock)
+            {
+                _durableRecordings = candidate.Select(CloneRecording).ToList();
+                generation = ++_publicationGeneration;
+            }
+            onCommitted?.Invoke();
+
+            // Dispatcher publication is deliberately detached: coordinator
+            // deadlines cover durable I/O, never a blocked UI message pump.
+            ObserveLateTask(PublishSnapshotAsync(candidate, generation));
+            return true;
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
     }
 
-    /// <summary>
-    /// Generates a unique audio file path for a new recording.
-    /// </summary>
-    public string GenerateAudioFilePath(string extension = ".wav")
+    private async Task<bool> SaveSnapshotAsync(
+        IReadOnlyList<Recording> recordings,
+        CancellationToken cancellationToken)
     {
-        EnsureDirectoriesExist();
-        var fileName = $"{Guid.NewGuid()}{extension}";
-        return Path.Combine(_audioPath, fileName);
+        if (!_persistenceHealthy) return false;
+        var snapshot = recordings.Select(CloneRecording).ToList();
+        try
+        {
+            return await Task.Run(async () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                EnsureDirectoriesExist();
+                var json = JsonConvert.SerializeObject(snapshot, _jsonSettings);
+                var tempPath = _historyPath + ".tmp";
+                await using (var stream = new FileStream(
+                                 tempPath,
+                                 FileMode.Create,
+                                 FileAccess.Write,
+                                 FileShare.None,
+                                 16 * 1024,
+                                 FileOptions.Asynchronous | FileOptions.WriteThrough))
+                await using (var writer = new StreamWriter(stream))
+                {
+                    await writer.WriteAsync(json.AsMemory(), cancellationToken).ConfigureAwait(false);
+                    await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    // Flush-to-disk is synchronous on Windows; it runs only on
+                    // this owned background worker, never on the dispatcher.
+                    stream.Flush(flushToDisk: true);
+                }
+                File.Move(tempPath, _historyPath, overwrite: true);
+                return true;
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            _persistenceHealthy = false;
+            return false;
+        }
     }
 
-    // MARK: - Private Methods
+    private async Task PublishSnapshotAsync(
+        IReadOnlyList<Recording> recordings,
+        long generation)
+    {
+        var snapshot = recordings.Select(CloneRecording).ToArray();
+        void Apply()
+        {
+            if (generation < Volatile.Read(ref _publishedGeneration)) return;
+            Volatile.Write(ref _publishedGeneration, generation);
+            Recordings.Clear();
+            foreach (var recording in snapshot) Recordings.Add(recording);
+            HistoryChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            Apply();
+            return;
+        }
+        await dispatcher.InvokeAsync(Apply).Task.ConfigureAwait(false);
+    }
 
     private void EnsureDirectoriesExist()
     {
-        if (!Directory.Exists(_appDataPath))
-        {
-            Directory.CreateDirectory(_appDataPath);
-        }
-
-        if (!Directory.Exists(_audioPath))
-        {
-            Directory.CreateDirectory(_audioPath);
-        }
+        if (!Directory.Exists(_appDataPath)) Directory.CreateDirectory(_appDataPath);
     }
 
     private List<Recording> LoadFromFile()
@@ -272,140 +302,52 @@ public sealed class HistoryService
         {
             if (!File.Exists(_historyPath)) return new List<Recording>();
             var json = File.ReadAllText(_historyPath);
-            return JsonConvert.DeserializeObject<List<Recording>>(json, _jsonSettings) ?? new List<Recording>();
+            return JsonConvert.DeserializeObject<List<Recording>>(json, _jsonSettings) ?? new();
         }
         catch (IOException)
         {
+            _persistenceHealthy = false;
             return new List<Recording>();
         }
         catch
         {
-            // Keep the corrupt file as evidence instead of overwriting it.
-            try { File.Copy(_historyPath, _historyPath + ".bak", overwrite: true); } catch { }
+            try { File.Copy(_historyPath, _historyPath + ".bak", overwrite: true); }
+            catch { }
+            _persistenceHealthy = false;
             return new List<Recording>();
         }
     }
 
-    private void Save()
+    private static void ObserveLateTask(Task task)
     {
-        try
-        {
-            var json = JsonConvert.SerializeObject(Recordings.ToList(), _jsonSettings);
-            // Write-then-rename keeps a crash mid-write from truncating the file.
-            var tempPath = _historyPath + ".tmp";
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, _historyPath, overwrite: true);
-        }
-        catch
-        {
-            // Silently fail - could add logging here
-        }
+        _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
-    private static void RunOnUiThread(Action action)
+    private readonly record struct Mutation(bool Accepted, bool Changed)
     {
-        // The Recordings collection is bound to WPF views; mutating it off the
-        // dispatcher thread throws NotSupportedException in CollectionView.
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher == null || dispatcher.CheckAccess())
-        {
-            action();
-        }
-        else
-        {
-            dispatcher.Invoke(action);
-        }
+        public static Mutation Rejected => new(false, false);
+        public static Mutation AcceptedUnchanged => new(true, false);
+        public static Mutation AcceptedChanged => new(true, true);
     }
 
-    private int IndexOf(Guid id)
+    private static Recording CloneRecording(Recording recording) => new()
     {
-        for (int i = 0; i < Recordings.Count; i++)
-        {
-            if (Recordings[i].Id == id) return i;
-        }
-        return -1;
-    }
-
-    private static void DeleteAudioFile(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return;
-
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch
-        {
-            // Silently fail - file may be in use or already deleted
-        }
-    }
-
-    /// <summary>
-    /// Removes audio files that are not referenced by any recording.
-    /// </summary>
-    private void CleanupOrphanedAudioFiles()
-    {
-        try
-        {
-            if (!Directory.Exists(_audioPath)) return;
-
-            var referencedFiles = new HashSet<string>(
-                Recordings
-                    .Where(r => !string.IsNullOrEmpty(r.AudioFilePath))
-                    .Select(r => Path.GetFullPath(r.AudioFilePath!)),
-                StringComparer.OrdinalIgnoreCase
-            );
-
-            var audioFiles = Directory.GetFiles(_audioPath);
-            foreach (var file in audioFiles)
-            {
-                var fullPath = Path.GetFullPath(file);
-                if (!referencedFiles.Contains(fullPath))
-                {
-                    try
-                    {
-                        File.Delete(file);
-                    }
-                    catch
-                    {
-                        // Skip files that can't be deleted
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Silently fail cleanup - non-critical operation
-        }
-    }
-
-    /// <summary>
-    /// Deletes the oldest audio files once the recordings folder exceeds the
-    /// storage cap; the count cap alone lets 100 long WAVs grow unbounded.
-    /// </summary>
-    private void EnforceAudioStorageCap()
-    {
-        try
-        {
-            if (!Directory.Exists(_audioPath)) return;
-
-            long total = 0;
-            foreach (var file in new DirectoryInfo(_audioPath).GetFiles()
-                         .OrderByDescending(f => f.LastWriteTimeUtc))
-            {
-                total += file.Length;
-                if (total > Constants.MaxAudioBytes)
-                {
-                    try { file.Delete(); } catch { }
-                }
-            }
-        }
-        catch
-        {
-            // Silently fail cleanup - non-critical operation
-        }
-    }
+        Id = recording.Id,
+        Timestamp = recording.Timestamp,
+        AudioFilePath = recording.AudioFilePath,
+        Transcription = recording.Transcription,
+        RawTranscription = recording.RawTranscription,
+        CheckpointTranscription = recording.CheckpointTranscription,
+        Status = recording.Status,
+        ErrorMessage = recording.ErrorMessage,
+        RetryCount = recording.RetryCount,
+        SourceIntegrity = recording.SourceIntegrity,
+        Revision = recording.Revision,
+        Duration = recording.Duration,
+        WordCount = recording.WordCount
+    };
 }

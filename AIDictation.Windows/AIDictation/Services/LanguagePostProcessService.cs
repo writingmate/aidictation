@@ -1,14 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AIDictation.Helpers;
-using Newtonsoft.Json.Linq;
 
 namespace AIDictation.Services;
 
@@ -35,15 +35,35 @@ public sealed class LanguagePostProcessService
     // MARK: - Private Properties
 
     private readonly HttpClient _httpClient;
+    private readonly Uri _endpoint;
+    private readonly string _apiKey;
+    private readonly string _model;
+    private readonly TimeSpan _deadline;
 
     // MARK: - Initialization
 
-    private LanguagePostProcessService()
+    private LanguagePostProcessService() : this(
+        new HttpClient { Timeout = Timeout.InfiniteTimeSpan },
+        new Uri(BuildConfig.PostProcessingEndpoint),
+        BuildConfig.PostProcessingApiKey,
+        BuildConfig.PostProcessingModel,
+        TimeSpan.FromSeconds(Constants.HttpTimeoutSeconds))
     {
-        _httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(Constants.HttpTimeoutSeconds)
-        };
+    }
+
+    public LanguagePostProcessService(
+        HttpClient httpClient,
+        Uri endpoint,
+        string apiKey,
+        string model,
+        TimeSpan deadline)
+    {
+        _httpClient = httpClient;
+        _httpClient.Timeout = Timeout.InfiniteTimeSpan;
+        _endpoint = endpoint;
+        _apiKey = apiKey;
+        _model = model;
+        _deadline = deadline;
     }
 
     // MARK: - Public API
@@ -58,65 +78,102 @@ public sealed class LanguagePostProcessService
     public async Task<string> PostProcessAsync(
         string rawText,
         IReadOnlyList<string> languageNames,
-        string? contextRules = null,
+        TranscriptionAttemptSnapshot snapshot,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(rawText)) return rawText;
 
-        var apiKey = BuildConfig.PostProcessingApiKey;
-        if (string.IsNullOrEmpty(apiKey))
+        if (string.IsNullOrEmpty(_apiKey))
         {
             Debug.WriteLine("[LanguagePostProcess] API key not configured, skipping");
             return rawText;
         }
 
-        var systemPrompt = BuildSystemPrompt(contextRules);
-        var userContent = $"1. [{(languageNames.Count > 0 ? languageNames[0] : "auto")}] {rawText}";
+        var systemPrompt = TranscriptionCleanupPrompt.BuildSystemInstructions();
+        var referenceBlock = snapshot.CleanupReferenceBlock ??
+                             TranscriptionCleanupPrompt.BuildReferenceBlock(
+                                 snapshot.Vocabulary ?? Array.Empty<string>(),
+                                 snapshot.Replacements,
+                                 snapshot.Expansions,
+                                 snapshot.ContextInstructions);
+        IReadOnlyList<string> selectedLanguages = languageNames.Count > 0
+            ? languageNames
+            : new[] { "auto" };
+        var languageLine = $"selected_languages={JsonSerializer.Serialize(selectedLanguages)}";
+        var userContent = languageLine + "\n" +
+                          TranscriptionCleanupPrompt.BuildOfflineUserContent(rawText, referenceBlock);
 
         try
         {
-            var requestJson = new JObject
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(_deadline);
+            var requestJson = JsonSerializer.Serialize(new
             {
-                ["model"] = BuildConfig.PostProcessingModel,
-                ["messages"] = new JArray
+                model = _model,
+                messages = new[]
                 {
-                    new JObject { ["role"] = "system", ["content"] = systemPrompt },
-                    new JObject { ["role"] = "user", ["content"] = userContent }
+                    new { role = "system", content = systemPrompt },
+                    new { role = "user", content = userContent }
                 },
-                ["max_tokens"] = EstimateCompletionTokens(rawText),
-                ["temperature"] = 0.0
-            };
+                max_tokens = EstimateCompletionTokens(rawText),
+                temperature = 0.0
+            });
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, BuildConfig.PostProcessingEndpoint)
+            using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint)
             {
-                Content = new StringContent(requestJson.ToString(), Encoding.UTF8, "application/json")
+                Content = new StringContent(requestJson, Encoding.UTF8, "application/json")
             };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
-            if (!response.IsSuccessStatusCode)
+            var sendTask = Task.Run(
+                () => _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    deadline.Token),
+                CancellationToken.None);
+            HttpResponseMessage response;
+            try
             {
-                Debug.WriteLine($"[LanguagePostProcess] Request failed: {(int)response.StatusCode}");
-                return rawText;
+                response = await sendTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch
+            {
+                DisposeLateResponse(sendTask);
+                throw;
             }
 
-            var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-            var choice = json["choices"]?[0];
-            var corrected = choice?["message"]?["content"]?.ToString()?.Trim();
-
-            // A truncated correction silently loses the tail of the dictation;
-            // the raw transcript beats a cut-off "improvement".
-            if (string.Equals(choice?["finish_reason"]?.ToString(), "length", StringComparison.OrdinalIgnoreCase))
+            using (response)
             {
-                Debug.WriteLine("[LanguagePostProcess] Completion truncated, returning raw text");
-                return rawText;
-            }
+                var bodyTask = Task.Run(
+                    () => response.Content.ReadAsStringAsync(deadline.Token),
+                    CancellationToken.None);
+                string responseBody;
+                try
+                {
+                    responseBody = await bodyTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+                }
+                catch
+                {
+                    ObserveLateTask(bodyTask);
+                    throw;
+                }
+                if (!CleanupCompletionPolicy.TryAccept(response.StatusCode, responseBody, out var corrected))
+                {
+                    Debug.WriteLine($"[LanguagePostProcess] Incomplete cleanup response ({(int)response.StatusCode}), returning raw text");
+                    return rawText;
+                }
 
-            return string.IsNullOrWhiteSpace(corrected) ? rawText : corrected;
+                return corrected;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {
-            throw;
+            Debug.WriteLine("[LanguagePostProcess] Cleanup timed out, returning raw text");
+            return rawText;
         }
         catch (Exception ex)
         {
@@ -127,35 +184,35 @@ public sealed class LanguagePostProcessService
 
     // MARK: - Private Methods
 
-    private static string BuildSystemPrompt(string? contextRules)
-    {
-        var prompt = new StringBuilder();
-        prompt.Append("Correct basic errors in the transcription:\n");
-        prompt.Append("Split improperly merged words (e.g., \"заросмова\" → \"зараз мова\").\n");
-        prompt.Append("Correct obvious spelling and grammatical forms (e.g., \"украинська\" → \"українська\").\n");
-        prompt.Append("Fix missing apostrophes and capitalization (e.g., \"dont\" → \"don't\").\n");
-        prompt.Append("Clean up stutters and repeated words or phrases.\n\n");
-        prompt.Append("STRICT CONSTRAINTS:\n");
-        prompt.Append("DO NOT translate, rephrase, or summarize the text.\n");
-        prompt.Append("DO NOT remove any spoken concepts or skip unrecognizable words. If unsure about a word, leave it exactly as-is.\n");
-        prompt.Append("Keep the corrected text in the original language spoken.\n\n");
-
-        if (!string.IsNullOrWhiteSpace(contextRules))
-        {
-            prompt.Append($"Additional instructions: {contextRules}\n\n");
-        }
-
-        prompt.Append("OUTPUT FORMAT:\n");
-        prompt.Append("Return ONLY the corrected transcription text. Do not include the transcription number, language labels, explanations, or quotation marks.");
-
-        return prompt.ToString();
-    }
-
     private static int EstimateCompletionTokens(string text)
     {
         // Roughly one token per three characters, doubled for headroom so long
         // dictations are never truncated mid-sentence.
         var estimate = text.Length * 2 / 3;
         return Math.Clamp(estimate, Constants.MinCompletionTokens, Constants.MaxCompletionTokens);
+    }
+
+    private static void DisposeLateResponse(Task<HttpResponseMessage> task)
+    {
+        _ = task.ContinueWith(
+            completed =>
+            {
+                if (completed.Status == TaskStatus.RanToCompletion)
+                    completed.Result.Dispose();
+                else
+                    _ = completed.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static void ObserveLateTask(Task task)
+    {
+        _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }

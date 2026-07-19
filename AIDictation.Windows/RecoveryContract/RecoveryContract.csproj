@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\AIDictation\Services\AudioContainerValidator.cs" Link="AudioContainerValidator.cs" />
+    <Compile Include="..\AIDictation\Services\AudioCaptureTerminalFence.cs" Link="AudioCaptureTerminalFence.cs" />
+    <Compile Include="..\AIDictation\Services\AudioExportDeadline.cs" Link="AudioExportDeadline.cs" />
+    <Compile Include="..\AIDictation\Services\CleanupCompletionPolicy.cs" Link="CleanupCompletionPolicy.cs" />
+    <Compile Include="..\AIDictation\Services\HistoryTombstoneFence.cs" Link="HistoryTombstoneFence.cs" />
+    <Compile Include="..\AIDictation\Services\AudioHttpRecoveryPolicy.cs" Link="AudioHttpRecoveryPolicy.cs" />
+    <Compile Include="..\AIDictation\Services\AudioProcessingContracts.cs" Link="AudioProcessingContracts.cs" />
+    <Compile Include="..\AIDictation\Services\AudioProcessingCoordinator.cs" Link="AudioProcessingCoordinator.cs" />
+    <Compile Include="..\AIDictation\Services\AudioProcessingStore.cs" Link="AudioProcessingStore.cs" />
+    <Compile Include="..\AIDictation\Services\AudioTranscriptionResponseParser.cs" Link="AudioTranscriptionResponseParser.cs" />
+    <Compile Include="..\AIDictation\Services\LanguagePostProcessService.cs" Link="LanguagePostProcessService.cs" />
+    <Compile Include="..\AIDictation\Services\ResettableResourceGeneration.cs" Link="ResettableResourceGeneration.cs" />
+    <Compile Include="..\AIDictation\Services\TranscriptionCleanupPrompt.cs" Link="TranscriptionCleanupPrompt.cs" />
+    <Compile Include="..\AIDictation\Services\TranscriptionAttemptSnapshotFactory.cs" Link="TranscriptionAttemptSnapshotFactory.cs" />
+    <Compile Include="..\AIDictation\Services\TerminalStateResetFence.cs" Link="TerminalStateResetFence.cs" />
+  </ItemGroup>
+</Project>

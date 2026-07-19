@@ -2,15 +2,23 @@ import Foundation
 import WhisperMateShared
 
 enum TranscriptionStatus: String, Codable {
+    case processing
     case success
     case failed
     case retrying
+    case cancelled
+}
+
+enum RecordingSourceIntegrity: String, Codable {
+    case complete
+    case knownIncomplete
+    case unfinalized
 }
 
 struct Recording: Identifiable, Codable, Hashable {
     let id: UUID
     let timestamp: Date
-    let audioFileURL: URL
+    var audioFileURL: URL
     var transcription: String?
     var status: TranscriptionStatus
     var errorMessage: String?
@@ -19,11 +27,15 @@ struct Recording: Identifiable, Codable, Hashable {
     var wordCount: Int?
     var outputMode: TranscriptionOutputMode
     var transcriptionOptions: TranscriptionOptions
+    var sourceIntegrity: RecordingSourceIntegrity
+    /// Original pre-journal source retained during one-time adoption. Managed
+    /// retries use `audioFilePath`; explicit Delete/Clear removes this legacy copy.
+    var legacyAudioFilePath: String?
 
     // MARK: - Codable
 
     private enum CodingKeys: String, CodingKey {
-        case id, timestamp, audioFilePath, transcription, status, errorMessage, retryCount, duration, wordCount, outputMode, transcriptionOptions
+        case id, timestamp, audioFilePath, transcription, status, errorMessage, retryCount, duration, wordCount, outputMode, transcriptionOptions, sourceIntegrity, legacyAudioFilePath
     }
 
     init(from decoder: Decoder) throws {
@@ -40,6 +52,8 @@ struct Recording: Identifiable, Codable, Hashable {
         wordCount = try container.decodeIfPresent(Int.self, forKey: .wordCount)
         outputMode = try container.decodeIfPresent(TranscriptionOutputMode.self, forKey: .outputMode) ?? .dictation
         transcriptionOptions = try container.decodeIfPresent(TranscriptionOptions.self, forKey: .transcriptionOptions) ?? .default
+        sourceIntegrity = try container.decodeIfPresent(RecordingSourceIntegrity.self, forKey: .sourceIntegrity) ?? .complete
+        legacyAudioFilePath = try container.decodeIfPresent(String.self, forKey: .legacyAudioFilePath)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -55,6 +69,8 @@ struct Recording: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(wordCount, forKey: .wordCount)
         try container.encode(outputMode, forKey: .outputMode)
         try container.encode(transcriptionOptions, forKey: .transcriptionOptions)
+        try container.encode(sourceIntegrity, forKey: .sourceIntegrity)
+        try container.encodeIfPresent(legacyAudioFilePath, forKey: .legacyAudioFilePath)
     }
 
     // MARK: - Hashable
@@ -80,7 +96,9 @@ struct Recording: Identifiable, Codable, Hashable {
         duration: TimeInterval? = nil,
         wordCount: Int? = nil,
         outputMode: TranscriptionOutputMode = .dictation,
-        transcriptionOptions: TranscriptionOptions = .default
+        transcriptionOptions: TranscriptionOptions = .default,
+        sourceIntegrity: RecordingSourceIntegrity = .complete,
+        legacyAudioFilePath: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -93,6 +111,8 @@ struct Recording: Identifiable, Codable, Hashable {
         self.wordCount = wordCount
         self.outputMode = outputMode
         self.transcriptionOptions = transcriptionOptions
+        self.sourceIntegrity = sourceIntegrity
+        self.legacyAudioFilePath = legacyAudioFilePath
     }
 
     var formattedDate: String {
@@ -119,6 +139,18 @@ struct Recording: Identifiable, Codable, Hashable {
 
     var isFailed: Bool {
         return status == .failed
+    }
+
+    var isInProgress: Bool {
+        status == .processing || status == .retrying
+    }
+
+    var canRetranscribe: Bool {
+        sourceIntegrity != .knownIncomplete && !isInProgress
+    }
+
+    var legacyAudioFileURL: URL? {
+        legacyAudioFilePath.map(URL.init(fileURLWithPath:))
     }
 
     var isNotes: Bool {

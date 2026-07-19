@@ -4,8 +4,10 @@ import WhisperMateShared
 
 struct HistoryView: View {
     @ObservedObject var historyManager: HistoryManager
+    @ObservedObject private var appState = AppState.shared
     @State private var searchText = ""
     @State private var showingClearConfirmation = false
+    @State private var operationError: String?
     @Environment(\.dismiss) var dismiss
 
     var onRetry: ((Recording) -> Void)?
@@ -93,7 +95,7 @@ struct HistoryView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(filteredRecordings) { recording in
-                                RecordingRow(recording: recording, historyManager: historyManager, onRetry: onRetry)
+                                RecordingRow(recording: recording, onRetry: onRetry)
                             }
                         }
                         .padding(.vertical, 8)
@@ -114,7 +116,7 @@ struct HistoryView: View {
                         .foregroundStyle(.red)
                     }
                     .buttonStyle(.plain)
-                    .disabled(historyManager.recordings.isEmpty)
+                    .disabled(historyManager.recordings.isEmpty || appState.isHistoryMutationInProgress)
 
                     Spacer()
                 }
@@ -126,28 +128,46 @@ struct HistoryView: View {
         .alert("Clear All History?", isPresented: $showingClearConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Clear All", role: .destructive) {
-                historyManager.clearAll()
+                Task {
+                    if let message = await appState.clearHistory() {
+                        operationError = message
+                    }
+                }
             }
         } message: {
             Text("This will permanently delete all \(historyManager.recordings.count) recordings. This action cannot be undone.")
+        }
+        .alert("History Couldn’t Be Changed", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(operationError ?? "Please try again.")
         }
     }
 }
 
 struct RecordingRow: View {
     let recording: Recording
-    let historyManager: HistoryManager
     let onRetry: ((Recording) -> Void)?
+    @ObservedObject private var appState = AppState.shared
 
     @State private var isHovering = false
     @State private var showingDeleteConfirmation = false
+    @State private var operationError: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             // Status indicator
-            Image(systemName: recording.status == .success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .dsFont(.body)
-                .foregroundStyle(recording.status == .success ? Color.dsSecondary : Color.dsAccent)
+            if recording.isInProgress {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: recording.status == .success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .dsFont(.body)
+                    .foregroundStyle(recording.status == .success ? Color.dsSecondary : Color.dsAccent)
+            }
 
             // Timestamp
             VStack(alignment: .leading, spacing: 2) {
@@ -170,7 +190,35 @@ struct RecordingRow: View {
             .frame(minWidth: 120, alignment: .leading)
 
             // Transcription or Error
-            if let transcription = recording.transcription {
+            if recording.status == .processing || recording.status == .retrying {
+                Text(recording.status == .retrying ? "Transcribing again…" : "Processing…")
+                    .dsFont(.label)
+                    .foregroundStyle(Color.dsMutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if recording.status == .cancelled {
+                Text("Cancelled")
+                    .dsFont(.label)
+                    .foregroundStyle(Color.dsMutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if recording.status == .failed {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Transcription stopped")
+                        .dsFont(.labelMedium)
+                        .foregroundStyle(Color.dsAccent)
+                    if let errorMessage = recording.errorMessage {
+                        Text(errorMessage)
+                            .dsFont(.small)
+                            .foregroundStyle(Color.dsMutedForeground)
+                    }
+                    if let transcription = recording.transcription {
+                        Text("Recovered text: \(transcription)")
+                            .dsFont(.label)
+                            .foregroundStyle(Color.dsForeground)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if let transcription = recording.transcription {
                 VStack(alignment: .leading, spacing: 4) {
                     if recording.isNotes {
                         Label("Notes", systemImage: "note.text")
@@ -183,16 +231,6 @@ struct RecordingRow: View {
                 }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-            } else if let errorMessage = recording.errorMessage {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Failed")
-                        .dsFont(.labelMedium)
-                        .foregroundStyle(Color.dsAccent)
-                    Text(errorMessage)
-                        .dsFont(.small)
-                        .foregroundStyle(Color.dsMutedForeground)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // Actions (always rendered, opacity changes on hover)
@@ -221,7 +259,12 @@ struct RecordingRow: View {
                     .buttonStyle(.plain)
                     .help("Retry")
                     .opacity(isHovering ? 1 : 0)
-                    .disabled(onRetry == nil || !FileManager.default.fileExists(atPath: recording.audioFileURL.path))
+                    .disabled(
+                        onRetry == nil ||
+                        !recording.canRetranscribe ||
+                        appState.isHistoryMutationInProgress ||
+                        !FileManager.default.fileExists(atPath: recording.audioFileURL.path)
+                    )
                 }
 
                 Button(action: {
@@ -234,6 +277,7 @@ struct RecordingRow: View {
                 .buttonStyle(.plain)
                 .help("Delete")
                 .opacity(isHovering ? 1 : 0)
+                .disabled(appState.isHistoryMutationInProgress)
             }
             .frame(width: 80)
         }
@@ -246,10 +290,22 @@ struct RecordingRow: View {
         .alert("Delete Recording?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                historyManager.deleteRecording(recording)
+                Task {
+                    if let message = await appState.deleteRecording(recording) {
+                        operationError = message
+                    }
+                }
             }
         } message: {
             Text("This action cannot be undone.")
+        }
+        .alert("Recording Couldn’t Be Deleted", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(operationError ?? "Please try again.")
         }
     }
 

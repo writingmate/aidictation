@@ -17,6 +17,7 @@ class AudioDeviceManager: ObservableObject {
 
     private enum Constants {
         static let wakeRecoveryDelays: [TimeInterval] = [0.5, 1.5, 3.0, 5.0, 8.0, 13.0]
+        static let deviceOperationTimeout: TimeInterval = 2.0
         static let virtualDeviceNameFragments = [
             "cadeviceaggregate",
             "aggregate",
@@ -41,10 +42,14 @@ class AudioDeviceManager: ObservableObject {
     private var wakeRecoveryWorkItem: DispatchWorkItem?
     private var deviceChangeWorkItem: DispatchWorkItem?
     private var wakeRecoveryGeneration = 0
+    private var wakeOperationID: UUID?
+    private var maintenanceOperationID: UUID?
+    private var refreshOperationID: UUID?
+    private var routeReconciliationNeeded = false
 
     // MARK: - Types
 
-    struct AudioDevice: Identifiable, Equatable, Hashable {
+    struct AudioDevice: Identifiable, Equatable, Hashable, Sendable {
         let id: AudioDeviceID
         let name: String
         let uniqueID: String
@@ -60,13 +65,34 @@ class AudioDeviceManager: ObservableObject {
         }
     }
 
+    struct CaptureSelectionSnapshot: Sendable {
+        let automaticallySelectDevice: Bool
+        let savedSelectedDeviceUID: String?
+    }
+
+    struct CaptureDeviceResolution: Sendable {
+        let device: AudioDevice
+        let availableDevices: [AudioDevice]
+        let usedFallback: Bool
+    }
+
+    private struct DeviceApplyOutcome: Sendable {
+        let devices: [AudioDevice]
+        let target: AudioDevice?
+        let usedFallback: Bool
+        let routeChanged: Bool
+        let applied: Bool
+    }
+
     // MARK: - Initialization
 
     private init() {
         automaticallySelectDevice = AppDefaults.shared.object(forKey: Keys.automaticallySelectAudioDevice) as? Bool ?? true
-        refreshDevices()
-        setupDeviceChangeListener()
         setupWakeRecovery()
+        makeDisposableDeviceQueue(purpose: "listener").async { [weak self] in
+            self?.setupDeviceChangeListener()
+        }
+        refreshDevices()
     }
 
     deinit {
@@ -85,76 +111,197 @@ class AudioDeviceManager: ObservableObject {
 
     // MARK: - Public API
 
-    func refreshDevices() {
-        inputDevices = getInputDevices()
-        selectedDevice = currentSelectedDevice(in: inputDevices)
+    /// Captures only user preference state. Potentially blocking Core Audio
+    /// calls are deliberately excluded and run later on the disposable capture
+    /// preparation lane.
+    func makeCaptureSelectionSnapshot() -> CaptureSelectionSnapshot {
+        CaptureSelectionSnapshot(
+            automaticallySelectDevice: automaticallySelectDevice,
+            savedSelectedDeviceUID: savedSelectedDeviceUID
+        )
+    }
+
+    /// Resolves the already-applied recording input without mutating global route
+    /// or published UI state. Recording preparation never changes the system
+    /// default, so an abandoned attempt cannot overwrite a newer route.
+    func resolveCaptureDevice(using snapshot: CaptureSelectionSnapshot) -> CaptureDeviceResolution? {
+        let devices = getInputDevices()
+        guard !devices.isEmpty else { return nil }
+
+        let preferredDevice: AudioDevice?
+        if snapshot.automaticallySelectDevice {
+            preferredDevice = bestAutomaticInputDevice(in: devices)
+        } else if let savedUID = snapshot.savedSelectedDeviceUID {
+            preferredDevice = preferredInputDevice(for: savedUID, in: devices)
+        } else {
+            preferredDevice = nil
+        }
+
+        let usedFallback = !snapshot.automaticallySelectDevice && preferredDevice == nil
+        guard let target = preferredDevice ?? bestAutomaticInputDevice(in: devices) else {
+            return nil
+        }
+
+        guard getDefaultInputDevice()?.uniqueID == target.uniqueID else {
+            return nil
+        }
+
+        return CaptureDeviceResolution(
+            device: target,
+            availableDevices: devices,
+            usedFallback: usedFallback
+        )
+    }
+
+    /// Publishes the already-resolved result after native preparation wins.
+    /// No Core Audio calls occur here, so this cannot wedge the main run loop.
+    func publishCaptureDeviceResolution(_ resolution: CaptureDeviceResolution) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.publishCaptureDeviceResolution(resolution)
+            }
+            return
+        }
+
+        inputDevices = resolution.availableDevices
+        selectedDevice = resolution.device
+        SentryTelemetry.recordAudioDeviceEvent(
+            "recording_input_device",
+            device: resolution.device,
+            mode: resolution.usedFallback ? "fallback" : nil,
+            fallback: resolution.usedFallback
+        )
+    }
+
+    func refreshDevices(completion: (() -> Void)? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshDevices(completion: completion)
+            }
+            return
+        }
+
+        let operationID = UUID()
+        let snapshot = makeCaptureSelectionSnapshot()
+        refreshOperationID = operationID
+        makeDisposableDeviceQueue(purpose: "refresh").async { [weak self] in
+            guard let self else { return }
+            let devices = self.getInputDevices()
+            let selected = self.selectedDevice(for: snapshot, in: devices)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.refreshOperationID == operationID else { return }
+                self.inputDevices = devices
+                self.selectedDevice = selected
+                completion?()
+            }
+        }
     }
 
     func setAutomaticSelection(_ enabled: Bool) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.setAutomaticSelection(enabled)
+            }
+            return
+        }
+
         automaticallySelectDevice = enabled
         AppDefaults.shared.set(enabled, forKey: Keys.automaticallySelectAudioDevice)
         if enabled {
             AppDefaults.shared.removeObject(forKey: Keys.selectedAudioDeviceID)
-            refreshDevices()
-            _ = applyAutomaticDevice(forceNotify: true)
-        } else {
-            _ = applyPreferredOrAutomaticDevice()
         }
-        SentryTelemetry.recordAudioDeviceEvent(
-            "automatic_selection_changed",
-            device: selectedDevice,
-            mode: enabled ? "automatic" : "manual"
-        )
+        applyPreferredOrAutomaticDevice(forceNotify: true) { [weak self] device in
+            SentryTelemetry.recordAudioDeviceEvent(
+                "automatic_selection_changed",
+                device: device ?? self?.selectedDevice,
+                mode: enabled ? "automatic" : "manual"
+            )
+        }
     }
 
-    func selectDevice(_ device: AudioDevice) -> Bool {
-        let success = setDefaultInputDevice(deviceID: device.id)
-        guard success else {
-            refreshDevices()
-            return false
+    func selectDevice(_ device: AudioDevice, completion: ((Bool) -> Void)? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.selectDevice(device, completion: completion)
+            }
+            return
         }
 
+        // Persist the latest user intent before starting uncancellable Core Audio
+        // work. Older completions may reconcile the route, but can never restore an
+        // older preference.
         automaticallySelectDevice = false
         AppDefaults.shared.set(false, forKey: Keys.automaticallySelectAudioDevice)
         AppDefaults.shared.set(device.uniqueID, forKey: Keys.selectedAudioDeviceID)
         selectedDevice = device
-        SentryTelemetry.recordAudioDeviceEvent("manual_input_selected", device: device, mode: "manual")
-
-        NotificationCenter.default.post(
-            name: NSNotification.Name("AudioInputDeviceChanged"),
-            object: device.uniqueID
-        )
-        return true
+        applyPreferredOrAutomaticDevice(forceNotify: true) { resolvedDevice in
+            let success = resolvedDevice?.uniqueID == device.uniqueID
+            if success {
+                SentryTelemetry.recordAudioDeviceEvent("manual_input_selected", device: device, mode: "manual")
+            }
+            completion?(success)
+        }
     }
 
-    @discardableResult
-    func applyPreferredOrAutomaticDevice() -> AudioDevice? {
-        refreshDevices()
-
-        if automaticallySelectDevice {
-            return applyAutomaticDevice(forceNotify: false)
+    func applyPreferredOrAutomaticDevice(
+        forceNotify: Bool = false,
+        completion: ((AudioDevice?) -> Void)? = nil
+    ) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPreferredOrAutomaticDevice(
+                    forceNotify: forceNotify,
+                    completion: completion
+                )
+            }
+            return
         }
 
-        guard let savedUID = savedSelectedDeviceUID else {
-            return applyAutomaticDevice(forceNotify: false)
-        }
+        let operationID = UUID()
+        let snapshot = makeCaptureSelectionSnapshot()
+        maintenanceOperationID = operationID
+        refreshOperationID = nil
 
-        guard let preferred = preferredInputDevice(for: savedUID) else {
-            let fallback = applyAutomaticDevice(forceNotify: false)
-            DebugLog.info(
-                "Preferred input device \(savedUID) is not available yet; using temporary fallback \(fallback?.name ?? "none") while keeping manual selection",
-                context: "AudioDeviceManager"
-            )
-            SentryTelemetry.recordAudioDeviceEvent(
-                "preferred_unavailable_temporary_fallback",
-                device: fallback,
-                mode: "manual",
-                fallback: true
-            )
-            return fallback
-        }
+        makeDisposableDeviceQueue(purpose: "apply").async { [weak self] in
+            guard let self else { return }
+            let outcome = self.applyDevicePreference(snapshot)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.maintenanceOperationID == operationID else {
+                    if outcome.routeChanged, outcome.applied {
+                        self.routeReconciliationNeeded = true
+                        self.runPendingRouteReconciliationIfPossible()
+                    }
+                    completion?(nil)
+                    return
+                }
 
-        return apply(device: preferred, forceNotify: false)
+                self.maintenanceOperationID = nil
+                self.inputDevices = outcome.devices
+                guard outcome.applied, let target = outcome.target else {
+                    self.selectedDevice = outcome.target
+                    completion?(nil)
+                    self.runPendingRouteReconciliationIfPossible()
+                    return
+                }
+
+                self.selectedDevice = target
+                SentryTelemetry.recordAudioDeviceEvent(
+                    "input_applied",
+                    device: target,
+                    mode: outcome.usedFallback ? "fallback" : nil,
+                    fallback: outcome.usedFallback
+                )
+                if forceNotify || outcome.routeChanged {
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("AudioInputDeviceChanged"),
+                        object: target.uniqueID
+                    )
+                }
+                completion?(target)
+                self.runPendingRouteReconciliationIfPossible()
+            }
+        }
     }
 
     func getInputDevices() -> [AudioDevice] {
@@ -271,55 +418,39 @@ class AudioDeviceManager: ObservableObject {
         }
     }
 
-    /// Re-apply the user's preferred device when the device list changes (e.g. mic connected/disconnected)
-    @discardableResult
-    func reapplyPreferredDevice(forceNotify: Bool = false) -> AudioDevice? {
-        refreshDevices()
-
-        if automaticallySelectDevice {
-            if let device = applyAutomaticDevice(forceNotify: forceNotify) {
-                DebugLog.info("Automatic input device selected: \(device.name)", context: "AudioDeviceManager")
-                return device
-            }
-            return nil
-        }
-
-        guard let savedUID = savedSelectedDeviceUID else {
-            return applyAutomaticDevice(forceNotify: forceNotify)
-        }
-
-        guard let preferred = preferredInputDevice(for: savedUID) else {
-            let fallback = applyAutomaticDevice(forceNotify: forceNotify)
-            DebugLog.info(
-                "Preferred input device \(savedUID) is unavailable; using temporary fallback \(fallback?.name ?? "none") while waiting for reconnect",
-                context: "AudioDeviceManager"
-            )
-            SentryTelemetry.recordAudioDeviceEvent(
-                "preferred_missing_reapply_fallback",
-                device: fallback,
-                mode: "manual",
-                fallback: true
-            )
-            return fallback
-        }
-
-        DebugLog.info("Resolved preferred input device: \(preferred.name)", context: "AudioDeviceManager")
-        return apply(device: preferred, forceNotify: forceNotify)
+    /// Re-applies the user's preference without running Core Audio on the caller.
+    func reapplyPreferredDevice(
+        forceNotify: Bool = false,
+        completion: ((AudioDevice?) -> Void)? = nil
+    ) {
+        applyPreferredOrAutomaticDevice(
+            forceNotify: forceNotify,
+            completion: completion
+        )
     }
 
     // MARK: - Private Methods
 
-    private func currentSelectedDevice(in devices: [AudioDevice]) -> AudioDevice? {
-        if !automaticallySelectDevice {
-            guard let savedUID = savedSelectedDeviceUID else { return nil }
-            return preferredInputDevice(for: savedUID, in: devices) ?? bestAutomaticInputDevice(in: devices)
+    private func runPendingRouteReconciliationIfPossible() {
+        guard maintenanceOperationID == nil, routeReconciliationNeeded else { return }
+        routeReconciliationNeeded = false
+        applyPreferredOrAutomaticDevice()
+    }
+
+    private func selectedDevice(
+        for snapshot: CaptureSelectionSnapshot,
+        in devices: [AudioDevice]
+    ) -> AudioDevice? {
+        if !snapshot.automaticallySelectDevice {
+            guard let savedUID = snapshot.savedSelectedDeviceUID else { return nil }
+            return preferredInputDevice(for: savedUID, in: devices)
+                ?? bestAutomaticInputDevice(in: devices)
         }
         return bestAutomaticInputDevice(in: devices)
     }
 
-    private func preferredInputDevice(for uniqueID: String, in devices: [AudioDevice]? = nil) -> AudioDevice? {
-        let availableDevices = devices ?? inputDevices
-        if let listedDevice = availableDevices.first(where: { $0.uniqueID == uniqueID }), isInputDeviceAlive(listedDevice.id) {
+    private func preferredInputDevice(for uniqueID: String, in devices: [AudioDevice]) -> AudioDevice? {
+        if let listedDevice = devices.first(where: { $0.uniqueID == uniqueID }), isInputDeviceAlive(listedDevice.id) {
             return listedDevice
         }
 
@@ -336,35 +467,57 @@ class AudioDeviceManager: ObservableObject {
         return AudioDevice(id: deviceID, name: name, uniqueID: resolvedUID)
     }
 
-    private func applyAutomaticDevice(forceNotify: Bool) -> AudioDevice? {
-        guard let target = bestAutomaticInputDevice(in: inputDevices) else { return nil }
-        return apply(device: target, forceNotify: forceNotify)
-    }
-
-    private func apply(device target: AudioDevice, forceNotify: Bool) -> AudioDevice? {
-        let current = getDefaultInputDevice()
-        let shouldNotify = forceNotify || current?.uniqueID != target.uniqueID
-
-        if current?.uniqueID != target.uniqueID {
-            DebugLog.info("Applying input device: \(target.name)", context: "AudioDeviceManager")
-            guard setDefaultInputDevice(deviceID: target.id) else {
-                refreshDevices()
-                SentryTelemetry.recordAudioDeviceEvent("input_apply_failed", device: target)
-                return selectedDevice
-            }
+    private func applyDevicePreference(_ snapshot: CaptureSelectionSnapshot) -> DeviceApplyOutcome {
+        let devices = getInputDevices()
+        let preferred = snapshot.savedSelectedDeviceUID.flatMap {
+            preferredInputDevice(for: $0, in: devices)
         }
+        let usedFallback = !snapshot.automaticallySelectDevice && preferred == nil
+        let target = snapshot.automaticallySelectDevice
+            ? bestAutomaticInputDevice(in: devices)
+            : preferred ?? bestAutomaticInputDevice(in: devices)
 
-        selectedDevice = target
-        SentryTelemetry.recordAudioDeviceEvent("input_applied", device: target)
-
-        if shouldNotify {
-            NotificationCenter.default.post(
-                name: NSNotification.Name("AudioInputDeviceChanged"),
-                object: target.uniqueID
+        guard let target else {
+            return DeviceApplyOutcome(
+                devices: devices,
+                target: nil,
+                usedFallback: usedFallback,
+                routeChanged: false,
+                applied: false
             )
         }
 
-        return target
+        let current = getDefaultInputDevice()
+        let routeChanged = current?.uniqueID != target.uniqueID
+
+        if routeChanged {
+            DebugLog.info("Applying input device: \(target.name)", context: "AudioDeviceManager")
+            guard setDefaultInputDevice(deviceID: target.id) else {
+                SentryTelemetry.recordAudioDeviceEvent("input_apply_failed", device: target)
+                return DeviceApplyOutcome(
+                    devices: devices,
+                    target: target,
+                    usedFallback: usedFallback,
+                    routeChanged: true,
+                    applied: false
+                )
+            }
+        }
+
+        return DeviceApplyOutcome(
+            devices: devices,
+            target: target,
+            usedFallback: usedFallback,
+            routeChanged: routeChanged,
+            applied: true
+        )
+    }
+
+    private func makeDisposableDeviceQueue(purpose: String) -> DispatchQueue {
+        DispatchQueue(
+            label: "ai.writingmate.audio-device.\(purpose).\(UUID().uuidString)",
+            qos: .utility
+        )
     }
 
     private func bestAutomaticInputDevice(in devices: [AudioDevice]) -> AudioDevice? {
@@ -372,13 +525,21 @@ class AudioDeviceManager: ObservableObject {
 
         if let defaultDevice = getDefaultInputDevice(),
            devices.contains(defaultDevice),
-           !shouldAvoidAutomaticallySelecting(defaultDevice, clamshellClosed: clamshellClosed)
+           !shouldAvoidAutomaticallySelecting(
+               defaultDevice,
+               clamshellClosed: clamshellClosed,
+               availableDevices: devices
+           )
         {
             return defaultDevice
         }
 
         let allowedCandidates = devices.filter { device in
-            !shouldAvoidAutomaticallySelecting(device, clamshellClosed: clamshellClosed)
+            !shouldAvoidAutomaticallySelecting(
+                device,
+                clamshellClosed: clamshellClosed,
+                availableDevices: devices
+            )
         }
 
         let physicalCandidates = allowedCandidates.filter { device in
@@ -392,9 +553,15 @@ class AudioDeviceManager: ObservableObject {
         } ?? physicalCandidates.first ?? allowedCandidates.first
     }
 
-    private func shouldAvoidAutomaticallySelecting(_ device: AudioDevice, clamshellClosed: Bool) -> Bool {
+    private func shouldAvoidAutomaticallySelecting(
+        _ device: AudioDevice,
+        clamshellClosed: Bool,
+        availableDevices: [AudioDevice]
+    ) -> Bool {
         guard isBuiltInInputDevice(device.id) else { return false }
-        return clamshellClosed || !hasActiveBuiltInDisplay() || shouldPreferExternalInputOverBuiltIn()
+        return clamshellClosed
+            || !hasActiveBuiltInDisplay()
+            || shouldPreferExternalInputOverBuiltIn(availableDevices: availableDevices)
     }
 
     private func isBuiltInInputDevice(_ deviceID: AudioDeviceID) -> Bool {
@@ -482,8 +649,8 @@ class AudioDeviceManager: ObservableObject {
         return displays.contains { CGDisplayIsBuiltin($0) == 0 }
     }
 
-    private func shouldPreferExternalInputOverBuiltIn() -> Bool {
-        hasActiveExternalDisplay() && inputDevices.contains { !isBuiltInInputDevice($0.id) }
+    private func shouldPreferExternalInputOverBuiltIn(availableDevices: [AudioDevice]) -> Bool {
+        hasActiveExternalDisplay() && availableDevices.contains { !isBuiltInInputDevice($0.id) }
     }
 
     private func hasInputStreams(deviceID: AudioDeviceID) -> Bool {
@@ -692,12 +859,12 @@ class AudioDeviceManager: ObservableObject {
             // Re-apply saved device preference when devices change. AirPods and other
             // Bluetooth devices often emit a burst of Core Audio notifications while
             // connecting/disconnecting, so debounce before touching the default input.
-            self.reapplyPreferredDevice()
-
-            NotificationCenter.default.post(
-                name: NSNotification.Name("AudioDeviceListChanged"),
-                object: nil
-            )
+            self.reapplyPreferredDevice { _ in
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("AudioDeviceListChanged"),
+                    object: nil
+                )
+            }
         }
 
         deviceChangeWorkItem = workItem
@@ -733,6 +900,7 @@ class AudioDeviceManager: ObservableObject {
     private func scheduleWakeRecovery(reason: String, restart: Bool) {
         if restart {
             wakeRecoveryGeneration += 1
+            wakeOperationID = nil
             wakeRecoveryWorkItem?.cancel()
             DebugLog.info("Scheduling audio device wake recovery: \(reason)", context: "AudioDeviceManager")
         }
@@ -749,18 +917,36 @@ class AudioDeviceManager: ObservableObject {
             guard let self else { return }
             guard generation == self.wakeRecoveryGeneration else { return }
 
-            let resolvedDevice = self.reapplyPreferredDevice(forceNotify: true)
-            NotificationCenter.default.post(
-                name: NSNotification.Name("AudioDeviceListChanged"),
-                object: nil
-            )
+            let operationID = UUID()
+            self.wakeOperationID = operationID
+            self.reapplyPreferredDevice(forceNotify: true) { [weak self] resolvedDevice in
+                guard let self,
+                      generation == self.wakeRecoveryGeneration,
+                      self.wakeOperationID == operationID
+                else { return }
 
-            guard self.shouldContinueWakeRecovery(resolvedDevice: resolvedDevice) else {
-                DebugLog.info("Audio device wake recovery finished after \(reason)", context: "AudioDeviceManager")
-                return
+                self.wakeOperationID = nil
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("AudioDeviceListChanged"),
+                    object: nil
+                )
+
+                guard self.shouldContinueWakeRecovery(resolvedDevice: resolvedDevice) else {
+                    DebugLog.info("Audio device wake recovery finished after \(reason)", context: "AudioDeviceManager")
+                    return
+                }
+
+                self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
             }
 
-            self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Constants.deviceOperationTimeout) { [weak self] in
+                guard let self,
+                      generation == self.wakeRecoveryGeneration,
+                      self.wakeOperationID == operationID
+                else { return }
+                self.wakeOperationID = nil
+                self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
+            }
         }
 
         wakeRecoveryWorkItem = workItem
@@ -779,7 +965,7 @@ class AudioDeviceManager: ObservableObject {
             return false
         }
 
-        return isClamshellClosed()
+        return true
     }
 }
 

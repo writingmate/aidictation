@@ -1,7 +1,12 @@
 import Foundation
 internal import Combine
 
-/// Manages recording history persistence and audio file storage
+/// Display/cache projection of the durable audio-processing journal.
+///
+/// This type never owns or deletes audio. AppState must first commit a store
+/// tombstone/Clear generation and only then update this cache or remove a
+/// legacy source that lives outside the managed store.
+@MainActor
 class HistoryManager: ObservableObject {
     static let shared = HistoryManager()
 
@@ -12,7 +17,6 @@ class HistoryManager: ObservableObject {
     // MARK: - Private Properties
 
     private enum Constants {
-        static let maxRecordings = 100
         static let appDirectoryName = "WhisperMate"
         static let recordingsDirectoryName = "Recordings"
         static let historyFileName = "history.json"
@@ -20,6 +24,8 @@ class HistoryManager: ObservableObject {
 
     private let fileURL: URL
     private let audioDirectory: URL
+    private var activeRecordingIDs: Set<UUID> = []
+    private var persistenceIsHealthy = true
 
     // MARK: - Initialization
 
@@ -41,61 +47,88 @@ class HistoryManager: ObservableObject {
 
     // MARK: - Public API
 
-    func addRecording(_ recording: Recording) {
-        // Add to beginning of list (most recent first)
-        recordings.insert(recording, at: 0)
-
-        // Keep only the latest recordings
-        if recordings.count > Constants.maxRecordings {
-            let removed = recordings.suffix(from: Constants.maxRecordings)
-            // Delete audio files for removed recordings
-            for oldRecording in removed {
-                deleteAudioFile(at: oldRecording.audioFileURL)
-            }
-            recordings = Array(recordings.prefix(Constants.maxRecordings))
-        }
-
-        saveRecordings()
+    /// Stable managed source location allocated before recognition starts.
+    func audioFileURL(for recordingID: UUID) -> URL {
+        audioDirectory.appendingPathComponent("recording_\(recordingID.uuidString).m4a")
     }
 
-    func updateRecording(_ recording: Recording) {
+    func recording(id: UUID) -> Recording? {
+        recordings.first { $0.id == id }
+    }
+
+    @discardableResult
+    func registerActiveRecording(id: UUID) -> Bool {
+        activeRecordingIDs.insert(id).inserted
+    }
+
+    func unregisterActiveRecording(id: UUID) {
+        activeRecordingIDs.remove(id)
+    }
+
+    @discardableResult
+    func addRecording(_ recording: Recording) -> Bool {
+        upsertRecording(recording)
+    }
+
+    @discardableResult
+    func upsertRecording(_ recording: Recording) -> Bool {
+        let previous = recordings
         if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
             recordings[index] = recording
-            saveRecordings()
+        } else {
+            recordings.insert(recording, at: 0)
         }
-    }
 
-    func deleteRecording(_ recording: Recording) {
-        recordings.removeAll { $0.id == recording.id }
-        deleteAudioFile(at: recording.audioFileURL)
-        saveRecordings()
-    }
-
-    func clearAll() {
-        // Delete all audio files
-        for recording in recordings {
-            deleteAudioFile(at: recording.audioFileURL)
+        guard saveRecordings() else {
+            recordings = previous
+            return false
         }
-        recordings.removeAll()
-        saveRecordings()
+        return true
     }
 
-    /// Copy audio file from temporary location to persistent storage
-    func copyAudioToPersistentStorage(from sourceURL: URL) -> URL? {
-        let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
-        let destinationURL = audioDirectory.appendingPathComponent(fileName)
-
-        do {
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
+    @discardableResult
+    func updateRecording(_ recording: Recording) -> Bool {
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            let previous = recordings[index]
+            recordings[index] = recording
+            guard saveRecordings() else {
+                recordings[index] = previous
+                return false
             }
-            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
-            DebugLog.info("Copied audio file to persistent storage: \(destinationURL.path)", context: "HistoryManager")
-            return destinationURL
-        } catch {
-            DebugLog.error("Failed to copy audio file: \(error)", context: "HistoryManager")
-            return nil
+            return true
         }
+        return false
+    }
+
+    /// Keeps the current UI truthful when a terminal disk write fails. This is
+    /// intentionally memory-only; the durable journal remains the recovery source.
+    func showUnsavedTerminalState(_ recording: Recording) {
+        guard recording.status != .processing && recording.status != .retrying,
+              let index = recordings.firstIndex(where: { $0.id == recording.id })
+        else { return }
+        recordings[index] = recording
+    }
+
+    @discardableResult
+    func removeRecordingMetadata(id: UUID) -> Bool {
+        let previous = recordings
+        recordings.removeAll { $0.id == id }
+        guard saveRecordings() else {
+            recordings = previous
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    func clearMetadata() -> Bool {
+        let previous = recordings
+        recordings.removeAll()
+        guard saveRecordings() else {
+            recordings = previous
+            return false
+        }
+        return true
     }
 
     // MARK: - Search
@@ -119,17 +152,6 @@ class HistoryManager: ObservableObject {
 
     // MARK: - Private Methods
 
-    private func deleteAudioFile(at url: URL) {
-        do {
-            if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
-                DebugLog.info("Deleted audio file: \(url.path)", context: "HistoryManager")
-            }
-        } catch {
-            DebugLog.error("Failed to delete audio file: \(error)", context: "HistoryManager")
-        }
-    }
-
     private func loadRecordings() {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return
@@ -139,16 +161,23 @@ class HistoryManager: ObservableObject {
             let data = try Data(contentsOf: fileURL)
             recordings = try JSONDecoder().decode([Recording].self, from: data)
         } catch {
-            DebugLog.info("Failed to load recordings: \(error)", context: "HistoryManager")
+            // Never replace an unreadable history with an empty array. Preserve the
+            // file and fail closed until journal reconciliation can recover it.
+            persistenceIsHealthy = false
+            DebugLog.error("History is unreadable; preserving it and disabling history changes: \(error)", context: "HistoryManager")
         }
     }
 
-    private func saveRecordings() {
+    @discardableResult
+    private func saveRecordings() -> Bool {
+        guard persistenceIsHealthy else { return false }
         do {
             let data = try JSONEncoder().encode(recordings)
             try data.write(to: fileURL, options: .atomic)
+            return true
         } catch {
             DebugLog.info("Failed to save recordings: \(error)", context: "HistoryManager")
+            return false
         }
     }
 }

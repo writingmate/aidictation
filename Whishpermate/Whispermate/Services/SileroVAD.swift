@@ -1,9 +1,9 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreML
 import Foundation
 
 /// Direct CoreML wrapper for Silero VAD model
-class SileroVAD {
+actor SileroVAD {
     private var model: MLModel?
     private let modelURL: URL
 
@@ -43,9 +43,8 @@ class SileroVAD {
         DebugLog.info("✅ Found VAD model at: \(foundPath)", context: "SileroVAD")
         modelURL = URL(fileURLWithPath: foundPath)
 
-        Task {
-            await loadModel()
-        }
+        // Load lazily inside `analyzeAudio`. Long sources are rejected by the
+        // metadata budget before an optional model is compiled or initialized.
     }
 
     private func loadModel() async {
@@ -61,9 +60,9 @@ class SileroVAD {
             let compiledURL: URL
             if modelURL.pathExtension == "mlpackage" {
                 DebugLog.info("📦 Compiling mlpackage model...", context: "SileroVAD")
-                // compileModel is synchronous, not async
+                let packageURL = modelURL
                 compiledURL = try await Task.detached {
-                    try MLModel.compileModel(at: self.modelURL)
+                    try MLModel.compileModel(at: packageURL)
                 }.value
                 DebugLog.info("✅ Model compiled to: \(compiledURL.path)", context: "SileroVAD")
             } else {
@@ -88,128 +87,174 @@ class SileroVAD {
             throw VADError.notInitialized
         }
 
-        // Load and convert audio to 16kHz mono
-        let samples = try loadAudio(url: url)
-
-        // Process in chunks
         let chunkSize = 576 // Silero VAD v6 expects 576 samples
-        var probabilities: [Float] = []
-
-        // Initialize hidden state (1 x 128) - Silero VAD v6 state dimensions
         var hiddenState = try MLMultiArray(shape: [1, 128], dataType: .float32)
         for i in 0 ..< 128 {
             hiddenState[i] = 0.0
         }
-
-        // Initialize cell state (1 x 128) - LSTM cell state
         var cellState = try MLMultiArray(shape: [1, 128], dataType: .float32)
         for i in 0 ..< 128 {
             cellState[i] = 0.0
         }
 
-        for i in stride(from: 0, to: samples.count, by: chunkSize) {
-            let end = min(i + chunkSize, samples.count)
-            var chunk = Array(samples[i ..< end])
-
-            // Pad if necessary
-            if chunk.count < chunkSize {
-                chunk.append(contentsOf: Array(repeating: Float(0), count: chunkSize - chunk.count))
-            }
-
-            // Create input array (1 x 576)
-            let inputArray = try MLMultiArray(shape: [1, NSNumber(value: chunkSize)], dataType: .float32)
-            for (index, value) in chunk.enumerated() {
-                inputArray[index] = NSNumber(value: value)
-            }
-
-            // Run inference with state
-            let input = try MLDictionaryFeatureProvider(dictionary: [
-                "audio_input": inputArray,
-                "hidden_state": hiddenState,
-                "cell_state": cellState,
-            ])
-            let output = try await model.prediction(from: input)
-
-            // Get probability from vad_output
-            if let outputArray = output.featureValue(for: "vad_output")?.multiArrayValue {
-                let prob = outputArray[0].floatValue
-                probabilities.append(prob)
-            }
-
-            // Update states for next iteration
-            if let newH = output.featureValue(for: "new_hidden_state")?.multiArrayValue {
-                hiddenState = newH
-            }
-            if let newC = output.featureValue(for: "new_cell_state")?.multiArrayValue {
-                cellState = newC
-            }
-        }
-
-        // Calculate statistics
-        guard !probabilities.isEmpty else { return false }
-
-        let avgProb = probabilities.reduce(0, +) / Float(probabilities.count)
-        let speechCount = probabilities.filter { $0 >= threshold }.count
-        let speechRatio = Float(speechCount) / Float(probabilities.count)
-
-        DebugLog.info(
-            "VAD Analysis - Avg: \(String(format: "%.3f", avgProb)), " +
-                "Ratio: \(String(format: "%.3f", speechRatio)) (\(speechCount)/\(probabilities.count))",
-            context: "SileroVAD"
-        )
-
-        return avgProb >= threshold || speechRatio >= 0.1
-    }
-
-    private func loadAudio(url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-
-        // Create 16kHz mono format
+        let sourceFormat = file.processingFormat
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: 16000,
+            sampleRate: 16_000,
             channels: 1,
             interleaved: false
         ) else {
             throw VADError.formatConversionFailed
         }
-
-        // Read and convert
-        guard let converter = AVAudioConverter(from: format, to: targetFormat) else {
+        guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
             throw VADError.formatConversionFailed
         }
 
-        let frameCount = UInt32(file.length)
-        guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+        let sourceCapacity: AVAudioFrameCount = 8_192
+        guard let inputBuffer = AVAudioPCMBuffer(
+            pcmFormat: sourceFormat,
+            frameCapacity: sourceCapacity
+        ) else {
             throw VADError.bufferAllocationFailed
         }
-
-        try file.read(into: inputBuffer)
-
-        let outputFrameCapacity = UInt32(Double(frameCount) * (16000.0 / format.sampleRate))
+        let ratio = targetFormat.sampleRate / sourceFormat.sampleRate
+        let outputCapacity = AVAudioFrameCount(
+            max(1, ceil(Double(sourceCapacity) * ratio) + 32)
+        )
         guard let outputBuffer = AVAudioPCMBuffer(
             pcmFormat: targetFormat,
-            frameCapacity: outputFrameCapacity
+            frameCapacity: outputCapacity
         ) else {
             throw VADError.bufferAllocationFailed
         }
 
-        var error: NSError?
-        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            outStatus.pointee = .haveData
-            return inputBuffer
+        var pendingSamples: [Float] = []
+        pendingSamples.reserveCapacity(Int(outputCapacity) + chunkSize)
+        var analyzedChunks = 0
+        var maximumProbability: Float = 0
+
+        while true {
+            try Task.checkCancellation()
+            inputBuffer.frameLength = 0
+            try file.read(into: inputBuffer, frameCount: sourceCapacity)
+            guard inputBuffer.frameLength > 0 else { break }
+
+            outputBuffer.frameLength = 0
+            var conversionError: NSError?
+            let inputSupplier = AudioConverterInputSupplier(buffer: inputBuffer)
+            let status = converter.convert(to: outputBuffer, error: &conversionError) { _, inputStatus in
+                inputSupplier.next(status: inputStatus)
+            }
+            if let conversionError {
+                throw VADError.conversionError(conversionError)
+            }
+            guard status != .error else { throw VADError.formatConversionFailed }
+            guard let converted = outputBuffer.floatChannelData?[0] else {
+                throw VADError.bufferReadFailed
+            }
+            pendingSamples.append(contentsOf: UnsafeBufferPointer(
+                start: converted,
+                count: Int(outputBuffer.frameLength)
+            ))
+
+            while pendingSamples.count >= chunkSize {
+                try Task.checkCancellation()
+                let chunk = Array(pendingSamples.prefix(chunkSize))
+                pendingSamples.removeFirst(chunkSize)
+                if let probability = try speechProbability(
+                    for: chunk,
+                    model: model,
+                    hiddenState: &hiddenState,
+                    cellState: &cellState
+                ) {
+                    analyzedChunks += 1
+                    maximumProbability = max(maximumProbability, probability)
+                    // VAD is a rejection optimization. One positive window is
+                    // sufficient and lets long recordings stop decoding early.
+                    if probability >= threshold {
+                        DebugLog.info(
+                            "VAD detected speech after \(analyzedChunks) streamed chunks",
+                            context: "SileroVAD"
+                        )
+                        return true
+                    }
+                }
+            }
         }
 
-        if let error = error {
-            throw VADError.conversionError(error)
+        if !pendingSamples.isEmpty {
+            pendingSamples.append(
+                contentsOf: repeatElement(0, count: chunkSize - pendingSamples.count)
+            )
+            if let probability = try speechProbability(
+                for: pendingSamples,
+                model: model,
+                hiddenState: &hiddenState,
+                cellState: &cellState
+            ) {
+                analyzedChunks += 1
+                maximumProbability = max(maximumProbability, probability)
+                if probability >= threshold { return true }
+            }
         }
 
-        // Extract samples
-        guard let floatData = outputBuffer.floatChannelData?[0] else {
-            throw VADError.bufferReadFailed
-        }
+        DebugLog.info(
+            "VAD found no speech in \(analyzedChunks) streamed chunks; max=\(String(format: "%.3f", maximumProbability))",
+            context: "SileroVAD"
+        )
+        return false
+    }
 
-        return Array(UnsafeBufferPointer(start: floatData, count: Int(outputBuffer.frameLength)))
+    private func speechProbability(
+        for chunk: [Float],
+        model: MLModel,
+        hiddenState: inout MLMultiArray,
+        cellState: inout MLMultiArray
+    ) throws -> Float? {
+        let inputArray = try MLMultiArray(
+            shape: [1, NSNumber(value: chunk.count)],
+            dataType: .float32
+        )
+        for (index, value) in chunk.enumerated() {
+            inputArray[index] = NSNumber(value: value)
+        }
+        let input = try MLDictionaryFeatureProvider(dictionary: [
+            "audio_input": inputArray,
+            "hidden_state": hiddenState,
+            "cell_state": cellState,
+        ])
+        let output = try model.prediction(from: input)
+        if let newHidden = output.featureValue(for: "new_hidden_state")?.multiArrayValue {
+            hiddenState = newHidden
+        }
+        if let newCell = output.featureValue(for: "new_cell_state")?.multiArrayValue {
+            cellState = newCell
+        }
+        return output.featureValue(for: "vad_output")?.multiArrayValue?[0].floatValue
+    }
+}
+
+private nonisolated final class AudioConverterInputSupplier: @unchecked Sendable {
+    private let lock = NSLock()
+    private let buffer: AVAudioPCMBuffer
+    private var supplied = false
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func next(
+        status: UnsafeMutablePointer<AVAudioConverterInputStatus>
+    ) -> AVAudioBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !supplied else {
+            status.pointee = .noDataNow
+            return nil
+        }
+        supplied = true
+        status.pointee = .haveData
+        return buffer
     }
 }

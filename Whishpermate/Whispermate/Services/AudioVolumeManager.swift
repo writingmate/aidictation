@@ -3,33 +3,90 @@ import CoreAudio
 import Foundation
 
 class AudioVolumeManager {
-    private var originalVolume: Float?
-    private var targetVolumeLevel: Float = 0.3 // Set volume to 30% (0.0 to 1.0 scale)
+    private let stateLock = NSLock()
+    private var activeGeneration: UUID?
+    private var baselineVolume: Float?
+    private var inFlightWorkers = 0
+    private let targetVolumeLevel: Float = 0.3 // Set volume to 30% (0.0 to 1.0 scale)
 
-    /// Lowers the system volume to a specific level and stores the original volume for restoration
+    /// Starts a disposable volume adjustment. Core Audio never runs on the caller's
+    /// thread, and a late adjustment compensates itself if recording has stopped.
     func lowerVolume() {
-        guard let currentVolume = getSystemVolume() else {
-            DebugLog.info("Failed to get current volume", context: "AudioVolumeManager")
-            return
+        let generation = UUID()
+        stateLock.lock()
+        activeGeneration = generation
+        inFlightWorkers += 1
+        stateLock.unlock()
+
+        makeDisposableQueue().async { [self] in
+            defer { finishWorker() }
+            guard let currentVolume = getSystemVolume() else {
+                DebugLog.info("Failed to get current volume", context: "AudioVolumeManager")
+                return
+            }
+
+            stateLock.lock()
+            if activeGeneration == generation, baselineVolume == nil {
+                baselineVolume = currentVolume
+            }
+            let hasAuthoritativeVolume = activeGeneration != nil || baselineVolume != nil
+            stateLock.unlock()
+
+            guard hasAuthoritativeVolume else { return }
+            convergeToAuthoritativeVolume()
         }
-
-        // Store the current volume so we can restore it later
-        originalVolume = currentVolume
-
-        DebugLog.info("Lowering volume from \(currentVolume) to \(targetVolumeLevel)", context: "AudioVolumeManager")
-        setSystemVolume(targetVolumeLevel)
     }
 
-    /// Restores the volume to the original level before it was lowered
+    /// Invalidates any in-flight lowering immediately and restores in the
+    /// background. A newer recording remains authoritative if it starts first.
     func restoreVolume() {
-        guard let volume = originalVolume else {
-            DebugLog.info("No original volume to restore", context: "AudioVolumeManager")
-            return
+        stateLock.lock()
+        activeGeneration = nil
+        let shouldRestore = baselineVolume != nil
+        if shouldRestore {
+            inFlightWorkers += 1
         }
+        stateLock.unlock()
 
-        DebugLog.info("Restoring volume to \(volume)", context: "AudioVolumeManager")
-        setSystemVolume(volume)
-        originalVolume = nil
+        guard shouldRestore else { return }
+        makeDisposableQueue().async { [self] in
+            defer { finishWorker() }
+            convergeToAuthoritativeVolume()
+        }
+    }
+
+    /// Every worker re-reads the desired state after its uncancellable native set.
+    /// Therefore the last native call to return also repairs any older side effect.
+    private func convergeToAuthoritativeVolume() {
+        while true {
+            stateLock.lock()
+            let desiredVolume = activeGeneration == nil ? baselineVolume : targetVolumeLevel
+            stateLock.unlock()
+
+            guard let desiredVolume else { return }
+            setSystemVolume(desiredVolume)
+
+            stateLock.lock()
+            let latestDesiredVolume = activeGeneration == nil ? baselineVolume : targetVolumeLevel
+            stateLock.unlock()
+            guard latestDesiredVolume != desiredVolume else { return }
+        }
+    }
+
+    private func finishWorker() {
+        stateLock.lock()
+        inFlightWorkers = max(0, inFlightWorkers - 1)
+        if inFlightWorkers == 0, activeGeneration == nil {
+            baselineVolume = nil
+        }
+        stateLock.unlock()
+    }
+
+    private func makeDisposableQueue() -> DispatchQueue {
+        DispatchQueue(
+            label: "ai.writingmate.audio-volume.\(UUID().uuidString)",
+            qos: .utility
+        )
     }
 
     // MARK: - Private Helpers

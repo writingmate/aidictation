@@ -1710,11 +1710,9 @@ struct SettingsView: View {
     private func loadAudioDevices() {
         // Get all available audio input devices using Core Audio
         isSyncingAudioDeviceSelection = true
-        audioDeviceManager.refreshDevices()
-        audioDevices = audioDeviceManager.inputDevices
-
-        selectedAudioDevice = audioDeviceManager.automaticallySelectDevice ? nil : audioDeviceManager.selectedDevice
-        DispatchQueue.main.async {
+        audioDeviceManager.refreshDevices {
+            audioDevices = audioDeviceManager.inputDevices
+            selectedAudioDevice = audioDeviceManager.automaticallySelectDevice ? nil : audioDeviceManager.selectedDevice
             isSyncingAudioDeviceSelection = false
         }
     }
@@ -1723,11 +1721,12 @@ struct SettingsView: View {
         if let device = device {
             DebugLog.info("Setting audio device: \(device.localizedName)", context: "SettingsView")
 
-            let success = audioDeviceManager.selectDevice(device)
-            if success {
-                DebugLog.info("Successfully set default input device", context: "SettingsView")
-            } else {
-                DebugLog.info("Failed to set default input device", context: "SettingsView")
+            audioDeviceManager.selectDevice(device) { success in
+                if success {
+                    DebugLog.info("Successfully set default input device", context: "SettingsView")
+                } else {
+                    DebugLog.info("Failed to set default input device", context: "SettingsView")
+                }
             }
         } else {
             audioDeviceManager.setAutomaticSelection(true)

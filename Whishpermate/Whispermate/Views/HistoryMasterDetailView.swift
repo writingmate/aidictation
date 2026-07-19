@@ -77,7 +77,9 @@ private struct HistoryMasterDetailContentView: View {
 
 private struct HistoryDetailPane: View {
     @ObservedObject var historyManager: HistoryManager
+    @ObservedObject private var appState = AppState.shared
     @Binding var selectedRecording: Recording?
+    @State private var operationError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -109,6 +111,14 @@ private struct HistoryDetailPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle(detailTitle)
+        .alert("History Couldn’t Be Changed", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(operationError ?? "Please try again.")
+        }
     }
 
     private var detailTitle: String {
@@ -135,16 +145,23 @@ private struct HistoryDetailPane: View {
             nextSelection = nil
         }
 
-        historyManager.deleteRecording(recordingToDelete)
-        selectedRecording = nextSelection
+        Task {
+            if let message = await appState.deleteRecording(recordingToDelete) {
+                operationError = message
+            } else {
+                selectedRecording = nextSelection
+            }
+        }
     }
 }
 
 /// Sidebar showing list of all recordings
 struct HistorySidebarView: View {
     @ObservedObject var historyManager: HistoryManager
+    @ObservedObject private var appState = AppState.shared
     @Binding var selectedRecording: Recording?
     @State private var searchText = ""
+    @State private var operationError: String?
 
     var filteredRecordings: [Recording] {
         historyManager.filteredRecordings(searchText: searchText)
@@ -169,6 +186,14 @@ struct HistorySidebarView: View {
             }
         }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search recordings")
+        .alert("History Couldn’t Be Changed", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(operationError ?? "Please try again.")
+        }
     }
 
     @ViewBuilder
@@ -203,6 +228,11 @@ struct HistorySidebarView: View {
                     } label: {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     }
+                    .disabled(
+                        !recording.canRetranscribe ||
+                        appState.isHistoryMutationInProgress ||
+                        !FileManager.default.fileExists(atPath: recording.audioFileURL.path)
+                    )
 
                     Button {
                         revealInFinder(recording)
@@ -237,18 +267,26 @@ struct HistorySidebarView: View {
     }
 
     private func deleteRecording(_ recording: Recording) {
-        if selectedRecording?.id == recording.id {
-            if let index = historyManager.recordings.firstIndex(where: { $0.id == recording.id }) {
-                if index < historyManager.recordings.count - 1 {
-                    selectedRecording = historyManager.recordings[index + 1]
-                } else if index > 0 {
-                    selectedRecording = historyManager.recordings[index - 1]
-                } else {
-                    selectedRecording = nil
-                }
+        let nextSelection: Recording?
+        if let index = historyManager.recordings.firstIndex(where: { $0.id == recording.id }) {
+            if index < historyManager.recordings.count - 1 {
+                nextSelection = historyManager.recordings[index + 1]
+            } else if index > 0 {
+                nextSelection = historyManager.recordings[index - 1]
+            } else {
+                nextSelection = nil
+            }
+        } else {
+            nextSelection = selectedRecording
+        }
+
+        Task {
+            if let message = await appState.deleteRecording(recording) {
+                operationError = message
+            } else if selectedRecording?.id == recording.id {
+                selectedRecording = nextSelection
             }
         }
-        historyManager.deleteRecording(recording)
     }
 }
 
@@ -259,12 +297,18 @@ struct HistorySidebarRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Main content
-            if let transcription = recording.transcription {
-                Text(transcription)
-                    .dsFont(.body)
-                    .lineLimit(3)
-            } else {
-                Label("Failed", systemImage: "exclamationmark.triangle.fill")
+            if recording.status == .processing || recording.status == .retrying {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(recording.status == .retrying ? "Transcribing again…" : "Processing…")
+                        .foregroundStyle(.secondary)
+                }
+            } else if recording.status == .cancelled {
+                Label("Cancelled", systemImage: "xmark.circle")
+                    .foregroundStyle(.secondary)
+            } else if recording.status == .failed {
+                Label("Transcription stopped", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                 if let errorMessage = recording.errorMessage {
                     Text(errorMessage)
@@ -272,6 +316,15 @@ struct HistorySidebarRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
+                if let transcription = recording.transcription {
+                    Text("Recovered text: \(transcription)")
+                        .dsFont(.body)
+                        .lineLimit(3)
+                }
+            } else if let transcription = recording.transcription {
+                Text(transcription)
+                    .dsFont(.body)
+                    .lineLimit(3)
             }
 
             // Metadata
@@ -301,7 +354,7 @@ struct HistorySidebarRow: View {
             }
         }
         .padding(.vertical, 4)
-        .badge(recording.status == .success ? nil : "!")
+        .badge(recording.status == .failed ? "!" : nil)
     }
 }
 
@@ -313,6 +366,7 @@ struct RecordingDetailView: View {
     let onDelete: (Recording) -> Void
     @State private var showCopiedNotification = false
     @StateObject private var audioPlayer = AudioPlayerModel()
+    @ObservedObject private var appState = AppState.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -320,13 +374,37 @@ struct RecordingDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     // Transcription or error
-                    if recording.status == .retrying {
+                    if recording.status == .processing || recording.status == .retrying {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Re-transcribing…")
+                            Text(recording.status == .retrying ? "Transcribing again…" : "Processing…")
                                 .dsFont(.body)
                                 .foregroundStyle(.secondary)
+                        }
+                        .transition(.opacity)
+                    } else if recording.status == .cancelled {
+                        Label("Cancelled", systemImage: "xmark.circle")
+                            .dsFont(.body)
+                            .foregroundStyle(.secondary)
+                    } else if recording.status == .failed {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Transcription stopped")
+                                .dsFont(.headline)
+                                .foregroundStyle(.orange)
+                            if let errorMessage = recording.errorMessage {
+                                Text(errorMessage)
+                                    .dsFont(.body)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let transcription = recording.transcription {
+                                Text("Recovered text")
+                                    .dsFont(.labelMedium)
+                                    .foregroundStyle(.secondary)
+                                Text(transcription)
+                                    .textSelection(.enabled)
+                                    .dsFont(.body)
+                            }
                         }
                         .transition(.opacity)
                     } else if let transcription = recording.transcription {
@@ -340,19 +418,6 @@ struct RecordingDetailView: View {
                             .textSelection(.enabled)
                             .dsFont(.body)
                             .transition(.opacity)
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Transcription Failed")
-                                .dsFont(.headline)
-                                .foregroundStyle(.orange)
-
-                            if let errorMessage = recording.errorMessage {
-                                Text(errorMessage)
-                                    .dsFont(.body)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .transition(.opacity)
                     }
                 }
                 .padding(24)
@@ -400,7 +465,11 @@ struct RecordingDetailView: View {
                     Button(action: retryTranscription) {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     }
-                    .disabled(!FileManager.default.fileExists(atPath: recording.audioFileURL.path))
+                    .disabled(
+                        !recording.canRetranscribe ||
+                        appState.isHistoryMutationInProgress ||
+                        !FileManager.default.fileExists(atPath: recording.audioFileURL.path)
+                    )
                 }
 
                 // Copy button
@@ -429,6 +498,7 @@ struct RecordingDetailView: View {
                 }
                 .foregroundStyle(.red)
                 .keyboardShortcut(.delete, modifiers: [])
+                .disabled(appState.isHistoryMutationInProgress)
             }
         }
         .onDeleteCommand(perform: deleteRecording)

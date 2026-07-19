@@ -6,6 +6,7 @@ import WhisperMateShared
 
 /// Central application state - single source of truth for app state
 /// Recording works completely independently of view lifecycle
+@MainActor
 class AppState: ObservableObject {
     static let shared = AppState()
 
@@ -13,7 +14,9 @@ class AppState: ObservableObject {
 
     enum RecordingState {
         case idle
+        case starting
         case recording
+        case finalizing
         case transcribing
         case pasting
     }
@@ -37,22 +40,37 @@ class AppState: ObservableObject {
     @Published var errorMessage: String = ""
     @Published var currentRecording: Recording?
     @Published var isProcessing: Bool = false
+    @Published private(set) var isHistoryMutationInProgress = false
 
     // MARK: - Private State
 
     private var shouldAutoPaste = false
     private var isContinuousRecording = false
     private var recordingStartTime: Date?
+    private var finalizedRecordingDuration: TimeInterval?
     private var capturedAppContext: String?
     private var capturedAppBundleId: String?
     private var capturedWindowTitle: String?
     private var capturedScreenContext: String?
     private var recordingMode: RecordingMode = .dictation
     private var shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
+    private var activeRecordingID: UUID?
+    private var recordingAttemptID: UUID?
+    private var activeCaptureLease: MacAudioProcessingStore.Lease?
+    private var activeTranscriptionSnapshot: MacTranscriptionAttemptSnapshot?
+    private var captureDeadlineTask: Task<Void, Never>?
+    private var retranscriptionAttemptIDs: [UUID: UUID] = [:]
+    private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var realtimeTranscriptionClient: OpenAIRealtimeTranscriptionClient?
     private var realtimeTranscript: String = ""
     private let diarizationTimeoutSeconds: UInt64 = 75
     private let llmPostProcessingTimeoutSeconds: UInt64 = 45
+    private let commandDeliveryTimeoutSeconds: UInt64 = 45
+    private let minimumRecognitionTimeoutSeconds: UInt64 = 90
+    private let maximumRecognitionTimeoutSeconds: UInt64 = 600
+    private let maximumCaptureDurationSeconds: UInt64 = 8 * 60 * 60
+    private let recordingPreparationStoreDeadlineSeconds: UInt64 = 10
+    private let recordingFinalizationStoreDeadlineSeconds: UInt64 = 60
 
     // MARK: - Dependencies (singletons)
 
@@ -69,11 +87,15 @@ class AppState: ObservableObject {
     private let languageManager = LanguageManager.shared
     private let screenCaptureManager = ScreenCaptureManager.shared
 
-    private var openAIClient: OpenAIClient?
-
     private init() {
         // Set up app state observers
         setupAppStateObservers()
+        audioRecorder.captureFailureHandler = { [weak self] message in
+            self?.handleCaptureFailure(message)
+        }
+        Task { [weak self] in
+            await self?.reconcileAudioProcessingStore()
+        }
     }
 
     // MARK: - Public API
@@ -85,8 +107,9 @@ class AppState: ObservableObject {
     func startRecording(continuous: Bool = false, isCommandMode: Bool = false, showOverlayControls: Bool = false) {
         DebugLog.info("🎬 AppState.startRecording(continuous: \(continuous), isCommandMode: \(isCommandMode), showOverlayControls: \(showOverlayControls))", context: "AppState")
 
-        // Don't start if already recording
-        guard recordingState == .idle else {
+        // One app-wide owner keeps capture, local recognition, and retries from
+        // competing for the same audio/model resources.
+        guard recordingState == .idle, retranscriptionAttemptIDs.isEmpty else {
             DebugLog.info("⚠️ Already in state: \(recordingState)", context: "AppState")
             return
         }
@@ -99,30 +122,47 @@ class AppState: ObservableObject {
         let shouldShowOverlayControls = showOverlayControls && !isCommandMode
         shouldKeepOverlayIdleVisibleAfterCurrentRecording = shouldShowOverlayControls
 
-        // Set state
-        recordingState = .recording
+        let recordingID = UUID()
+        let attemptID = UUID()
+
+        guard historyManager.registerActiveRecording(id: recordingID) else {
+            errorMessage = "A recording is already being handled. Please try again."
+            return
+        }
+
+        activeRecordingID = recordingID
+        recordingAttemptID = attemptID
+        activeCaptureLease = nil
+        activeTranscriptionSnapshot = nil
+        recordingState = .starting
         isContinuousRecording = continuous
         shouldAutoPaste = true // Always auto-paste when hotkey is triggered
-        recordingStartTime = Date()
+        recordingStartTime = nil
+        finalizedRecordingDuration = nil
 
         DebugLog.info("Recording mode: \(recordingMode)", context: "AppState")
 
         // Clear previous state
         ClipboardManager.cancelLiveDictationInsertion(removeInsertedText: false)
-        DispatchQueue.main.async { [weak self] in
-            self?.errorMessage = ""
-            self?.transcriptionText = ""
-        }
+        errorMessage = ""
+        transcriptionText = ""
 
-        // Notify that recording started
-        NotificationCenter.default.post(name: .recordingStarted, object: nil)
-
-        // Capture app context for tone/style customization
-        if let context = AppContextHelper.getCurrentAppContext() {
-            capturedAppContext = context.description
-            capturedAppBundleId = context.bundleId
-            capturedWindowTitle = context.windowTitle
-            DebugLog.info("Captured app context: \(context.description)", context: "AppState")
+        // Accessibility calls can block on an unresponsive foreground app. Capture
+        // context best-effort off-main and fence the late result to this attempt.
+        capturedAppContext = nil
+        capturedAppBundleId = nil
+        capturedWindowTitle = nil
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let context = AppContextHelper.getCurrentAppContext()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.recordingAttemptID == attemptID else { return }
+                self.capturedAppContext = context?.description
+                self.capturedAppBundleId = context?.bundleId
+                self.capturedWindowTitle = context?.windowTitle
+                if let context {
+                    DebugLog.info("Captured app context: \(context.description)", context: "AppState")
+                }
+            }
         }
 
         // Capture screen context if enabled
@@ -131,6 +171,7 @@ class AppState: ObservableObject {
             Task {
                 if let screenContext = await screenCaptureManager.captureAndExtractText() {
                     await MainActor.run {
+                        guard self.recordingAttemptID == attemptID else { return }
                         self.capturedScreenContext = screenContext
                         DebugLog.info("Captured screen context", context: "AppState")
                     }
@@ -141,31 +182,218 @@ class AppState: ObservableObject {
         // Store previous app for pasting
         ClipboardManager.storePreviousApp()
 
-        startRealtimeTranscriptionIfAvailable()
+        Task { [weak self] in
+            await self?.beginPreparedCapture(
+                recordingID: recordingID,
+                attemptID: attemptID,
+                shouldShowOverlayControls: shouldShowOverlayControls
+            )
+        }
+    }
 
-        // Start audio recording
-        overlayManager.initializeAudioObservers()
-        audioRecorder.startRecording()
-
-        if audioRecorder.isRecording {
-            DebugLog.info("✅ Recording started successfully", context: "AppState")
-            if overlayManager.isOverlayMode {
-                let isCommand = (recordingMode == .command)
-                overlayManager.setRecordingControlsVisible(shouldShowOverlayControls && !isCommand)
-                if !shouldShowOverlayControls {
-                    overlayManager.setHoverExpanded(true)
-                }
-                overlayManager.transition(to: .recording(isCommandMode: isCommand))
-                DebugLog.info("Overlay transitioned to recording (command: \(isCommand))", context: "AppState")
+    private func beginPreparedCapture(
+        recordingID: UUID,
+        attemptID: UUID,
+        shouldShowOverlayControls: Bool
+    ) async {
+        let store = await MacAudioProcessingStoreProvider.shared()
+        do {
+            let deadline = Date().addingTimeInterval(
+                TimeInterval(recordingPreparationStoreDeadlineSeconds)
+            )
+            let prepared = try await store.prepare(
+                recordingID: recordingID,
+                attemptID: attemptID,
+                deadline: deadline
+            )
+            guard activeRecordingID == recordingID,
+                  recordingAttemptID == attemptID,
+                  recordingState == .starting
+            else {
+                _ = try? await store.tombstone(recordingID: recordingID)
+                return
             }
-        } else {
-            DebugLog.info("❌ Recording failed to start", context: "AppState")
-            let realtimeClient = stopRealtimeTranscription()
-            realtimeClient?.close()
-            recordingState = .idle
-            errorMessage = "Failed to start recording"
-            shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
-            finishOverlayAfterRecording()
+
+            let provisional = Recording(
+                id: recordingID,
+                audioFileURL: store.partialURL(for: recordingID),
+                status: .processing,
+                outputMode: requestedOutputMode(),
+                transcriptionOptions: requestedTranscriptionOptions(),
+                sourceIntegrity: .unfinalized
+            )
+            guard historyManager.upsertRecording(provisional) else {
+                _ = try? await store.tombstone(recordingID: recordingID)
+                finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: "Recording couldn’t start because its recovery information couldn’t be displayed.",
+                    removeMetadata: true
+                )
+                return
+            }
+
+            activeCaptureLease = prepared.lease
+            overlayManager.initializeAudioObservers()
+            audioRecorder.startRecording(
+                recordingID: attemptID,
+                recordingURL: store.partialURL(for: recordingID)
+            ) { [weak self] terminal in
+                Task { @MainActor [weak self] in
+                    await self?.handleRecorderStartTerminal(
+                        terminal,
+                        store: store,
+                        recordingID: recordingID,
+                        attemptID: attemptID,
+                        shouldShowOverlayControls: shouldShowOverlayControls
+                    )
+                }
+            }
+        } catch {
+            guard activeRecordingID == recordingID, recordingAttemptID == attemptID else { return }
+            finishRecordingWithoutTranscription(
+                recordingID: recordingID,
+                message: error.localizedDescription,
+                removeMetadata: true
+            )
+        }
+    }
+
+    private func handleRecorderStartTerminal(
+        _ terminal: RecordingPreparationAttempt.Terminal,
+        store: MacAudioProcessingStore,
+        recordingID: UUID,
+        attemptID: UUID,
+        shouldShowOverlayControls: Bool
+    ) async {
+        guard activeRecordingID == recordingID,
+              recordingAttemptID == attemptID,
+              recordingState == .starting
+        else { return }
+
+        switch terminal {
+        case .ready:
+            guard let lease = activeCaptureLease else {
+                await abortCaptureAfterStoreFailure(
+                    store: store,
+                    recordingID: recordingID,
+                    message: "Recording ownership could not be confirmed. The available audio was kept."
+                )
+                return
+            }
+            do {
+                let recording = try await store.markRecording(
+                    lease,
+                    captureDeadline: Date().addingTimeInterval(
+                        TimeInterval(maximumCaptureDurationSeconds)
+                    )
+                )
+                guard activeRecordingID == recordingID,
+                      recordingAttemptID == attemptID,
+                      recordingState == .starting
+                else { return }
+                activeCaptureLease = recording.lease
+                recordingState = .recording
+                recordingStartTime = Date()
+                let fixedRecording = historyManager.recording(id: recordingID)
+                let snapshot = makeTranscriptionAttemptSnapshot(
+                    outputMode: fixedRecording?.outputMode ?? requestedOutputMode(),
+                    transcriptionOptions: fixedRecording?.transcriptionOptions
+                        ?? requestedTranscriptionOptions(),
+                    appContext: capturedAppContext,
+                    screenContext: capturedScreenContext
+                )
+                activeTranscriptionSnapshot = snapshot
+                scheduleCaptureDeadline(recordingID: recordingID, attemptID: attemptID)
+                startRealtimeTranscriptionIfAvailable(
+                    recordingID: recordingID,
+                    attemptID: attemptID,
+                    snapshot: snapshot
+                )
+                NotificationCenter.default.post(name: .recordingStarted, object: nil)
+
+                DebugLog.info("✅ Recording started successfully", context: "AppState")
+                if overlayManager.isOverlayMode {
+                    let isCommand = recordingMode == .command
+                    overlayManager.setRecordingControlsVisible(shouldShowOverlayControls && !isCommand)
+                    if !shouldShowOverlayControls {
+                        overlayManager.setHoverExpanded(true)
+                    }
+                    overlayManager.transition(to: .recording(isCommandMode: isCommand))
+                }
+            } catch {
+                await abortCaptureAfterStoreFailure(
+                    store: store,
+                    recordingID: recordingID,
+                    message: error.localizedDescription
+                )
+            }
+
+        case .failed(let message):
+            _ = try? await store.tombstone(recordingID: recordingID)
+            finishRecordingStart(recordingID: recordingID, terminalMessage: message)
+        case .timedOut:
+            _ = try? await store.tombstone(recordingID: recordingID)
+            finishRecordingStart(
+                recordingID: recordingID,
+                terminalMessage: "Recording didn’t start. Check your microphone and try again."
+            )
+        case .invalidated:
+            _ = try? await store.tombstone(recordingID: recordingID)
+            finishRecordingStart(
+                recordingID: recordingID,
+                terminalMessage: "Your microphone changed before recording started. Please try again."
+            )
+        case .cancelled:
+            _ = try? await store.tombstone(recordingID: recordingID)
+            finishRecordingStart(recordingID: recordingID, terminalMessage: nil)
+        @unknown default:
+            _ = try? await store.tombstone(recordingID: recordingID)
+            finishRecordingStart(
+                recordingID: recordingID,
+                terminalMessage: "Recording couldn’t start. Please try again."
+            )
+        }
+    }
+
+    private func abortCaptureAfterStoreFailure(
+        store: MacAudioProcessingStore,
+        recordingID: UUID,
+        message: String
+    ) async {
+        let lease = activeCaptureLease
+        audioRecorder.stopRecording(disposition: .submitIfValid) { _ in }
+        if let lease {
+            _ = try? await store.fail(lease, message: message)
+        }
+        let sourceURL = store.partialURL(for: recordingID)
+        _ = persistActiveRecording(
+            recordingID: recordingID,
+            audioURL: sourceURL,
+            status: .failed,
+            errorMessage: message,
+            sourceIntegrity: .unfinalized
+        )
+        finishRecordingWithoutTranscription(recordingID: recordingID, message: message)
+    }
+
+    private func scheduleCaptureDeadline(recordingID: UUID, attemptID: UUID) {
+        captureDeadlineTask?.cancel()
+        let deadlineNanoseconds = maximumCaptureDurationSeconds * 1_000_000_000
+        captureDeadlineTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: deadlineNanoseconds)
+            } catch {
+                return
+            }
+            guard let self,
+                  self.activeRecordingID == recordingID,
+                  self.recordingAttemptID == attemptID,
+                  self.recordingState == .recording
+            else { return }
+            self.finalizeRecording(
+                disposition: .submitIfValid,
+                terminalMessage: "Recording reached the maximum length. The captured audio was kept."
+            )
         }
     }
 
@@ -188,99 +416,409 @@ class AppState: ObservableObject {
             context: "DictationFlow"
         )
 
+        if recordingState == .starting {
+            cancelStartingCapture()
+            return
+        }
+
         guard recordingState == .recording else {
             DebugLog.info("⚠️ Not recording, current state: \(recordingState)", context: "AppState")
             return
         }
 
-        // Check recording duration
-        if let startTime = recordingStartTime {
+        if let startTime = recordingStartTime,
+           Date().timeIntervalSince(startTime) < 0.3
+        {
             let duration = Date().timeIntervalSince(startTime)
-
-            if duration < 0.3 {
-                DebugLog.info("Recording too short (\(duration)s), skipping", context: "AppState")
-                recordingState = .idle
-                shouldAutoPaste = false
-                recordingStartTime = nil
-                recordingMode = .dictation
-                _ = audioRecorder.stopRecording()
-                let realtimeClient = stopRealtimeTranscription()
-                realtimeClient?.close()
-                ClipboardManager.cancelLiveDictationInsertion()
-
-                finishOverlayAfterRecording()
-                return
-            }
-        }
-
-        // Stop audio recording
-        guard let audioURL = audioRecorder.stopRecording() else {
-            DebugLog.info("❌ Failed to get audio URL", context: "AppState")
-            let realtimeClient = stopRealtimeTranscription()
-            realtimeClient?.close()
-            recordingState = .idle
-            recordingMode = .dictation
-            errorMessage = "Failed to save recording"
-            ClipboardManager.cancelLiveDictationInsertion()
-            finishOverlayAfterRecording()
+            DebugLog.info("Recording too short (\(duration)s), skipping", context: "AppState")
+            finalizeRecording(disposition: .discard, terminalMessage: nil)
             return
         }
 
-        let realtimeClient = stopRealtimeTranscription()
-        DebugLog.info("Realtime client captured on stop: \(realtimeClient != nil)", context: "DictationFlow")
-
-        // Check file size
-        do {
-            let fileAttributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
-            let fileSize = fileAttributes[.size] as? Int64 ?? 0
-            DebugLog.info(
-                "Recording file ready name=\(audioURL.lastPathComponent) bytes=\(fileSize)",
-                context: "DictationFlow"
-            )
-
-            if fileSize < 1000 {
-                DebugLog.info("Audio file too small (\(fileSize) bytes)", context: "AppState")
-                recordingState = .idle
-                shouldAutoPaste = false
-                recordingMode = .dictation
-                try? FileManager.default.removeItem(at: audioURL)
-                realtimeClient?.close()
-                ClipboardManager.cancelLiveDictationInsertion()
-                finishOverlayAfterRecording()
-                return
-            }
-        } catch {
-            DebugLog.info("Error checking file: \(error)", context: "AppState")
-        }
-
-        // Begin transcription
-        transcribe(audioURL: audioURL, realtimeClient: realtimeClient)
+        finalizeRecording(disposition: .submitIfValid, terminalMessage: nil)
     }
 
     /// Cancel recording, discard captured audio, and return to idle without transcription.
     func cancelRecording() {
         DebugLog.info("✕ AppState.cancelRecording()", context: "AppState")
 
+        if recordingState == .starting {
+            cancelStartingCapture()
+            return
+        }
+
         guard recordingState == .recording else {
             DebugLog.info("⚠️ Not recording, current state: \(recordingState)", context: "AppState")
             return
         }
 
-        let audioURL = audioRecorder.stopRecording()
-        let realtimeClient = stopRealtimeTranscription()
-        realtimeClient?.close()
-        if let audioURL {
-            try? FileManager.default.removeItem(at: audioURL)
+        finalizeRecording(disposition: .discard, terminalMessage: nil)
+    }
+
+    private func cancelStartingCapture() {
+        guard let recordingID = activeRecordingID,
+              let attemptID = recordingAttemptID
+        else { return }
+        recordingState = .finalizing
+        Task { [weak self] in
+            guard let self else { return }
+            let store = await MacAudioProcessingStoreProvider.shared()
+            _ = try? await store.tombstone(recordingID: recordingID)
+            guard self.activeRecordingID == recordingID,
+                  self.recordingAttemptID == attemptID
+            else { return }
+            self.audioRecorder.cancelPendingOrActiveCapture(recordingID: attemptID)
+            _ = self.historyManager.removeRecordingMetadata(id: recordingID)
+            self.finishRecordingWithoutTranscription(recordingID: recordingID, message: nil)
+        }
+    }
+
+    private func finalizeRecording(
+        disposition: AudioRecorder.StopDisposition,
+        terminalMessage: String?
+    ) {
+        guard let recordingID = activeRecordingID,
+              let attemptID = recordingAttemptID,
+              let lease = activeCaptureLease
+        else {
+            finishRecordingWithoutTranscription(
+                recordingID: activeRecordingID,
+                message: terminalMessage ?? "Recording couldn’t be saved. Please try again."
+            )
+            return
         }
 
+        recordingState = .finalizing
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        finalizedRecordingDuration = recordingStartTime.map { Date().timeIntervalSince($0) }
+        recordingStartTime = nil
+        if overlayManager.isOverlayMode {
+            overlayManager.transition(
+                to: .processing(isCommandMode: recordingMode == .command)
+            )
+        }
+        let realtimeClient = stopRealtimeTranscription()
+        DebugLog.info(
+            "Realtime client captured on stop: \(realtimeClient != nil)",
+            context: "DictationFlow"
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            let store = await MacAudioProcessingStoreProvider.shared()
+            do {
+                if disposition == .discard {
+                    _ = try await store.tombstone(recordingID: recordingID)
+                } else {
+                    let finalizing = try await store.beginFinalization(
+                        lease,
+                        deadline: Date().addingTimeInterval(
+                            TimeInterval(recordingFinalizationStoreDeadlineSeconds)
+                        )
+                    )
+                    guard self.activeRecordingID == recordingID,
+                          self.recordingAttemptID == attemptID,
+                          self.recordingState == .finalizing
+                    else { return }
+                    self.activeCaptureLease = finalizing.lease
+                }
+
+                guard self.activeRecordingID == recordingID,
+                      self.recordingAttemptID == attemptID,
+                      self.recordingState == .finalizing
+                else { return }
+                self.audioRecorder.stopRecording(disposition: disposition) { [weak self] terminal in
+                    Task { @MainActor [weak self] in
+                        await self?.handleRecorderFinalizationTerminal(
+                            terminal,
+                            store: store,
+                            recordingID: recordingID,
+                            attemptID: attemptID,
+                            disposition: disposition,
+                            terminalMessage: terminalMessage,
+                            realtimeClient: realtimeClient
+                        )
+                    }
+                }
+            } catch {
+                self.audioRecorder.stopRecording(disposition: .submitIfValid) { _ in }
+                _ = try? await store.fail(lease, message: error.localizedDescription)
+                realtimeClient?.close()
+                self.finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func handleRecorderFinalizationTerminal(
+        _ terminal: RecordingFinalizationAttempt.Terminal,
+        store: MacAudioProcessingStore,
+        recordingID: UUID,
+        attemptID: UUID,
+        disposition: AudioRecorder.StopDisposition,
+        terminalMessage: String?,
+        realtimeClient: OpenAIRealtimeTranscriptionClient?
+    ) async {
+        guard activeRecordingID == recordingID,
+              recordingAttemptID == attemptID,
+              recordingState == .finalizing
+        else {
+            realtimeClient?.close()
+            return
+        }
+
+        switch terminal {
+        case .finalized:
+            guard let lease = activeCaptureLease else {
+                realtimeClient?.close()
+                finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: "Recording ownership could not be confirmed. The available audio was kept."
+                )
+                return
+            }
+            var closedAudioWasCheckpointed = false
+            do {
+                // AudioRecorder delivers `.finalized` only after the exact
+                // session has drained writes and released its AVAudioFile.
+                let proof = try await store.proveClosedAudio(lease)
+                let checkpoint = try await store.checkpointClosedAudio(lease, proof: proof)
+                closedAudioWasCheckpointed = true
+                activeCaptureLease = checkpoint.lease
+                let ready = try await store.finishFinalization(checkpoint.lease, proof: proof)
+                activeCaptureLease = ready.lease
+                let finalURL = store.finalURL(for: recordingID)
+
+                if let terminalMessage {
+                    let failed = try await store.fail(ready.lease, message: terminalMessage)
+                    activeCaptureLease = failed.lease
+                    _ = persistActiveRecording(
+                        recordingID: recordingID,
+                        audioURL: finalURL,
+                        status: .failed,
+                        errorMessage: terminalMessage,
+                        sourceIntegrity: .complete
+                    )
+                    realtimeClient?.close()
+                    finishRecordingWithoutTranscription(
+                        recordingID: recordingID,
+                        message: terminalMessage
+                    )
+                    return
+                }
+
+                _ = persistActiveRecording(
+                    recordingID: recordingID,
+                    audioURL: finalURL,
+                    status: .processing,
+                    errorMessage: nil,
+                    sourceIntegrity: .complete
+                )
+                await beginLiveTranscription(
+                    store: store,
+                    ready: ready,
+                    recordingID: recordingID,
+                    realtimeClient: realtimeClient
+                )
+            } catch {
+                realtimeClient?.close()
+                var failedRecord: MacAudioProcessingStore.Record?
+                if let lease = activeCaptureLease {
+                    let failureMutation = try? await store.fail(
+                        lease,
+                        message: error.localizedDescription
+                    )
+                    failedRecord = failureMutation?.record
+                }
+                if failedRecord == nil {
+                    failedRecord = await store.record(for: recordingID)
+                }
+                let partialURL = store.partialURL(for: recordingID)
+                let finalURL = store.finalURL(for: recordingID)
+                let partialExists = FileManager.default.fileExists(atPath: partialURL.path)
+                let finalExists = FileManager.default.fileExists(atPath: finalURL.path)
+                let finalIsCheckpointed = finalExists && !partialExists &&
+                    (closedAudioWasCheckpointed || failedRecord?.audioIntegrity != nil)
+                _ = persistActiveRecording(
+                    recordingID: recordingID,
+                    audioURL: finalIsCheckpointed ? finalURL : partialURL,
+                    status: .failed,
+                    errorMessage: error.localizedDescription,
+                    sourceIntegrity: finalIsCheckpointed ? .complete : .unfinalized
+                )
+                finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: error.localizedDescription
+                )
+            }
+
+        case .failed(let message, let recoverableURL):
+            realtimeClient?.close()
+            let displayedMessage = terminalMessage ?? message
+            if let lease = activeCaptureLease {
+                _ = try? await store.fail(lease, message: displayedMessage)
+            }
+            _ = persistActiveRecording(
+                recordingID: recordingID,
+                audioURL: recoverableURL,
+                status: .failed,
+                errorMessage: displayedMessage,
+                sourceIntegrity: .knownIncomplete
+            )
+            finishRecordingWithoutTranscription(recordingID: recordingID, message: displayedMessage)
+
+        case .timedOut(let recoverableURL):
+            realtimeClient?.close()
+            let displayedMessage = terminalMessage ?? (disposition == .discard
+                ? nil
+                : "Recording took too long to save. The audio was kept for recovery.")
+            if let lease = activeCaptureLease {
+                _ = try? await store.timeOut(lease)
+            }
+            _ = persistActiveRecording(
+                recordingID: recordingID,
+                audioURL: recoverableURL,
+                status: .failed,
+                errorMessage: displayedMessage,
+                sourceIntegrity: .unfinalized
+            )
+            finishRecordingWithoutTranscription(recordingID: recordingID, message: displayedMessage)
+
+        case .discarded:
+            realtimeClient?.close()
+            _ = historyManager.removeRecordingMetadata(id: recordingID)
+            finishRecordingWithoutTranscription(recordingID: recordingID, message: terminalMessage)
+
+        case .unavailable(let message):
+            realtimeClient?.close()
+            let displayedMessage = terminalMessage ?? message
+            if let lease = activeCaptureLease {
+                _ = try? await store.fail(lease, message: displayedMessage)
+            }
+            _ = persistActiveRecording(
+                recordingID: recordingID,
+                audioURL: store.partialURL(for: recordingID),
+                status: .failed,
+                errorMessage: displayedMessage,
+                sourceIntegrity: .unfinalized
+            )
+            finishRecordingWithoutTranscription(recordingID: recordingID, message: displayedMessage)
+
+        @unknown default:
+            realtimeClient?.close()
+            let message = terminalMessage ?? "Recording couldn’t be saved. Please try again."
+            if let lease = activeCaptureLease {
+                _ = try? await store.fail(lease, message: message)
+            }
+            finishRecordingWithoutTranscription(recordingID: recordingID, message: message)
+        }
+    }
+
+    private func finishRecordingWithoutTranscription(
+        recordingID: UUID?,
+        message: String?,
+        removeMetadata: Bool = false
+    ) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        var metadataRemovalFailed = false
+        if let recordingID {
+            if removeMetadata {
+                metadataRemovalFailed = !historyManager.removeRecordingMetadata(id: recordingID)
+            }
+            historyManager.unregisterActiveRecording(id: recordingID)
+            if activeRecordingID == recordingID {
+                activeRecordingID = nil
+                recordingAttemptID = nil
+                activeCaptureLease = nil
+                activeTranscriptionSnapshot = nil
+            }
+        }
         recordingState = .idle
         isContinuousRecording = false
         shouldAutoPaste = false
         recordingStartTime = nil
+        finalizedRecordingDuration = nil
         recordingMode = .dictation
-
+        if metadataRemovalFailed {
+            errorMessage = "Recording stopped, but its recovery information couldn’t be updated."
+        } else if let message {
+            errorMessage = message
+        }
+        CommandModeManager.shared.reset()
         ClipboardManager.cancelLiveDictationInsertion()
         finishOverlayAfterRecording()
+    }
+
+    private func finishRecordingStart(recordingID: UUID, terminalMessage: String?) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        let realtimeClient = stopRealtimeTranscription()
+        realtimeClient?.close()
+        let removedMetadata = historyManager.removeRecordingMetadata(id: recordingID)
+        historyManager.unregisterActiveRecording(id: recordingID)
+        if activeRecordingID == recordingID {
+            activeRecordingID = nil
+            recordingAttemptID = nil
+            activeCaptureLease = nil
+            activeTranscriptionSnapshot = nil
+        }
+        recordingState = .idle
+        isContinuousRecording = false
+        shouldAutoPaste = false
+        recordingStartTime = nil
+        finalizedRecordingDuration = nil
+        recordingMode = .dictation
+        shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
+        if !removedMetadata {
+            errorMessage = "Recording didn’t start, and its recovery information couldn’t be updated."
+        } else if let terminalMessage {
+            errorMessage = terminalMessage
+        }
+        CommandModeManager.shared.reset()
+        ClipboardManager.cancelLiveDictationInsertion()
+        finishOverlayAfterRecording()
+    }
+
+    @discardableResult
+    private func persistActiveRecording(
+        recordingID: UUID,
+        audioURL: URL,
+        status: TranscriptionStatus,
+        errorMessage: String?,
+        sourceIntegrity: RecordingSourceIntegrity,
+        transcription: String? = nil,
+        wordCount: Int? = nil,
+        outputMode: TranscriptionOutputMode? = nil,
+        transcriptionOptions: TranscriptionOptions? = nil
+    ) -> Recording? {
+        guard activeRecordingID == recordingID else { return nil }
+
+        let previous = historyManager.recording(id: recordingID)
+        let recording = Recording(
+            id: recordingID,
+            timestamp: previous?.timestamp ?? Date(),
+            audioFileURL: audioURL,
+            transcription: transcription,
+            status: status,
+            errorMessage: errorMessage,
+            retryCount: previous?.retryCount ?? 0,
+            duration: finalizedRecordingDuration ?? previous?.duration,
+            wordCount: wordCount,
+            outputMode: outputMode ?? requestedOutputMode(),
+            transcriptionOptions: transcriptionOptions ?? requestedTranscriptionOptions(),
+            sourceIntegrity: sourceIntegrity,
+            legacyAudioFilePath: previous?.legacyAudioFilePath
+        )
+        return historyManager.upsertRecording(recording) ? recording : nil
+    }
+
+    private func handleCaptureFailure(_ message: String) {
+        guard recordingState == .recording else { return }
+        finalizeRecording(disposition: .submitIfValid, terminalMessage: message)
     }
 
     /// Toggle continuous recording mode
@@ -303,56 +841,361 @@ class AppState: ObservableObject {
     func retranscribe(recording: Recording) {
         DebugLog.info("🔄 AppState.retranscribe(id: \(recording.id))", context: "AppState")
 
-        let audioURL = recording.audioFileURL
-        guard FileManager.default.fileExists(atPath: audioURL.path) else {
-            DebugLog.error("Audio file not found: \(audioURL.path)", context: "AppState")
-            var updated = recording
-            updated.errorMessage = "Audio file not found"
-            updated.status = .failed
-            historyManager.updateRecording(updated)
+        guard recordingState == .idle,
+              retranscriptionAttemptIDs.isEmpty,
+              !recording.isInProgress
+        else { return }
+
+        let attemptID = UUID()
+        guard historyManager.registerActiveRecording(id: recording.id) else { return }
+        retranscriptionAttemptIDs[recording.id] = attemptID
+
+        var retrying = recording
+        retrying.retryCount += 1
+        retrying.status = .retrying
+        retrying.errorMessage = nil
+        _ = historyManager.upsertRecording(retrying)
+        let snapshot = makeTranscriptionAttemptSnapshot(
+            outputMode: retrying.outputMode,
+            transcriptionOptions: retrying.transcriptionOptions,
+            appContext: nil,
+            screenContext: nil
+        )
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runRetranscription(
+                recording: retrying,
+                attemptID: attemptID,
+                snapshot: snapshot
+            )
+        }
+        transcriptionTasks[recording.id] = task
+    }
+
+    private func runRetranscription(
+        recording: Recording,
+        attemptID: UUID,
+        snapshot: MacTranscriptionAttemptSnapshot
+    ) async {
+        let store = await MacAudioProcessingStoreProvider.shared()
+        do {
+            var record = await store.record(for: recording.id)
+            var legacyAudioFilePath = recording.legacyAudioFilePath
+            if record == nil {
+                guard FileManager.default.fileExists(atPath: recording.audioFileURL.path) else {
+                    throw NSError(
+                        domain: "AppState",
+                        code: -4,
+                        userInfo: [NSLocalizedDescriptionKey: "The saved audio could not be found."]
+                    )
+                }
+                let generation = await store.view().clearGeneration
+                let adopted = try await store.adoptFinalizedSource(
+                    recordingID: recording.id,
+                    attemptID: UUID(),
+                    sourceURL: recording.audioFileURL,
+                    expectedClearGeneration: generation,
+                    deadline: Date().addingTimeInterval(
+                        TimeInterval(recognitionTimeoutSeconds(for: recording.duration))
+                    )
+                )
+                record = adopted.record
+                legacyAudioFilePath = recording.audioFileURL.path
+            }
+
+            guard var durableRecord = record else {
+                throw MacAudioProcessingStore.StoreError.recordingNotFound
+            }
+            if durableRecord.stage == .failed, durableRecord.source == .partial {
+                let salvageDeadline = Date().addingTimeInterval(
+                    TimeInterval(recognitionTimeoutSeconds(for: recording.duration))
+                )
+                let proof = try await store.proveRecoverablePartial(
+                    recordingID: recording.id,
+                    expectedRevision: durableRecord.revision,
+                    expectedClearGeneration: durableRecord.clearGeneration,
+                    deadline: salvageDeadline
+                )
+                let salvaged = try await store.salvageFinalizedPartial(
+                    recordingID: recording.id,
+                    salvageAttemptID: UUID(),
+                    expectedRevision: durableRecord.revision,
+                    expectedClearGeneration: durableRecord.clearGeneration,
+                    deadline: salvageDeadline,
+                    proof: proof
+                )
+                durableRecord = salvaged.record
+            }
+
+            let recognition = try await store.beginRecognition(
+                recordingID: recording.id,
+                attemptID: attemptID,
+                expectedRevision: durableRecord.revision,
+                deadline: Date().addingTimeInterval(
+                    TimeInterval(recognitionTimeoutSeconds(for: recording.duration))
+                )
+            )
+            let session = MacStoreTranscriptionSession(
+                store: store,
+                mutation: recognition
+            )
+            let finalURL = store.finalURL(for: recording.id)
+            var projected = recording
+            projected.audioFileURL = finalURL
+            projected.sourceIntegrity = .complete
+            projected.legacyAudioFilePath = legacyAudioFilePath
+            projected.status = .retrying
+            projected.errorMessage = nil
+            _ = historyManager.upsertRecording(projected)
+
+            await executeTranscriptionAttempt(
+                recording: projected,
+                attemptID: attemptID,
+                session: session,
+                audioURL: finalURL,
+                snapshot: snapshot,
+                realtimeClient: nil,
+                isLiveRecording: false
+            )
+        } catch {
+            await finishRetranscriptionFailure(
+                recording: recording,
+                attemptID: attemptID,
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func deleteRecording(_ recording: Recording) async -> String? {
+        guard !isHistoryMutationInProgress else {
+            return "Another History change is still finishing."
+        }
+        isHistoryMutationInProgress = true
+        defer { isHistoryMutationInProgress = false }
+
+        let store = await MacAudioProcessingStoreProvider.shared()
+        let managedRecord = await store.record(for: recording.id)
+        var managedCleanupFailed = false
+        if managedRecord != nil {
+            do {
+                let cleanup = try await store.tombstone(recordingID: recording.id)
+                managedCleanupFailed = !cleanup.completed
+            } catch {
+                return error.localizedDescription
+            }
+        }
+
+        transcriptionTasks[recording.id]?.cancel()
+        transcriptionTasks.removeValue(forKey: recording.id)
+        retranscriptionAttemptIDs.removeValue(forKey: recording.id)
+        historyManager.unregisterActiveRecording(id: recording.id)
+
+        if activeRecordingID == recording.id {
+            let nativeCaptureAttemptID = recordingAttemptID
+            captureDeadlineTask?.cancel()
+            captureDeadlineTask = nil
+            activeRecordingID = nil
+            recordingAttemptID = nil
+            activeCaptureLease = nil
+            activeTranscriptionSnapshot = nil
+            let realtime = stopRealtimeTranscription()
+            realtime?.close()
+            if recordingState == .starting {
+                if let nativeCaptureAttemptID {
+                    audioRecorder.cancelPendingOrActiveCapture(
+                        recordingID: nativeCaptureAttemptID
+                    )
+                }
+            } else if recordingState == .recording || recordingState == .finalizing {
+                audioRecorder.stopRecording(disposition: .discard) { _ in }
+            }
+            resetProcessingUIAfterDeletion()
+        }
+
+        let legacyURL = recording.legacyAudioFileURL
+            ?? (managedRecord == nil ? recording.audioFileURL : nil)
+        var legacyCleanupFailed = false
+        if let legacyURL,
+           FileManager.default.fileExists(atPath: legacyURL.path) {
+            do {
+                try FileManager.default.removeItem(at: legacyURL)
+            } catch {
+                legacyCleanupFailed = true
+            }
+        }
+        guard historyManager.removeRecordingMetadata(id: recording.id) else {
+            return "The recording was deleted, but History couldn’t be updated."
+        }
+        return managedCleanupFailed || legacyCleanupFailed
+            ? "The recording was removed from History, but one saved audio file couldn’t be deleted."
+            : nil
+    }
+
+    func clearHistory() async -> String? {
+        guard !isHistoryMutationInProgress else {
+            return "Another History change is still finishing."
+        }
+        isHistoryMutationInProgress = true
+        defer { isHistoryMutationInProgress = false }
+
+        let cachedRecordings = historyManager.recordings
+        let store = await MacAudioProcessingStoreProvider.shared()
+        let managedCleanupFailed: Bool
+        do {
+            let cleanup = try await store.clearAll()
+            managedCleanupFailed = !cleanup.completed
+        } catch {
+            return error.localizedDescription
+        }
+
+        for task in transcriptionTasks.values { task.cancel() }
+        transcriptionTasks.removeAll()
+        retranscriptionAttemptIDs.removeAll()
+        for recording in cachedRecordings {
+            historyManager.unregisterActiveRecording(id: recording.id)
+        }
+
+        let nativeCaptureAttemptID = recordingAttemptID
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        activeRecordingID = nil
+        recordingAttemptID = nil
+        activeCaptureLease = nil
+        activeTranscriptionSnapshot = nil
+        let realtime = stopRealtimeTranscription()
+        realtime?.close()
+        if recordingState == .starting {
+            if let nativeCaptureAttemptID {
+                audioRecorder.cancelPendingOrActiveCapture(
+                    recordingID: nativeCaptureAttemptID
+                )
+            }
+        } else if recordingState == .recording || recordingState == .finalizing {
+            audioRecorder.stopRecording(disposition: .discard) { _ in }
+        }
+        resetProcessingUIAfterDeletion()
+
+        var legacyDeleteFailed = false
+        let managedDirectory = store.rootDirectory
+            .appendingPathComponent("AudioProcessing", isDirectory: true)
+            .standardizedFileURL.path
+        for recording in cachedRecordings {
+            let legacyURL = recording.legacyAudioFileURL ?? recording.audioFileURL
+            let path = legacyURL.standardizedFileURL.path
+            guard !path.hasPrefix(managedDirectory + "/"),
+                  FileManager.default.fileExists(atPath: path)
+            else { continue }
+            do {
+                try FileManager.default.removeItem(at: legacyURL)
+            } catch {
+                legacyDeleteFailed = true
+            }
+        }
+
+        guard historyManager.clearMetadata() else {
+            return "Recordings were cleared, but History couldn’t be updated."
+        }
+        return managedCleanupFailed || legacyDeleteFailed
+            ? "History was cleared, but one saved audio file couldn’t be removed."
+            : nil
+    }
+
+    private func resetProcessingUIAfterDeletion() {
+        recordingState = .idle
+        isProcessing = false
+        isContinuousRecording = false
+        shouldAutoPaste = false
+        recordingStartTime = nil
+        finalizedRecordingDuration = nil
+        recordingMode = .dictation
+        CommandModeManager.shared.reset()
+        ClipboardManager.cancelLiveDictationInsertion()
+        finishOverlayAfterRecording()
+    }
+
+    private func reconcileAudioProcessingStore() async {
+        let store = await MacAudioProcessingStoreProvider.shared()
+        let view = await store.view()
+        guard case .healthy = view.health else {
+            errorMessage = "Saved recordings need attention. No files were changed."
+            for recording in historyManager.recordings where recording.isInProgress {
+                var failed = recording
+                failed.status = .failed
+                failed.errorMessage = "Processing was interrupted. The saved files were preserved."
+                historyManager.showUnsavedTerminalState(failed)
+            }
             return
         }
 
-        // Mark as retrying
-        var updated = recording
-        updated.retryCount += 1
-        updated.status = .retrying
-        updated.errorMessage = nil
-        historyManager.updateRecording(updated)
+        let durableIDs = Set(view.records.map(\.recordingID))
+        for cached in historyManager.recordings
+            where cached.isInProgress && !durableIDs.contains(cached.id) {
+            var failed = cached
+            failed.status = .failed
+            failed.errorMessage = "Processing was interrupted. Retry will safely import the saved recording."
+            _ = historyManager.upsertRecording(failed)
+        }
 
-        Task {
-            do {
-                let result = try await performTranscription(
-                    audioURL: audioURL,
-                    appContext: nil,
-                    clipboardContent: nil,
-                    screenContext: nil,
-                    outputMode: recording.outputMode,
-                    transcriptionOptions: recording.transcriptionOptions
+        for initialRecord in view.records {
+            var record = initialRecord
+            if record.stage == .rawResultReady || record.stage == .cleaning,
+               let raw = record.rawText {
+                let lease = MacAudioProcessingStore.Lease(
+                    recordingID: record.recordingID,
+                    attemptID: record.attemptID,
+                    clearGeneration: record.clearGeneration,
+                    revision: record.revision
                 )
-
-                let wordCount = result.split(separator: " ").count
-                await MainActor.run {
-                    var success = recording
-                    success.transcription = result
-                    success.status = .success
-                    success.errorMessage = nil
-                    success.retryCount = updated.retryCount
-                    success.wordCount = wordCount
-                    historyManager.updateRecording(success)
+                if let result = try? await store.useRawResult(
+                    lease,
+                    message: "Cleanup was interrupted. The complete raw transcript was kept."
+                ), let success = try? await store.markSucceeded(result.lease) {
+                    record = success.record
+                    if record.resultText == nil { record.resultText = raw }
                 }
-                DebugLog.info("✅ Re-transcription succeeded", context: "AppState")
-
-            } catch {
-                DebugLog.error("❌ Re-transcription failed: \(error)", context: "AppState")
-                await MainActor.run {
-                    var failed = recording
-                    failed.status = .failed
-                    failed.errorMessage = error.localizedDescription
-                    failed.retryCount = updated.retryCount
-                    historyManager.updateRecording(failed)
+            } else if record.stage == .resultReady {
+                let lease = MacAudioProcessingStore.Lease(
+                    recordingID: record.recordingID,
+                    attemptID: record.attemptID,
+                    clearGeneration: record.clearGeneration,
+                    revision: record.revision
+                )
+                if let success = try? await store.markSucceeded(lease) {
+                    record = success.record
                 }
             }
+
+            if record.stage == .deleted {
+                _ = historyManager.removeRecordingMetadata(id: record.recordingID)
+                continue
+            }
+            let existing = historyManager.recording(id: record.recordingID)
+            let sourceURL: URL
+            switch record.source {
+            case .final: sourceURL = store.finalURL(for: record.recordingID)
+            case .partial, .both, .missing: sourceURL = store.partialURL(for: record.recordingID)
+            }
+            let succeeded = record.stage == .succeeded
+            let projected = Recording(
+                id: record.recordingID,
+                timestamp: existing?.timestamp ?? record.updatedAt,
+                audioFileURL: sourceURL,
+                transcription: record.resultText ?? record.rawText ?? existing?.transcription,
+                status: succeeded ? .success : .failed,
+                errorMessage: succeeded ? nil : (record.failureMessage
+                    ?? "Processing was interrupted. Your recording is available to retry."),
+                retryCount: existing?.retryCount ?? 0,
+                duration: existing?.duration ?? record.audioIntegrity?.duration,
+                wordCount: (record.resultText ?? record.rawText)?.split(separator: " ").count,
+                outputMode: existing?.outputMode ?? .dictation,
+                transcriptionOptions: existing?.transcriptionOptions ?? .default,
+                sourceIntegrity: record.source == .final && record.audioIntegrity != nil
+                    ? .complete
+                    : (record.source == .missing ? .knownIncomplete : .unfinalized),
+                legacyAudioFilePath: existing?.legacyAudioFilePath
+            )
+            _ = historyManager.upsertRecording(projected)
         }
     }
 
@@ -365,8 +1208,10 @@ class AppState: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.appContext = .background
-            DebugLog.info("App went to background", context: "AppState")
+            Task { @MainActor [weak self] in
+                self?.appContext = .background
+                DebugLog.info("App went to background", context: "AppState")
+            }
         }
 
         NotificationCenter.default.addObserver(
@@ -374,233 +1219,390 @@ class AppState: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.appContext = .foreground
-            DebugLog.info("App came to foreground", context: "AppState")
+            Task { @MainActor [weak self] in
+                self?.appContext = .foreground
+                DebugLog.info("App came to foreground", context: "AppState")
+            }
         }
 
     }
 
-    private func transcribe(audioURL: URL, realtimeClient: OpenAIRealtimeTranscriptionClient? = nil) {
-        DebugLog.info("📝 AppState.transcribe()", context: "AppState")
-        DebugLog.info(
-            "Transcribe start audio=\(audioURL.lastPathComponent) realtimeClient=\(realtimeClient != nil) autoPaste=\(shouldAutoPaste) recordingMode=\(recordingMode)",
-            context: "DictationFlow"
-        )
+    private func beginLiveTranscription(
+        store: MacAudioProcessingStore,
+        ready: MacAudioProcessingStore.Mutation,
+        recordingID: UUID,
+        realtimeClient: OpenAIRealtimeTranscriptionClient?
+    ) async {
+        guard activeRecordingID == recordingID else {
+            realtimeClient?.close()
+            return
+        }
 
         recordingState = .transcribing
         isProcessing = true
-
         if overlayManager.isOverlayMode {
-            let isCommand = (recordingMode == .command)
-            overlayManager.transition(to: .processing(isCommandMode: isCommand))
+            overlayManager.transition(to: .processing(isCommandMode: recordingMode == .command))
         }
 
-        Task {
-            do {
-                // Check word limit for ALL users (authenticated and anonymous)
-                let (canTranscribe, reason) = SubscriptionManager.shared.checkCanTranscribe()
-                if !canTranscribe {
-                    DebugLog.info("⚠️ Word limit reached: \(reason ?? "unknown")", context: "AppState")
-                    await MainActor.run {
-                        self.recordingState = .idle
-                        self.isProcessing = false
-                    }
-                    ClipboardManager.cancelLiveDictationInsertion(removeInsertedText: false)
-                    try? FileManager.default.removeItem(at: audioURL)
-                    finishOverlayAfterRecording()
-
-                    // Open Settings to Account section
-                    await MainActor.run {
-                        NotificationCenter.default.post(name: .openAccountSettings, object: nil)
-                    }
-                    return
-                }
-
-                let requestedOutputMode = self.requestedOutputMode()
-                let transcriptionOptions = self.requestedTranscriptionOptions()
-                let activeTransport = requestedOutputMode != .dictation || transcriptionOptions.diarization ? .batch : transcriptionProviderManager.effectiveTransport
-                DebugLog.info(
-                    "Transcribe routing outputMode=\(requestedOutputMode.rawValue) diarization=\(transcriptionOptions.diarization) activeTransport=\(activeTransport.rawValue) provider=\(transcriptionProviderManager.selectedProvider.rawValue)",
-                    context: "DictationFlow"
+        let recognitionAttemptID = UUID()
+        do {
+            let recognition = try await store.beginRecognition(
+                recordingID: recordingID,
+                attemptID: recognitionAttemptID,
+                expectedRevision: ready.record.revision,
+                deadline: Date().addingTimeInterval(
+                    TimeInterval(recognitionTimeoutSeconds(for: finalizedRecordingDuration))
                 )
-                let realtimeResult: String?
-                if activeTransport == .realtime {
-                    let finishTimeout = transcriptionProviderManager.selectedProvider == .custom ? 6.0 : 2.0
-                    let result = await realtimeClient?.finish(timeout: finishTimeout)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let result, !result.isEmpty {
-                        DebugLog.info("Realtime result accepted length=\(result.count)", context: "DictationFlow")
-                        realtimeResult = result
-                    } else {
-                        DebugLog.warning("Realtime transcription unavailable; falling back to batch cloud transcription", context: "AppState")
-                        realtimeClient?.close()
-                        realtimeResult = nil
-                    }
-                } else {
-                    DebugLog.info("Closing realtime client because active transport is \(activeTransport.rawValue)", context: "DictationFlow")
-                    realtimeClient?.close()
-                    realtimeResult = nil
-                }
-
-                // VAD check first unless realtime already returned text.
-                if (realtimeResult?.isEmpty ?? true), vadSettingsManager.vadEnabled {
-                    let vadStart = CFAbsoluteTimeGetCurrent()
-
-                    let hasSpeech = try await VoiceActivityDetector.hasSpeech(
-                        in: audioURL,
-                        settings: vadSettingsManager
-                    )
-                    let vadMs = Int((CFAbsoluteTimeGetCurrent() - vadStart) * 1000)
-                    DebugLog.info("⏱️ VAD took \(vadMs)ms, hasSpeech=\(hasSpeech)", context: "AppState")
-
-                    if !hasSpeech {
-                        DebugLog.info("🔇 No speech detected", context: "AppState")
-                        await MainActor.run {
-                            self.recordingState = .idle
-                            self.isProcessing = false
-                            self.shouldAutoPaste = false
-                        }
-                        ClipboardManager.cancelLiveDictationInsertion(removeInsertedText: false)
-                        try? FileManager.default.removeItem(at: audioURL)
-                        finishOverlayAfterRecording()
-                        return
-                    }
-                }
-
-                // Get screen context only. Normal dictation must not read or write the clipboard.
-                let clipboardContent: String?
-                let screenContextForTranscription: String?
-
-                if self.recordingMode == .command {
-                    clipboardContent = nil
-                    screenContextForTranscription = nil
-                    DebugLog.info("Command mode: transcribing voice instruction only", context: "AppState")
-                } else {
-                    clipboardContent = nil
-                    screenContextForTranscription = capturedScreenContext
-                }
-
-                let transcriptionStart = CFAbsoluteTimeGetCurrent()
-                let result: String
-                if let realtimeResult, !realtimeResult.isEmpty {
-                    DebugLog.info("Using realtime transcription result", context: "AppState")
-                    result = dictionaryManager.applyReplacements(to: TranscriptionOutputFilter.filter(realtimeResult))
-                } else {
-                    DebugLog.info("Using batch transcription path", context: "DictationFlow")
-                    result = try await performTranscription(
-                        audioURL: audioURL,
-                        appContext: capturedAppContext,
-                        clipboardContent: clipboardContent,
-                        screenContext: screenContextForTranscription,
-                        outputMode: requestedOutputMode,
-                        transcriptionOptions: transcriptionOptions
-                    )
-                }
-                let transcriptionMs = Int((CFAbsoluteTimeGetCurrent() - transcriptionStart) * 1000)
-                DebugLog.info("⏱️ Transcription took \(transcriptionMs)ms", context: "AppState")
-                DebugLog.info("Transcription result length=\(result.count) words=\(result.split(separator: " ").count)", context: "DictationFlow")
-
-                // Success - save to history
-                let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-
-                // Move audio file to persistent storage
-                guard let persistentURL = historyManager.copyAudioToPersistentStorage(from: audioURL) else {
-                    DebugLog.error("Failed to save audio file", context: "AppState")
-                    return
-                }
-
-                // Count words in transcription
-                let wordCount = result.split(separator: " ").count
-
-                // Update word count (works for both authenticated and anonymous users)
-                await SubscriptionManager.shared.recordWords(wordCount)
-                DebugLog.info("✅ Updated word count: +\(wordCount) words", context: "AppState")
-
-                var recording = Recording(
-                    audioFileURL: persistentURL,
-                    transcription: result,
-                    status: .success,
-                    duration: duration,
-                    outputMode: requestedOutputMode,
-                    transcriptionOptions: transcriptionOptions
+            )
+            guard activeRecordingID == recordingID else {
+                realtimeClient?.close()
+                return
+            }
+            recordingAttemptID = recognitionAttemptID
+            let session = MacStoreTranscriptionSession(store: store, mutation: recognition)
+            let projected = historyManager.recording(id: recordingID) ?? Recording(
+                id: recordingID,
+                audioFileURL: store.finalURL(for: recordingID),
+                status: .processing,
+                outputMode: requestedOutputMode(),
+                transcriptionOptions: requestedTranscriptionOptions(),
+                sourceIntegrity: .complete
+            )
+            let snapshot = activeTranscriptionSnapshot
+                ?? makeTranscriptionAttemptSnapshot(
+                    outputMode: projected.outputMode,
+                    transcriptionOptions: projected.transcriptionOptions,
+                    appContext: capturedAppContext,
+                    screenContext: capturedScreenContext
                 )
-                recording.wordCount = wordCount
-
-                // Capture mode and target before resetting
-                let wasCommandMode = self.recordingMode == .command
-                let commandTargetText = CommandModeManager.shared.targetText
-
-                // Update common state
-                await MainActor.run {
-                    self.recordingMode = .dictation // Reset recording mode
-                    historyManager.addRecording(recording)
-                    self.currentRecording = recording
-                    self.transcriptionText = result // Always store raw transcription
-                    self.recordingState = .idle
-                    self.isProcessing = false
-                }
-
-                // Notify recording completed
-                NotificationCenter.default.post(name: .recordingCompleted, object: recording)
-
-                // Dispatch to appropriate handler based on mode
-                DebugLog.info(
-                    "Dispatching transcription result wasCommandMode=\(wasCommandMode) autoPaste=\(shouldAutoPaste) duration=\(duration)",
-                    context: "DictationFlow"
+            let task = Task { [weak self] in
+                guard let self else { return }
+                await self.executeTranscriptionAttempt(
+                    recording: projected,
+                    attemptID: recognitionAttemptID,
+                    session: session,
+                    audioURL: store.finalURL(for: recordingID),
+                    snapshot: snapshot,
+                    realtimeClient: realtimeClient,
+                    isLiveRecording: true
                 )
-                if wasCommandMode {
-                    await processCommandResult(instruction: result, targetText: commandTargetText)
-                } else {
-                    await processDictationResult(transcription: result)
-                }
+            }
+            transcriptionTasks[recordingID] = task
+        } catch {
+            realtimeClient?.close()
+            _ = try? await store.fail(ready.lease, message: error.localizedDescription)
+            finishActiveTranscriptionFailure(
+                recordingID: recordingID,
+                audioURL: store.finalURL(for: recordingID),
+                message: error.localizedDescription
+            )
+        }
+    }
 
-            } catch {
-                DebugLog.info("❌ Transcription error: \(error)", context: "AppState")
-
-                // Save failed recording
-                let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-
-                if let persistentURL = historyManager.copyAudioToPersistentStorage(from: audioURL) {
-                    let recording = Recording(
-                        audioFileURL: persistentURL,
-                        transcription: nil,
-                        status: .failed,
-                        errorMessage: error.localizedDescription,
-                        duration: duration,
-                        outputMode: self.requestedOutputMode(),
-                        transcriptionOptions: self.requestedTranscriptionOptions()
-                    )
-
-                    await MainActor.run {
-                        historyManager.addRecording(recording)
-                        self.errorMessage = error.localizedDescription
-                        self.recordingState = .idle
-                        self.isProcessing = false
-                        self.recordingMode = .dictation // Reset recording mode on error
-                        CommandModeManager.shared.reset()
-                    }
-
-                    // Notify recording completed (even if failed)
-                    NotificationCenter.default.post(name: .recordingCompleted, object: recording)
-                }
-
-                if overlayManager.isOverlayMode {
-                    finishOverlayAfterRecording()
-                }
-
-                if ClipboardManager.hasActiveLiveDictationInsertion {
-                    if self.realtimeTranscript.isEmpty {
-                        ClipboardManager.cancelLiveDictationInsertion()
-                    } else {
-                        ClipboardManager.finishLiveDictationInsertion(finalText: self.realtimeTranscript)
-                    }
-                }
+    private func executeTranscriptionAttempt(
+        recording: Recording,
+        attemptID: UUID,
+        session: MacStoreTranscriptionSession,
+        audioURL: URL,
+        snapshot: MacTranscriptionAttemptSnapshot,
+        realtimeClient: OpenAIRealtimeTranscriptionClient? = nil,
+        isLiveRecording: Bool
+    ) async {
+        defer { realtimeClient?.close() }
+        do {
+            try Task.checkCancellation()
+            let (canTranscribe, reason) = SubscriptionManager.shared.checkCanTranscribe()
+            guard canTranscribe else {
+                throw NSError(
+                    domain: "AppState",
+                    code: -5,
+                    userInfo: [NSLocalizedDescriptionKey: reason ?? "Your usage limit was reached. Your recording is saved."]
+                )
             }
 
-            // Reset state
-            shouldAutoPaste = false
-            recordingStartTime = nil
+            let requestedOutputMode = snapshot.outputMode
+            let transcriptionOptions = snapshot.transcriptionOptions
+            let activeTransport = requestedOutputMode != .dictation || transcriptionOptions.diarization
+                ? TranscriptionTransport.batch
+                : snapshot.transport
+
+            let realtimeResult: String?
+            if isLiveRecording, activeTransport == .realtime {
+                let finishTimeout = snapshot.provider == .custom ? 6.0 : 2.0
+                let result = await realtimeClient?.finish(timeout: finishTimeout)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                realtimeResult = (result?.isEmpty == false) ? result : nil
+            } else {
+                realtimeResult = nil
+            }
+
+            let result = try await withTimeout(
+                seconds: recognitionTimeoutSeconds(for: recording.duration)
+            ) {
+                if realtimeResult == nil, snapshot.vadEnabled {
+                    do {
+                        let hasSpeech = try await VoiceActivityDetector.hasSpeech(
+                            in: audioURL,
+                            threshold: snapshot.vadThreshold
+                        )
+                        guard hasSpeech else {
+                            throw NSError(
+                                domain: "AppState",
+                                code: -6,
+                                userInfo: [NSLocalizedDescriptionKey: "No speech was detected. Your recording is saved."]
+                            )
+                        }
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch let error as NSError where error.domain == "AppState" && error.code == -6 {
+                        throw error
+                    } catch {
+                        // VAD is only a rejection optimization. Model, decode, or
+                        // inference failures must fail open to recognition.
+                        await MainActor.run {
+                            DebugLog.warning(
+                                "Speech check unavailable; continuing with transcription",
+                                context: "VAD"
+                            )
+                        }
+                    }
+                }
+                if let realtimeResult {
+                    let raw = snapshot.applyReplacements(to: realtimeResult)
+                    try await session.checkpoint(raw)
+                    try await session.markRawResultReady(raw)
+                    try await session.beginCleanup()
+                    return try await self.applyLLMPassWithFallback(
+                        rawText: raw,
+                        client: OpenAIClient(config: .init()),
+                        snapshot: snapshot
+                    )
+                }
+                return try await self.performTranscription(
+                    audioURL: audioURL,
+                    clipboardContent: nil,
+                    snapshot: snapshot,
+                    onRecognitionCheckpoint: { text in
+                        try await session.checkpoint(text)
+                    },
+                    onRawTranscript: { text in
+                        try await session.markRawResultReady(text)
+                    },
+                    onCleanupStarted: {
+                        try await session.beginCleanup()
+                    }
+                )
+            }
+            try Task.checkCancellation()
+            let resultReady = try await session.finishCleanup(result)
+            let durableText = resultReady.record.resultText ?? resultReady.record.rawText ?? result
+            let succeeded = try await session.markSucceeded()
+            await commitTranscriptionSuccess(
+                recording: recording,
+                attemptID: attemptID,
+                storeRecord: succeeded.record,
+                text: durableText,
+                isLiveRecording: isLiveRecording
+            )
+        } catch {
+            await finishStoredTranscriptionFailure(
+                recording: recording,
+                attemptID: attemptID,
+                session: session,
+                message: error.localizedDescription,
+                isLiveRecording: isLiveRecording
+            )
         }
+    }
+
+    private func commitTranscriptionSuccess(
+        recording: Recording,
+        attemptID: UUID,
+        storeRecord: MacAudioProcessingStore.Record,
+        text: String,
+        isLiveRecording: Bool
+    ) async {
+        guard isCurrentAttempt(
+            recordingID: recording.id,
+            attemptID: attemptID,
+            isLiveRecording: isLiveRecording
+        ) else { return }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var success = recording
+        success.audioFileURL = (await MacAudioProcessingStoreProvider.shared()).finalURL(for: recording.id)
+        success.transcription = trimmed
+        success.status = .success
+        success.errorMessage = storeRecord.failureMessage
+        success.wordCount = trimmed.split(separator: " ").count
+        success.sourceIntegrity = .complete
+        if !historyManager.upsertRecording(success) {
+            historyManager.showUnsavedTerminalState(success)
+            errorMessage = "The transcript is safe, but History couldn’t be updated."
+        }
+
+        currentRecording = success
+        transcriptionText = trimmed
+        isProcessing = false
+        transcriptionTasks.removeValue(forKey: recording.id)
+        if isLiveRecording {
+            releaseActiveRecordingOwnership(recording.id)
+            recordingState = .idle
+            finishOverlayAfterRecording()
+        } else {
+            retranscriptionAttemptIDs.removeValue(forKey: recording.id)
+            historyManager.unregisterActiveRecording(id: recording.id)
+        }
+        NotificationCenter.default.post(name: .recordingCompleted, object: success)
+
+        let wordCount = success.wordCount ?? 0
+        Task { await SubscriptionManager.shared.recordWords(wordCount) }
+        guard isLiveRecording else { return }
+
+        let wasCommandMode = recordingMode == .command
+        let commandTargetText = CommandModeManager.shared.targetText
+        if wasCommandMode {
+            await processCommandResult(instruction: trimmed, targetText: commandTargetText)
+        } else {
+            await processDictationResult(transcription: trimmed)
+        }
+        recordingMode = .dictation
+        shouldAutoPaste = false
+        recordingStartTime = nil
+        finalizedRecordingDuration = nil
+    }
+
+    private func finishStoredTranscriptionFailure(
+        recording: Recording,
+        attemptID: UUID,
+        session: MacStoreTranscriptionSession,
+        message: String,
+        isLiveRecording: Bool
+    ) async {
+        guard isCurrentAttempt(
+            recordingID: recording.id,
+            attemptID: attemptID,
+            isLiveRecording: isLiveRecording
+        ) else { return }
+
+        do {
+            let terminal = try await session.fail(message)
+            if terminal.record.stage == .resultReady,
+               let raw = terminal.record.resultText ?? terminal.record.rawText {
+                let succeeded = try await session.markSucceeded()
+                await commitTranscriptionSuccess(
+                    recording: recording,
+                    attemptID: attemptID,
+                    storeRecord: succeeded.record,
+                    text: raw,
+                    isLiveRecording: isLiveRecording
+                )
+                return
+            }
+        } catch {
+            // A persisted tombstone/Clear or newer attempt owns the recording.
+            guard isCurrentAttempt(
+                recordingID: recording.id,
+                attemptID: attemptID,
+                isLiveRecording: isLiveRecording
+            ) else { return }
+        }
+
+        if isLiveRecording {
+            finishActiveTranscriptionFailure(
+                recordingID: recording.id,
+                audioURL: recording.audioFileURL,
+                message: message
+            )
+        } else {
+            await finishRetranscriptionFailure(
+                recording: recording,
+                attemptID: attemptID,
+                message: message
+            )
+        }
+    }
+
+    private func finishRetranscriptionFailure(
+        recording: Recording,
+        attemptID: UUID,
+        message: String
+    ) async {
+        guard retranscriptionAttemptIDs[recording.id] == attemptID else { return }
+        var failed = recording
+        failed.status = .failed
+        failed.errorMessage = message
+        if !historyManager.upsertRecording(failed) {
+            historyManager.showUnsavedTerminalState(failed)
+            errorMessage = "The recording is safe, but History couldn’t be updated."
+        }
+        transcriptionTasks.removeValue(forKey: recording.id)
+        retranscriptionAttemptIDs.removeValue(forKey: recording.id)
+        historyManager.unregisterActiveRecording(id: recording.id)
+    }
+
+    private func isCurrentAttempt(
+        recordingID: UUID,
+        attemptID: UUID,
+        isLiveRecording: Bool
+    ) -> Bool {
+        if isLiveRecording {
+            return activeRecordingID == recordingID && recordingAttemptID == attemptID
+        }
+        return retranscriptionAttemptIDs[recordingID] == attemptID
+    }
+
+    private func finishActiveTranscriptionFailure(
+        recordingID: UUID,
+        audioURL: URL,
+        message: String
+    ) {
+        guard activeRecordingID == recordingID else { return }
+
+        let recording = persistActiveRecording(
+            recordingID: recordingID,
+            audioURL: audioURL,
+            status: .failed,
+            errorMessage: message,
+            sourceIntegrity: .complete
+        )
+        errorMessage = recording == nil
+            ? "Your recording was kept, but its status couldn’t be saved."
+            : message
+        recordingState = .idle
+        isProcessing = false
+        recordingMode = .dictation
+        shouldAutoPaste = false
+        recordingStartTime = nil
+        finalizedRecordingDuration = nil
+        releaseActiveRecordingOwnership(recordingID)
+        CommandModeManager.shared.reset()
+        finishOverlayAfterRecording()
+
+        if let recording {
+            NotificationCenter.default.post(name: .recordingCompleted, object: recording)
+        }
+        // A failure must never paste an incomplete realtime prefix or bypass a
+        // usage denial. Remove any live insertion and leave the saved source.
+        ClipboardManager.cancelLiveDictationInsertion()
+    }
+
+    private func releaseActiveRecordingOwnership(_ recordingID: UUID) {
+        historyManager.unregisterActiveRecording(id: recordingID)
+        guard activeRecordingID == recordingID else { return }
+        activeRecordingID = nil
+        recordingAttemptID = nil
+        activeCaptureLease = nil
+        activeTranscriptionSnapshot = nil
+    }
+
+    private func recognitionTimeoutSeconds(for duration: TimeInterval?) -> UInt64 {
+        let proportional = UInt64(max(0, duration ?? 0) * 2) + 60
+        return min(
+            maximumRecognitionTimeoutSeconds,
+            max(minimumRecognitionTimeoutSeconds, proportional)
+        )
     }
 
     private func finishOverlayAfterRecording() {
@@ -617,17 +1619,21 @@ class AppState: ObservableObject {
         }
     }
 
-    private func startRealtimeTranscriptionIfAvailable() {
+    private func startRealtimeTranscriptionIfAvailable(
+        recordingID: UUID,
+        attemptID: UUID,
+        snapshot: MacTranscriptionAttemptSnapshot
+    ) {
         realtimeTranscript = ""
         realtimeTranscriptionClient?.close()
         realtimeTranscriptionClient = nil
         audioRecorder.realtimeAudioChunkHandler = nil
 
-        let mode = transcriptionProviderManager.transcriptionMode
-        let provider = transcriptionProviderManager.selectedProvider
-        let transport = transcriptionProviderManager.effectiveTransport
+        let mode = snapshot.mode
+        let provider = snapshot.provider
+        let transport = snapshot.transport
 
-        if requestedTranscriptionOptions().diarization {
+        if snapshot.transcriptionOptions.diarization {
             DebugLog.info("Skipping realtime start because speaker labels require batch transcription", context: "AppState")
             return
         }
@@ -635,20 +1641,20 @@ class AppState: ObservableObject {
         guard mode != .local,
               !provider.isOnDevice,
               transport == .realtime,
-              NetworkMonitor.shared.isConnected
+              snapshot.networkWasConnected
         else {
             DebugLog.info("Skipping realtime start for transport=\(transport.rawValue), mode=\(mode.displayName), provider=\(provider.displayName)", context: "AppState")
             return
         }
 
-        let prompt = buildRealtimePrompt()
+        let prompt = snapshot.sttHintPrompt
         let realtimePrompt = prompt.isEmpty ? nil : prompt
-        let languageCode = singleAPILanguageCode()
+        let languageCode = snapshot.languageCode
         let client: OpenAIRealtimeTranscriptionClient
 
         switch provider {
         case .openai:
-            guard let apiKey = resolvedTranscriptionApiKey(), !apiKey.isEmpty else {
+            guard let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty else {
                 return
             }
             client = OpenAIRealtimeTranscriptionClient(
@@ -656,19 +1662,29 @@ class AppState: ObservableObject {
                 language: languageCode,
                 prompt: realtimePrompt,
                 onPartialTranscript: { [weak self] partial in
-                    self?.handleRealtimePartial(partial)
+                    self?.handleRealtimePartial(
+                        partial,
+                        recordingID: recordingID,
+                        attemptID: attemptID
+                    )
                 },
                 onError: { message in
                     DebugLog.warning(message, context: "AppState")
                 }
             )
         case .custom:
-            guard let apiKey = resolvedTranscriptionApiKey(), !apiKey.isEmpty else {
+            guard let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty else {
                 return
             }
-            let realtimeModel = resolvedRealtimeTranscriptionModel()
+            let realtimeModel = resolvedRealtimeTranscriptionModel(
+                configuredModel: snapshot.transcriptionModel,
+                overrideModel: snapshot.customRealtimeModel
+            )
 
-            if let webSocketURL = customRealtimeWebSocketURL() {
+            if let webSocketURL = customRealtimeWebSocketURL(
+                configuredEndpoint: snapshot.transcriptionEndpoint,
+                overrideEndpoint: snapshot.customRealtimeEndpoint
+            ) {
                 client = OpenAIRealtimeTranscriptionClient(
                     apiKey: apiKey,
                     webSocketURL: webSocketURL,
@@ -676,14 +1692,21 @@ class AppState: ObservableObject {
                     language: languageCode,
                     prompt: realtimePrompt,
                     onPartialTranscript: { [weak self] partial in
-                        self?.handleRealtimePartial(partial)
+                        self?.handleRealtimePartial(
+                            partial,
+                            recordingID: recordingID,
+                            attemptID: attemptID
+                        )
                     },
                     onError: { message in
                         DebugLog.warning(message, context: "AppState")
                     }
                 )
             } else {
-                guard let endpoint = customRealtimeSessionEndpoint() else {
+                guard let endpoint = customRealtimeSessionEndpoint(
+                    configuredEndpoint: snapshot.transcriptionEndpoint,
+                    overrideEndpoint: snapshot.customRealtimeEndpoint
+                ) else {
                     DebugLog.warning("Invalid custom realtime session endpoint", context: "AppState")
                     return
                 }
@@ -702,7 +1725,11 @@ class AppState: ObservableObject {
                     transcriptionModel: realtimeModel,
                     language: languageCode,
                     onPartialTranscript: { [weak self] partial in
-                        self?.handleRealtimePartial(partial)
+                        self?.handleRealtimePartial(
+                            partial,
+                            recordingID: recordingID,
+                            attemptID: attemptID
+                        )
                     },
                     onError: { message in
                         DebugLog.warning(message, context: "AppState")
@@ -721,26 +1748,32 @@ class AppState: ObservableObject {
         DebugLog.info("Started realtime transcription stream for \(provider.displayName)", context: "AppState")
     }
 
-    private func customRealtimeSessionEndpoint() -> URL? {
-        if let configuredEndpoint = configuredCustomRealtimeEndpoint(),
-           !isWebSocketURL(configuredEndpoint)
+    private func customRealtimeSessionEndpoint(
+        configuredEndpoint: String,
+        overrideEndpoint: URL?
+    ) -> URL? {
+        if let overrideEndpoint,
+           !isWebSocketURL(overrideEndpoint)
         {
-            return configuredEndpoint
+            return overrideEndpoint
         }
 
         return WritingmateRealtimeClientSecretProvider.endpoint(
-            from: transcriptionProviderManager.effectiveEndpoint
+            from: configuredEndpoint
         )
     }
 
-    private func customRealtimeWebSocketURL() -> URL? {
-        if let configuredEndpoint = configuredCustomRealtimeEndpoint(),
-           isWebSocketURL(configuredEndpoint)
+    private func customRealtimeWebSocketURL(
+        configuredEndpoint: String,
+        overrideEndpoint: URL?
+    ) -> URL? {
+        if let overrideEndpoint,
+           isWebSocketURL(overrideEndpoint)
         {
-            return configuredEndpoint
+            return overrideEndpoint
         }
 
-        guard let endpoint = URL(string: transcriptionProviderManager.effectiveEndpoint),
+        guard let endpoint = URL(string: configuredEndpoint),
               isWebSocketURL(endpoint)
         else {
             return nil
@@ -758,20 +1791,30 @@ class AppState: ObservableObject {
         return URL(string: configured)
     }
 
+    private func configuredCustomRealtimeModel() -> String? {
+        guard let configured = SecretsLoader.customTranscriptionRealtimeModel()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !configured.isEmpty
+        else {
+            return nil
+        }
+        return configured
+    }
+
     private func isWebSocketURL(_ url: URL) -> Bool {
         let scheme = url.scheme?.lowercased()
         return scheme == "ws" || scheme == "wss"
     }
 
-    private func resolvedRealtimeTranscriptionModel() -> String {
-        if let configuredModel = SecretsLoader.customTranscriptionRealtimeModel()?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !configuredModel.isEmpty
-        {
-            return configuredModel
+    private func resolvedRealtimeTranscriptionModel(
+        configuredModel: String,
+        overrideModel: String?
+    ) -> String {
+        if let overrideModel {
+            return overrideModel
         }
 
-        let model = transcriptionProviderManager.effectiveModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = configuredModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty,
               !model.contains("/"),
               model != TranscriptionProvider.custom.defaultModel
@@ -788,7 +1831,15 @@ class AppState: ObservableObject {
         return client
     }
 
-    private func handleRealtimePartial(_ partial: String) {
+    private func handleRealtimePartial(
+        _ partial: String,
+        recordingID: UUID,
+        attemptID: UUID
+    ) {
+        guard activeRecordingID == recordingID,
+              recordingAttemptID == attemptID,
+              recordingState == .recording
+        else { return }
         let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         realtimeTranscript = text
@@ -814,6 +1865,62 @@ class AppState: ObservableObject {
             return .default
         }
         return contextRulesManager.transcriptionOptions(for: capturedAppBundleId, windowTitle: capturedWindowTitle)
+    }
+
+    private func makeTranscriptionAttemptSnapshot(
+        outputMode: TranscriptionOutputMode,
+        transcriptionOptions: TranscriptionOptions,
+        appContext: String?,
+        screenContext: String?
+    ) -> MacTranscriptionAttemptSnapshot {
+        let provider = transcriptionProviderManager.selectedProvider
+        let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
+        var cleanupComponents = buildTranscriptionPromptComponents()
+        if !sttHintPrompt.isEmpty {
+            cleanupComponents.append(
+                "Reference vocabulary and spoken phrases (use only when supported by the transcript): \(sttHintPrompt)"
+            )
+        }
+        let replacements = dictionaryManager.entries
+            .filter { $0.isEnabled && $0.replacement != nil }
+            .sorted { $0.trigger.count > $1.trigger.count }
+            .compactMap { entry in
+                entry.replacement.map {
+                    MacTranscriptionAttemptSnapshot.Replacement(
+                        trigger: entry.trigger,
+                        replacement: $0
+                    )
+                }
+            }
+
+        return MacTranscriptionAttemptSnapshot(
+            outputMode: outputMode,
+            transcriptionOptions: transcriptionOptions,
+            mode: transcriptionProviderManager.transcriptionMode,
+            provider: provider,
+            transport: transcriptionProviderManager.effectiveTransport,
+            transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
+            transcriptionModel: transcriptionProviderManager.effectiveModel,
+            transcriptionAPIKey: resolvedTranscriptionApiKey(),
+            customRealtimeEndpoint: configuredCustomRealtimeEndpoint(),
+            customRealtimeModel: configuredCustomRealtimeModel(),
+            llmPostProcessingEnabled: transcriptionProviderManager.enableLLMPostProcessing,
+            postProcessingProvider: transcriptionProviderManager.postProcessingProvider,
+            llmEndpoint: llmProviderManager.effectiveEndpoint,
+            llmModel: llmProviderManager.effectiveModel,
+            llmAPIKey: llmProviderManager.effectiveApiKey,
+            aidictationPostProcessingEndpoint: SecretsLoader.aidictationPostProcessingEndpoint(),
+            aidictationPostProcessingKey: SecretsLoader.aidictationPostProcessingKey(),
+            languageCode: singleAPILanguageCode(),
+            sttHintPrompt: sttHintPrompt,
+            cleanupPromptComponents: cleanupComponents,
+            appContext: appContext,
+            screenContext: screenContext,
+            vadEnabled: vadSettingsManager.vadEnabled,
+            vadThreshold: vadSettingsManager.sensitivityThreshold,
+            networkWasConnected: NetworkMonitor.shared.isConnected,
+            replacements: replacements
+        )
     }
 
     private func buildTranscriptionPromptComponents() -> [String] {
@@ -861,19 +1968,26 @@ class AppState: ObservableObject {
     /// Core transcription logic shared by live recording and re-transcription
     private func performTranscription(
         audioURL: URL,
-        appContext: String?,
         clipboardContent: String?,
-        screenContext: String?,
-        outputMode: TranscriptionOutputMode,
-        transcriptionOptions: TranscriptionOptions = .default
+        snapshot: MacTranscriptionAttemptSnapshot,
+        onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
     ) async throws -> String {
-        let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
-        let promptComponents = buildTranscriptionPromptComponents()
+        let sttHintPrompt = snapshot.sttHintPrompt
+        let promptComponents = snapshot.cleanupPromptComponents
         let postProcessingPrompt = promptComponents.joined(separator: "\n")
+        let outputMode = snapshot.outputMode
+        let transcriptionOptions = snapshot.transcriptionOptions
+        let milestones = TranscriptionMilestoneForwarder(
+            onCheckpoint: onRecognitionCheckpoint,
+            onRaw: onRawTranscript,
+            onCleanup: onCleanupStarted
+        )
 
-        let mode = transcriptionProviderManager.transcriptionMode
-        var provider = transcriptionProviderManager.selectedProvider
-        DebugLog.info("Transcription mode: \(mode.displayName), provider: \(provider.displayName), transport: \(transcriptionProviderManager.effectiveTransport.rawValue), isOnDevice: \(provider.isOnDevice)", context: "AppState")
+        let mode = snapshot.mode
+        var provider = snapshot.provider
+        DebugLog.info("Transcription mode: \(mode.displayName), provider: \(provider.displayName), transport: \(snapshot.transport.rawValue), isOnDevice: \(provider.isOnDevice)", context: "AppState")
 
         if transcriptionOptions.diarization {
             guard ParakeetTranscriptionService.isRuntimeSupported else {
@@ -891,7 +2005,7 @@ class AppState: ObservableObject {
         if !transcriptionOptions.diarization,
            mode == .auto,
            !provider.isOnDevice,
-           !NetworkMonitor.shared.isConnected,
+           !snapshot.networkWasConnected,
            ParakeetTranscriptionService.isRuntimeSupported
         {
             let parakeetState = await MainActor.run { ParakeetTranscriptionService.shared.state }
@@ -906,6 +2020,8 @@ class AppState: ObservableObject {
                     try await ParakeetTranscriptionService.shared.initialize()
                     DebugLog.info("Auto mode: Parakeet initialized - using on-device", context: "AppState")
                     provider = .parakeet
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
                     DebugLog.error("Auto mode: Parakeet init failed (\(error.localizedDescription)) - attempting cloud", context: "AppState")
                 }
@@ -914,8 +2030,8 @@ class AppState: ObservableObject {
             }
         }
 
-        let transport = provider == transcriptionProviderManager.selectedProvider
-            ? transcriptionProviderManager.effectiveTransport
+        let transport = provider == snapshot.provider
+            ? snapshot.transport
             : provider.defaultTransport
 
         switch transport {
@@ -932,26 +2048,27 @@ class AppState: ObservableObject {
 
             var text: String
             if transcriptionOptions.diarization {
-                do {
-                    text = try await withTimeout(seconds: diarizationTimeoutSeconds) {
-                        try await ParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
-                    }
-                } catch {
-                    DebugLog.warning("Speaker labels unavailable within time limit - using offline transcript without speaker labels", context: "AppState")
-                    text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+                text = try await withTimeout(seconds: diarizationTimeoutSeconds) {
+                    try await ParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
                 }
             } else {
                 text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
             }
-            text = TranscriptionOutputFilter.filter(text)
-            text = dictionaryManager.applyReplacements(to: text)
+            text = snapshot.applyReplacements(to: text)
+            let durableRaw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !durableRaw.isEmpty else {
+                throw NSError(
+                    domain: "AppState",
+                    code: -7,
+                    userInfo: [NSLocalizedDescriptionKey: "No speech was recognized. Your recording was kept."]
+                )
+            }
+            try await milestones.acceptRaw(durableRaw)
+            try await milestones.beginCleanup()
             return try await applyLLMPassWithFallback(
-                rawText: text,
-                client: openAIClient ?? OpenAIClient(config: .init()),
-                promptComponents: promptComponents,
-                provider: provider,
-                outputMode: outputMode,
-                appContext: appContext
+                rawText: durableRaw,
+                client: OpenAIClient(config: .init()),
+                snapshot: snapshot
             )
 
         case .realtime:
@@ -960,7 +2077,7 @@ class AppState: ObservableObject {
 
         case .batch:
             DebugLog.info("Using \(provider.displayName) batch transcription", context: "AppState")
-            guard let transcriptionApiKey = resolvedTranscriptionApiKey() else {
+            guard let transcriptionApiKey = snapshot.transcriptionAPIKey else {
                 throw NSError(domain: "AppState", code: -1, userInfo: [NSLocalizedDescriptionKey: "Please set your \(provider.displayName) API key"])
             }
 
@@ -968,97 +2085,105 @@ class AppState: ObservableObject {
             let chatCompletionModel: String
             let chatCompletionApiKey: String?
             if provider == .custom {
-                chatCompletionEndpoint = SecretsLoader.aidictationPostProcessingEndpoint() ?? ""
+                chatCompletionEndpoint = snapshot.aidictationPostProcessingEndpoint ?? ""
                 chatCompletionModel = PostProcessingProvider.aidictationModel
-                chatCompletionApiKey = SecretsLoader.aidictationPostProcessingKey() ?? transcriptionApiKey
+                chatCompletionApiKey = snapshot.aidictationPostProcessingKey ?? transcriptionApiKey
             } else {
-                chatCompletionEndpoint = llmProviderManager.effectiveEndpoint
-                chatCompletionModel = llmProviderManager.effectiveModel
+                chatCompletionEndpoint = snapshot.llmEndpoint
+                chatCompletionModel = snapshot.llmModel
                 chatCompletionApiKey = nil
             }
 
             let config = OpenAIClient.Configuration(
-                transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-                transcriptionModel: transcriptionProviderManager.effectiveModel,
+                transcriptionEndpoint: snapshot.transcriptionEndpoint,
+                transcriptionModel: snapshot.transcriptionModel,
                 chatCompletionEndpoint: chatCompletionEndpoint,
                 chatCompletionModel: chatCompletionModel,
                 apiKey: transcriptionApiKey,
                 chatCompletionApiKey: chatCompletionApiKey
             )
 
-            if openAIClient == nil {
-                openAIClient = OpenAIClient(config: config)
+            // Configuration is attempt-local. Concurrent retry/live attempts must
+            // never mutate a shared client out from under one another.
+            let client = OpenAIClient(config: config)
+            let checkpointAccumulator = OrderedRecognitionCheckpointAccumulator(
+                callback: { text in
+                    try await milestones.checkpoint(text)
+                }
+            )
+            let customCleanupPrompt = provider == .custom
+                ? providerPostProcessingPrompt(
+                    outputMode: outputMode,
+                    basePrompt: postProcessingPrompt
+                )
+                : nil
+            let mergedCleanup: ((String) async throws -> String)?
+            if provider == .custom {
+                mergedCleanup = { mergedRaw in
+                    try await milestones.beginCleanup()
+                    return try await self.cleanupWithRawFallback(
+                        rawText: mergedRaw,
+                        label: "Transcription cleanup"
+                    ) {
+                        try await client.applyFormattingRules(
+                            transcription: mergedRaw,
+                            rules: customCleanupPrompt.map { [$0] } ?? [],
+                            languageCodes: snapshot.languageCode,
+                            appContext: snapshot.appContext,
+                            clipboardContent: nil
+                        )
+                    }
+                }
             } else {
-                openAIClient?.updateConfig(config)
-            }
-
-            guard let client = openAIClient else {
-                throw NSError(domain: "AppState", code: -1)
+                mergedCleanup = nil
             }
 
             let rawText = try await client.transcribe(
                 audioURL: audioURL,
                 prompt: sttHintPrompt.isEmpty ? nil : sttHintPrompt,
-                language: singleAPILanguageCode(),
+                language: snapshot.languageCode,
                 sttPrompt: provider == .custom && !sttHintPrompt.isEmpty ? sttHintPrompt : nil,
-                postProcessingPrompt: provider == .custom ? providerPostProcessingPrompt(outputMode: outputMode, basePrompt: postProcessingPrompt) : nil
+                postProcessingPrompt: customCleanupPrompt,
+                serverPostProcessingEnabledByDefault: provider == .custom,
+                onChunkCheckpoint: { completedLeafIndex, transcript in
+                    try await checkpointAccumulator.accept(
+                        completedLeafIndex: completedLeafIndex,
+                        transcript: transcript
+                    )
+                },
+                onMergedRawTranscript: { mergedRaw in
+                    try await milestones.acceptRaw(mergedRaw)
+                },
+                cleanupMergedTranscript: mergedCleanup
             )
 
-            if outputMode != .dictation {
-                return try await applyLLMPassWithFallback(
-                    rawText: rawText,
-                    client: client,
-                    promptComponents: promptComponents,
-                    provider: provider,
-                    outputMode: outputMode,
-                    appContext: appContext
+            let checkpointedRaw = await checkpointAccumulator.latestText
+            let candidateRaw = (await milestones.rawText) ?? checkpointedRaw ?? rawText
+            let durableRaw = candidateRaw
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !durableRaw.isEmpty else {
+                throw NSError(
+                    domain: "AppState",
+                    code: -8,
+                    userInfo: [NSLocalizedDescriptionKey: "No speech was recognized. Your recording was kept."]
                 )
             }
+            try await milestones.acceptRaw(durableRaw)
+            try await milestones.beginCleanup()
 
-            let shouldPostProcess = transcriptionProviderManager.enableLLMPostProcessing &&
-                provider != .custom &&
-                (transcriptionProviderManager.postProcessingProvider == .aidictation || !promptComponents.isEmpty)
-            if shouldPostProcess {
-                let postProcessor = transcriptionProviderManager.postProcessingProvider
-
-                if postProcessor == .aidictation,
-                   let endpoint = SecretsLoader.aidictationPostProcessingEndpoint(),
-                   let apiKey = SecretsLoader.aidictationPostProcessingKey()
-                {
-                    DebugLog.info("Applying AIDictation post-processing", context: "AppState")
-                    let llmConfig = OpenAIClient.Configuration(
-                        transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-                        transcriptionModel: transcriptionProviderManager.effectiveModel,
-                        chatCompletionEndpoint: endpoint,
-                        chatCompletionModel: PostProcessingProvider.aidictationModel,
-                        apiKey: apiKey
-                    )
-                    client.updateConfig(llmConfig)
-                    return try await client.applyFormattingRules(
-                        transcription: rawText, rules: promptComponents,
-                        languageCodes: languageManager.apiLanguageCode,
-                        appContext: appContext, clipboardContent: nil
-                    )
-                } else if postProcessor == .customLLM, let llmApiKey = resolvedLLMApiKey() {
-                    DebugLog.info("Applying custom LLM post-processing", context: "AppState")
-                    let llmConfig = OpenAIClient.Configuration(
-                        transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-                        transcriptionModel: transcriptionProviderManager.effectiveModel,
-                        chatCompletionEndpoint: llmProviderManager.effectiveEndpoint,
-                        chatCompletionModel: llmProviderManager.effectiveModel,
-                        apiKey: llmApiKey
-                    )
-                    client.updateConfig(llmConfig)
-                    return try await client.applyFormattingRules(
-                        transcription: rawText, rules: promptComponents,
-                        languageCodes: languageManager.apiLanguageCode,
-                        appContext: appContext, clipboardContent: nil
-                    )
-                } else if postProcessor == .customLLM && resolvedLLMApiKey() == nil {
-                    DebugLog.warning("Custom LLM post-processing enabled but no API key - using raw transcription", context: "AppState")
-                }
+            // The custom one-request/chunked client has already applied its
+            // cleanup/output-mode prompt after checkpointing the complete raw
+            // merge. Do not replace that result with the raw checkpoint.
+            if provider == .custom {
+                let oneStageResult = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                return oneStageResult.isEmpty ? durableRaw : oneStageResult
             }
-            return rawText
+
+            return try await applyLLMPassWithFallback(
+                rawText: durableRaw,
+                client: client,
+                snapshot: snapshot
+            )
         }
     }
 
@@ -1079,24 +2204,39 @@ class AppState: ObservableObject {
     private func applyLLMPassWithFallback(
         rawText: String,
         client: OpenAIClient,
-        promptComponents: [String],
-        provider: TranscriptionProvider,
-        outputMode: TranscriptionOutputMode,
-        appContext: String?
+        snapshot: MacTranscriptionAttemptSnapshot
+    ) async throws -> String {
+        try await cleanupWithRawFallback(
+            rawText: rawText,
+            label: "\(snapshot.outputMode.displayName) post-processing"
+        ) {
+            try await self.applyLLMPassIfNeeded(
+                rawText: rawText,
+                client: client,
+                snapshot: snapshot
+            )
+        }
+    }
+
+    private func cleanupWithRawFallback(
+        rawText: String,
+        label: String,
+        operation: @escaping @Sendable () async throws -> String
     ) async throws -> String {
         do {
-            return try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
-                try await self.applyLLMPassIfNeeded(
-                    rawText: rawText,
-                    client: client,
-                    promptComponents: promptComponents,
-                    provider: provider,
-                    outputMode: outputMode,
-                    appContext: appContext
-                )
+            let cleaned = try await withTimeout(
+                seconds: llmPostProcessingTimeoutSeconds,
+                operation: operation
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else {
+                DebugLog.warning("\(label) returned no text - using transcript", context: "AppState")
+                return rawText
             }
+            return cleaned
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
-            DebugLog.warning("\(outputMode.displayName) post-processing unavailable within time limit - using transcript", context: "AppState")
+            DebugLog.warning("\(label) unavailable within time limit - using transcript", context: "AppState")
             return rawText
         }
     }
@@ -1104,58 +2244,74 @@ class AppState: ObservableObject {
     private func applyLLMPassIfNeeded(
         rawText: String,
         client: OpenAIClient,
-        promptComponents: [String],
-        provider: TranscriptionProvider,
-        outputMode: TranscriptionOutputMode,
-        appContext: String?
+        snapshot: MacTranscriptionAttemptSnapshot
     ) async throws -> String {
-        if outputMode == .dictation {
+        let outputMode = snapshot.outputMode
+        let promptComponents = snapshot.cleanupPromptComponents
+        let postProcessor = snapshot.postProcessingProvider
+        let outputRequiresFormatting = outputMode != .dictation
+        let cleanupWasRequested = snapshot.llmPostProcessingEnabled &&
+            (postProcessor == .aidictation || !promptComponents.isEmpty)
+        guard outputRequiresFormatting || cleanupWasRequested else {
             return rawText
         }
 
-        if provider == .custom {
-            return rawText
-        }
-
-        let postProcessor = transcriptionProviderManager.postProcessingProvider
         if postProcessor == .aidictation,
-           let endpoint = SecretsLoader.aidictationPostProcessingEndpoint(),
-           let apiKey = SecretsLoader.aidictationPostProcessingKey()
+           let endpoint = snapshot.aidictationPostProcessingEndpoint,
+           let apiKey = snapshot.aidictationPostProcessingKey
         {
             let llmConfig = OpenAIClient.Configuration(
-                transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-                transcriptionModel: transcriptionProviderManager.effectiveModel,
+                transcriptionEndpoint: snapshot.transcriptionEndpoint,
+                transcriptionModel: snapshot.transcriptionModel,
                 chatCompletionEndpoint: endpoint,
                 chatCompletionModel: PostProcessingProvider.aidictationModel,
                 apiKey: apiKey
             )
             client.updateConfig(llmConfig)
+            if outputMode == .dictation {
+                return try await client.applyFormattingRules(
+                    transcription: rawText,
+                    rules: promptComponents,
+                    languageCodes: snapshot.languageCode,
+                    appContext: snapshot.appContext,
+                    clipboardContent: nil
+                )
+            }
             return try await applyOutputModeFormatting(
                 client: client,
                 transcription: rawText,
                 outputMode: outputMode,
                 rules: promptComponents,
-                languageCodes: languageManager.apiLanguageCode,
-                appContext: appContext
+                languageCodes: snapshot.languageCode,
+                appContext: snapshot.appContext
             )
         }
 
-        if postProcessor == .customLLM, let llmApiKey = resolvedLLMApiKey() {
+        if postProcessor == .customLLM, let llmApiKey = snapshot.llmAPIKey {
             let llmConfig = OpenAIClient.Configuration(
-                transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-                transcriptionModel: transcriptionProviderManager.effectiveModel,
-                chatCompletionEndpoint: llmProviderManager.effectiveEndpoint,
-                chatCompletionModel: llmProviderManager.effectiveModel,
+                transcriptionEndpoint: snapshot.transcriptionEndpoint,
+                transcriptionModel: snapshot.transcriptionModel,
+                chatCompletionEndpoint: snapshot.llmEndpoint,
+                chatCompletionModel: snapshot.llmModel,
                 apiKey: llmApiKey
             )
             client.updateConfig(llmConfig)
+            if outputMode == .dictation {
+                return try await client.applyFormattingRules(
+                    transcription: rawText,
+                    rules: promptComponents,
+                    languageCodes: snapshot.languageCode,
+                    appContext: snapshot.appContext,
+                    clipboardContent: nil
+                )
+            }
             return try await applyOutputModeFormatting(
                 client: client,
                 transcription: rawText,
                 outputMode: outputMode,
                 rules: promptComponents,
-                languageCodes: languageManager.apiLanguageCode,
-                appContext: appContext
+                languageCodes: snapshot.languageCode,
+                appContext: snapshot.appContext
             )
         }
 
@@ -1188,6 +2344,8 @@ class AppState: ObservableObject {
                 languageCodes: languageCodes,
                 appContext: appContext
             )
+        @unknown default:
+            return transcription
         }
     }
 
@@ -1304,15 +2462,32 @@ class AppState: ObservableObject {
         if let instructions = contextRulesManager.instructions(for: capturedAppBundleId, windowTitle: capturedWindowTitle) {
             contextRules.append(instructions)
         }
+        let immutableContextRules = contextRules
 
         // Execute the command (with or without target text)
-        guard let resultText = await CommandModeManager.shared.executeInstruction(
-            instruction,
-            selectedText: targetText,
-            screenContext: screenContext,
-            contextRules: contextRules
-        ) else {
+        let resultText: String?
+        do {
+            resultText = try await withTimeout(seconds: commandDeliveryTimeoutSeconds) {
+                await CommandModeManager.shared.executeInstruction(
+                    instruction,
+                    selectedText: targetText,
+                    screenContext: screenContext,
+                    contextRules: immutableContextRules
+                )
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Your dictation was saved, but the requested change took too long."
+            }
+            await resetCommandModeState()
+            return
+        }
+
+        guard let resultText else {
             DebugLog.error("Command mode: execution failed", context: "AppState")
+            await MainActor.run {
+                self.errorMessage = "Your dictation was saved, but the requested change couldn’t be completed."
+            }
             await resetCommandModeState()
             return
         }
@@ -1363,23 +2538,37 @@ class AppState: ObservableObject {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 Task {
+                    await gate.install(continuation)
+                }
+
+                let operationTask = Task {
                     do {
                         let result = try await operation()
-                        await gate.resume(.success(result), continuation: continuation)
+                        await gate.resolve(.success(result))
                     } catch {
-                        await gate.resume(.failure(error), continuation: continuation)
+                        await gate.resolve(.failure(error))
                     }
                 }
 
-                Task {
-                    try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                    await gate.resume(
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                    } catch {
+                        return
+                    }
+                    await gate.resolve(
                         .failure(NSError(
                             domain: "AppState",
                             code: -1001,
                             userInfo: [NSLocalizedDescriptionKey: "The operation took too long."]
-                        )),
-                        continuation: continuation
+                        ))
+                    )
+                }
+
+                Task {
+                    await gate.installTasks(
+                        operation: operationTask,
+                        timeout: timeoutTask
                     )
                 }
             }
@@ -1391,13 +2580,176 @@ class AppState: ObservableObject {
     }
 }
 
+private actor MacStoreTranscriptionSession {
+    private let store: MacAudioProcessingStore
+    private var mutation: MacAudioProcessingStore.Mutation
+
+    init(
+        store: MacAudioProcessingStore,
+        mutation: MacAudioProcessingStore.Mutation
+    ) {
+        self.store = store
+        self.mutation = mutation
+    }
+
+    func checkpoint(_ text: String) async throws {
+        mutation = try await store.checkpointRecognition(
+            mutation.lease,
+            partialText: text
+        )
+    }
+
+    func markRawResultReady(_ text: String) async throws {
+        mutation = try await store.markRawResultReady(mutation.lease, rawText: text)
+    }
+
+    func beginCleanup() async throws {
+        mutation = try await store.beginCleanup(mutation.lease)
+    }
+
+    func finishCleanup(_ text: String?) async throws -> MacAudioProcessingStore.Mutation {
+        mutation = try await store.finishCleanup(mutation.lease, cleanedText: text)
+        return mutation
+    }
+
+    func markSucceeded() async throws -> MacAudioProcessingStore.Mutation {
+        mutation = try await store.markSucceeded(mutation.lease)
+        return mutation
+    }
+
+    func fail(_ message: String) async throws -> MacAudioProcessingStore.Mutation {
+        mutation = try await store.fail(mutation.lease, message: message)
+        return mutation
+    }
+}
+
+private actor OrderedRecognitionCheckpointAccumulator {
+    private let callback: @Sendable (String) async throws -> Void
+    private var leaves: [String] = []
+    private(set) var latestText: String?
+
+    init(callback: @escaping @Sendable (String) async throws -> Void) {
+        self.callback = callback
+    }
+
+    func accept(completedLeafIndex: Int, transcript: String) async throws {
+        guard completedLeafIndex == leaves.count else {
+            throw NSError(
+                domain: "AppState",
+                code: -9,
+                userInfo: [NSLocalizedDescriptionKey: "Audio parts completed out of order. Your recording was kept."]
+            )
+        }
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            throw NSError(
+                domain: "AppState",
+                code: -10,
+                userInfo: [NSLocalizedDescriptionKey: "An audio part returned no text. Your recording was kept."]
+            )
+        }
+        let cumulative = (leaves + [text]).joined(separator: " ")
+        try await callback(cumulative)
+        leaves.append(text)
+        latestText = cumulative
+    }
+}
+
+private actor TranscriptionMilestoneForwarder {
+    private let onCheckpoint: @Sendable (String) async throws -> Void
+    private let onRaw: @Sendable (String) async throws -> Void
+    private let onCleanup: @Sendable () async throws -> Void
+    private var lastCheckpoint: String?
+    private(set) var rawText: String?
+    private var cleanupStarted = false
+
+    init(
+        onCheckpoint: @escaping @Sendable (String) async throws -> Void,
+        onRaw: @escaping @Sendable (String) async throws -> Void,
+        onCleanup: @escaping @Sendable () async throws -> Void
+    ) {
+        self.onCheckpoint = onCheckpoint
+        self.onRaw = onRaw
+        self.onCleanup = onCleanup
+    }
+
+    func checkpoint(_ text: String) async throws {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized != lastCheckpoint else { return }
+        try await onCheckpoint(normalized)
+        lastCheckpoint = normalized
+    }
+
+    func acceptRaw(_ text: String) async throws {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        if rawText == nil {
+            try await checkpoint(normalized)
+            try await onRaw(normalized)
+            rawText = normalized
+        }
+    }
+
+    func beginCleanup() async throws {
+        guard rawText != nil, !cleanupStarted else { return }
+        try await onCleanup()
+        cleanupStarted = true
+    }
+}
+
 private actor AppStateTimeoutGate<T> {
-    private var didResume = false
+    private var continuation: CheckedContinuation<T, Error>?
+    private var pendingResult: Result<T, Error>?
+    private var didResolve = false
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
 
-    func resume(_ result: Result<T, Error>, continuation: CheckedContinuation<T, Error>) {
-        guard !didResume else { return }
-        didResume = true
+    func installTasks(
+        operation: Task<Void, Never>,
+        timeout: Task<Void, Never>
+    ) {
+        guard !didResolve else {
+            operation.cancel()
+            timeout.cancel()
+            return
+        }
+        operationTask = operation
+        timeoutTask = timeout
+    }
 
+    func install(_ continuation: CheckedContinuation<T, Error>) {
+        if let pendingResult {
+            self.pendingResult = nil
+            resume(continuation, with: pendingResult)
+            return
+        }
+        guard !didResolve else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+    }
+
+    func resolve(_ result: Result<T, Error>) {
+        guard !didResolve else { return }
+        didResolve = true
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        operationTask = nil
+        timeoutTask = nil
+
+        guard let continuation else {
+            pendingResult = result
+            return
+        }
+        self.continuation = nil
+        resume(continuation, with: result)
+    }
+
+    private func resume(
+        _ continuation: CheckedContinuation<T, Error>,
+        with result: Result<T, Error>
+    ) {
         switch result {
         case .success(let value):
             continuation.resume(returning: value)
@@ -1407,6 +2759,6 @@ private actor AppStateTimeoutGate<T> {
     }
 
     func cancel() {
-        didResume = true
+        resolve(.failure(CancellationError()))
     }
 }

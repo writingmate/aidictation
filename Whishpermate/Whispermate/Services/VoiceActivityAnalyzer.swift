@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 /// Analyzes completed audio files to detect if they contain speech
-class VoiceActivityAnalyzer {
+actor VoiceActivityAnalyzer {
     private let sileroVAD = SileroVAD()
 
     /// Check if audio file contains speech

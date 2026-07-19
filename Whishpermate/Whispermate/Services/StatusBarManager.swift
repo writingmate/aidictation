@@ -343,7 +343,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let manager = AudioDeviceManager.shared
         manager.refreshDevices()
         guard let device = manager.inputDevices.first(where: { $0.uniqueID == uniqueID }) else { return }
-        _ = manager.selectDevice(device)
+        manager.selectDevice(device)
     }
 
     @objc private func selectTranscriptionMode(_ sender: NSMenuItem) {

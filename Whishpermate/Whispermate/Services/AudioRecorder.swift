@@ -11,28 +11,42 @@ class AudioRecorder: NSObject, ObservableObject {
     private enum Constants {
         static let recordingWatchdogInterval: TimeInterval = 1.0
         static let recordingBufferStallThreshold: TimeInterval = 2.5
-        static let engineRecoveryCooldown: TimeInterval = 2.0
+        static let recordingPreparationTimeout: TimeInterval = 5.0
+        static let recordingFinalizationTimeout: TimeInterval = 5.0
+    }
+
+    enum StopDisposition: Equatable {
+        case submitIfValid
+        case discard
     }
 
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount) // Frequency spectrum data
-    var realtimeAudioChunkHandler: ((Data) -> Void)?
+    var realtimeAudioChunkHandler: ((Data) -> Void)? {
+        get {
+            realtimeHandlerLock.lock()
+            defer { realtimeHandlerLock.unlock() }
+            return storedRealtimeAudioChunkHandler
+        }
+        set {
+            realtimeHandlerLock.lock()
+            storedRealtimeAudioChunkHandler = newValue
+            realtimeHandlerLock.unlock()
+        }
+    }
+    var captureFailureHandler: ((String) -> Void)?
 
-    private var audioEngine: AVAudioEngine?
-    private var audioFile: AVAudioFile?
-    private var recordingURL: URL?
     private let volumeManager = AudioVolumeManager()
     private let frequencyAnalyzer = FrequencyAnalyzer()
-    private var inputFormat: AVAudioFormat?
-    private var outputFormat: AVAudioFormat?
-    private var pendingEngineRefresh = false
     private var recordingWatchdogTimer: Timer?
     private var lastAudioBufferAt: Date?
-    private var lastEngineRecoveryAt: Date?
-    private var retiredEngines: [AVAudioEngine] = []
+    private var pendingPreparation: MacCapturePreparation?
+    private var activeCapture: MacCaptureSession?
+    private var pendingFinalization: MacCaptureFinalization?
+    private let realtimeHandlerLock = NSLock()
+    private var storedRealtimeAudioChunkHandler: ((Data) -> Void)?
     private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
-    private let engineStartQueue = DispatchQueue(label: "ai.writingmate.audio-engine-start", qos: .userInitiated)
     private let realtimeOutputFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
         sampleRate: 24_000,
@@ -64,257 +78,422 @@ class AudioRecorder: NSObject, ObservableObject {
         // likely to hit AVAudioIOUnit's hardware-format callbacks.
     }
 
-    @objc private func handleAudioDeviceChanged(_: Notification) {
+    @objc private func handleAudioDeviceChanged(_ notification: Notification) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.handleAudioDeviceChanged(notification)
+            }
+            return
+        }
+
         DebugLog.info("Audio input device changed", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("input_device_changed")
-        // Don't restart if currently recording - let the current recording finish
-        // Only reinitialize the engine when not recording
-        if !isRecording {
-            pendingEngineRefresh = true
-            teardownCurrentEngine()
-        } else {
-            DebugLog.info("Currently recording - will use new device on next recording", context: "AudioRecorder LOG")
+
+        let changedDeviceUID = notification.object as? String
+        if let pendingPreparation {
+            if !pendingPreparation.shouldInvalidate(forChangedDeviceUID: changedDeviceUID) {
+                return
+            }
+            invalidatePendingPreparation(
+                message: "The microphone changed before recording started. Please try again."
+            )
+        } else if isRecording, let session = activeCapture {
+            if changedDeviceUID == session.deviceResolution.device.uniqueID {
+                return
+            }
+            session.retire()
+            reportCaptureFailure(
+                "The microphone changed while recording. Please record again.",
+                session: session
+            )
         }
     }
 
-    @objc private func handleAudioEngineConfigurationChanged(_: Notification) {
+    @objc private func handleAudioEngineConfigurationChanged(_ notification: Notification) {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in
-                self?.handleAudioEngineConfigurationChanged(Notification(name: .AVAudioEngineConfigurationChange))
+                self?.handleAudioEngineConfigurationChanged(notification)
             }
             return
         }
 
         DebugLog.info("Audio engine configuration changed", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("configuration_changed")
-        if isRecording {
-            pendingEngineRefresh = true
-            DebugLog.info("Deferring audio engine rebuild until recording stops", context: "AudioRecorder LOG")
-        } else {
-            pendingEngineRefresh = true
-            teardownCurrentEngine()
-        }
-    }
 
-    private func retireEngine(_ engine: AVAudioEngine) {
-        retiredEngines.append(engine)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self else { return }
-            let releasedEngines = self.retiredEngines.filter { $0 === engine }
-            self.retiredEngines.removeAll { $0 === engine }
-            DispatchQueue.global(qos: .utility).async {
-                _ = releasedEngines
-            }
-        }
-    }
-
-    private func setupAudioEngine() {
-        DebugLog.info("🎙️ Setting up audio engine", context: "AudioRecorder LOG")
-        SentryTelemetry.recordAudioEngineEvent("setup")
-
-        teardownCurrentEngine()
-
-        do {
-            // Create AVAudioEngine
-            let engine = AVAudioEngine()
-            let inputNode = engine.inputNode
-            let bus = 0
-            inputFormat = inputNode.outputFormat(forBus: bus)
-
-            // Create output format for M4A file (AAC, 44.1kHz, mono)
-            outputFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 44100.0,
-                channels: 1,
-                interleaved: false
+        guard let changedEngine = notification.object as? AVAudioEngine else { return }
+        if let pendingPreparation, pendingPreparation.owns(engine: changedEngine) {
+            invalidatePendingPreparation(
+                message: "The microphone changed before recording started. Please try again."
             )
-
-            guard inputFormat != nil, let outputFormat = outputFormat else {
-                DebugLog.info("❌ Failed to create audio formats", context: "AudioRecorder LOG")
-                return
-            }
-
-            // Install tap for both recording and frequency analysis
-            // The tap runs continuously, but only writes to file when isRecording is true
-            // Use nil format to let system choose - avoids format mismatch errors
-            inputNode.installTap(onBus: bus, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-                guard let self = self else { return }
-
-                // Only analyze and update visualization when actually recording
-                if self.isRecording {
-                    let bands = self.frequencyAnalyzer.analyze(buffer: buffer)
-                    let level = self.calculateAudioLevel(from: buffer)
-
-                    DispatchQueue.main.async {
-                        self.lastAudioBufferAt = Date()
-                        self.frequencyBands = bands
-                        self.audioLevel = level
-                    }
-                }
-
-                // Only write to file when actually recording
-                guard self.isRecording, let audioFile = self.audioFile else { return }
-
-                do {
-                    // Use buffer's actual format for conversion (since we use nil tap format)
-                    let bufferFormat = buffer.format
-
-                    // Convert to output format if needed
-                    if bufferFormat.sampleRate != outputFormat.sampleRate || bufferFormat.channelCount != outputFormat.channelCount,
-                       let converter = AVAudioConverter(from: bufferFormat, to: outputFormat)
-                    {
-                        let ratio = outputFormat.sampleRate / bufferFormat.sampleRate
-                        let convertedBuffer = AVAudioPCMBuffer(
-                            pcmFormat: outputFormat,
-                            frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-                        )!
-
-                        var error: NSError?
-                        converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
-                            outStatus.pointee = .haveData
-                            return buffer
-                        }
-
-                        if error == nil {
-                            try audioFile.write(from: convertedBuffer)
-                        }
-                    } else {
-                        // Same format, write directly
-                        try audioFile.write(from: buffer)
-                    }
-                } catch {
-                    DebugLog.info("❌ Failed to write audio buffer: \(error)", context: "AudioRecorder LOG")
-                }
-
-                if let chunk = self.realtimePCMChunk(from: buffer), let handler = self.realtimeAudioChunkHandler {
-                    self.realtimeAudioQueue.async {
-                        handler(chunk)
-                    }
-                }
-            }
-
-            // Don't start the engine yet - only start when recording begins
-            audioEngine = engine
-
-            DebugLog.info("✅ Audio engine initialized", context: "AudioRecorder LOG")
-        } catch {
-            DebugLog.info("❌ Failed to setup audio engine: \(error)", context: "AudioRecorder LOG")
+        } else if isRecording, let session = activeCapture, session.engine === changedEngine {
+            session.retire()
+            reportCaptureFailure(
+                "The microphone changed while recording. Please record again.",
+                session: session
+            )
         }
     }
 
-    func startRecording() {
+    func startRecording(
+        recordingID: UUID,
+        recordingURL: URL,
+        completion: @escaping (RecordingPreparationAttempt.Terminal) -> Void
+    ) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.startRecording(
+                    recordingID: recordingID,
+                    recordingURL: recordingURL,
+                    completion: completion
+                )
+            }
+            return
+        }
+
         DebugLog.info("⚡ startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("start_recording")
 
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             DebugLog.info("❌ Microphone permission is not authorized", context: "AudioRecorder LOG")
+            completion(.failed("Microphone access is required to start recording."))
             return
         }
 
-        guard let inputDevice = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() else {
-            DebugLog.info("❌ Preferred input device is unavailable; refusing to record from fallback microphone", context: "AudioRecorder LOG")
-            return
-        }
-        DebugLog.info("Using input device for recording: \(inputDevice.name)", context: "AudioRecorder LOG")
-        SentryTelemetry.recordAudioDeviceEvent("recording_input_device", device: inputDevice)
-
-        if pendingEngineRefresh {
-            DebugLog.info("Applying deferred audio engine refresh before recording", context: "AudioRecorder LOG")
-            pendingEngineRefresh = false
-            setupAudioEngine()
-        }
-
-        // Ensure engine is set up
-        if audioEngine == nil {
-            DebugLog.info("Engine not initialized, setting up...", context: "AudioRecorder LOG")
-            setupAudioEngine()
-        }
-
-        // Start the engine if not running
-        guard let engine = audioEngine else {
-            DebugLog.info("❌ Engine not available", context: "AudioRecorder LOG")
+        guard pendingPreparation == nil,
+              pendingFinalization == nil,
+              activeCapture == nil,
+              !isRecording
+        else {
+            completion(.failed("Recording is already active."))
             return
         }
 
-        // Prepare recording file
-        let fileManager = FileManager.default
-        let tempDirectory = fileManager.temporaryDirectory
-        let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
-        let newRecordingURL = tempDirectory.appendingPathComponent(fileName)
+        let deviceSnapshot = AudioDeviceManager.shared.makeCaptureSelectionSnapshot()
+        let preparation = MacCapturePreparation(
+            recordingID: recordingID,
+            recordingURL: recordingURL,
+            completion: completion
+        )
+        pendingPreparation = preparation
 
-        // Delete any existing file at this path
-        if fileManager.fileExists(atPath: newRecordingURL.path) {
-            try? fileManager.removeItem(at: newRecordingURL)
+        preparation.queue.async { [weak self, weak preparation] in
+            guard let self, let preparation else { return }
+            self.prepareCapture(preparation, deviceSnapshot: deviceSnapshot)
         }
 
-        recordingURL = newRecordingURL
+        DispatchQueue.main.asyncAfter(deadline: .now() + Constants.recordingPreparationTimeout) { [weak self, weak preparation] in
+            guard let self, let preparation, self.pendingPreparation === preparation else { return }
+            guard preparation.attempt.resolve(.timedOut) else { return }
 
-        guard outputFormat != nil else {
-            DebugLog.info("❌ Output format not initialized - audioEngine: \(audioEngine != nil)", context: "AudioRecorder LOG")
+            preparation.retireSession()
+            self.pendingPreparation = nil
+            self.resetFailedStart()
+            preparation.completion(.timedOut)
+            preparation.scheduleCleanup(deleteFile: true)
+        }
+    }
+
+    func cancelPendingRecordingStart() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.cancelPendingRecordingStart()
+            }
             return
         }
+
+        guard let preparation = pendingPreparation,
+              preparation.attempt.resolve(.cancelled)
+        else { return }
+
+        preparation.retireSession()
+        pendingPreparation = nil
+        resetFailedStart()
+        preparation.completion(.cancelled)
+        preparation.scheduleCleanup(deleteFile: true)
+    }
+
+    /// Cancels one exact capture attempt across the preparation-to-active
+    /// promotion boundary. Main-queue serialization makes the operation atomic:
+    /// it either resolves the pending attempt or retires the just-promoted
+    /// active session, so a late `.ready` cannot leave native capture running.
+    func cancelPendingOrActiveCapture(recordingID: UUID) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.cancelPendingOrActiveCapture(recordingID: recordingID)
+            }
+            return
+        }
+
+        if let preparation = pendingPreparation,
+           preparation.recordingID == recordingID {
+            guard preparation.attempt.resolve(.cancelled) else { return }
+            preparation.retireSession()
+            pendingPreparation = nil
+            resetFailedStart()
+            preparation.completion(.cancelled)
+            preparation.scheduleCleanup(deleteFile: true)
+            return
+        }
+
+        guard let session = activeCapture,
+              session.recordingID == recordingID else { return }
+        activeCapture = nil
+        session.retire()
+        resetFailedStart()
+        DispatchQueue(
+            label: "ai.writingmate.audio-cancel.\(recordingID.uuidString)",
+            qos: .utility
+        ).async {
+            session.cleanup(deleteFile: true)
+        }
+    }
+
+    private func prepareCapture(
+        _ preparation: MacCapturePreparation,
+        deviceSnapshot: AudioDeviceManager.CaptureSelectionSnapshot
+    ) {
+        guard preparation.attempt.isPending else { return }
+
+        guard let deviceResolution = AudioDeviceManager.shared.resolveCaptureDevice(using: deviceSnapshot) else {
+            failPreparation(
+                preparation,
+                message: "The selected microphone is unavailable. Choose another microphone and try again."
+            )
+            return
+        }
+        guard preparation.accept(deviceResolution: deviceResolution) else {
+            failPreparation(
+                preparation,
+                message: "The microphone changed before recording started. Please try again."
+            )
+            return
+        }
+
+        guard preparation.attempt.isPending else { return }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let bus = 0
+        let inputFormat = inputNode.outputFormat(forBus: bus)
+        guard inputFormat.channelCount > 0,
+              let outputFormat = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32,
+                  sampleRate: 44_100,
+                  channels: 1,
+                  interleaved: false
+              )
+        else {
+            failPreparation(preparation, message: "The microphone audio format is unavailable. Please try again.")
+            return
+        }
+
+        let recordingURL = preparation.recordingURL
 
         do {
-            // Create audio file for writing
-            audioFile = try AVAudioFile(
-                forWriting: newRecordingURL,
+            let audioFile = try AVAudioFile(
+                forWriting: recordingURL,
                 settings: [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVSampleRateKey: 44100.0,
+                    AVSampleRateKey: 44_100.0,
                     AVNumberOfChannelsKey: 1,
                     AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
                 ]
             )
+            let session = MacCaptureSession(
+                recordingID: preparation.recordingID,
+                engine: engine,
+                audioFile: audioFile,
+                recordingURL: recordingURL,
+                outputFormat: outputFormat,
+                deviceResolution: deviceResolution
+            )
+            preparation.setSession(session)
 
-            // Update UI state synchronously so ContentView can check it immediately
-            // Ensure we're on main thread for @Published property updates
-            if Thread.isMainThread {
-                isRecording = true
-                lastAudioBufferAt = Date()
-            } else {
-                DispatchQueue.main.sync {
-                    self.isRecording = true
-                    self.lastAudioBufferAt = Date()
-                }
+            inputNode.installTap(onBus: bus, bufferSize: 2048, format: nil) { [weak self, preparation, weak session] buffer, _ in
+                guard let self, let session else { return }
+                self.processCaptureBuffer(buffer, session: session, preparation: preparation)
             }
-            startRecordingWatchdog()
 
-            let engineWasStarted = engine.isRunning
-            if !engineWasStarted {
-                startEngineOffMainThread(engine, reason: "recording start") { [weak self] in
-                    self?.finishEngineStart()
-                }
+            guard preparation.attempt.isPending else {
+                preparation.scheduleCleanup(deleteFile: true)
                 return
             }
 
-            finishEngineStart()
+            do {
+                try engine.start()
+            } catch {
+                failPreparation(preparation, message: "Recording could not start. Please try again.")
+                preparation.scheduleCleanup(deleteFile: true)
+                return
+            }
+
+            if session.markEngineStarted() {
+                signalPreparationReady(preparation, session: session)
+            }
+
+            if !preparation.attempt.isPending, preparation.attempt.terminal != .ready {
+                preparation.scheduleCleanup(deleteFile: true)
+            }
         } catch {
-            DebugLog.info("❌ Failed to create audio file: \(error)", context: "AudioRecorder LOG")
-            resetFailedStart()
+            failPreparation(preparation, message: "Recording could not start. Please try again.")
+            preparation.scheduleCleanup(deleteFile: true)
         }
     }
 
-    private func startEngineOffMainThread(_ engine: AVAudioEngine, reason: String, onStarted: @escaping () -> Void) {
-        engineStartQueue.async { [weak self, weak engine] in
-            guard let self, let engine else { return }
+    private func processCaptureBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        session: MacCaptureSession,
+        preparation: MacCapturePreparation
+    ) {
+        guard let write = session.beginWrite() else { return }
+        let audioFile = write.audioFile
 
-            do {
-                try engine.start()
+        do {
+            let bufferFormat = buffer.format
+            if bufferFormat.sampleRate != session.outputFormat.sampleRate
+                || bufferFormat.channelCount != session.outputFormat.channelCount,
+                let converter = AVAudioConverter(from: bufferFormat, to: session.outputFormat)
+            {
+                let ratio = session.outputFormat.sampleRate / bufferFormat.sampleRate
+                guard let convertedBuffer = AVAudioPCMBuffer(
+                    pcmFormat: session.outputFormat,
+                    frameCapacity: AVAudioFrameCount(max(1, ceil(Double(buffer.frameLength) * ratio)))
+                ) else {
+                    throw NSError(domain: "AudioRecorder", code: 1)
+                }
 
-                DispatchQueue.main.async { [weak self, weak engine] in
-                    guard let self, let engine, self.audioEngine === engine else { return }
-                    DebugLog.info("✅ Audio engine started for \(reason)", context: "AudioRecorder LOG")
-                    onStarted()
+                var conversionError: NSError?
+                var providedInput = false
+                converter.convert(to: convertedBuffer, error: &conversionError) { _, status in
+                    guard !providedInput else {
+                        status.pointee = .noDataNow
+                        return nil
+                    }
+                    providedInput = true
+                    status.pointee = .haveData
+                    return buffer
                 }
-            } catch {
-                DispatchQueue.main.async { [weak self, weak engine] in
-                    guard let self, let engine, self.audioEngine === engine else { return }
-                    DebugLog.info("❌ Failed to start audio engine for \(reason): \(error)", context: "AudioRecorder LOG")
-                    self.resetFailedStart()
-                }
+                if let conversionError { throw conversionError }
+                try audioFile.write(from: convertedBuffer)
+            } else {
+                try audioFile.write(from: buffer)
+            }
+
+            if session.finishWrite(succeeded: true, lease: write.lease) == .becameReady {
+                signalPreparationReady(preparation, session: session)
+            }
+        } catch {
+            let failureMessage: String
+            switch write.lease {
+            case .preparation:
+                failureMessage = "The recording could not be saved. Please try again."
+            case .active:
+                failureMessage = "The recording could not be saved completely. Please record again."
+            }
+            let outcome = session.finishWrite(
+                succeeded: false,
+                lease: write.lease,
+                failureMessage: failureMessage
+            )
+            DebugLog.info("❌ Failed to write audio buffer: \(error)", context: "AudioRecorder LOG")
+
+            switch outcome {
+            case .preparationFailed:
+                failPreparation(
+                    preparation,
+                    message: "The recording could not be saved. Please try again."
+                )
+                preparation.scheduleCleanup(deleteFile: true)
+            case .activeFailed:
+                reportCaptureFailure(
+                    "The recording could not be saved completely. Please record again.",
+                    session: session
+                )
+            case .becameReady, .accepted, .ignored:
+                break
+            }
+            return
+        }
+
+        guard session.isActive else { return }
+        let bands = frequencyAnalyzer.analyze(buffer: buffer)
+        let level = calculateAudioLevel(from: buffer)
+        DispatchQueue.main.async { [weak self, weak session] in
+            guard let self, let session, self.activeCapture === session else { return }
+            self.lastAudioBufferAt = Date()
+            self.frequencyBands = bands
+            self.audioLevel = level
+        }
+
+        if let chunk = realtimePCMChunk(from: buffer), let handler = realtimeAudioChunkHandler {
+            realtimeAudioQueue.async {
+                handler(chunk)
             }
         }
+    }
+
+    private func signalPreparationReady(_ preparation: MacCapturePreparation, session: MacCaptureSession) {
+        DispatchQueue.main.async { [weak self, weak preparation, weak session] in
+            guard let self, let preparation, let session else { return }
+            guard self.pendingPreparation === preparation else {
+                preparation.retireSession()
+                preparation.scheduleCleanup(deleteFile: true)
+                return
+            }
+            let activationTerminal = preparation.attempt.resolveAfterActivation(
+                succeeded: session.activate(),
+                failureMessage: "The recording could not be saved. Please try again."
+            )
+            guard activationTerminal == .ready else {
+                if case .failed(let message) = activationTerminal {
+                    self.pendingPreparation = nil
+                    self.resetFailedStart()
+                    preparation.completion(.failed(message))
+                }
+                preparation.retireSession()
+                preparation.scheduleCleanup(deleteFile: true)
+                return
+            }
+
+            self.pendingPreparation = nil
+            self.activeCapture = session
+            AudioDeviceManager.shared.publishCaptureDeviceResolution(session.deviceResolution)
+            self.isRecording = true
+            self.lastAudioBufferAt = Date()
+            self.startRecordingWatchdog()
+            preparation.completion(.ready)
+            self.finishEngineStart()
+        }
+    }
+
+    private func failPreparation(_ preparation: MacCapturePreparation, message: String) {
+        guard preparation.attempt.resolve(.failed(message)) else { return }
+        preparation.retireSession()
+
+        DispatchQueue.main.async { [weak self, weak preparation] in
+            guard let self, let preparation else { return }
+            guard self.pendingPreparation === preparation else {
+                preparation.scheduleCleanup(deleteFile: true)
+                return
+            }
+
+            self.pendingPreparation = nil
+            self.resetFailedStart()
+            preparation.completion(.failed(message))
+            preparation.scheduleCleanup(deleteFile: true)
+        }
+    }
+
+    private func invalidatePendingPreparation(message: String) {
+        guard let preparation = pendingPreparation,
+              preparation.attempt.resolve(.invalidated)
+        else { return }
+
+        preparation.retireSession()
+        pendingPreparation = nil
+        resetFailedStart()
+        preparation.completion(.invalidated)
+        preparation.scheduleCleanup(deleteFile: true)
     }
 
     private func finishEngineStart() {
@@ -329,22 +508,9 @@ class AudioRecorder: NSObject, ObservableObject {
 
     private func resetFailedStart() {
         stopRecordingWatchdog()
-        audioFile = nil
-        if let recordingURL {
-            try? FileManager.default.removeItem(at: recordingURL)
-        }
-        recordingURL = nil
-        if Thread.isMainThread {
-            isRecording = false
-            audioLevel = 0.0
-            frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
-        } else {
-            DispatchQueue.main.sync {
-                self.isRecording = false
-                self.audioLevel = 0.0
-                self.frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
-            }
-        }
+        isRecording = false
+        audioLevel = 0.0
+        frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
         volumeManager.restoreVolume()
     }
 
@@ -370,53 +536,34 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
-        guard !pendingEngineRefresh else { return }
-
-        guard let engine = audioEngine, engine.isRunning else {
-            recoverAudioEngineDuringRecording(reason: "engine stopped")
+        guard let session = activeCapture, session.engine.isRunning else {
+            if let session = activeCapture {
+                session.retire()
+                reportCaptureFailure(
+                    "The microphone stopped responding. Please record again.",
+                    session: session
+                )
+            }
             return
         }
 
         guard let lastAudioBufferAt else { return }
         if Date().timeIntervalSince(lastAudioBufferAt) > Constants.recordingBufferStallThreshold {
-            guard !pendingEngineRefresh else { return }
-            recoverAudioEngineDuringRecording(reason: "audio tap stalled")
+            session.retire()
+            reportCaptureFailure(
+                "The microphone stopped responding. Please record again.",
+                session: session
+            )
         }
     }
 
-    private func recoverAudioEngineDuringRecording(reason: String) {
-        guard isRecording else {
-            pendingEngineRefresh = true
-            teardownCurrentEngine()
-            return
-        }
+    private func reportCaptureFailure(_ message: String, session: MacCaptureSession) {
+        guard session.recordFailure(message) else { return }
 
-        let now = Date()
-        if let lastEngineRecoveryAt,
-           now.timeIntervalSince(lastEngineRecoveryAt) < Constants.engineRecoveryCooldown
-        {
-            return
-        }
-        lastEngineRecoveryAt = now
-
-        guard let device = AudioDeviceManager.shared.applyPreferredOrAutomaticDevice() else {
-            DebugLog.info("Cannot recover recording engine after \(reason): preferred input device unavailable", context: "AudioRecorder LOG")
-            return
-        }
-
-        DebugLog.info("Recovering audio engine after \(reason) with input device: \(device.name)", context: "AudioRecorder LOG")
-        SentryTelemetry.recordAudioDeviceEvent("recover_engine_device", device: device)
-        SentryTelemetry.recordAudioEngineEvent("recover", reason: reason)
-        setupAudioEngine()
-
-        guard let engine = audioEngine else {
-            DebugLog.info("❌ Audio engine recovery failed: engine not available", context: "AudioRecorder LOG")
-            return
-        }
-
-        startEngineOffMainThread(engine, reason: "recording recovery") { [weak self] in
-            self?.lastAudioBufferAt = Date()
-            DebugLog.info("✅ Audio engine recovered during recording", context: "AudioRecorder LOG")
+        DispatchQueue.main.async { [weak self, weak session] in
+            guard let self, let session, self.activeCapture === session else { return }
+            self.stopRecordingWatchdog()
+            self.captureFailureHandler?(message)
         }
     }
 
@@ -520,16 +667,45 @@ class AudioRecorder: NSObject, ObservableObject {
         return Data(bytes: channelData.pointee, count: byteCount)
     }
 
-    func stopRecording() -> URL? {
+    func stopRecording(
+        disposition: StopDisposition = .submitIfValid,
+        completion: @escaping (RecordingFinalizationAttempt.Terminal) -> Void
+    ) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.stopRecording(disposition: disposition, completion: completion)
+            }
+            return
+        }
+
         DebugLog.info("⚡ stopRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("stop_recording")
 
+        if pendingPreparation != nil {
+            cancelPendingRecordingStart()
+            completion(.discarded)
+            return
+        }
+
         stopRecordingWatchdog()
-
-        // Close audio file
-        audioFile = nil
-
-        teardownCurrentEngine()
+        guard pendingFinalization == nil else {
+            completion(.unavailable("Recording is already being saved."))
+            return
+        }
+        guard let session = activeCapture else {
+            resetFailedStart()
+            completion(.unavailable("No recording is available to save."))
+            return
+        }
+        activeCapture = nil
+        isRecording = false
+        session.retire()
+        let finalization = MacCaptureFinalization(
+            session: session,
+            deletesFile: disposition == .discard,
+            completion: completion
+        )
+        pendingFinalization = finalization
 
         // Restore system volume
         let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
@@ -539,43 +715,75 @@ class AudioRecorder: NSObject, ObservableObject {
 
         // Update UI state synchronously so ContentView can check it immediately
         // Ensure we're on main thread for @Published property updates
-        if Thread.isMainThread {
-            isRecording = false
-            audioLevel = 0.0
-            frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
-        } else {
-            DispatchQueue.main.sync {
-                self.isRecording = false
-                self.audioLevel = 0.0
-                self.frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
+        audioLevel = 0.0
+        frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
+        DebugLog.info("Recording finalization started", context: "AudioRecorder LOG")
+
+        finalization.queue.async { [weak self, finalization] in
+            guard let self else { return }
+            let deleteFile = finalization.deletesFile
+            finalization.session.cleanup(deleteFile: deleteFile)
+
+            let terminal: RecordingFinalizationAttempt.Terminal
+            if deleteFile {
+                terminal = .discarded
+            } else if let failure = finalization.session.recordedFailure {
+                terminal = .failed(
+                    message: failure,
+                    recoverableURL: finalization.session.recordingURL
+                )
+            } else if let failure = self.finalizedRecordingFailure(finalization.session.recordingURL) {
+                terminal = .failed(
+                    message: failure,
+                    recoverableURL: finalization.session.recordingURL
+                )
+            } else {
+                terminal = .finalized(finalization.session.recordingURL)
+            }
+
+            DispatchQueue.main.async { [weak self, weak finalization] in
+                guard let self, let finalization else { return }
+                self.finishFinalization(finalization, terminal: terminal)
             }
         }
 
-        let url = recordingURL
-        DebugLog.info("✅ stopRecording completed, recordingURL: \(String(describing: url))", context: "AudioRecorder LOG")
-
-        // Clear recordingURL for next session
-        recordingURL = nil
-
-        if pendingEngineRefresh {
-            pendingEngineRefresh = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + Constants.recordingFinalizationTimeout) { [weak self, weak finalization] in
+            guard let self,
+                  let finalization,
+                  self.pendingFinalization === finalization
+            else { return }
+            self.finishFinalization(
+                finalization,
+                terminal: .timedOut(recoverableURL: finalization.session.recordingURL)
+            )
         }
-
-        return url
     }
 
-    private func teardownCurrentEngine() {
-        guard let engine = audioEngine else { return }
+    private func finishFinalization(
+        _ finalization: MacCaptureFinalization,
+        terminal: RecordingFinalizationAttempt.Terminal
+    ) {
+        guard pendingFinalization === finalization,
+              finalization.attempt.resolve(terminal)
+        else { return }
 
-        audioEngine = nil
+        pendingFinalization = nil
+        finalization.completion(terminal)
+    }
 
-        engine.inputNode.removeTap(onBus: 0)
-        if engine.isRunning {
-            engine.stop()
-            DebugLog.info("✅ Audio engine stopped", context: "AudioRecorder LOG")
+    private func finalizedRecordingFailure(_ url: URL) -> String? {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let byteCount = attributes[.size] as? Int64 ?? 0
+            DebugLog.info(
+                "Recording file ready name=\(url.lastPathComponent) bytes=\(byteCount)",
+                context: "DictationFlow"
+            )
+            return byteCount < 1_000 ? "No speech was captured. Please try again." : nil
+        } catch {
+            DebugLog.info("Recording file validation failed: \(error)", context: "AudioRecorder")
+            return "Recording couldn’t be verified. Please try again."
         }
-
-        retireEngine(engine)
     }
 
     deinit {
@@ -586,13 +794,310 @@ class AudioRecorder: NSObject, ObservableObject {
         // Remove notification observers
         NotificationCenter.default.removeObserver(self)
 
-        // Stop engine and clean up
-        teardownCurrentEngine()
-        audioFile = nil
+        pendingPreparation?.scheduleCleanup(deleteFile: true)
+        if let activeCapture {
+            DispatchQueue(
+                label: "ai.writingmate.audio-deinit.\(UUID().uuidString)",
+                qos: .utility
+            ).async {
+                activeCapture.cleanup(deleteFile: false)
+            }
+        }
 
         // Restore volume as a safety measure
         volumeManager.restoreVolume()
 
         DebugLog.info("✅ Cleanup complete", context: "AudioRecorder LOG")
+    }
+}
+
+private final class MacCapturePreparation: @unchecked Sendable {
+    let recordingID: UUID
+    let attempt: RecordingPreparationAttempt
+    let recordingURL: URL
+    let queue = DispatchQueue(
+        label: "ai.writingmate.audio-preparation.\(UUID().uuidString)",
+        qos: .userInitiated
+    )
+    let completion: (RecordingPreparationAttempt.Terminal) -> Void
+
+    private let lock = NSLock()
+    private var storedSession: MacCaptureSession?
+    private var resolvedDeviceUID: String?
+    private var lastNotifiedDeviceUID: String?
+
+    init(
+        recordingID: UUID,
+        recordingURL: URL,
+        completion: @escaping (RecordingPreparationAttempt.Terminal) -> Void
+    ) {
+        self.recordingID = recordingID
+        attempt = RecordingPreparationAttempt(
+            token: RecordingPreparationAttempt.Token(rawValue: recordingID)
+        )
+        self.recordingURL = recordingURL
+        self.completion = completion
+    }
+
+    func setSession(_ session: MacCaptureSession) {
+        lock.lock()
+        storedSession = session
+        lock.unlock()
+
+        if !attempt.isPending {
+            session.retire()
+        }
+    }
+
+    func retireSession() {
+        lock.lock()
+        let session = storedSession
+        lock.unlock()
+        session?.retire()
+    }
+
+    func accept(deviceResolution: AudioDeviceManager.CaptureDeviceResolution) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let uniqueID = deviceResolution.device.uniqueID
+        if let lastNotifiedDeviceUID, lastNotifiedDeviceUID != uniqueID {
+            return false
+        }
+        resolvedDeviceUID = uniqueID
+        return true
+    }
+
+    func shouldInvalidate(forChangedDeviceUID uniqueID: String?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let uniqueID else { return true }
+        if let ownedUID = storedSession?.deviceResolution.device.uniqueID ?? resolvedDeviceUID {
+            return ownedUID != uniqueID
+        }
+
+        // The route changed before resolution completed. Let the background
+        // resolver observe it, then reject only if its resolved UID differs.
+        lastNotifiedDeviceUID = uniqueID
+        return false
+    }
+
+    func owns(engine: AVAudioEngine) -> Bool {
+        lock.lock()
+        let matches = storedSession?.engine === engine
+        lock.unlock()
+        return matches
+    }
+
+    func scheduleCleanup(deleteFile: Bool) {
+        queue.async {
+            self.lock.lock()
+            let session = self.storedSession
+            self.lock.unlock()
+            session?.cleanup(deleteFile: deleteFile)
+        }
+    }
+}
+
+private final class MacCaptureFinalization: @unchecked Sendable {
+    let attempt = RecordingFinalizationAttempt()
+    let queue = DispatchQueue(
+        label: "ai.writingmate.audio-finalization.\(UUID().uuidString)",
+        qos: .userInitiated
+    )
+    let session: MacCaptureSession
+    let deletesFile: Bool
+    let completion: (RecordingFinalizationAttempt.Terminal) -> Void
+
+    init(
+        session: MacCaptureSession,
+        deletesFile: Bool,
+        completion: @escaping (RecordingFinalizationAttempt.Terminal) -> Void
+    ) {
+        self.session = session
+        self.deletesFile = deletesFile
+        self.completion = completion
+    }
+}
+
+private final class MacCaptureSession: @unchecked Sendable {
+    enum WriteLease {
+        case preparation
+        case active
+    }
+
+    enum WriteCompletion {
+        case accepted
+        case becameReady
+        case preparationFailed
+        case activeFailed
+        case ignored
+    }
+
+    private enum Phase {
+        case preparing
+        case ready
+        case active
+        case retired
+    }
+
+    let recordingID: UUID
+    let engine: AVAudioEngine
+    let recordingURL: URL
+    let outputFormat: AVAudioFormat
+    let deviceResolution: AudioDeviceManager.CaptureDeviceResolution
+
+    private let condition = NSCondition()
+    private let cleanupClaim = RecordingPreparationCleanupClaim()
+    private var phase: Phase = .preparing
+    private var audioFile: AVAudioFile?
+    private var activeWrites = 0
+    private var engineStarted = false
+    private var wroteBuffer = false
+    private var failureMessage: String?
+    private var failureDeliveryClaimed = false
+
+    init(
+        recordingID: UUID,
+        engine: AVAudioEngine,
+        audioFile: AVAudioFile,
+        recordingURL: URL,
+        outputFormat: AVAudioFormat,
+        deviceResolution: AudioDeviceManager.CaptureDeviceResolution
+    ) {
+        self.recordingID = recordingID
+        self.engine = engine
+        self.audioFile = audioFile
+        self.recordingURL = recordingURL
+        self.outputFormat = outputFormat
+        self.deviceResolution = deviceResolution
+    }
+
+    var isActive: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return phase == .active
+    }
+
+    func markEngineStarted() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard phase == .preparing else { return false }
+        engineStarted = true
+        return promoteToReadyIfPossible()
+    }
+
+    func beginWrite() -> (audioFile: AVAudioFile, lease: WriteLease)? {
+        condition.lock()
+        defer { condition.unlock() }
+        guard phase == .preparing || phase == .ready || phase == .active,
+              let audioFile
+        else { return nil }
+
+        activeWrites += 1
+        let lease: WriteLease = phase == .active ? .active : .preparation
+        return (audioFile, lease)
+    }
+
+    func finishWrite(
+        succeeded: Bool,
+        lease: WriteLease,
+        failureMessage: String? = nil
+    ) -> WriteCompletion {
+        condition.lock()
+        defer { condition.unlock() }
+
+        let failureOutcome: WriteCompletion?
+        if !succeeded {
+            if self.failureMessage == nil {
+                self.failureMessage = failureMessage
+            }
+            if phase != .retired {
+                phase = .retired
+            }
+            switch lease {
+            case .preparation:
+                failureOutcome = .preparationFailed
+            case .active:
+                failureOutcome = .activeFailed
+            }
+        } else {
+            failureOutcome = nil
+        }
+
+        activeWrites = max(0, activeWrites - 1)
+        if activeWrites == 0 {
+            condition.broadcast()
+        }
+        if let failureOutcome {
+            return failureOutcome
+        }
+
+        guard phase == .preparing else {
+            return phase == .retired ? .ignored : .accepted
+        }
+        wroteBuffer = true
+        return promoteToReadyIfPossible() ? .becameReady : .accepted
+    }
+
+    func activate() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard phase == .ready else { return false }
+        phase = .active
+        return true
+    }
+
+    func retire() {
+        condition.lock()
+        phase = .retired
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    @discardableResult
+    func recordFailure(_ message: String) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        if failureMessage == nil {
+            failureMessage = message
+        }
+        guard !failureDeliveryClaimed else { return false }
+        failureDeliveryClaimed = true
+        return true
+    }
+
+    var recordedFailure: String? {
+        condition.lock()
+        defer { condition.unlock() }
+        return failureMessage
+    }
+
+    func cleanup(deleteFile: Bool) {
+        guard cleanupClaim.claim() else { return }
+
+        retire()
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning {
+            engine.stop()
+        }
+
+        condition.lock()
+        while activeWrites > 0 {
+            condition.wait()
+        }
+        audioFile = nil
+        condition.unlock()
+
+        if deleteFile {
+            try? FileManager.default.removeItem(at: recordingURL)
+        }
+    }
+
+    private func promoteToReadyIfPossible() -> Bool {
+        guard phase == .preparing, engineStarted, wroteBuffer else { return false }
+        phase = .ready
+        return true
     }
 }

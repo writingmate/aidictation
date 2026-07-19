@@ -168,7 +168,7 @@ public class SubscriptionManager: ObservableObject {
     }
 
     /// Records words after transcription and reports whether the destination acknowledged it.
-    /// Callers with durable work must retain their outbox entry when this returns false.
+    /// This operation is not idempotent; durable callers must claim it before invoking this method.
     @discardableResult
     public func recordWords(_ count: Int) async -> Bool {
         if authManager.isAuthenticated {

@@ -47,9 +47,14 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 "$work_dir/validate-macos-snapshot"
 
 swiftc -parse-as-library -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/WhisperMateShared.swift \
+  Whishpermate/WhisperMateShared/Models/TranscriptionOutputMode.swift \
   Whishpermate/WhisperMateShared/Models/TranscriptionOptions.swift \
+  Whishpermate/WhisperMateShared/Models/Recording.swift \
+  Whishpermate/WhisperMateShared/Services/DebugLog.swift \
   Whishpermate/WhisperMateShared/Services/MobileAudioProcessingStore.swift \
   Whishpermate/WhisperMateShared/Services/IOSAudioProcessingDeadline.swift \
+  Whishpermate/WhisperMateShared/Storage/HistoryManager.swift \
   scripts/validate_ios_audio_processing_recovery.swift \
   -framework AVFoundation \
   -o "$work_dir/validate-ios-store"

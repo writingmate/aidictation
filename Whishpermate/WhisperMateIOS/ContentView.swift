@@ -1412,11 +1412,7 @@ struct ContentView: View {
         Task { @MainActor in
             do {
                 try await MobileAudioProcessingStore.shared.tombstone(recordingID: recording.id)
-                if let audioURL = recording.audioFileURL,
-                   FileManager.default.fileExists(atPath: audioURL.path)
-                {
-                    try FileManager.default.removeItem(at: audioURL)
-                }
+                try historyManager.removeAudioFileIfPresent(for: recording)
                 historyManager.deleteRecording(recording)
             } catch {
                 historyActionMessage = "This recording could not be deleted. Please try again."
@@ -1446,11 +1442,7 @@ struct ContentView: View {
                     recordingIDs: recordings.map(\.id)
                 )
                 for recording in recordings {
-                    if let audioURL = recording.audioFileURL,
-                       FileManager.default.fileExists(atPath: audioURL.path)
-                    {
-                        try FileManager.default.removeItem(at: audioURL)
-                    }
+                    try historyManager.removeAudioFileIfPresent(for: recording)
                 }
                 historyManager.clearAll()
             } catch {
@@ -1489,6 +1481,7 @@ struct ContentView: View {
             }
             for snapshot in snapshots where snapshot.stage == .deleted {
                 if let recording = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
+                    try historyManager.removeAudioFileIfPresent(for: recording)
                     historyManager.deleteRecording(recording)
                 }
             }
@@ -1543,7 +1536,7 @@ struct ContentView: View {
             MobileAudioHostLaunchRecoveryGate.ready = true
             mobileAudioRecoveryReady = true
             // Recovery readiness must never wait on a usage-network request. Claims happen in
-            // this follow-up task, so an app exit before work starts leaves them retryable.
+            // this follow-up task; once claimed, a request is deliberately never replayed.
             Task { @MainActor in
                 for recordingID in usageRecordingIDs {
                     await MobileAudioUsageAccounting.flush(recordingID: recordingID)

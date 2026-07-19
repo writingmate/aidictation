@@ -11,6 +11,8 @@ private enum ValidationFailure: Error, CustomStringConvertible {
     }
 }
 
+private struct InjectedDeletionCrash: Error, Sendable {}
+
 private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     guard condition() else { throw ValidationFailure.failed(message) }
 }
@@ -24,6 +26,17 @@ private func requireThrows(
         throw ValidationFailure.failed("Expected \(expected), but operation succeeded")
     } catch let error as MobileAudioProcessingStore.StoreError {
         try require(error == expected, "Expected \(expected), got \(error)")
+    }
+}
+
+private func requireInjectedDeletionCrash(
+    _ operation: () async throws -> Void
+) async throws {
+    do {
+        try await operation()
+        throw ValidationFailure.failed("Expected injected deletion crash, but operation succeeded")
+    } catch is InjectedDeletionCrash {
+        return
     }
 }
 
@@ -599,16 +612,12 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
     let duplicateAccountingLease = try await store.beginUsageAccounting(recordingID: lease.recordingID)
     try require(firstAccountingLease?.wordCount == 3, "Successful result was not leased for usage")
     try require(duplicateAccountingLease == nil, "Usage accounting was leased concurrently")
-    guard let firstAccountingLease else {
-        throw ValidationFailure.failed("Usage accounting lease was missing")
-    }
-    try await store.finishUsageAccounting(firstAccountingLease, acknowledged: true)
-    let accountingAfterAcknowledgement = try await store.beginUsageAccounting(
+    let accountingAfterClaim = try await store.beginUsageAccounting(
         recordingID: lease.recordingID
     )
     try require(
-        accountingAfterAcknowledgement == nil,
-        "Acknowledged usage accounting was sent twice"
+        firstAccountingLease != nil && accountingAfterClaim == nil,
+        "Durably claimed usage accounting was sent twice"
     )
 
     let sourceURL = URL(fileURLWithPath: #filePath)
@@ -647,13 +656,12 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
         recordingID: rawLease.recordingID
     ) else { throw ValidationFailure.failed("Raw fallback skipped durable usage accounting") }
     try require(rawAccountingLease.wordCount == 4, "Raw fallback accounting count is wrong")
-    try await rawStore.finishUsageAccounting(rawAccountingLease, acknowledged: false)
     let rawRetryAccountingLease = try await rawStore.beginUsageAccounting(
         recordingID: rawLease.recordingID
     )
     try require(
-        rawRetryAccountingLease != nil,
-        "Unacknowledged raw fallback usage was not returned to pending"
+        rawRetryAccountingLease == nil,
+        "A failed non-idempotent usage delivery was made retryable"
     )
     let rawAccountingRestart = MobileAudioProcessingStore(rootDirectory: rawRoot)
     _ = try await rawAccountingRestart.normalizeInterruptedAttempts()
@@ -661,8 +669,8 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
         recordingID: rawLease.recordingID
     )
     try require(
-        rawRestartAccountingLease?.wordCount == 4,
-        "Restart did not release an abandoned usage-accounting lease"
+        rawRestartAccountingLease == nil,
+        "Restart replayed an already claimed usage operation"
     )
 
     let resultRoot = try makeRoot("result-cancel-fallback")
@@ -697,8 +705,8 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
     )
 }
 
-private func testDurableUsageOutboxSurvivesDeleteAndLeaseExpiry() async throws {
-    let expiryRoot = try makeRoot("usage-lease-expiry")
+private func testUsageClaimIsAtMostOnceAcrossRestartDeleteAndClear() async throws {
+    let expiryRoot = try makeRoot("usage-at-most-once")
     let expiryStore = MobileAudioProcessingStore(rootDirectory: expiryRoot)
     let (expiryLease, _) = try await makeFinalizedAttempt(store: expiryStore)
     _ = try await expiryStore.beginRecognition(
@@ -709,29 +717,30 @@ private func testDurableUsageOutboxSurvivesDeleteAndLeaseExpiry() async throws {
     _ = try await expiryStore.checkpointFinalText("one two three", lease: expiryLease)
     try await expiryStore.markSucceeded(expiryLease)
 
-    let leaseStart = Date(timeIntervalSinceReferenceDate: 1_000_000)
-    guard let firstUsageLease = try await expiryStore.beginUsageAccounting(
+    let claimTime = Date(timeIntervalSinceReferenceDate: 1_000_000)
+    let firstClaim = try await expiryStore.beginUsageAccounting(
         recordingID: expiryLease.recordingID,
-        now: leaseStart
-    ) else { throw ValidationFailure.failed("Usage outbox did not issue its first lease") }
-    let concurrentLease = try await expiryStore.beginUsageAccounting(
-        recordingID: expiryLease.recordingID,
-        now: leaseStart.addingTimeInterval(599)
+        now: claimTime
     )
-    try require(concurrentLease == nil, "Usage outbox issued a concurrent unexpired lease")
-    guard let replacementLease = try await expiryStore.beginUsageAccounting(
+    try require(firstClaim?.wordCount == 3, "Usage accounting did not issue its first claim")
+    let nearFormerExpiry = try await expiryStore.beginUsageAccounting(
         recordingID: expiryLease.recordingID,
-        now: leaseStart.addingTimeInterval(601)
-    ) else { throw ValidationFailure.failed("Expired usage lease was not made retryable") }
+        now: claimTime.addingTimeInterval(599)
+    )
+    let afterFormerExpiry = try await expiryStore.beginUsageAccounting(
+        recordingID: expiryLease.recordingID,
+        now: claimTime.addingTimeInterval(601)
+    )
     try require(
-        replacementLease.attemptID != firstUsageLease.attemptID
-            && replacementLease.wordCount == 3,
-        "Expired usage lease did not preserve its exact word count"
+        nearFormerExpiry == nil && afterFormerExpiry == nil,
+        "Time made a claimed non-idempotent usage operation retryable"
     )
-    try await requireThrows(.staleAttempt) {
-        try await expiryStore.finishUsageAccounting(firstUsageLease, acknowledged: true)
-    }
-    try await expiryStore.finishUsageAccounting(replacementLease, acknowledged: true)
+    let expiryRestart = MobileAudioProcessingStore(rootDirectory: expiryRoot)
+    _ = try await expiryRestart.normalizeInterruptedAttempts()
+    let restartClaim = try await expiryRestart.beginUsageAccounting(
+        recordingID: expiryLease.recordingID
+    )
+    try require(restartClaim == nil, "Restart replayed a claimed usage operation")
 
     let deleteRoot = try makeRoot("usage-delete")
     let deleteStore = MobileAudioProcessingStore(rootDirectory: deleteRoot)
@@ -743,9 +752,10 @@ private func testDurableUsageOutboxSurvivesDeleteAndLeaseExpiry() async throws {
     try await deleteStore.checkpointRawTranscript("count survives delete", lease: deleteLease)
     _ = try await deleteStore.checkpointFinalText("count survives delete", lease: deleteLease)
     try await deleteStore.markSucceeded(deleteLease)
-    guard let abandonedDeleteUsageLease = try await deleteStore.beginUsageAccounting(
+    let deleteClaim = try await deleteStore.beginUsageAccounting(
         recordingID: deleteLease.recordingID
-    ) else { throw ValidationFailure.failed("Delete fixture did not lease pending accounting") }
+    )
+    try require(deleteClaim?.wordCount == 3, "Delete fixture did not claim usage")
     try await deleteStore.tombstone(recordingID: deleteLease.recordingID)
     try require(
         !FileManager.default.fileExists(atPath: deleteLease.sourceURL.path),
@@ -753,15 +763,10 @@ private func testDurableUsageOutboxSurvivesDeleteAndLeaseExpiry() async throws {
     )
     let deleteRestart = MobileAudioProcessingStore(rootDirectory: deleteRoot)
     _ = try await deleteRestart.normalizeInterruptedAttempts()
-    guard let deletedUsageLease = try await deleteRestart.beginUsageAccounting(
+    let deletedClaim = try await deleteRestart.beginUsageAccounting(
         recordingID: deleteLease.recordingID
-    ) else { throw ValidationFailure.failed("Delete silently dropped pending usage accounting") }
-    try require(
-        deletedUsageLease.wordCount == 3
-            && deletedUsageLease.attemptID != abandonedDeleteUsageLease.attemptID,
-        "Restart after Delete did not recover the exact pending usage count"
     )
-    try await deleteRestart.finishUsageAccounting(deletedUsageLease, acknowledged: true)
+    try require(deletedClaim == nil, "Delete/restart replayed a claimed usage operation")
 
     let clearRoot = try makeRoot("usage-clear")
     let clearStore = MobileAudioProcessingStore(rootDirectory: clearRoot)
@@ -773,21 +778,180 @@ private func testDurableUsageOutboxSurvivesDeleteAndLeaseExpiry() async throws {
     try await clearStore.checkpointRawTranscript("clear keeps accounting", lease: clearLease)
     _ = try await clearStore.checkpointFinalText("clear keeps accounting", lease: clearLease)
     try await clearStore.markSucceeded(clearLease)
-    guard let abandonedClearUsageLease = try await clearStore.beginUsageAccounting(
+    let clearClaim = try await clearStore.beginUsageAccounting(
         recordingID: clearLease.recordingID
-    ) else { throw ValidationFailure.failed("Clear fixture did not lease pending accounting") }
+    )
+    try require(clearClaim?.wordCount == 3, "Clear fixture did not claim usage")
     try await clearStore.clearAll()
     let clearRestart = MobileAudioProcessingStore(rootDirectory: clearRoot)
     _ = try await clearRestart.normalizeInterruptedAttempts()
-    guard let clearedUsageLease = try await clearRestart.beginUsageAccounting(
+    let clearedClaim = try await clearRestart.beginUsageAccounting(
         recordingID: clearLease.recordingID
-    ) else { throw ValidationFailure.failed("Clear silently dropped pending usage accounting") }
-    try require(
-        clearedUsageLease.wordCount == 3
-            && clearedUsageLease.attemptID != abandonedClearUsageLease.attemptID,
-        "Restart after Clear did not recover the exact pending usage count"
     )
-    try await clearRestart.finishUsageAccounting(clearedUsageLease, acknowledged: true)
+    try require(clearedClaim == nil, "Clear/restart replayed a claimed usage operation")
+}
+
+private func testLegacyHistoryDeletionIntentSurvivesCrash() async throws {
+    let legacyAppRoot = try makeRoot("legacy-delete-crash")
+    let legacyDeleteRoot = legacyAppRoot.appendingPathComponent(
+        "MobileAudioProcessing",
+        isDirectory: true
+    )
+    let legacyAudioDirectory = legacyAppRoot.appendingPathComponent(
+        "Recordings",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+        at: legacyAudioDirectory,
+        withIntermediateDirectories: true
+    )
+    let legacyRecordingID = UUID()
+    let legacyAudioURL = legacyAudioDirectory.appendingPathComponent(
+        "\(legacyRecordingID.uuidString).m4a"
+    )
+    try Data("legacy private audio".utf8).write(to: legacyAudioURL, options: .atomic)
+    let crashingLegacyStore = MobileAudioProcessingStore(
+        rootDirectory: legacyDeleteRoot,
+        afterHistoryDeletionIntentPersisted: { throw InjectedDeletionCrash() }
+    )
+    try await requireInjectedDeletionCrash {
+        try await crashingLegacyStore.tombstone(recordingID: legacyRecordingID)
+    }
+    try require(
+        FileManager.default.fileExists(atPath: legacyAudioURL.path),
+        "Crash injection did not occur before legacy audio deletion"
+    )
+    let legacyRestart = MobileAudioProcessingStore(rootDirectory: legacyDeleteRoot)
+    _ = try await legacyRestart.normalizeInterruptedAttempts()
+    let legacySnapshot = try await legacyRestart.snapshot(recordingID: legacyRecordingID)
+    try require(
+        legacySnapshot?.stage == .deleted,
+        "Crash before legacy history mutation lost the durable Delete intent"
+    )
+    try HistoryManager.removeCanonicalAudioIfPresent(
+        recordingID: legacyRecordingID,
+        recordedAudioURL: legacyAudioURL,
+        audioDirectory: legacyAudioDirectory
+    )
+    try require(
+        !FileManager.default.fileExists(atPath: legacyAudioURL.path),
+        "Launch deletion reconciliation orphaned legacy private audio"
+    )
+
+    let unrelatedURL = legacyAppRoot.appendingPathComponent("unrelated.m4a")
+    try Data("must survive".utf8).write(to: unrelatedURL, options: .atomic)
+    try HistoryManager.removeCanonicalAudioIfPresent(
+        recordingID: UUID(),
+        recordedAudioURL: unrelatedURL,
+        audioDirectory: legacyAudioDirectory
+    )
+    try require(
+        FileManager.default.fileExists(atPath: unrelatedURL.path),
+        "A tampered History URL deleted an unrelated regular file"
+    )
+
+    let symlinkRecordingID = UUID()
+    let symlinkURL = legacyAudioDirectory.appendingPathComponent(
+        "\(symlinkRecordingID.uuidString).m4a"
+    )
+    try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: unrelatedURL)
+    try HistoryManager.removeCanonicalAudioIfPresent(
+        recordingID: symlinkRecordingID,
+        recordedAudioURL: symlinkURL,
+        audioDirectory: legacyAudioDirectory
+    )
+    try require(
+        FileManager.default.fileExists(atPath: symlinkURL.path)
+            && FileManager.default.fileExists(atPath: unrelatedURL.path),
+        "A symlinked History audio path was followed or removed"
+    )
+
+    let escapedDirectoryTarget = legacyAppRoot.appendingPathComponent(
+        "escaped-recordings",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+        at: escapedDirectoryTarget,
+        withIntermediateDirectories: true
+    )
+    let escapedRecordingID = UUID()
+    let escapedTargetURL = escapedDirectoryTarget.appendingPathComponent(
+        "\(escapedRecordingID.uuidString).m4a"
+    )
+    try Data("must also survive".utf8).write(to: escapedTargetURL, options: .atomic)
+    let symlinkedAudioDirectory = legacyAppRoot.appendingPathComponent(
+        "linked-recordings",
+        isDirectory: true
+    )
+    try FileManager.default.createSymbolicLink(
+        at: symlinkedAudioDirectory,
+        withDestinationURL: escapedDirectoryTarget
+    )
+    try HistoryManager.removeCanonicalAudioIfPresent(
+        recordingID: escapedRecordingID,
+        recordedAudioURL: symlinkedAudioDirectory.appendingPathComponent(
+            "\(escapedRecordingID.uuidString).m4a"
+        ),
+        audioDirectory: symlinkedAudioDirectory
+    )
+    try require(
+        FileManager.default.fileExists(atPath: escapedTargetURL.path),
+        "A symlinked History audio directory escaped its ownership boundary"
+    )
+    try await requireThrows(.recordingIDAlreadyExists) {
+        _ = try await legacyRestart.beginNewAttempt(
+            recordingID: legacyRecordingID,
+            deadlineAt: Date().addingTimeInterval(30)
+        )
+    }
+
+    let activeDeleteRoot = try makeRoot("active-delete-crash")
+    let crashingActiveStore = MobileAudioProcessingStore(
+        rootDirectory: activeDeleteRoot,
+        afterHistoryDeletionIntentPersisted: { throw InjectedDeletionCrash() }
+    )
+    let activeLease = try await crashingActiveStore.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try await requireInjectedDeletionCrash {
+        try await crashingActiveStore.tombstone(recordingID: activeLease.recordingID)
+    }
+    try await requireThrows(.staleAttempt) {
+        try await crashingActiveStore.captureBecameReady(
+            activeLease,
+            deadlineAt: Date().addingTimeInterval(30)
+        )
+    }
+    let activeRestart = MobileAudioProcessingStore(rootDirectory: activeDeleteRoot)
+    _ = try await activeRestart.normalizeInterruptedAttempts()
+    let activeSnapshot = try await activeRestart.snapshot(recordingID: activeLease.recordingID)
+    try require(
+        activeSnapshot?.stage == .deleted,
+        "Crash after Delete intent allowed an active attempt to survive"
+    )
+
+    let legacyClearRoot = try makeRoot("legacy-clear-crash")
+    let legacyClearIDs = [UUID(), UUID()]
+    let crashingClearStore = MobileAudioProcessingStore(
+        rootDirectory: legacyClearRoot,
+        afterHistoryDeletionIntentPersisted: { throw InjectedDeletionCrash() }
+    )
+    try await requireInjectedDeletionCrash {
+        try await crashingClearStore.clearAll(recordingIDs: legacyClearIDs)
+    }
+    let clearRestart = MobileAudioProcessingStore(rootDirectory: legacyClearRoot)
+    _ = try await clearRestart.normalizeInterruptedAttempts()
+    let clearedSnapshots = try await clearRestart.allSnapshots()
+    let clearedIDs = Set(
+        clearedSnapshots
+            .filter { $0.stage == .deleted }
+            .map(\.recordingID)
+    )
+    try require(
+        clearedIDs.isSuperset(of: legacyClearIDs),
+        "Crash before legacy history mutation lost one or more durable Clear intents"
+    )
 }
 
 private func testCorruptionQuarantinesWithoutOverwrite() async throws {
@@ -1008,13 +1172,35 @@ private func testIOSCallerRecoveryContracts() throws {
     )
     try require(
         content.contains("MobileAudioUsageAccounting.flush("),
-        "iOS completion paths do not drain the durable usage outbox"
+        "iOS completion paths do not perform durably claimed usage accounting"
     )
     try require(
         content.contains("let usageRecordingIDs = snapshots.compactMap")
             && content.contains("snapshot.stage == .deleted,")
             && content.contains("snapshot.usageAccountingWordCount != nil"),
-        "Launch recovery does not drain pending usage after Delete or Clear"
+        "Launch recovery does not claim pending usage after Delete or Clear"
+    )
+    guard let deletedHistoryLoop = content.range(
+        of: "for snapshot in snapshots where snapshot.stage == .deleted"
+    ),
+    let deletedHistoryLoopEnd = content.range(
+        of: "for snapshot in snapshots\n            where snapshot.stage == .succeeded",
+        range: deletedHistoryLoop.upperBound ..< content.endIndex
+    )
+    else { throw ValidationFailure.failed("Launch history deletion reconciliation is missing") }
+    let deletedHistoryReconciliation = content[
+        deletedHistoryLoop.lowerBound ..< deletedHistoryLoopEnd.lowerBound
+    ]
+    guard let audioRemoval = deletedHistoryReconciliation.range(
+        of: "historyManager.removeAudioFileIfPresent(for: recording)"
+    ),
+    let rowRemoval = deletedHistoryReconciliation.range(
+        of: "historyManager.deleteRecording(recording)"
+    )
+    else { throw ValidationFailure.failed("Launch deletion does not remove audio and history") }
+    try require(
+        audioRemoval.lowerBound < rowRemoval.lowerBound,
+        "Launch deletion forgets the History row before removing its audio"
     )
     try require(
         content.contains("reset(keepAudioBridgeAlive: false)"),
@@ -1048,7 +1234,7 @@ private func testIOSCallerRecoveryContracts() throws {
     )
     try require(
         sheet.contains("MobileAudioUsageAccounting.flush("),
-        "Sheet raw fallback skips the durable usage outbox"
+        "Sheet raw fallback skips durably claimed usage accounting"
     )
 }
 
@@ -1067,7 +1253,8 @@ private struct IOSAudioRecoveryValidator {
             try await testPathEscapeQuarantinesWithoutDeletingOutsideFile()
             try await testCrashAfterMoveAndLateCallbackFence()
             try await testTerminalSuccessCannotBeDowngradedByDeliveryFailure()
-            try await testDurableUsageOutboxSurvivesDeleteAndLeaseExpiry()
+            try await testUsageClaimIsAtMostOnceAcrossRestartDeleteAndClear()
+            try await testLegacyHistoryDeletionIntentSurvivesCrash()
             try await testCorruptionQuarantinesWithoutOverwrite()
             try await testHistoryDoesNotResurrectEvictedStoreAttempts()
             try testIOSCallerRecoveryContracts()

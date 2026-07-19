@@ -154,6 +154,11 @@ public actor MobileAudioProcessingStore {
     private struct StoreMetadata: Codable {
         var schemaVersion: Int
         var generation: UInt64
+        /// IDs deleted from legacy history before they had a managed attempt manifest.
+        /// Keeping this in the atomically replaced store metadata makes Delete/Clear durable
+        /// before the fallible history-file mutation and lets launch recovery materialize the
+        /// corresponding tombstones after a crash.
+        var deletedHistoryRecordingIDs: Set<UUID>? = nil
     }
 
     private struct FileProof: Equatable, Sendable {
@@ -180,11 +185,11 @@ public actor MobileAudioProcessingStore {
     private let lockURL: URL
     private let fileManager: FileManager
     private let beforeDeepSourceValidation: @Sendable () -> Void
+    private let afterHistoryDeletionIntentPersisted: @Sendable () throws -> Void
     private var initializationFailed = false
 
     private static let schemaVersion = 4
     private static let finalizationStartGrace: TimeInterval = 5
-    private static let usageAccountingLeaseDuration: TimeInterval = 10 * 60
     private static let appGroupIdentifier = "group.com.whispermate.shared"
     private static let allowedPayloadNames: Set<String> = [
         "attempt.json", "source.partial.m4a", "source.m4a",
@@ -194,7 +199,8 @@ public actor MobileAudioProcessingStore {
     public init(
         rootDirectory: URL,
         fileManager: FileManager = .default,
-        beforeDeepSourceValidation: @escaping @Sendable () -> Void = {}
+        beforeDeepSourceValidation: @escaping @Sendable () -> Void = {},
+        afterHistoryDeletionIntentPersisted: @escaping @Sendable () throws -> Void = {}
     ) {
         self.rootDirectory = rootDirectory
         attemptsDirectory = rootDirectory.appendingPathComponent("Attempts", isDirectory: true)
@@ -203,6 +209,7 @@ public actor MobileAudioProcessingStore {
         lockURL = rootDirectory.appendingPathComponent("store.lock")
         self.fileManager = fileManager
         self.beforeDeepSourceValidation = beforeDeepSourceValidation
+        self.afterHistoryDeletionIntentPersisted = afterHistoryDeletionIntentPersisted
 
         do {
             try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
@@ -223,6 +230,9 @@ public actor MobileAudioProcessingStore {
         try withExclusiveLock {
             try requireFutureDeadline(deadlineAt)
             let metadata = try requireWritableMetadataLocked()
+            guard !historyDeletionIDs(metadata).contains(recordingID) else {
+                throw StoreError.recordingIDAlreadyExists
+            }
             let directory = attemptDirectory(recordingID: recordingID)
             guard !fileManager.fileExists(atPath: directory.path) else {
                 throw StoreError.recordingIDAlreadyExists
@@ -273,6 +283,9 @@ public actor MobileAudioProcessingStore {
         try withExclusiveLock {
             try requireFutureDeadline(deadlineAt)
             let metadata = try requireWritableMetadataLocked()
+            guard !historyDeletionIDs(metadata).contains(recordingID) else {
+                throw StoreError.invalidTransition
+            }
             let old = try loadSnapshotLocked(recordingID: recordingID)
             guard old.stage.isTerminal, old.stage != .deleted,
                   old.sourceIntegrity == .complete,
@@ -657,35 +670,34 @@ public actor MobileAudioProcessingStore {
         }
     }
 
-    /// Tombstone is persisted before payload removal, so late callbacks always lose.
+    /// The deletion intent is persisted in store metadata before the attempt manifest or legacy
+    /// history file is touched. A crash at any later point is repaired from that intent.
     public func tombstone(recordingID: UUID) throws {
         try withExclusiveLock {
-            _ = try requireWritableMetadataLocked()
-            guard var snapshot = try loadSnapshotIfPresentLocked(
-                recordingID: recordingID,
-                validateReferencedPayloads: false
-            ) else { return }
-            guard snapshot.generation < UInt64.max else { throw StoreError.counterExhausted }
-            snapshot.generation += 1
-            snapshot.stage = .deleted
-            snapshot.sourceProof = nil
-            snapshot.deadlineAt = nil
-            snapshot.userMessage = nil
-            try advanceRevision(&snapshot)
-            try saveLocked(snapshot)
-            try removePayloadsLocked(snapshot)
+            var metadata = try requireWritableMetadataLocked()
+            var deletionIDs = historyDeletionIDs(metadata)
+            if deletionIDs.insert(recordingID).inserted {
+                metadata.deletedHistoryRecordingIDs = deletionIDs
+                try saveMetadataLocked(metadata)
+                try afterHistoryDeletionIntentPersisted()
+            }
+            try applyHistoryDeletionIntentLocked(recordingID: recordingID, metadata: metadata)
         }
     }
 
-    /// Global generation is advanced first. A crash during cleanup still invalidates every old lease.
+    /// The legacy history IDs and global generation advance in one atomic metadata replacement.
+    /// A crash during later manifest/history cleanup therefore cannot resurrect an old row or lease.
     public func clearAll(recordingIDs: [UUID] = []) throws {
         try withExclusiveLock {
-            _ = recordingIDs // The global Clear command intentionally covers hidden/interrupted attempts too.
             var metadata = try requireWritableMetadataLocked()
             let snapshots = try scanSnapshotsLocked(validateReferencedPayloads: false)
             guard metadata.generation < UInt64.max else { throw StoreError.counterExhausted }
+            var deletionIDs = historyDeletionIDs(metadata)
+            deletionIDs.formUnion(recordingIDs)
+            metadata.deletedHistoryRecordingIDs = deletionIDs
             metadata.generation += 1
             try saveMetadataLocked(metadata)
+            try afterHistoryDeletionIntentPersisted()
 
             for var snapshot in snapshots {
                 guard snapshot.generation < UInt64.max else { throw StoreError.counterExhausted }
@@ -694,10 +706,16 @@ public actor MobileAudioProcessingStore {
                 snapshot.sourceProof = nil
                 snapshot.deadlineAt = nil
                 snapshot.userMessage = nil
+                if snapshot.usageAccountingState == .inFlight {
+                    snapshot.usageAccountingState = .acknowledged
+                    snapshot.usageAccountingAttemptID = nil
+                    snapshot.usageAccountingDeadlineAt = nil
+                }
                 try advanceRevision(&snapshot)
                 try saveLocked(snapshot)
                 try removePayloadsLocked(snapshot)
             }
+            try applyHistoryDeletionIntentsLocked(metadata)
         }
     }
 
@@ -706,6 +724,9 @@ public actor MobileAudioProcessingStore {
     public func purgePayloadsIfDeleted(recordingID: UUID) throws {
         try withExclusiveLock {
             let metadata = try requireWritableMetadataLocked()
+            if historyDeletionIDs(metadata).contains(recordingID) {
+                try applyHistoryDeletionIntentLocked(recordingID: recordingID, metadata: metadata)
+            }
             guard let snapshot = try loadSnapshotIfPresentLocked(
                 recordingID: recordingID,
                 validateReferencedPayloads: false
@@ -718,6 +739,7 @@ public actor MobileAudioProcessingStore {
     public func isActive(recordingID: UUID) throws -> Bool {
         try withExclusiveLock {
             let metadata = try requireReadableMetadataLocked()
+            guard !historyDeletionIDs(metadata).contains(recordingID) else { return false }
             guard let snapshot = try loadSnapshotIfPresentLocked(recordingID: recordingID) else { return false }
             return snapshot.storeGeneration == metadata.generation && !snapshot.stage.isTerminal
         }
@@ -725,14 +747,18 @@ public actor MobileAudioProcessingStore {
 
     public func snapshot(recordingID: UUID) throws -> Snapshot? {
         try withExclusiveLock {
-            _ = try requireReadableMetadataLocked()
+            let metadata = try requireWritableMetadataLocked()
+            if historyDeletionIDs(metadata).contains(recordingID) {
+                try applyHistoryDeletionIntentLocked(recordingID: recordingID, metadata: metadata)
+            }
             return try loadSnapshotIfPresentLocked(recordingID: recordingID)
         }
     }
 
     public func allSnapshots() throws -> [Snapshot] {
         try withExclusiveLock {
-            _ = try requireReadableMetadataLocked()
+            let metadata = try requireWritableMetadataLocked()
+            try applyHistoryDeletionIntentsLocked(metadata)
             return try scanSnapshotsLocked()
         }
     }
@@ -743,13 +769,16 @@ public actor MobileAudioProcessingStore {
     public func normalizeInterruptedAttempts() throws -> [Snapshot] {
         try withExclusiveLock {
             let metadata = try requireWritableMetadataLocked()
+            try applyHistoryDeletionIntentsLocked(metadata)
             var normalized: [Snapshot] = []
             for var snapshot in try scanSnapshotsLocked() {
                 if snapshot.storeGeneration != metadata.generation {
                     snapshot.stage = .deleted
                     snapshot.deadlineAt = nil
                     if snapshot.usageAccountingState == .inFlight {
-                        snapshot.usageAccountingState = .pending
+                        // An older app may have completed the non-idempotent side effect before
+                        // crashing. Never replay that ambiguous operation.
+                        snapshot.usageAccountingState = .acknowledged
                         snapshot.usageAccountingAttemptID = nil
                         snapshot.usageAccountingDeadlineAt = nil
                     }
@@ -763,7 +792,7 @@ public actor MobileAudioProcessingStore {
                     if [.succeeded, .deleted].contains(snapshot.stage),
                        snapshot.usageAccountingState == .inFlight
                     {
-                        snapshot.usageAccountingState = .pending
+                        snapshot.usageAccountingState = .acknowledged
                         snapshot.usageAccountingAttemptID = nil
                         snapshot.usageAccountingDeadlineAt = nil
                         try advanceRevision(&snapshot)
@@ -947,8 +976,9 @@ public actor MobileAudioProcessingStore {
         }
     }
 
-    /// Leases one pending usage operation. The stable recording ID is the operation key; the
-    /// attempt ID prevents foreground completion and launch recovery from sending it concurrently.
+    /// Durably claims one pending non-idempotent usage operation before returning it to the caller.
+    /// Once this succeeds the operation is never returned again, including after restart. A crash
+    /// before delivery can undercount, but can never charge the same transcript twice.
     public func beginUsageAccounting(
         recordingID: UUID,
         attemptID: UUID = UUID(),
@@ -962,13 +992,14 @@ public actor MobileAudioProcessingStore {
             else { return nil }
 
             if snapshot.usageAccountingState == .inFlight {
-                guard let deadline = snapshot.usageAccountingDeadlineAt else {
-                    throw StoreError.quarantined
-                }
-                guard deadline <= now else { return nil }
-                snapshot.usageAccountingState = .pending
+                // Migration from the former retrying lease model. Delivery may already have
+                // happened, so replay would risk a duplicate charge.
+                snapshot.usageAccountingState = .acknowledged
                 snapshot.usageAccountingAttemptID = nil
                 snapshot.usageAccountingDeadlineAt = nil
+                try advanceRevision(&snapshot)
+                try saveLocked(snapshot)
+                return nil
             }
             guard (snapshot.usageAccountingState ?? .pending) == .pending else { return nil }
 
@@ -982,11 +1013,9 @@ public actor MobileAudioProcessingStore {
                 return nil
             }
 
-            snapshot.usageAccountingState = .inFlight
-            snapshot.usageAccountingAttemptID = attemptID
-            snapshot.usageAccountingDeadlineAt = now.addingTimeInterval(
-                Self.usageAccountingLeaseDuration
-            )
+            snapshot.usageAccountingState = .acknowledged
+            snapshot.usageAccountingAttemptID = nil
+            snapshot.usageAccountingDeadlineAt = nil
             try advanceRevision(&snapshot)
             try saveLocked(snapshot)
             return UsageAccountingLease(
@@ -994,29 +1023,6 @@ public actor MobileAudioProcessingStore {
                 attemptID: attemptID,
                 wordCount: wordCount
             )
-        }
-    }
-
-    /// Acknowledges only the matching leased operation. Failed delivery returns it to pending so
-    /// the next launch can retry; process restart separately releases abandoned in-flight leases.
-    public func finishUsageAccounting(
-        _ lease: UsageAccountingLease,
-        acknowledged: Bool
-    ) throws {
-        try withExclusiveLock {
-            _ = try requireWritableMetadataLocked()
-            var snapshot = try loadSnapshotLocked(recordingID: lease.recordingID)
-            guard [.succeeded, .deleted].contains(snapshot.stage),
-                  snapshot.usageAccountingState == .inFlight,
-                  snapshot.usageAccountingAttemptID == lease.attemptID,
-                  snapshot.usageAccountingDeadlineAt != nil
-            else { throw StoreError.staleAttempt }
-
-            snapshot.usageAccountingState = acknowledged ? .acknowledged : .pending
-            snapshot.usageAccountingAttemptID = nil
-            snapshot.usageAccountingDeadlineAt = nil
-            try advanceRevision(&snapshot)
-            try saveLocked(snapshot)
         }
     }
 
@@ -1040,7 +1046,9 @@ public actor MobileAudioProcessingStore {
 
     private func currentSnapshotLocked(for lease: Lease, enforceDeadline: Bool) throws -> Snapshot {
         let metadata = try requireWritableMetadataLocked()
-        guard metadata.generation == lease.storeGeneration else { throw StoreError.staleAttempt }
+        guard metadata.generation == lease.storeGeneration,
+              !historyDeletionIDs(metadata).contains(lease.recordingID)
+        else { throw StoreError.staleAttempt }
         let snapshot = try loadSnapshotLocked(recordingID: lease.recordingID)
         guard snapshot.attemptID == lease.attemptID,
               snapshot.generation == lease.generation,
@@ -1389,6 +1397,87 @@ public actor MobileAudioProcessingStore {
             if let error = error as? StoreError { throw error }
             throw StoreError.unavailable
         }
+    }
+
+    private func historyDeletionIDs(_ metadata: StoreMetadata) -> Set<UUID> {
+        metadata.deletedHistoryRecordingIDs ?? []
+    }
+
+    private func applyHistoryDeletionIntentsLocked(_ metadata: StoreMetadata) throws {
+        for recordingID in historyDeletionIDs(metadata).sorted(by: {
+            $0.uuidString < $1.uuidString
+        }) {
+            try applyHistoryDeletionIntentLocked(recordingID: recordingID, metadata: metadata)
+        }
+    }
+
+    /// Materializes the metadata deletion ledger into attempt tombstones. The ledger itself is
+    /// already the authority, so this repair is safe to repeat after any interrupted file write.
+    private func applyHistoryDeletionIntentLocked(
+        recordingID: UUID,
+        metadata: StoreMetadata
+    ) throws {
+        if var snapshot = try loadSnapshotIfPresentLocked(
+            recordingID: recordingID,
+            validateReferencedPayloads: false
+        ) {
+            var needsSave = false
+            if snapshot.stage != .deleted {
+                guard snapshot.generation < UInt64.max else {
+                    throw StoreError.counterExhausted
+                }
+                snapshot.generation += 1
+                snapshot.stage = .deleted
+                snapshot.sourceProof = nil
+                snapshot.deadlineAt = nil
+                snapshot.userMessage = nil
+                needsSave = true
+            }
+            if snapshot.usageAccountingState == .inFlight {
+                snapshot.usageAccountingState = .acknowledged
+                snapshot.usageAccountingAttemptID = nil
+                snapshot.usageAccountingDeadlineAt = nil
+                needsSave = true
+            }
+            if needsSave {
+                try advanceRevision(&snapshot)
+                try saveLocked(snapshot)
+            }
+            try removePayloadsLocked(snapshot)
+            return
+        }
+
+        let directory = attemptDirectory(recordingID: recordingID)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
+        try synchronizeDirectoryLocked(attemptsDirectory)
+        let now = Date()
+        let snapshot = Snapshot(
+            recordingID: recordingID,
+            attemptID: UUID(),
+            generation: 1,
+            storeGeneration: metadata.generation,
+            revision: 1,
+            stage: .deleted,
+            sourceIntegrity: .unfinalized,
+            sourcePath: directory.appendingPathComponent("source.partial.m4a").path,
+            partialTranscriptPath: nil,
+            rawTranscriptPath: nil,
+            resultPath: nil,
+            previousResultPath: nil,
+            sourceProof: nil,
+            outputModeRaw: nil,
+            transcriptionOptions: nil,
+            usageAccountingState: .acknowledged,
+            usageAccountingAttemptID: nil,
+            usageAccountingDeadlineAt: nil,
+            usageAccountingWordCount: nil,
+            duration: nil,
+            userMessage: nil,
+            deadlineAt: nil,
+            createdAt: now,
+            updatedAt: now
+        )
+        try saveLocked(snapshot)
     }
 
     private func quarantineLocked(_ reason: String) throws {

@@ -71,6 +71,48 @@ public class HistoryManager: ObservableObject {
         saveRecordings()
     }
 
+    /// Removes only the canonical legacy audio owned by this History store. A corrupt or
+    /// tampered URL is ignored rather than being granted authority to delete another sandbox file.
+    public func removeAudioFileIfPresent(for recording: Recording) throws {
+        try Self.removeCanonicalAudioIfPresent(
+            recordingID: recording.id,
+            recordedAudioURL: recording.audioFileURL,
+            audioDirectory: audioDirectory
+        )
+    }
+
+    static func removeCanonicalAudioIfPresent(
+        recordingID: UUID,
+        recordedAudioURL: URL?,
+        audioDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        guard let recordedAudioURL, fileManager.fileExists(atPath: recordedAudioURL.path) else {
+            return
+        }
+
+        let expectedURL = audioDirectory.appendingPathComponent(
+            "\(recordingID.uuidString).m4a",
+            isDirectory: false
+        )
+        guard recordedAudioURL.standardizedFileURL == expectedURL.standardizedFileURL else {
+            return
+        }
+
+        let directoryValues = try audioDirectory.resourceValues(
+            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        )
+        guard directoryValues.isDirectory == true,
+              directoryValues.isSymbolicLink != true
+        else { return }
+
+        let fileValues = try expectedURL.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+        )
+        guard fileValues.isRegularFile == true, fileValues.isSymbolicLink != true else { return }
+        try fileManager.removeItem(at: expectedURL)
+    }
+
     public func clearAll() {
         recordings.removeAll()
         saveRecordings()

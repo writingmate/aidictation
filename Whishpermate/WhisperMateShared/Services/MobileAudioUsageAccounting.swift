@@ -1,7 +1,8 @@
 import Foundation
 
-/// Drains one durable usage side effect without delaying recording recovery or terminal UI.
-/// The recording ID is the stable local operation key; the store serializes competing callers.
+/// Performs one non-idempotent usage side effect without delaying terminal UI. The store durably
+/// claims the recording before this call receives it, so competing callers and restarts cannot
+/// submit the same transcript twice.
 @MainActor
 public enum MobileAudioUsageAccounting {
     public static func flush(
@@ -14,11 +15,9 @@ public enum MobileAudioUsageAccounting {
         }
 
         let acknowledged = await subscriptionManager.recordWords(lease.wordCount)
-        do {
-            try await store.finishUsageAccounting(lease, acknowledged: acknowledged)
-        } catch {
+        if !acknowledged {
             DebugLog.warning(
-                "Usage outbox acknowledgement could not be saved: \(error.localizedDescription)",
+                "Word usage was not delivered after its one-time claim; it will not be retried.",
                 context: "MobileAudioUsageAccounting"
             )
         }

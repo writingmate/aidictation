@@ -62,18 +62,18 @@ public final class RuntimeCallbackAttempt<Value: Sendable>: @unchecked Sendable 
 public final class RuntimeAttemptCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private let bridge: NSObject
-    private let bridgeSlot: RuntimeBridgeSlot?
+    private let bridgeOwnership: RuntimeBridgeAttemptOwnership?
     private let attemptID: NSString
     private var didCancel = false
 
     public init(
         bridge: NSObject,
         attemptID: String,
-        bridgeSlot: RuntimeBridgeSlot? = nil
+        bridgeOwnership: RuntimeBridgeAttemptOwnership? = nil
     ) {
         self.bridge = bridge
         self.attemptID = attemptID as NSString
-        self.bridgeSlot = bridgeSlot
+        self.bridgeOwnership = bridgeOwnership
     }
 
     public func cancel() {
@@ -85,6 +85,11 @@ public final class RuntimeAttemptCancellation: @unchecked Sendable {
         didCancel = true
         lock.unlock()
 
+        // Retire ownership before invoking callback-capable native code. The
+        // selector may synchronously resume the high-level scope and run its
+        // defer/release path; by then retirement must already be irrevocable.
+        let retiredBridge = bridgeOwnership?.beginCancellation()
+
         let selector = NSSelectorFromString("cancelAttempt:")
         if bridge.responds(to: selector),
            let method = bridge.method(for: selector) {
@@ -92,15 +97,7 @@ public final class RuntimeAttemptCancellation: @unchecked Sendable {
             unsafeBitCast(method, to: Function.self)(bridge, selector, attemptID)
         }
 
-        guard bridgeSlot?.retire(bridge) == true else { return }
-        let cleanupSelector = NSSelectorFromString("cleanupRuntime")
-        guard bridge.responds(to: cleanupSelector),
-              let cleanupMethod = bridge.method(for: cleanupSelector)
-        else {
-            return
-        }
-        typealias CleanupFunction = @convention(c) (AnyObject, Selector) -> Void
-        unsafeBitCast(cleanupMethod, to: CleanupFunction.self)(bridge, cleanupSelector)
+        bridgeOwnership?.finishCancellation(retiredBridge)
     }
 }
 
@@ -111,9 +108,12 @@ public final class RuntimeAttemptCancellation: @unchecked Sendable {
 public final class RuntimeBridgeSlot: @unchecked Sendable {
     private let lock = NSLock()
     private var bridge: NSObject?
-    private var generation: UInt64 = 0
+    private var generation: UInt64
+    private var ownerID: String?
 
-    public init() {}
+    public init(initialGeneration: UInt64 = 0) {
+        generation = initialGeneration
+    }
 
     public func current() -> NSObject? {
         lock.lock()
@@ -122,36 +122,92 @@ public final class RuntimeBridgeSlot: @unchecked Sendable {
         return value
     }
 
-    public func installIfEmpty(_ candidate: NSObject) -> NSObject {
+    /// Returns nil instead of wrapping generation identity. Reusing an old
+    /// generation would let a sufficiently late callback become current again.
+    public func installIfEmpty(_ candidate: NSObject) -> NSObject? {
         lock.lock()
         if let bridge {
             lock.unlock()
             return bridge
         }
-        generation &+= 1
+        guard generation < UInt64.max else {
+            lock.unlock()
+            return nil
+        }
+        generation += 1
         bridge = candidate
+        ownerID = nil
         lock.unlock()
         return candidate
     }
 
-    @discardableResult
-    public func retire(_ expected: NSObject) -> Bool {
+    /// Exclusively reserves the exact bridge generation for one high-level
+    /// initialize/transcribe attempt. A concurrent or late attempt must never
+    /// share a bridge that another attempt can cancel.
+    public func reserve(_ expected: NSObject, ownerID expectedOwnerID: String) -> UInt64? {
         lock.lock()
-        guard bridge === expected else {
+        guard bridge === expected, ownerID == nil else {
+            lock.unlock()
+            return nil
+        }
+        ownerID = expectedOwnerID
+        let value = generation
+        lock.unlock()
+        return value
+    }
+
+    @discardableResult
+    public func release(
+        _ expected: NSObject,
+        generation expectedGeneration: UInt64,
+        ownerID expectedOwnerID: String
+    ) -> Bool {
+        lock.lock()
+        guard bridge === expected,
+              generation == expectedGeneration,
+              ownerID == expectedOwnerID
+        else {
             lock.unlock()
             return false
         }
-        bridge = nil
+        ownerID = nil
         lock.unlock()
         return true
     }
 
-    public func take() -> NSObject? {
+    @discardableResult
+    public func retire(
+        _ expected: NSObject,
+        generation expectedGeneration: UInt64,
+        ownerID expectedOwnerID: String
+    ) -> Bool {
+        lock.lock()
+        guard bridge === expected,
+              generation == expectedGeneration,
+              ownerID == expectedOwnerID
+        else {
+            lock.unlock()
+            return false
+        }
+        bridge = nil
+        ownerID = nil
+        lock.unlock()
+        return true
+    }
+
+    /// Removes the current bridge and advances to a tombstone generation so
+    /// callbacks from the removed generation cannot publish after Cleanup.
+    public func invalidateAndTake() -> (bridge: NSObject?, generation: UInt64) {
         lock.lock()
         let value = bridge
         bridge = nil
+        ownerID = nil
+        if generation < UInt64.max {
+            generation += 1
+        }
+        let invalidatedGeneration = generation
         lock.unlock()
-        return value
+        return (value, invalidatedGeneration)
     }
 
     public func generation(of expected: NSObject) -> UInt64? {
@@ -168,22 +224,145 @@ public final class RuntimeBridgeSlot: @unchecked Sendable {
         return value
     }
 
-    /// Runs `body` while the slot lock proves that no newer generation can be
-    /// installed between the identity check and the state publication. A
-    /// retired generation remains latest until an explicit retry installs the
-    /// next bridge, allowing cancellation to publish idle only when safe.
-    @discardableResult
-    public func withLatestGeneration(
-        _ expectedGeneration: UInt64,
-        _ body: () -> Void
-    ) -> Bool {
+}
+
+/// Cancellation-safe ownership registration around a runtime bridge. The
+/// outer task installs its cancellation handler before loading or reserving a
+/// bridge. Cancellation is remembered when it wins first, so a late old task
+/// cannot reserve and tear down the bridge installed by an immediate retry.
+public final class RuntimeBridgeAttemptOwnership: @unchecked Sendable {
+    private let lock = NSLock()
+    private let slot: RuntimeBridgeSlot
+    private let ownerID = UUID().uuidString
+    private var reservation: (bridge: NSObject, generation: UInt64)?
+    private var isCancelled = false
+    private var isReleased = false
+
+    public init(slot: RuntimeBridgeSlot) {
+        self.slot = slot
+    }
+
+    public var wasCancelled: Bool {
         lock.lock()
-        guard generation == expectedGeneration else {
+        let value = isCancelled
+        lock.unlock()
+        return value
+    }
+
+    /// Returns the reserved generation, or nil if cancellation/concurrent
+    /// ownership won. Holding this lock makes pre-cancellation and reservation
+    /// a single ordering decision.
+    public func reserve(_ bridge: NSObject) -> UInt64? {
+        lock.lock()
+        guard !isCancelled, !isReleased, reservation == nil,
+              let generation = slot.reserve(bridge, ownerID: ownerID)
+        else {
+            lock.unlock()
+            return nil
+        }
+        reservation = (bridge, generation)
+        lock.unlock()
+        return generation
+    }
+
+    @discardableResult
+    public func release() -> Bool {
+        lock.lock()
+        guard !isReleased, let reservation else {
+            isReleased = true
             lock.unlock()
             return false
         }
-        body()
+        isReleased = true
+        self.reservation = nil
         lock.unlock()
+
+        return slot.release(
+            reservation.bridge,
+            generation: reservation.generation,
+            ownerID: ownerID
+        )
+    }
+
+    /// Atomically remembers cancellation and retires only this attempt's exact
+    /// reservation. Cleanup is deliberately separate because native
+    /// `cancelAttempt:` may synchronously resume and release the caller.
+    public func beginCancellation() -> NSObject? {
+        let owned: (bridge: NSObject, generation: UInt64)?
+        lock.lock()
+        guard !isCancelled else {
+            lock.unlock()
+            return nil
+        }
+        isCancelled = true
+        owned = reservation
+        reservation = nil
+        lock.unlock()
+
+        guard let owned,
+              slot.retire(
+                  owned.bridge,
+                  generation: owned.generation,
+                  ownerID: ownerID
+              )
+        else {
+            return nil
+        }
+
+        return owned.bridge
+    }
+
+    public func finishCancellation(_ retiredBridge: NSObject?) {
+        guard let retiredBridge else { return }
+        let selector = NSSelectorFromString("cleanupRuntime")
+        guard retiredBridge.responds(to: selector),
+              let method = retiredBridge.method(for: selector)
+        else {
+            return
+        }
+        typealias CleanupFunction = @convention(c) (AnyObject, Selector) -> Void
+        unsafeBitCast(method, to: CleanupFunction.self)(retiredBridge, selector)
+    }
+
+    /// Idempotently retires and cleans the owned generation synchronously.
+    public func cancel() {
+        finishCancellation(beginCancellation())
+    }
+}
+
+/// Main-actor state-publication fence. Register each newly reserved runtime
+/// generation before its first visible state. Later writes are accepted only
+/// for that exact generation, so a stale catch cannot overwrite Retry.
+public struct RuntimeGenerationPublicationFence: Sendable {
+    public private(set) var generation: UInt64?
+    private var isInvalidated = false
+
+    public init() {}
+
+    @discardableResult
+    public mutating func register(_ candidate: UInt64) -> Bool {
+        if let generation, candidate < generation {
+            return false
+        }
+        if generation == candidate, isInvalidated {
+            return false
+        }
+        generation = candidate
+        isInvalidated = false
         return true
+    }
+
+    @discardableResult
+    public mutating func invalidate(_ candidate: UInt64) -> Bool {
+        if let generation, candidate < generation {
+            return false
+        }
+        generation = candidate
+        isInvalidated = true
+        return true
+    }
+
+    public func accepts(_ candidate: UInt64) -> Bool {
+        generation == candidate && !isInvalidated
     }
 }

@@ -40,6 +40,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
 
     private var initializationTask: Task<Void, Error>?
     private let runtimeBridgeSlot = RuntimeBridgeSlot()
+    @MainActor private var runtimePublicationFence = RuntimeGenerationPublicationFence()
 
     private init() {}
 
@@ -65,40 +66,39 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
 
         let task = Task<Void, Error> {
-            await MainActor.run {
-                state = .downloading
-            }
+            let ownership = RuntimeBridgeAttemptOwnership(slot: runtimeBridgeSlot)
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                let bridge = try loadRuntimeBridge()
+                try Task.checkCancellation()
+                guard let generation = ownership.reserve(bridge) else {
+                    if ownership.wasCancelled { throw CancellationError() }
+                    throw runtimeError("Offline transcription is already in progress.")
+                }
+                defer { ownership.release() }
 
-            let bridge = try loadRuntimeBridge()
-            guard let generation = runtimeBridgeSlot.generation(of: bridge) else {
-                throw CancellationError()
-            }
+                guard await registerRuntimeGeneration(generation, initialState: .downloading) else {
+                    throw CancellationError()
+                }
 
-            do {
-                try await initializeRuntimeBridge(bridge)
-                await MainActor.run {
-                    runtimeBridgeSlot.withLatestGeneration(generation) {
-                        state = .ready
-                        isModelDownloaded = true
-                    }
+                do {
+                    try await initializeRuntimeBridge(bridge, ownership: ownership)
+                    await publishRuntimeState(generation, state: .ready, isModelDownloaded: true)
+                } catch is CancellationError {
+                    ownership.cancel()
+                    await publishRuntimeState(generation, state: .notInitialized, isModelDownloaded: false)
+                    throw CancellationError()
+                } catch {
+                    ownership.cancel()
+                    await publishRuntimeState(
+                        generation,
+                        state: .error(error.localizedDescription),
+                        isModelDownloaded: false
+                    )
+                    throw error
                 }
-            } catch is CancellationError {
-                retireRuntimeBridge(bridge)
-                await MainActor.run {
-                    runtimeBridgeSlot.withLatestGeneration(generation) {
-                        state = .notInitialized
-                        isModelDownloaded = false
-                    }
-                }
-                throw CancellationError()
-            } catch {
-                await MainActor.run {
-                    runtimeBridgeSlot.withLatestGeneration(generation) {
-                        state = .error(error.localizedDescription)
-                        isModelDownloaded = false
-                    }
-                }
-                throw error
+            } onCancel: {
+                ownership.cancel()
             }
         }
         initializationTask = task
@@ -122,45 +122,46 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             throw runtimeError(Self.unavailableMessage)
         }
 
-        let bridge = try loadRuntimeBridge()
-        guard let generation = runtimeBridgeSlot.generation(of: bridge) else {
-            throw CancellationError()
-        }
-        // The published state can lag a synchronously retired generation.
-        // Initializing the exact loaded bridge is idempotent when already ready.
-        try await initializeRuntimeBridge(bridge)
+        let ownership = RuntimeBridgeAttemptOwnership(slot: runtimeBridgeSlot)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let bridge = try loadRuntimeBridge()
+            try Task.checkCancellation()
+            guard let generation = ownership.reserve(bridge) else {
+                if ownership.wasCancelled { throw CancellationError() }
+                throw runtimeError("Offline transcription is already in progress.")
+            }
+            defer { ownership.release() }
+            guard await registerRuntimeGeneration(generation) else { throw CancellationError() }
 
-        let ownsPublishedState = await MainActor.run {
-            runtimeBridgeSlot.withLatestGeneration(generation) {
-                state = .transcribing
-            }
-        }
-        guard ownsPublishedState else { throw CancellationError() }
-
-        do {
-            let text = try await transcribeWithRuntimeBridge(bridge, audioPath: audioURL.path)
-            await MainActor.run {
-                runtimeBridgeSlot.withLatestGeneration(generation) {
-                    state = .ready
+            do {
+                // Initializing the exact reserved bridge is idempotent when ready.
+                try await initializeRuntimeBridge(bridge, ownership: ownership)
+                guard await publishRuntimeState(generation, state: .transcribing) else {
+                    throw CancellationError()
                 }
+                let text = try await transcribeWithRuntimeBridge(
+                    bridge,
+                    ownership: ownership,
+                    audioPath: audioURL.path
+                )
+                await publishRuntimeState(generation, state: .ready)
+                return text
+            } catch is CancellationError {
+                ownership.cancel()
+                await publishRuntimeState(generation, state: .notInitialized, isModelDownloaded: false)
+                throw CancellationError()
+            } catch {
+                ownership.cancel()
+                await publishRuntimeState(
+                    generation,
+                    state: .error(error.localizedDescription),
+                    isModelDownloaded: false
+                )
+                throw error
             }
-            return text
-        } catch is CancellationError {
-            retireRuntimeBridge(bridge)
-            await MainActor.run {
-                runtimeBridgeSlot.withLatestGeneration(generation) {
-                    state = .notInitialized
-                    isModelDownloaded = false
-                }
-            }
-            throw CancellationError()
-        } catch {
-            await MainActor.run {
-                runtimeBridgeSlot.withLatestGeneration(generation) {
-                    state = .error(error.localizedDescription)
-                }
-            }
-            throw error
+        } onCancel: {
+            ownership.cancel()
         }
     }
 
@@ -170,43 +171,45 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             throw runtimeError(Self.unavailableMessage)
         }
 
-        let bridge = try loadRuntimeBridge()
-        guard let generation = runtimeBridgeSlot.generation(of: bridge) else {
-            throw CancellationError()
-        }
-        try await initializeRuntimeBridge(bridge)
+        let ownership = RuntimeBridgeAttemptOwnership(slot: runtimeBridgeSlot)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let bridge = try loadRuntimeBridge()
+            try Task.checkCancellation()
+            guard let generation = ownership.reserve(bridge) else {
+                if ownership.wasCancelled { throw CancellationError() }
+                throw runtimeError("Offline transcription is already in progress.")
+            }
+            defer { ownership.release() }
+            guard await registerRuntimeGeneration(generation) else { throw CancellationError() }
 
-        let ownsPublishedState = await MainActor.run {
-            runtimeBridgeSlot.withLatestGeneration(generation) {
-                state = .transcribing
-            }
-        }
-        guard ownsPublishedState else { throw CancellationError() }
-
-        do {
-            let text = try await transcribeDiarizedWithRuntimeBridge(bridge, audioPath: audioURL.path)
-            await MainActor.run {
-                runtimeBridgeSlot.withLatestGeneration(generation) {
-                    state = .ready
+            do {
+                try await initializeRuntimeBridge(bridge, ownership: ownership)
+                guard await publishRuntimeState(generation, state: .transcribing) else {
+                    throw CancellationError()
                 }
+                let text = try await transcribeDiarizedWithRuntimeBridge(
+                    bridge,
+                    ownership: ownership,
+                    audioPath: audioURL.path
+                )
+                await publishRuntimeState(generation, state: .ready)
+                return text
+            } catch is CancellationError {
+                ownership.cancel()
+                await publishRuntimeState(generation, state: .notInitialized, isModelDownloaded: false)
+                throw CancellationError()
+            } catch {
+                ownership.cancel()
+                await publishRuntimeState(
+                    generation,
+                    state: .error(error.localizedDescription),
+                    isModelDownloaded: false
+                )
+                throw error
             }
-            return text
-        } catch is CancellationError {
-            retireRuntimeBridge(bridge)
-            await MainActor.run {
-                runtimeBridgeSlot.withLatestGeneration(generation) {
-                    state = .notInitialized
-                    isModelDownloaded = false
-                }
-            }
-            throw CancellationError()
-        } catch {
-            await MainActor.run {
-                runtimeBridgeSlot.withLatestGeneration(generation) {
-                    state = .error(error.localizedDescription)
-                }
-            }
-            throw error
+        } onCancel: {
+            ownership.cancel()
         }
     }
 
@@ -214,29 +217,44 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         try await transcribeDiarized(audioURL: audioURL)
     }
 
+    @MainActor
     public func cleanup() {
-        let generation = runtimeBridgeSlot.latestGeneration()
-        let bridge = runtimeBridgeSlot.take()
+        let invalidation = runtimeBridgeSlot.invalidateAndTake()
 
-        if let bridge {
+        _ = runtimePublicationFence.invalidate(invalidation.generation)
+        state = .notInitialized
+        isModelDownloaded = false
+
+        if let bridge = invalidation.bridge {
             callVoidSelector("cleanupRuntime", on: bridge)
-        }
-
-        Task { @MainActor in
-            runtimeBridgeSlot.withLatestGeneration(generation) {
-                state = .notInitialized
-                isModelDownloaded = false
-            }
         }
     }
 
-    /// Retire the cancelled runtime generation immediately. Native work in the
-    /// old framework may ignore Task cancellation, but it owns only the old
-    /// bridge/managers and its callbacks are attempt-fenced. An explicit retry
-    /// therefore initializes a fresh generation instead of remaining busy.
-    private func retireRuntimeBridge(_ bridge: NSObject) {
-        guard runtimeBridgeSlot.retire(bridge) else { return }
-        callVoidSelector("cleanupRuntime", on: bridge)
+    @MainActor
+    private func registerRuntimeGeneration(
+        _ generation: UInt64,
+        initialState: ServiceState? = nil
+    ) -> Bool {
+        guard runtimePublicationFence.register(generation) else { return false }
+        if let initialState {
+            state = initialState
+        }
+        return true
+    }
+
+    @MainActor
+    @discardableResult
+    private func publishRuntimeState(
+        _ generation: UInt64,
+        state newState: ServiceState,
+        isModelDownloaded newDownloadState: Bool? = nil
+    ) -> Bool {
+        guard runtimePublicationFence.accepts(generation) else { return false }
+        state = newState
+        if let newDownloadState {
+            isModelDownloaded = newDownloadState
+        }
+        return true
     }
 
     private func setUnavailableState() async {
@@ -270,7 +288,10 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
 
         let bridge = bridgeClass.init()
-        return runtimeBridgeSlot.installIfEmpty(bridge)
+        guard let installed = runtimeBridgeSlot.installIfEmpty(bridge) else {
+            throw runtimeError("Offline runtime attempt identity is exhausted.")
+        }
+        return installed
     }
 
     private func runtimeFrameworkBundle() -> Bundle? {
@@ -291,13 +312,16 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         return nil
     }
 
-    private func initializeRuntimeBridge(_ bridge: NSObject) async throws {
+    private func initializeRuntimeBridge(
+        _ bridge: NSObject,
+        ownership: RuntimeBridgeAttemptOwnership
+    ) async throws {
         let attemptID = UUID().uuidString
         let gate = RuntimeCallbackAttempt<Void>()
         let cancellation = RuntimeAttemptCancellation(
             bridge: bridge,
             attemptID: attemptID,
-            bridgeSlot: runtimeBridgeSlot
+            bridgeOwnership: ownership
         )
 
         try await withTaskCancellationHandler {
@@ -339,18 +363,28 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
     }
 
-    private func transcribeWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
+    private func transcribeWithRuntimeBridge(
+        _ bridge: NSObject,
+        ownership: RuntimeBridgeAttemptOwnership,
+        audioPath: String
+    ) async throws -> String {
         try await performTextOperation(
             on: bridge,
+            ownership: ownership,
             selectorName: "transcribeAudioAtPath:attemptID:completion:",
             audioPath: audioPath,
             failureMessage: "Offline transcription failed."
         )
     }
 
-    private func transcribeDiarizedWithRuntimeBridge(_ bridge: NSObject, audioPath: String) async throws -> String {
+    private func transcribeDiarizedWithRuntimeBridge(
+        _ bridge: NSObject,
+        ownership: RuntimeBridgeAttemptOwnership,
+        audioPath: String
+    ) async throws -> String {
         try await performTextOperation(
             on: bridge,
+            ownership: ownership,
             selectorName: "transcribeDiarizedAudioAtPath:attemptID:completion:",
             audioPath: audioPath,
             failureMessage: "Meeting transcription failed."
@@ -359,6 +393,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
 
     private func performTextOperation(
         on bridge: NSObject,
+        ownership: RuntimeBridgeAttemptOwnership,
         selectorName: String,
         audioPath: String,
         failureMessage: String
@@ -368,7 +403,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         let cancellation = RuntimeAttemptCancellation(
             bridge: bridge,
             attemptID: attemptID,
-            bridgeSlot: runtimeBridgeSlot
+            bridgeOwnership: ownership
         )
 
         return try await withTaskCancellationHandler {

@@ -9,8 +9,8 @@ earlier durable result.
 
 | Phase | Durable state | What must happen before moving on | Failure result |
 |---|---|---|---|
-| 0. Capture and finalize | none | Write every audio frame, monitor capture health, and close the container under a bounded stop/finalize deadline | Return to idle with a microphone or storage message. Never submit a truncated or unfinalized source as a normal recording |
-| 1. Save source | none → `processing` | Move the finalized audio into managed storage and commit its stable recording ID | Stop before recognition. Do not claim the recording is saved unless both the source and record are durable |
+| 0. Capture and finalize | durable preparation/capture journal | Allocate the stable ID and managed partial source first, write every audio frame, monitor capture health, and close the container under a bounded stop/finalize deadline | Return to idle with a microphone or storage message. Never submit a truncated or unfinalized source as a normal recording |
+| 1. Promote source | capture journal → `processing` | Validate, fsync, and atomically promote the already-managed finalized partial, then commit its stable recording record | Stop before recognition. Do not claim the recording is saved unless both the source and record are durable |
 | 2. Recognize speech | `processing` or `retrying` | Run one bounded local job or bounded sequential cloud requests; checkpoint completed leaves | `failed`, with source and the last durable ordered checkpoint |
 | 3. Clean up text | active state, with complete raw text already available | Run one separately bounded optional cleanup pass | Raw text becomes the result on timeout, HTTP error, invalid/empty/truncated output, or unavailable cleanup |
 | 4. Commit result | active → `success`, `failed`, or `cancelled` | Persist the terminal state before dismissing the workflow | The UI still becomes idle and explains that History could not be updated; startup recovery uses retained managed audio |

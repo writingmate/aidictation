@@ -167,15 +167,27 @@ public class SubscriptionManager: ObservableObject {
         }
     }
 
-    /// Record words after transcription (works for both authenticated and anonymous users)
-    public func recordWords(_ count: Int) async {
+    /// Records words after transcription and reports whether the destination acknowledged it.
+    /// Callers with durable work must retain their outbox entry when this returns false.
+    @discardableResult
+    public func recordWords(_ count: Int) async -> Bool {
         if authManager.isAuthenticated {
-            _ = try? await authManager.updateWordCount(wordsToAdd: count)
-            await MainActor.run {
-                self.usageVersion += 1
+            do {
+                _ = try await authManager.updateWordCount(wordsToAdd: count)
+                await MainActor.run {
+                    self.usageVersion += 1
+                }
+                return true
+            } catch {
+                DebugLog.warning(
+                    "Word usage was not acknowledged: \(error.localizedDescription)",
+                    context: "SubscriptionManager"
+                )
+                return false
             }
         } else {
             addLocalWords(count)
+            return true
         }
     }
 

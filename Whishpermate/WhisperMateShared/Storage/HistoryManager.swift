@@ -4,7 +4,6 @@ public import Combine
 public class HistoryManager: ObservableObject {
     @Published public var recordings: [Recording] = []
 
-    private let maxRecordings = 100
     private let storageKey = "recordings_history"
     private let fileURL: URL
     private let audioDirectory: URL
@@ -63,11 +62,6 @@ public class HistoryManager: ObservableObject {
     public func addRecording(_ recording: Recording) {
         // Add to beginning of list (most recent first)
         recordings.insert(recording, at: 0)
-
-        // Keep only the latest 100
-        if recordings.count > maxRecordings {
-            recordings = Array(recordings.prefix(maxRecordings))
-        }
 
         saveRecordings()
     }

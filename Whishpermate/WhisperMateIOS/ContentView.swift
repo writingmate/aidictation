@@ -7,6 +7,18 @@ import MediaPlayer
 import SwiftUI
 import WhisperMateShared
 
+@MainActor
+private enum KeyboardHostLaunchRecoveryGate {
+    static var attempted = false
+    static var ready = false
+}
+
+@MainActor
+private enum MobileAudioHostLaunchRecoveryGate {
+    static var attempted = false
+    static var ready = false
+}
+
 struct ContentView: View {
     @StateObject private var historyManager = HistoryManager()
     @StateObject private var dictionaryManager = DictionaryManager.shared
@@ -35,12 +47,15 @@ struct ContentView: View {
     @State private var isRedeemingReferral = false
     @State private var referralCodeToRedeem = ""
     @State private var referralError: String?
-    @State private var activeKeyboardDictationSessionID: String?
+    @State private var activeKeyboardDictationIdentity: KeyboardDictationHandoff.AttemptIdentity?
     @State private var showKeyboardReturnScreen = false
     @State private var keyboardBridgeAliveUntil: Date?
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
     @State private var showCloudTranscriptionConsent = false
     @State private var keyboardCommandPollTask: Task<Void, Never>?
+    @State private var keyboardHostLaunchReady = false
+    @State private var mobileAudioRecoveryReady = false
+    @State private var historyActionMessage: String?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -48,10 +63,11 @@ struct ContentView: View {
         // Use iPhone layout for all devices (scales nicely on iPad)
         iPhoneLayout
             .onAppear {
-                DebugLog.info("ContentView appeared; starting keyboard command polling", context: "KEYBOARD_DIAG")
-                drainKeyboardDiagnostics()
-                startKeyboardCommandPolling()
-                consumePendingKeyboardCommandIfNeeded()
+                Task { @MainActor in
+                    await recoverMobileAudioProcessingIfNeeded()
+                    guard mobileAudioRecoveryReady else { return }
+                    recoverKeyboardHostLaunchIfNeeded()
+                }
                 #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-showAccountLoginForValidation") {
                         // The login sheet now lives inside the settings sheet,
@@ -67,6 +83,7 @@ struct ContentView: View {
             .onChange(of: scenePhase) { phase in
                 DebugLog.info("scenePhase=\(String(describing: phase))", context: "KEYBOARD_DIAG")
                 if phase == .active {
+                    guard keyboardHostLaunchReady else { return }
                     drainKeyboardDiagnostics()
                     startKeyboardCommandPolling()
                     consumePendingKeyboardCommandIfNeeded()
@@ -80,12 +97,12 @@ struct ContentView: View {
                 prepareOfflineRuntimeForSelectedModeIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.openAppNotification)) { notification in
-                let sessionID = notification.object as? String ?? KeyboardDictationHandoff.activeSessionID()
-                startKeyboardDictation(sessionID: sessionID)
+                _ = notification
+                consumePendingKeyboardCommandIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.stopAppNotification)) { notification in
-                let sessionID = notification.object as? String ?? KeyboardDictationHandoff.activeSessionID()
-                stopKeyboardDictation(sessionID: sessionID)
+                _ = notification
+                consumePendingKeyboardCommandIfNeeded()
             }
             .alert("Login Unavailable", isPresented: $showLoginConfigurationAlert) {
                 Button("OK", role: .cancel) {}
@@ -119,11 +136,25 @@ struct ContentView: View {
             } message: {
                 Text(CloudTranscriptionConsent.disclosureMessage)
             }
+            .alert("History", isPresented: Binding(
+                get: { historyActionMessage != nil },
+                set: { if !$0 { historyActionMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(historyActionMessage ?? "")
+            }
     }
 
     private func openRecordingSheet() {
+        guard requireMobileAudioRecoveryReady() else { return }
         recordingSheetID = UUID()
         showRecordingSheet = true
+    }
+
+    private func openSavedRecording(_ recording: Recording) {
+        guard requireMobileAudioRecoveryReady() else { return }
+        selectedRecording = recording
     }
 
     private var displayedHistoryRecordings: [Recording] {
@@ -363,7 +394,7 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     ForEach(historyManager.recordings.prefix(5)) { recording in
                         Button(action: {
-                            selectedRecording = recording
+                            openSavedRecording(recording)
                         }) {
                             VStack(alignment: .leading, spacing: 8) {
                                 if recording.outputMode == .notes {
@@ -371,7 +402,7 @@ struct ContentView: View {
                                         .font(.caption.weight(.medium))
                                         .foregroundColor(.secondary)
                                 }
-                                Text(recording.transcription)
+                                Text(historyDisplayText(for: recording))
                                     .font(.body)
                                     .foregroundColor(.primary)
                                     .lineLimit(2)
@@ -390,9 +421,10 @@ struct ContentView: View {
 	                            }) {
 	                                Label("Share", systemImage: "square.and.arrow.up")
 	                            }
+	                            .disabled(recording.transcription.isEmpty)
 
                             Button(role: .destructive, action: {
-                                historyManager.deleteRecording(recording)
+                                deleteRecordingSafely(recording)
                             }) {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -434,7 +466,7 @@ struct ContentView: View {
 
                 // Clear History
                 Button(action: {
-                    historyManager.clearAll()
+                    clearHistorySafely()
                 }) {
                     HStack {
                         Label("Clear All History", systemImage: "trash")
@@ -525,7 +557,7 @@ struct ContentView: View {
             let isNewRecording = newlyInsertedRecordingID == recording.id
 
             Button(action: {
-                selectedRecording = recording
+                openSavedRecording(recording)
             }) {
                 VStack(alignment: .leading, spacing: 8) {
                     if recording.outputMode == .notes {
@@ -533,7 +565,7 @@ struct ContentView: View {
                             .font(.caption.weight(.medium))
                             .foregroundColor(.secondary)
                     }
-                    Text(recording.transcription)
+                    Text(historyDisplayText(for: recording))
                         .font(.body)
                         .foregroundColor(.primary)
                     Text(recording.formattedDate)
@@ -556,7 +588,7 @@ struct ContentView: View {
             .animation(.spring(response: 0.34, dampingFraction: 0.72, blendDuration: 0.04), value: isNewRecording)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
-                    historyManager.deleteRecording(recording)
+                    deleteRecordingSafely(recording)
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
@@ -566,15 +598,14 @@ struct ContentView: View {
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
+                .disabled(recording.transcription.isEmpty)
 
-                if recording.audioFileURL != nil {
-                    Button {
-                        selectedRecording = recording
-                    } label: {
-                        Label("Play", systemImage: "play.fill")
-                    }
-                    .tint(.green)
+                Button {
+                    openSavedRecording(recording)
+                } label: {
+                    Label("Play", systemImage: "play.fill")
                 }
+                .tint(.green)
             }
         }
     }
@@ -715,7 +746,7 @@ struct ContentView: View {
 
                 Section("Data") {
                     Button("Clear All History", role: .destructive) {
-                        historyManager.clearAll()
+                        clearHistorySafely()
                     }
                     .disabled(historyManager.recordings.isEmpty)
                 }
@@ -1064,6 +1095,7 @@ struct ContentView: View {
     private func handleInlineRecordingTap() {
         DebugLog.info("inline primary action state=\(inlineRecording.state) selectedMode=\(selectedRecordingMode.displayName)", context: "KEYBOARD_DIAG")
         if inlineRecording.state == .idle {
+            guard requireMobileAudioRecoveryReady() else { return }
             guard ensureCloudTranscriptionAllowedForRecording() else { return }
             guard ensureOfflineModelReadyForRecording() else { return }
         }
@@ -1074,18 +1106,16 @@ struct ContentView: View {
             toneStyleManager: toneStyleManager,
             shortcutManager: shortcutManager,
             selectedPreset: recordingPreset(for: selectedRecordingMode, manager: toneStyleManager),
-            keepAudioBridgeAliveAfterStop: activeKeyboardDictationSessionID != nil
+            keyboardIdentity: activeKeyboardDictationIdentity,
+            keepAudioBridgeAliveAfterStop: activeKeyboardDictationIdentity != nil
         ) { recording in
-            if let activeKeyboardDictationSessionID {
-                DebugLog.info("publishing keyboard text sessionID=\(activeKeyboardDictationSessionID) length=\(recording.transcription.count)", context: "KEYBOARD_DIAG")
-                KeyboardDictationHandoff.publish(
-                    text: recording.transcription,
-                    sessionID: activeKeyboardDictationSessionID
-                )
-                self.activeKeyboardDictationSessionID = nil
+            if let activeKeyboardDictationIdentity {
+                DebugLog.info("completed keyboard attemptID=\(activeKeyboardDictationIdentity.attemptID) length=\(recording.transcription.count)", context: "KEYBOARD_DIAG")
+                self.activeKeyboardDictationIdentity = nil
                 self.showKeyboardReturnScreen = false
-                self.inlineRecording.setKeyboardMeterSessionID(nil)
-                self.keepKeyboardBridgeAlive()
+                self.keyboardBridgeAliveUntil = nil
+                self.inlineRecording.setKeyboardAttemptIdentity(nil)
+                self.inlineRecording.stopListening()
             }
             markRecordingAsNew(recording)
         }
@@ -1104,68 +1134,158 @@ struct ContentView: View {
         !transcriptionProviderManager.shouldUseOnDeviceTranscription && !CloudTranscriptionConsent.isGranted
     }
 
-    private func startKeyboardDictation(sessionID: String?) {
-        let resolvedSessionID = sessionID ?? KeyboardDictationHandoff.beginSession()
-        DebugLog.info("startKeyboardDictation sessionID=\(resolvedSessionID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
-        activeKeyboardDictationSessionID = resolvedSessionID
+    private func startKeyboardDictation(identity: KeyboardDictationHandoff.AttemptIdentity) {
+        guard mobileAudioRecoveryReady else {
+            _ = KeyboardDictationHandoff.publishHostFailure(
+                identity: identity,
+                userMessage: "Saved recordings are still being checked. Try again in a moment."
+            )
+            return
+        }
+        guard let snapshot = loadKeyboardSnapshot(identity: identity) else { return }
+        guard snapshot.phase == .preparing else {
+            if snapshot.phase == .finalizing {
+                _ = KeyboardDictationHandoff.publishHostFailure(
+                    identity: identity,
+                    userMessage: "Recording stopped before it started."
+                )
+            }
+            return
+        }
+        DebugLog.info("startKeyboardDictation attemptID=\(identity.attemptID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
+
+        guard inlineRecording.state == .idle else {
+            _ = KeyboardDictationHandoff.publishHostFailure(
+                identity: identity,
+                userMessage: "Another recording is already active."
+            )
+            return
+        }
+        guard ensureCloudTranscriptionAllowedForRecording(), ensureOfflineModelReadyForRecording() else {
+            _ = KeyboardDictationHandoff.publishHostFailure(
+                identity: identity,
+                userMessage: "Open AI Dictation and finish choosing your transcription mode."
+            )
+            return
+        }
+
+        activeKeyboardDictationIdentity = identity
         keepKeyboardBridgeAlive()
         showKeyboardReturnScreen = true
-        inlineRecording.setKeyboardMeterSessionID(resolvedSessionID)
-        if inlineRecording.state == .idle {
-            handleInlineRecordingTap()
-        }
+        inlineRecording.setKeyboardAttemptIdentity(identity)
+        handleInlineRecordingTap()
     }
 
-    private func stopKeyboardDictation(sessionID: String?) {
-        let resolvedSessionID = sessionID ?? activeKeyboardDictationSessionID ?? KeyboardDictationHandoff.activeSessionID()
-        DebugLog.info("stopKeyboardDictation sessionID=\(resolvedSessionID ?? "nil") inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
-        activeKeyboardDictationSessionID = resolvedSessionID
+    private func stopKeyboardDictation(identity: KeyboardDictationHandoff.AttemptIdentity) {
+        guard let snapshot = loadKeyboardSnapshot(identity: identity),
+              snapshot.phase == .finalizing,
+              activeKeyboardDictationIdentity == identity
+        else {
+            return
+        }
+        DebugLog.info("stopKeyboardDictation attemptID=\(identity.attemptID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
         keepKeyboardBridgeAlive()
         showKeyboardReturnScreen = true
-        inlineRecording.setKeyboardMeterSessionID(resolvedSessionID)
-        if inlineRecording.state == .recording || inlineRecording.state == .paused {
+        inlineRecording.setKeyboardAttemptIdentity(identity)
+        if inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing {
             handleInlineRecordingTap()
+        } else {
+            _ = KeyboardDictationHandoff.publishHostFailure(
+                identity: identity,
+                userMessage: "Recording was not active."
+            )
         }
     }
 
     private func consumePendingKeyboardCommandIfNeeded() {
+        guard keyboardHostLaunchReady else { return }
+        reconcileActiveKeyboardAttemptIfNeeded()
         drainKeyboardDiagnostics()
-        guard let pending = KeyboardDictationHandoff.consumePendingCommand() else {
+        let pending: KeyboardDictationHandoff.CommandEnvelope
+        do {
+            guard let persisted = try KeyboardDictationHandoff.consumePendingCommandEnvelopePersisted() else {
+                return
+            }
+            pending = persisted
+        } catch {
+            cancelActiveKeyboardHostWork()
+            keyboardHostLaunchReady = false
+            KeyboardHostLaunchRecoveryGate.ready = false
+            keyboardCommandPollTask?.cancel()
+            keyboardCommandPollTask = nil
+            historyActionMessage = "Keyboard dictation is temporarily unavailable. Restart the app and try again."
             return
         }
 
-        DebugLog.info("app consumed command=\(pending.command.rawValue) sessionID=\(pending.sessionID ?? "nil")", context: "KEYBOARD_DIAG")
+        DebugLog.info("app consumed command=\(pending.command.rawValue) attemptID=\(pending.identity.attemptID)", context: "KEYBOARD_DIAG")
         switch pending.command {
         case .start:
-            startKeyboardDictation(sessionID: pending.sessionID)
+            startKeyboardDictation(identity: pending.identity)
         case .stop:
-            stopKeyboardDictation(sessionID: pending.sessionID)
-        case .shutdown:
-            shutdownKeyboardDictation(sessionID: pending.sessionID)
+            stopKeyboardDictation(identity: pending.identity)
+        case .cancel, .shutdown:
+            shutdownKeyboardDictation(identity: pending.identity)
         @unknown default:
             DebugLog.info("unknown keyboard command=\(pending.command.rawValue)", context: "KEYBOARD_DIAG")
         }
+        reconcileActiveKeyboardAttemptIfNeeded()
     }
 
-    private func shutdownKeyboardDictation(sessionID: String?) {
-        DebugLog.info("shutdownKeyboardDictation sessionID=\(sessionID ?? "nil") inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
-        activeKeyboardDictationSessionID = nil
+    /// The persisted snapshot is authoritative even when a cancel command aged out while the
+    /// host was suspended. Reconcile it on every poll so abandoned native work cannot continue.
+    private func reconcileActiveKeyboardAttemptIfNeeded() {
+        guard let identity = activeKeyboardDictationIdentity else { return }
+        let snapshot = loadKeyboardSnapshot(identity: identity)
+        guard activeKeyboardDictationIdentity == identity else { return }
+        switch KeyboardDictationHandoff.hostReconciliationAction(
+            activeIdentity: identity,
+            snapshot: snapshot
+        ) {
+        case .cancel:
+            shutdownKeyboardDictation(identity: identity)
+        case .stop:
+            stopKeyboardDictation(identity: identity)
+        case .none:
+            return
+        }
+    }
+
+    private func shutdownKeyboardDictation(identity: KeyboardDictationHandoff.AttemptIdentity) {
+        DebugLog.info("shutdownKeyboardDictation attemptID=\(identity.attemptID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
+        guard activeKeyboardDictationIdentity == identity
+                || loadKeyboardSnapshot(identity: identity)?.phase == .cancelled
+        else { return }
+        _ = KeyboardDictationHandoff.cancelAttempt(identity: identity)
+        cancelActiveKeyboardHostWork()
+    }
+
+    /// Fails closed without touching the handoff journal. This is used when persistence itself
+    /// cannot be read or written, so native work is retired while its managed source is retained.
+    private func cancelActiveKeyboardHostWork() {
+        guard activeKeyboardDictationIdentity != nil else { return }
+        activeKeyboardDictationIdentity = nil
         showKeyboardReturnScreen = false
         keyboardBridgeAliveUntil = nil
-        inlineRecording.setKeyboardMeterSessionID(nil)
-        inlineRecording.stopListening()
-        KeyboardDictationHandoff.clearActiveSession()
+        let reconciliation = inlineRecording.cancelAndReconcile(historyManager: historyManager)
+        inlineRecording.setKeyboardAttemptIdentity(nil)
+        if let reconciliation {
+            Task { @MainActor in
+                if let recovered = await reconciliation.value {
+                    markRecordingAsNew(recovered)
+                }
+            }
+        }
     }
 
     private var shouldKeepKeyboardCommandPolling: Bool {
-        let hasActiveKeyboardRecording = activeKeyboardDictationSessionID != nil
+        let hasActiveKeyboardRecording = activeKeyboardDictationIdentity != nil
             && (inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing)
         let hasLiveKeyboardBridge = keyboardBridgeAliveUntil.map { $0 > Date() } ?? false
         return hasActiveKeyboardRecording || hasLiveKeyboardBridge
     }
 
     private func startKeyboardCommandPolling() {
-        guard keyboardCommandPollTask == nil else { return }
+        guard keyboardHostLaunchReady, keyboardCommandPollTask == nil else { return }
 
         DebugLog.info("start command polling", context: "KEYBOARD_DIAG")
         keyboardCommandPollTask = Task { @MainActor in
@@ -1196,8 +1316,63 @@ struct ContentView: View {
 
     private func keepKeyboardBridgeAlive() {
         keyboardBridgeAliveUntil = Date().addingTimeInterval(120)
+        guard keyboardHostLaunchReady else { return }
         KeyboardDictationHandoff.publishAppReady()
         startKeyboardCommandPolling()
+    }
+
+    private func recoverKeyboardHostLaunchIfNeeded() {
+        guard !KeyboardHostLaunchRecoveryGate.attempted else {
+            keyboardHostLaunchReady = KeyboardHostLaunchRecoveryGate.ready
+            if keyboardHostLaunchReady {
+                drainKeyboardDiagnostics()
+                startKeyboardCommandPolling()
+                consumePendingKeyboardCommandIfNeeded()
+            }
+            return
+        }
+        KeyboardHostLaunchRecoveryGate.attempted = true
+
+        do {
+            if let abandonedIdentity = try KeyboardDictationHandoff.normalizeAfterHostLaunch() {
+                if activeKeyboardDictationIdentity == abandonedIdentity {
+                    activeKeyboardDictationIdentity = nil
+                }
+                showKeyboardReturnScreen = false
+                keyboardBridgeAliveUntil = nil
+            }
+            // True process startup always closes stale/nonmatching Live Activities before a
+            // fresh queued command is consumed.
+            inlineRecording.setKeyboardAttemptIdentity(nil)
+            inlineRecording.stopListening()
+            KeyboardHostLaunchRecoveryGate.ready = true
+            keyboardHostLaunchReady = true
+            DebugLog.info("ContentView appeared; starting keyboard command polling", context: "KEYBOARD_DIAG")
+            drainKeyboardDiagnostics()
+            startKeyboardCommandPolling()
+            consumePendingKeyboardCommandIfNeeded()
+        } catch {
+            cancelActiveKeyboardHostWork()
+            KeyboardHostLaunchRecoveryGate.ready = false
+            keyboardHostLaunchReady = false
+            historyActionMessage = "Keyboard dictation is temporarily unavailable. Restart the app and try again."
+        }
+    }
+
+    private func loadKeyboardSnapshot(
+        identity: KeyboardDictationHandoff.AttemptIdentity
+    ) -> KeyboardDictationHandoff.Snapshot? {
+        do {
+            return try KeyboardDictationHandoff.loadSnapshot(for: identity)
+        } catch {
+            cancelActiveKeyboardHostWork()
+            KeyboardHostLaunchRecoveryGate.ready = false
+            keyboardHostLaunchReady = false
+            keyboardCommandPollTask?.cancel()
+            keyboardCommandPollTask = nil
+            historyActionMessage = "Keyboard dictation is temporarily unavailable. Restart the app and try again."
+            return nil
+        }
     }
 
     private func drainKeyboardDiagnostics() {
@@ -1223,6 +1398,161 @@ struct ContentView: View {
             withAnimation(.easeOut(duration: 0.24)) {
                 newlyInsertedRecordingID = nil
             }
+        }
+    }
+
+    private func historyDisplayText(for recording: Recording) -> String {
+        recording.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Recording needs attention"
+            : recording.transcription
+    }
+
+    private func deleteRecordingSafely(_ recording: Recording) {
+        guard requireMobileAudioRecoveryReady() else { return }
+        Task { @MainActor in
+            do {
+                try await MobileAudioProcessingStore.shared.tombstone(recordingID: recording.id)
+                if let audioURL = recording.audioFileURL,
+                   FileManager.default.fileExists(atPath: audioURL.path)
+                {
+                    try FileManager.default.removeItem(at: audioURL)
+                }
+                historyManager.deleteRecording(recording)
+            } catch {
+                historyActionMessage = "This recording could not be deleted. Please try again."
+            }
+        }
+    }
+
+    private func clearHistorySafely() {
+        guard requireMobileAudioRecoveryReady() else { return }
+        let recordings = historyManager.recordings
+
+        if inlineRecording.isActive {
+            inlineRecording.stopListening()
+            if let activeKeyboardDictationIdentity {
+                _ = KeyboardDictationHandoff.cancelAttempt(
+                    identity: activeKeyboardDictationIdentity,
+                    reason: "History cleared."
+                )
+            }
+            activeKeyboardDictationIdentity = nil
+            showKeyboardReturnScreen = false
+        }
+
+        Task { @MainActor in
+            do {
+                try await MobileAudioProcessingStore.shared.clearAll(
+                    recordingIDs: recordings.map(\.id)
+                )
+                for recording in recordings {
+                    if let audioURL = recording.audioFileURL,
+                       FileManager.default.fileExists(atPath: audioURL.path)
+                    {
+                        try FileManager.default.removeItem(at: audioURL)
+                    }
+                }
+                historyManager.clearAll()
+            } catch {
+                historyActionMessage = "History could not be cleared. Please try again."
+            }
+        }
+    }
+
+    private func requireMobileAudioRecoveryReady() -> Bool {
+        guard mobileAudioRecoveryReady else {
+            historyActionMessage = "Saved recordings are still being checked. Try again in a moment."
+            return false
+        }
+        return true
+    }
+
+    private func recoverMobileAudioProcessingIfNeeded() async {
+        guard !MobileAudioHostLaunchRecoveryGate.attempted else {
+            mobileAudioRecoveryReady = MobileAudioHostLaunchRecoveryGate.ready
+            return
+        }
+        MobileAudioHostLaunchRecoveryGate.attempted = true
+
+        do {
+            _ = try await MobileAudioProcessingStore.shared.normalizeInterruptedAttempts()
+            let snapshots = try await MobileAudioProcessingStore.shared.allSnapshots()
+            let usageRecordingIDs = snapshots.compactMap { snapshot -> UUID? in
+                guard snapshot.usageAccountingState != .acknowledged else { return nil }
+                if snapshot.stage == .succeeded { return snapshot.recordingID }
+                if snapshot.stage == .deleted,
+                   snapshot.usageAccountingWordCount != nil
+                {
+                    return snapshot.recordingID
+                }
+                return nil
+            }
+            for snapshot in snapshots where snapshot.stage == .deleted {
+                if let recording = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
+                    historyManager.deleteRecording(recording)
+                }
+            }
+
+            for snapshot in snapshots
+            where snapshot.stage == .succeeded
+                || snapshot.stage == .failed
+                || snapshot.stage == .cancelled
+            {
+                guard FileManager.default.fileExists(atPath: snapshot.sourcePath) else { continue }
+                let text = try await MobileAudioProcessingStore.shared.recognizedText(
+                    for: snapshot.recordingID
+                )
+                if snapshot.stage == .succeeded,
+                   text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+                {
+                    continue
+                }
+                let outputMode = snapshot.outputModeRaw.flatMap(TranscriptionOutputMode.init(rawValue:))
+                    ?? .dictation
+                let transcriptionOptions = snapshot.transcriptionOptions
+                    ?? (outputMode == .meetings ? TranscriptionOptions(diarization: true) : .default)
+                if let existing = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
+                    if snapshot.stage == .succeeded,
+                       let text,
+                       existing.transcription != text
+                    {
+                        historyManager.deleteRecording(existing)
+                        historyManager.addRecording(Recording(
+                            id: existing.id,
+                            timestamp: existing.timestamp,
+                            transcription: text,
+                            duration: snapshot.duration ?? existing.duration,
+                            audioFileURL: snapshot.sourceURL,
+                            outputMode: outputMode,
+                            transcriptionOptions: snapshot.transcriptionOptions ?? existing.transcriptionOptions
+                        ))
+                    }
+                } else {
+                    historyManager.addRecording(Recording(
+                        id: snapshot.recordingID,
+                        timestamp: snapshot.createdAt,
+                        transcription: text ?? "",
+                        duration: snapshot.duration,
+                        audioFileURL: snapshot.sourceURL,
+                        outputMode: outputMode,
+                        transcriptionOptions: transcriptionOptions
+                    ))
+                }
+
+            }
+            MobileAudioHostLaunchRecoveryGate.ready = true
+            mobileAudioRecoveryReady = true
+            // Recovery readiness must never wait on a usage-network request. Claims happen in
+            // this follow-up task, so an app exit before work starts leaves them retryable.
+            Task { @MainActor in
+                for recordingID in usageRecordingIDs {
+                    await MobileAudioUsageAccounting.flush(recordingID: recordingID)
+                }
+            }
+        } catch {
+            MobileAudioHostLaunchRecoveryGate.ready = false
+            mobileAudioRecoveryReady = false
+            historyActionMessage = "Saved recordings need attention. Restart the app before recording again."
         }
     }
 }
@@ -1740,6 +2070,7 @@ private enum InlineRecordingState: Equatable {
     case completing
 }
 
+@MainActor
 private final class RecordingNowPlayingStatus {
     private enum LiveActivityPhase {
         case listening
@@ -1748,18 +2079,14 @@ private final class RecordingNowPlayingStatus {
 
     private var isActive = false
     private var startedAt = Date()
-    private var liveActivitySessionID: String?
+    private var liveActivityIdentity: KeyboardDictationHandoff.AttemptIdentity?
+    private var liveActivityOperationToken = UUID()
+    private var liveActivityOperationTask: Task<Void, Never>?
 
-    #if canImport(ActivityKit)
-        @available(iOS 16.2, *)
-        private var liveActivity: Activity<KeyboardDictationActivityAttributes>? {
-            Activity<KeyboardDictationActivityAttributes>.activities.first
-        }
-    #endif
-
-    func start() {
+    func start(identity: KeyboardDictationHandoff.AttemptIdentity? = nil) {
         isActive = true
         startedAt = Date()
+        liveActivityIdentity = identity
 
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: "AI Dictation",
@@ -1775,7 +2102,11 @@ private final class RecordingNowPlayingStatus {
 
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         UIApplication.shared.beginReceivingRemoteControlEvents()
-        startOrUpdateLiveActivity(phase: .listening)
+        if identity == nil {
+            endLiveActivity()
+        } else {
+            startOrUpdateLiveActivity(phase: .listening)
+        }
         DebugLog.info("recording now playing status started", context: "KEYBOARD_DIAG")
     }
 
@@ -1785,10 +2116,6 @@ private final class RecordingNowPlayingStatus {
     }
 
     func stop() {
-        guard isActive || MPNowPlayingInfoCenter.default().nowPlayingInfo != nil else {
-            return
-        }
-
         isActive = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         UIApplication.shared.endReceivingRemoteControlEvents()
@@ -1802,26 +2129,49 @@ private final class RecordingNowPlayingStatus {
                 return
             }
 
-            Task {
-                let sessionID = KeyboardDictationHandoff.activeSessionID() ?? UUID().uuidString
+            guard let identity = liveActivityIdentity else {
+                endLiveActivity()
+                return
+            }
+            let operationStartedAt = startedAt
+            enqueueLiveActivityOperation { [weak self] token in
+                guard let self, self.liveActivityOperationToken == token,
+                      self.liveActivityIdentity == identity
+                else { return }
                 let activityPhase: KeyboardDictationActivityAttributes.Phase = phase == .processing ? .processing : .listening
-                let state = KeyboardDictationActivityAttributes.ContentState(phase: activityPhase, startedAt: startedAt)
+                let state = KeyboardDictationActivityAttributes.ContentState(
+                    phase: activityPhase,
+                    startedAt: operationStartedAt
+                )
+                let activities = Activity<KeyboardDictationActivityAttributes>.activities
+                let exactActivities = activities.filter { self.activity($0, matches: identity) }
+                let activityToKeep = exactActivities.first
 
-                if let liveActivity {
-                    await liveActivity.update(ActivityContent(state: state, staleDate: nil))
-                    liveActivitySessionID = liveActivity.attributes.sessionID
-                    return
+                for activity in activities where activity.id != activityToKeep?.id {
+                    await activity.end(
+                        ActivityContent(state: state, staleDate: nil),
+                        dismissalPolicy: .immediate
+                    )
+                    guard self.liveActivityOperationToken == token,
+                          self.liveActivityIdentity == identity
+                    else { return }
                 }
 
+                if let activityToKeep {
+                    await activityToKeep.update(ActivityContent(state: state, staleDate: nil))
+                    return
+                }
+                guard self.liveActivityOperationToken == token,
+                      self.liveActivityIdentity == identity
+                else { return }
                 do {
-                    let attributes = KeyboardDictationActivityAttributes(sessionID: sessionID)
-                    let activity = try Activity.request(
+                    let attributes = KeyboardDictationActivityAttributes(identity: identity)
+                    _ = try Activity.request(
                         attributes: attributes,
                         content: ActivityContent(state: state, staleDate: nil),
                         pushType: nil
                     )
-                    liveActivitySessionID = activity.attributes.sessionID
-                    DebugLog.info("live activity started sessionID=\(sessionID)", context: "KEYBOARD_DIAG")
+                    DebugLog.info("live activity started attemptID=\(identity.attemptID)", context: "KEYBOARD_DIAG")
                 } catch {
                     DebugLog.info("failed to start live activity: \(error)", context: "KEYBOARD_DIAG")
                 }
@@ -1833,15 +2183,50 @@ private final class RecordingNowPlayingStatus {
         #if canImport(ActivityKit)
             guard #available(iOS 17.0, *) else { return }
 
-            Task {
+            liveActivityIdentity = nil
+            let operationStartedAt = startedAt
+            enqueueLiveActivityOperation { [weak self] token in
+                guard let self, self.liveActivityOperationToken == token else { return }
+                let state = KeyboardDictationActivityAttributes.ContentState(
+                    phase: .processing,
+                    startedAt: operationStartedAt
+                )
                 for activity in Activity<KeyboardDictationActivityAttributes>.activities {
-                    let state = KeyboardDictationActivityAttributes.ContentState(phase: .processing, startedAt: startedAt)
                     await activity.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .immediate)
+                    guard self.liveActivityOperationToken == token else { return }
                 }
-                liveActivitySessionID = nil
             }
         #endif
     }
+
+    #if canImport(ActivityKit)
+        @available(iOS 17.0, *)
+        private func activity(
+            _ activity: Activity<KeyboardDictationActivityAttributes>,
+            matches identity: KeyboardDictationHandoff.AttemptIdentity
+        ) -> Bool {
+            activity.attributes.sessionID == identity.sessionID
+                && activity.attributes.attemptID == identity.attemptID
+                && activity.attributes.generation == identity.generation
+        }
+
+        @available(iOS 17.0, *)
+        private func enqueueLiveActivityOperation(
+            _ operation: @escaping @MainActor @Sendable (UUID) async -> Void
+        ) {
+            let precedingTask = liveActivityOperationTask
+            let token = UUID()
+            liveActivityOperationToken = token
+            liveActivityOperationTask = Task { @MainActor in
+                if let precedingTask { await precedingTask.value }
+                guard self.liveActivityOperationToken == token else { return }
+                await operation(token)
+                if self.liveActivityOperationToken == token {
+                    self.liveActivityOperationTask = nil
+                }
+            }
+        }
+    #endif
 }
 
 struct RecordingPresetMenu: View {
@@ -1902,6 +2287,8 @@ struct RecordingPresetMenu: View {
             return "note.text"
         case .meetings:
             return "person.2.fill"
+        @unknown default:
+            return "text.cursor"
         }
     }
 }
@@ -1925,6 +2312,8 @@ func recordingPreset(for mode: TranscriptionOutputMode, manager: ToneStyleManage
             isEnabled: false,
             transcriptionOptions: TranscriptionOptions(diarization: true)
         )
+    @unknown default:
+        return nil
     }
 }
 
@@ -1936,17 +2325,28 @@ private final class InlineRecordingCoordinator: ObservableObject {
     @Published var errorMessage: String?
     @Published var completionText: String?
 
-    private let audioRecorder = AudioRecorder()
+    private let audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
+    private var audioRecorder: AudioRecorder { audioRecorderSlot.current }
+    private let processingStore = MobileAudioProcessingStore.shared
     private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared
     private var recordingStartTime: Date?
-    private var recorderHasStarted = false
-    private var keyboardMeterSessionID: String?
-    private var cancellables = Set<AnyCancellable>()
+    private var activeAttempt: MobileAudioProcessingStore.Lease?
+    private var activeAttemptTask: Task<Void, Never>?
+    private var captureDeadlineTask: Task<Void, Never>?
+    private var activeTranscriptionRequest: SharedTranscriptionService.RequestSnapshot?
+    private var activeOutputMode: TranscriptionOutputMode?
+    private var activeTranscriptionOptions: TranscriptionOptions?
+    private var keyboardAttemptIdentity: KeyboardDictationHandoff.AttemptIdentity?
+    private var stopRequestedWhilePreparing = false
+    private var recorderCancellables = Set<AnyCancellable>()
 
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let minimumAudioFileBytes: Int64 = 1000
-    private let recordingStartTimeout: UInt64 = 1_200_000_000
+    private let recordingStartDeadline: TimeInterval = 5
+    private let minimumFinalizationDeadline: TimeInterval = 15
+    private let maximumFinalizationDeadline: TimeInterval = 120
+    private let maximumRecordingDuration: TimeInterval = 4 * 60 * 60
 
     var isActive: Bool {
         state == .recording || state == .paused || state == .processing
@@ -1970,16 +2370,20 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     init() {
-        audioRecorder.$isRecording
+        bindAudioRecorder(audioRecorder)
+    }
+
+    private func bindAudioRecorder(_ recorder: AudioRecorder) {
+        recorder.$isRecording
             .dropFirst()
             .sink { [weak self] isRecording in
                 Task { @MainActor in
                     self?.updateRecordingState(isRecording)
                 }
             }
-            .store(in: &cancellables)
+            .store(in: &recorderCancellables)
 
-        audioRecorder.$audioLevel
+        recorder.$audioLevel
             .sink { [weak self] level in
                 Task { @MainActor in
                     guard self?.state == .recording else { return }
@@ -1987,9 +2391,9 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     self?.publishKeyboardMeter()
                 }
             }
-            .store(in: &cancellables)
+            .store(in: &recorderCancellables)
 
-        audioRecorder.$frequencyBands
+        recorder.$frequencyBands
             .sink { [weak self] bands in
                 Task { @MainActor in
                     guard self?.state == .recording else { return }
@@ -1997,7 +2401,23 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     self?.publishKeyboardMeter()
                 }
             }
-            .store(in: &cancellables)
+            .store(in: &recorderCancellables)
+
+        recorder.$managedAttemptFailure
+            .compactMap { $0 }
+            .sink { [weak self] failure in
+                Task { @MainActor in
+                    self?.handleCaptureFailure(failure)
+                }
+            }
+            .store(in: &recorderCancellables)
+    }
+
+    private func retireAudioRecorderIfCurrent(_ recorder: AudioRecorder) {
+        let replacement = audioRecorderSlot.retire(ifCurrent: recorder)
+        guard replacement !== recorder else { return }
+        recorderCancellables.removeAll()
+        bindAudioRecorder(replacement)
     }
 
     func handlePrimaryAction(
@@ -2006,24 +2426,32 @@ private final class InlineRecordingCoordinator: ObservableObject {
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
         selectedPreset: ContextRule?,
+        keyboardIdentity: KeyboardDictationHandoff.AttemptIdentity? = nil,
         keepAudioBridgeAliveAfterStop: Bool = false,
         onCompleted: @escaping (Recording) -> Void
     ) {
         switch state {
         case .idle:
-            startRecording()
-        case .recording, .paused:
-            stopRecording(
+            startRecording(
                 historyManager: historyManager,
                 dictionaryManager: dictionaryManager,
                 toneStyleManager: toneStyleManager,
                 shortcutManager: shortcutManager,
                 selectedPreset: selectedPreset,
+                keyboardIdentity: keyboardIdentity,
+                keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
+                onCompleted: onCompleted
+            )
+        case .recording, .paused:
+            stopRecording(
+                historyManager: historyManager,
                 keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
                 onCompleted: onCompleted
             )
         case .processing:
-            break
+            if activeAttempt != nil {
+                stopRequestedWhilePreparing = true
+            }
         case .completing:
             break
         }
@@ -2048,24 +2476,62 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    func setKeyboardMeterSessionID(_ sessionID: String?) {
-        keyboardMeterSessionID = sessionID
-        DebugLog.info("set keyboard meter sessionID=\(sessionID ?? "nil")", context: "KEYBOARD_DIAG")
-        if sessionID == nil {
+    func setKeyboardAttemptIdentity(_ identity: KeyboardDictationHandoff.AttemptIdentity?) {
+        keyboardAttemptIdentity = identity
+        DebugLog.info(
+            "set keyboard meter attemptID=\(identity?.attemptID ?? "nil")",
+            context: "KEYBOARD_DIAG"
+        )
+        if identity == nil {
             KeyboardDictationHandoff.clearMeter()
         }
     }
 
     private func publishKeyboardMeter() {
-        guard let sessionID = keyboardMeterSessionID ?? KeyboardDictationHandoff.activeSessionID() else { return }
+        guard let identity = keyboardAttemptIdentity else { return }
         if audioLevel > 0.02 {
-            DebugLog.info("app meter sessionID=\(sessionID) level=\(String(format: "%.3f", audioLevel)) bands=\(frequencyBands.count)", context: "KEYBOARD_DIAG")
+            DebugLog.info("app meter attemptID=\(identity.attemptID) level=\(String(format: "%.3f", audioLevel)) bands=\(frequencyBands.count)", context: "KEYBOARD_DIAG")
         }
         KeyboardDictationHandoff.publishMeter(
             audioLevel: audioLevel,
             frequencyBands: frequencyBands,
-            sessionID: sessionID
+            identity: identity
         )
+    }
+
+    private func handleCaptureFailure(_ failure: ManagedAudioRecordingFailure) {
+        guard let lease = activeAttempt,
+              lease.attemptID == failure.attemptID,
+              state == .recording || state == .paused
+        else { return }
+
+        activeAttemptTask?.cancel()
+        captureDeadlineTask?.cancel()
+        let abandonedRecorder = audioRecorder
+        retireAudioRecorderIfCurrent(abandonedRecorder)
+        if let keyboardAttemptIdentity {
+            _ = KeyboardDictationHandoff.publishHostFailure(
+                identity: keyboardAttemptIdentity,
+                recordingID: lease.recordingID.uuidString,
+                userMessage: failure.error.localizedDescription
+            )
+        }
+        activeAttempt = nil
+        activeAttemptTask = nil
+        showError(failure.error.localizedDescription)
+
+        Task {
+            try? await processingStore.markFailed(
+                lease,
+                message: failure.error.localizedDescription,
+                integrity: .knownIncomplete
+            )
+            await abandonedRecorder.abandonRecording(
+                attemptID: lease.attemptID,
+                deactivateAudioSession: false
+            )
+            try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
+        }
     }
 
     func dismissError() {
@@ -2075,10 +2541,36 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     func stopListening() {
-        _ = audioRecorder.stopRecording(deactivateAudioSession: true)
+        activeAttemptTask?.cancel()
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        if let activeAttempt {
+            let recorder = audioRecorder
+            retireAudioRecorderIfCurrent(recorder)
+            let identity = keyboardAttemptIdentity
+            Task {
+                try? await processingStore.markCancelled(activeAttempt)
+                if let identity {
+                    _ = KeyboardDictationHandoff.cancelAttempt(identity: identity)
+                }
+                await recorder.abandonRecording(
+                    attemptID: activeAttempt.attemptID,
+                    deactivateAudioSession: false
+                )
+                try? await processingStore.purgePayloadsIfDeleted(recordingID: activeAttempt.recordingID)
+            }
+        } else {
+            audioRecorder.stopMonitoring()
+        }
         recordingStatus.stop()
         recordingStartTime = nil
-        recorderHasStarted = false
+        activeAttempt = nil
+        activeAttemptTask = nil
+        activeTranscriptionRequest = nil
+        activeOutputMode = nil
+        activeTranscriptionOptions = nil
+        keyboardAttemptIdentity = nil
+        stopRequestedWhilePreparing = false
         state = .idle
         audioLevel = 0
         frequencyBands = Array(repeating: 0.0, count: 10)
@@ -2086,80 +2578,328 @@ private final class InlineRecordingCoordinator: ObservableObject {
         errorMessage = nil
     }
 
-    private func startRecording() {
+    /// Cancels the active native work immediately, then reconciles any complete raw transcript
+    /// that won the race with cancellation into the same durable completion side effects.
+    func cancelAndReconcile(
+        historyManager: HistoryManager
+    ) -> Task<Recording?, Never>? {
+        guard let lease = activeAttempt else {
+            stopListening()
+            return nil
+        }
+
+        activeAttemptTask?.cancel()
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        let recorder = audioRecorder
+        let outputMode = activeOutputMode ?? .dictation
+        let transcriptionOptions = activeTranscriptionOptions ?? .default
+        let fallbackDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
+
+        retireAudioRecorderIfCurrent(recorder)
+        activeAttempt = nil
+        activeAttemptTask = nil
+        activeTranscriptionRequest = nil
+        activeOutputMode = nil
+        activeTranscriptionOptions = nil
+        stopRequestedWhilePreparing = false
+        errorMessage = nil
+        reset(keepAudioBridgeAlive: false)
+
+        return Task { @MainActor in
+            try? await processingStore.markCancelled(lease)
+            let snapshot = try? await processingStore.snapshot(recordingID: lease.recordingID)
+            let recoveredText = try? await processingStore.recognizedText(for: lease.recordingID)
+            Task {
+                await recorder.abandonRecording(
+                    attemptID: lease.attemptID,
+                    deactivateAudioSession: false
+                )
+                try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
+            }
+
+            guard snapshot?.stage == .succeeded,
+                  let recoveredText,
+                  !recoveredText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+
+            let recording = Recording(
+                id: lease.recordingID,
+                transcription: recoveredText,
+                duration: snapshot?.duration ?? fallbackDuration,
+                audioFileURL: snapshot?.sourceURL ?? lease.sourceURL,
+                outputMode: outputMode,
+                transcriptionOptions: snapshot?.transcriptionOptions ?? transcriptionOptions
+            )
+            replaceHistoryRecording(recording, in: historyManager)
+            await MobileAudioUsageAccounting.flush(
+                recordingID: lease.recordingID,
+                store: processingStore,
+                subscriptionManager: subscriptionManager
+            )
+            return recording
+        }
+    }
+
+    private func startRecording(
+        historyManager: HistoryManager,
+        dictionaryManager: DictionaryManager,
+        toneStyleManager: ToneStyleManager,
+        shortcutManager: ShortcutManager,
+        selectedPreset: ContextRule?,
+        keyboardIdentity: KeyboardDictationHandoff.AttemptIdentity?,
+        keepAudioBridgeAliveAfterStop: Bool,
+        onCompleted: @escaping (Recording) -> Void
+    ) {
         dismissError()
         DebugLog.info("inline startRecording permission=\(AVAudioSession.sharedInstance().recordPermission.rawValue)", context: "KEYBOARD_DIAG")
 
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             DebugLog.info("inline start blocked by subscription reason=\(access.reason ?? "nil")", context: "KEYBOARD_DIAG")
-            showError(access.reason ?? "Log in to continue transcribing.")
+            let message = access.reason ?? "Log in to continue transcribing."
+            publishKeyboardStartFailure(identity: keyboardIdentity, message: message)
+            showError(message)
             return
         }
 
         switch AVAudioSession.sharedInstance().recordPermission {
         case .granted:
-            beginRecording()
+            beginRecording(
+                historyManager: historyManager,
+                dictionaryManager: dictionaryManager,
+                toneStyleManager: toneStyleManager,
+                shortcutManager: shortcutManager,
+                selectedPreset: selectedPreset,
+                keyboardIdentity: keyboardIdentity,
+                keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
+                onCompleted: onCompleted
+            )
         case .denied:
-            showError("Microphone permission denied. Please enable it in Settings.")
+            let message = "Microphone permission denied. Please enable it in Settings."
+            publishKeyboardStartFailure(identity: keyboardIdentity, message: message)
+            showError(message)
         case .undetermined:
             DebugLog.info("requesting microphone permission", context: "KEYBOARD_DIAG")
             AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
                 DispatchQueue.main.async {
                     DebugLog.info("microphone permission response granted=\(granted)", context: "KEYBOARD_DIAG")
                     if granted {
-                        self?.beginRecording()
+                        self?.beginRecording(
+                            historyManager: historyManager,
+                            dictionaryManager: dictionaryManager,
+                            toneStyleManager: toneStyleManager,
+                            shortcutManager: shortcutManager,
+                            selectedPreset: selectedPreset,
+                            keyboardIdentity: keyboardIdentity,
+                            keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
+                            onCompleted: onCompleted
+                        )
                     } else {
-                        self?.showError("Microphone permission denied. Please enable it in Settings.")
+                        let message = "Microphone permission denied. Please enable it in Settings."
+                        self?.publishKeyboardStartFailure(identity: keyboardIdentity, message: message)
+                        self?.showError(message)
                     }
                 }
             }
         @unknown default:
-            showError("Unable to check microphone permission.")
+            let message = "Unable to check microphone permission."
+            publishKeyboardStartFailure(identity: keyboardIdentity, message: message)
+            showError(message)
         }
     }
 
-    private func beginRecording() {
-        DebugLog.info("inline beginRecording", context: "KEYBOARD_DIAG")
-        recordingStartTime = Date()
-        recordingStatus.start()
-        recorderHasStarted = false
-        errorMessage = nil
-        audioLevel = 0
-        frequencyBands = Array(repeating: 0.0, count: 10)
-
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-            state = .recording
-        }
-
-        audioRecorder.startRecording()
-        verifyRecordingDidStart()
-    }
-
-    private func verifyRecordingDidStart() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: recordingStartTimeout)
-            guard state == .recording, !recorderHasStarted else {
-                return
-            }
-
-            DebugLog.info("inline recording start timeout isRecording=\(audioRecorder.isRecording)", context: "KEYBOARD_DIAG")
-            showError("Recording could not start. Please try again.")
-        }
-    }
-
-    private func stopRecording(
+    private func beginRecording(
         historyManager: HistoryManager,
         dictionaryManager: DictionaryManager,
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
         selectedPreset: ContextRule?,
+        keyboardIdentity: KeyboardDictationHandoff.AttemptIdentity?,
         keepAudioBridgeAliveAfterStop: Bool,
         onCompleted: @escaping (Recording) -> Void
     ) {
-        let recordingStartedAt = recordingStartTime
+        DebugLog.info("inline beginRecording", context: "KEYBOARD_DIAG")
+        let startOutputMode = recordingOutputMode(for: selectedPreset)
+        let startOptions = selectedPreset?.transcriptionOptions ?? .default
+        let request: SharedTranscriptionService.RequestSnapshot
+        do {
+            request = try SharedTranscriptionService.RequestSnapshot.capture(
+                dictionaryManager: dictionaryManager,
+                toneStyleManager: toneStyleManager,
+                shortcutManager: shortcutManager,
+                outputMode: startOutputMode,
+                transcriptionOptions: startOptions,
+                selectedPreset: selectedPreset
+            )
+        } catch {
+            let message = userMessage(for: error)
+            publishKeyboardStartFailure(identity: keyboardIdentity, message: message)
+            showError(message)
+            return
+        }
 
-        DebugLog.info("inline stopRecording state=\(state) preset=\(selectedPreset?.name ?? "dictation")", context: "KEYBOARD_DIAG")
+        recordingStartTime = nil
+        activeOutputMode = startOutputMode
+        activeTranscriptionOptions = startOptions
+        activeTranscriptionRequest = request
+        self.keyboardAttemptIdentity = keyboardIdentity
+        stopRequestedWhilePreparing = false
+        errorMessage = nil
+        audioLevel = 0
+        frequencyBands = Array(repeating: 0.0, count: 10)
+
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            state = .processing
+        }
+
+        let recordingID = UUID()
+        let attemptID = UUID()
+        let recorder = audioRecorder
+        activeAttemptTask?.cancel()
+        activeAttemptTask = Task { @MainActor in
+            var lease: MobileAudioProcessingStore.Lease?
+            do {
+                let prepared = try await processingStore.beginNewAttempt(
+                    recordingID: recordingID,
+                    attemptID: attemptID,
+                    outputModeRaw: startOutputMode.rawValue,
+                    transcriptionOptions: startOptions,
+                    deadlineAt: Date().addingTimeInterval(recordingStartDeadline)
+                )
+                lease = prepared
+                activeAttempt = prepared
+                guard !Task.isCancelled else { throw CancellationError() }
+                if let keyboardIdentity {
+                    guard KeyboardDictationHandoff.snapshot(for: keyboardIdentity)?.phase == .preparing else {
+                        throw CancellationError()
+                    }
+                }
+
+                _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
+                    try await recorder.startRecording(
+                        at: prepared.sourceURL,
+                        attemptID: prepared.attemptID
+                    )
+                }
+                let captureDeadline = Date().addingTimeInterval(maximumRecordingDuration)
+                try await processingStore.captureBecameReady(
+                    prepared,
+                    deadlineAt: captureDeadline
+                )
+                guard activeAttempt == prepared, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+
+                if let keyboardIdentity {
+                    guard KeyboardDictationHandoff.publishHostPhase(
+                        .recording,
+                        identity: keyboardIdentity,
+                        recordingID: prepared.recordingID.uuidString
+                    ) else {
+                        throw CancellationError()
+                    }
+                }
+
+                recordingStartTime = Date()
+                recordingStatus.start(identity: keyboardIdentity)
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+                    state = .recording
+                }
+                activeAttemptTask = nil
+                scheduleCaptureDeadline(
+                    for: prepared,
+                    deadlineAt: captureDeadline,
+                    historyManager: historyManager,
+                    keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
+                    onCompleted: onCompleted
+                )
+
+                if stopRequestedWhilePreparing {
+                    stopRequestedWhilePreparing = false
+                    stopRecording(
+                        historyManager: historyManager,
+                        keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
+                        onCompleted: onCompleted
+                    )
+                }
+            } catch {
+                if let lease {
+                    retireAudioRecorderIfCurrent(recorder)
+                    if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
+                        try? await processingStore.markCancelled(lease)
+                    } else {
+                        try? await processingStore.markFailed(
+                            lease,
+                            message: userMessage(for: error),
+                            integrity: .unfinalized
+                        )
+                    }
+                    Task {
+                        await recorder.abandonRecording(
+                            attemptID: lease.attemptID,
+                            deactivateAudioSession: false
+                        )
+                        try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
+                    }
+                }
+                if let keyboardIdentity, !(error is CancellationError) {
+                    _ = KeyboardDictationHandoff.publishHostFailure(
+                        identity: keyboardIdentity,
+                        recordingID: lease?.recordingID.uuidString,
+                        userMessage: userMessage(for: error)
+                    )
+                }
+                guard activeAttempt?.attemptID == attemptID || activeAttempt == nil else { return }
+                activeAttempt = nil
+                activeAttemptTask = nil
+                showError(error is CancellationError ? "Recording cancelled." : userMessage(for: error))
+            }
+        }
+    }
+
+    private func scheduleCaptureDeadline(
+        for lease: MobileAudioProcessingStore.Lease,
+        deadlineAt: Date,
+        historyManager: HistoryManager,
+        keepAudioBridgeAliveAfterStop: Bool,
+        onCompleted: @escaping (Recording) -> Void
+    ) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = Task { @MainActor in
+            let remaining = max(0, deadlineAt.timeIntervalSinceNow)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard activeAttempt == lease,
+                  state == .recording || state == .paused
+            else { return }
+            stopRecording(
+                historyManager: historyManager,
+                keepAudioBridgeAliveAfterStop: keepAudioBridgeAliveAfterStop,
+                onCompleted: onCompleted
+            )
+        }
+    }
+
+    private func stopRecording(
+        historyManager: HistoryManager,
+        keepAudioBridgeAliveAfterStop: Bool,
+        onCompleted: @escaping (Recording) -> Void
+    ) {
+        guard let activeAttempt,
+              let request = activeTranscriptionRequest,
+              let outputMode = activeOutputMode,
+              let transcriptionOptions = activeTranscriptionOptions
+        else {
+            showError("Recording could not be finished. Please try again.")
+            return
+        }
+        DebugLog.info("inline stopRecording state=\(state) mode=\(outputMode.rawValue)", context: "KEYBOARD_DIAG")
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
         if !keepAudioBridgeAliveAfterStop {
             recordingStatus.stop()
         } else {
@@ -2171,129 +2911,340 @@ private final class InlineRecordingCoordinator: ObservableObject {
             frequencyBands = Array(repeating: 0.0, count: 10)
         }
 
-        Task {
-            guard let audioURL = await audioRecorder.stopRecordingAsync(deactivateAudioSession: false) else {
-                DebugLog.info("inline stop returned nil audioURL", context: "KEYBOARD_DIAG")
-                reset(keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop)
-                return
-            }
+        let recorder = audioRecorder
+        let capturedDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
+        let finalizationSeconds = max(
+            minimumFinalizationDeadline,
+            min(maximumFinalizationDeadline, 10 + (capturedDuration * 0.05))
+        )
+        let finalizationDeadlineAt = Date().addingTimeInterval(finalizationSeconds)
+        activeAttemptTask?.cancel()
+        activeAttemptTask = Task { @MainActor in
+            var recorderClosed = false
+            do {
+                try await processingStore.beginFinalization(
+                    activeAttempt,
+                    deadlineAt: finalizationDeadlineAt
+                )
+                if let keyboardAttemptIdentity {
+                    guard KeyboardDictationHandoff.publishHostPhase(
+                        .finalizing,
+                        identity: keyboardAttemptIdentity,
+                        recordingID: activeAttempt.recordingID.uuidString,
+                        deadlineAt: finalizationDeadlineAt
+                    ) else {
+                        throw CancellationError()
+                    }
+                }
 
-            if keepAudioBridgeAliveAfterStop {
-                audioRecorder.startMonitoring()
-                recordingStatus.start()
-            }
+                let partialURL = try await IOSAudioProcessingDeadline.run(
+                    seconds: finalizationSeconds
+                ) {
+                    try await recorder.stopRecording(
+                        attemptID: activeAttempt.attemptID,
+                        deactivateAudioSession: !keepAudioBridgeAliveAfterStop
+                    )
+                }
+                recorderClosed = true
+                guard self.activeAttempt == activeAttempt, !Task.isCancelled else {
+                    throw CancellationError()
+                }
 
-            DebugLog.info("inline stop returned url=\(audioURL.path)", context: "KEYBOARD_DIAG")
-            guard validateRecordingForTranscription(audioURL, recordingStartTime: recordingStartedAt) else {
-                try? FileManager.default.removeItem(at: audioURL)
-                reset(keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop)
-                return
-            }
+                if keepAudioBridgeAliveAfterStop {
+                    audioRecorder.startMonitoring()
+                    recordingStatus.start(identity: keyboardAttemptIdentity)
+                }
 
-            await transcribeAudio(
-                audioURL: audioURL,
-                historyManager: historyManager,
-                dictionaryManager: dictionaryManager,
-                toneStyleManager: toneStyleManager,
-                shortcutManager: shortcutManager,
-                selectedPreset: selectedPreset,
-                keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop,
-                onCompleted: onCompleted
-            )
+                guard partialURL == activeAttempt.sourceURL else {
+                    throw MobileAudioProcessingStore.StoreError.sourceConflict
+                }
+                let proof = try await processingStore.proveFinalizedSource(
+                    activeAttempt,
+                    minimumBytes: minimumAudioFileBytes,
+                    minimumDuration: minimumRecordingDuration
+                )
+                try await processingStore.checkpointFinalizedSourceProof(
+                    activeAttempt,
+                    proof: proof
+                )
+                let finalized = try await processingStore.acceptFinalizedSource(
+                    activeAttempt,
+                    proof: proof
+                )
+                guard self.activeAttempt == activeAttempt, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+
+                if let keyboardAttemptIdentity {
+                    guard KeyboardDictationHandoff.publishHostPhase(
+                        .processing,
+                        identity: keyboardAttemptIdentity,
+                        recordingID: activeAttempt.recordingID.uuidString
+                    ) else {
+                        throw CancellationError()
+                    }
+                }
+
+                await transcribeAudio(
+                    audioURL: finalized.url,
+                    lease: activeAttempt,
+                    duration: finalized.duration,
+                    historyManager: historyManager,
+                    outputMode: outputMode,
+                    transcriptionOptions: transcriptionOptions,
+                    request: request,
+                    keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop,
+                    onCompleted: onCompleted
+                )
+            } catch {
+                if !recorderClosed {
+                    retireAudioRecorderIfCurrent(recorder)
+                }
+                if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
+                    try? await processingStore.markCancelled(activeAttempt)
+                } else {
+                    let integrity: MobileAudioProcessingStore.SourceIntegrity =
+                        recorderClosed
+                            || (error as? MobileAudioProcessingStore.StoreError) == .sourceIncomplete
+                        ? .knownIncomplete
+                        : .unfinalized
+                    try? await processingStore.markFailed(
+                        activeAttempt,
+                        message: userMessage(for: error),
+                        integrity: integrity
+                    )
+                }
+                Task {
+                    await recorder.abandonRecording(
+                        attemptID: activeAttempt.attemptID,
+                        deactivateAudioSession: false
+                    )
+                    try? await processingStore.purgePayloadsIfDeleted(
+                        recordingID: activeAttempt.recordingID
+                    )
+                }
+                guard self.activeAttempt == activeAttempt else { return }
+                let fallbackMessage = error is CancellationError
+                    ? "Processing cancelled."
+                    : userMessage(for: error)
+                if recorderClosed {
+                    await finishTerminalRecording(
+                        lease: activeAttempt,
+                        audioURL: activeAttempt.sourceURL,
+                        duration: capturedDuration,
+                        historyManager: historyManager,
+                        outputMode: outputMode,
+                        transcriptionOptions: transcriptionOptions,
+                        fallbackMessage: fallbackMessage,
+                        keepAudioBridgeAlive: keepAudioBridgeAliveAfterStop,
+                        onCompleted: onCompleted
+                    )
+                    return
+                }
+                if let keyboardAttemptIdentity {
+                    _ = KeyboardDictationHandoff.publishHostFailure(
+                        identity: keyboardAttemptIdentity,
+                        recordingID: activeAttempt.recordingID.uuidString,
+                        userMessage: fallbackMessage
+                    )
+                }
+                self.activeAttempt = nil
+                activeAttemptTask = nil
+                showError(fallbackMessage)
+            }
         }
     }
 
     private func transcribeAudio(
         audioURL: URL,
+        lease: MobileAudioProcessingStore.Lease,
+        duration: TimeInterval,
         historyManager: HistoryManager,
-        dictionaryManager: DictionaryManager,
-        toneStyleManager: ToneStyleManager,
-        shortcutManager: ShortcutManager,
-        selectedPreset: ContextRule?,
+        outputMode: TranscriptionOutputMode,
+        transcriptionOptions: TranscriptionOptions,
+        request: SharedTranscriptionService.RequestSnapshot,
         keepAudioBridgeAlive: Bool = false,
         onCompleted: @escaping (Recording) -> Void
     ) async {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
-            try? FileManager.default.removeItem(at: audioURL)
-            showError(access.reason ?? "Log in to continue transcribing.")
+            let message = access.reason ?? "Log in to continue transcribing."
+            try? await processingStore.markFailed(lease, message: message, integrity: .complete)
+            guard activeAttempt == lease else { return }
+            await finishTerminalRecording(
+                lease: lease,
+                audioURL: audioURL,
+                duration: duration,
+                historyManager: historyManager,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions,
+                fallbackMessage: message,
+                keepAudioBridgeAlive: keepAudioBridgeAlive,
+                onCompleted: onCompleted
+            )
             return
         }
 
         do {
-            let outputMode = recordingOutputMode(for: selectedPreset)
-            let transcriptionOptions = selectedPreset?.transcriptionOptions ?? .default
-            let processedResult = try await SharedTranscriptionService.transcribe(
-                audioURL: audioURL,
-                dictionaryManager: dictionaryManager,
-                toneStyleManager: toneStyleManager,
-                shortcutManager: shortcutManager,
-                outputMode: outputMode,
-                transcriptionOptions: transcriptionOptions,
-                selectedPreset: selectedPreset
+            let deadline = max(90, min(600, (duration * 2) + 60))
+            let recognitionURL = try await processingStore.beginRecognition(
+                lease,
+                deadlineAt: Date().addingTimeInterval(deadline)
+            )
+            let processedResult = try await IOSAudioProcessingDeadline.runOnMainActor(
+                seconds: deadline
+            ) {
+                try await SharedTranscriptionService.transcribe(
+                    audioURL: recognitionURL,
+                    request: request,
+                    onRecognitionCheckpoint: { checkpoint in
+                        try await self.processingStore.checkpointRecognitionPartial(checkpoint, lease: lease)
+                    },
+                    onRawTranscript: { raw in
+                        try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
+                    },
+                    onCleanupStarted: {
+                        try await self.processingStore.cleanupStarted(lease)
+                    }
+                )
+            }
+            guard activeAttempt == lease, !Task.isCancelled else { throw CancellationError() }
+            let durableResult = try await processingStore.checkpointFinalText(
+                processedResult,
+                lease: lease
             )
 
-            guard !processedResult.isEmpty else {
-                DebugLog.info("Inline transcription was empty after sanitization; skipping history item", context: "ContentView")
-                try? FileManager.default.removeItem(at: audioURL)
-                reset(keepAudioBridgeAlive: keepAudioBridgeAlive)
-                return
-            }
-
-            let wordCount = subscriptionManager.wordCount(for: processedResult)
-            await subscriptionManager.recordWords(wordCount)
-
-            let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
-            let recordingID = UUID()
-            let permanentAudioURL = historyManager.saveAudioFile(from: audioURL, for: recordingID)
             let recording = Recording(
-                id: recordingID,
-                transcription: processedResult,
+                id: lease.recordingID,
+                transcription: durableResult,
                 duration: duration,
-                audioFileURL: permanentAudioURL,
+                audioFileURL: audioURL,
                 outputMode: outputMode,
                 transcriptionOptions: transcriptionOptions
             )
 
-            try? FileManager.default.removeItem(at: audioURL)
+            try await processingStore.markSucceeded(lease)
+            guard activeAttempt == lease, !Task.isCancelled else { return }
+            let keyboardDeliverySucceeded: Bool
+            if let keyboardAttemptIdentity {
+                keyboardDeliverySucceeded = KeyboardDictationHandoff.publishHostResult(
+                    text: durableResult,
+                    identity: keyboardAttemptIdentity,
+                    recordingID: lease.recordingID.uuidString
+                )
+            } else {
+                keyboardDeliverySucceeded = true
+            }
+            replaceHistoryRecording(recording, in: historyManager)
 
             withAnimation(.spring(response: 0.42, dampingFraction: 0.92)) {
-                historyManager.addRecording(recording)
-                reset(keepAudioBridgeAlive: keepAudioBridgeAlive)
+                activeAttempt = nil
+                activeAttemptTask = nil
+                reset(keepAudioBridgeAlive: false)
             }
 
             onCompleted(recording)
+            if !keyboardDeliverySucceeded {
+                showError("Your transcription was saved in History, but it could not be sent to the keyboard.")
+            }
+            // Completion is already durable and the UI is idle; keep usage
+            // accounting structured so app suspension cannot silently drop it.
+            await MobileAudioUsageAccounting.flush(
+                recordingID: lease.recordingID,
+                store: processingStore,
+                subscriptionManager: subscriptionManager
+            )
         } catch {
-            try? FileManager.default.removeItem(at: audioURL)
-            showError("Transcription failed. Please try again.")
+            if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
+                try? await processingStore.markCancelled(lease)
+            } else {
+                try? await processingStore.markFailed(
+                    lease,
+                    message: userMessage(for: error),
+                    integrity: .complete
+                )
+            }
+            guard activeAttempt == lease else { return }
+            await finishTerminalRecording(
+                lease: lease,
+                audioURL: audioURL,
+                duration: duration,
+                historyManager: historyManager,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions,
+                fallbackMessage: error is CancellationError
+                    ? "Processing cancelled."
+                    : userMessage(for: error),
+                keepAudioBridgeAlive: keepAudioBridgeAlive,
+                onCompleted: onCompleted
+            )
         }
     }
 
-    private func validateRecordingForTranscription(_ audioURL: URL, recordingStartTime: Date?) -> Bool {
-        let elapsed = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-
-        let fileSize: Int64
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
-            fileSize = attributes[.size] as? Int64 ?? 0
-        } catch {
-            DebugLog.info("Failed to verify inline recording file: \(error)", context: "ContentView")
-            return false
+    private func finishTerminalRecording(
+        lease: MobileAudioProcessingStore.Lease,
+        audioURL: URL,
+        duration: TimeInterval,
+        historyManager: HistoryManager,
+        outputMode: TranscriptionOutputMode,
+        transcriptionOptions: TranscriptionOptions,
+        fallbackMessage: String,
+        keepAudioBridgeAlive: Bool,
+        onCompleted: @escaping (Recording) -> Void
+    ) async {
+        let snapshot = try? await processingStore.snapshot(recordingID: lease.recordingID)
+        let recoveredText = try? await processingStore.recognizedText(for: lease.recordingID)
+        let succeeded = snapshot?.stage == .succeeded
+        let message = snapshot?.userMessage ?? fallbackMessage
+        let recording = Recording(
+            id: lease.recordingID,
+            transcription: recoveredText ?? "",
+            duration: snapshot?.duration ?? duration,
+            audioFileURL: snapshot?.sourceURL ?? audioURL,
+            outputMode: outputMode,
+            transcriptionOptions: transcriptionOptions
+        )
+        replaceHistoryRecording(recording, in: historyManager)
+        var keyboardDeliverySucceeded = true
+        if let keyboardAttemptIdentity {
+            if succeeded, let recoveredText, !recoveredText.isEmpty {
+                keyboardDeliverySucceeded = KeyboardDictationHandoff.publishHostResult(
+                    text: recoveredText,
+                    identity: keyboardAttemptIdentity,
+                    recordingID: lease.recordingID.uuidString
+                )
+            } else {
+                keyboardDeliverySucceeded = KeyboardDictationHandoff.publishHostFailure(
+                    identity: keyboardAttemptIdentity,
+                    recordingID: lease.recordingID.uuidString,
+                    userMessage: message
+                )
+            }
         }
 
-        let audioDuration = audioFileDuration(audioURL)
-        DebugLog.info("inline recording validation elapsed=\(String(format: "%.2f", elapsed)) duration=\(audioDuration.map { String(format: "%.2f", $0) } ?? "nil") fileSize=\(fileSize)", context: "KEYBOARD_DIAG")
-        if elapsed < minimumRecordingDuration || (audioDuration ?? elapsed) < minimumRecordingDuration {
-            DebugLog.info("Inline recording too short; skipping transcription", context: "ContentView")
-            return false
+        activeAttempt = nil
+        activeAttemptTask = nil
+        if succeeded {
+            reset(keepAudioBridgeAlive: false)
+            onCompleted(recording)
+            if !keyboardDeliverySucceeded {
+                showError("Your transcription was saved in History, but it could not be sent to the keyboard.")
+            }
+            await MobileAudioUsageAccounting.flush(
+                recordingID: lease.recordingID,
+                store: processingStore,
+                subscriptionManager: subscriptionManager
+            )
+        } else {
+            showError(message)
         }
+    }
 
-        if fileSize < minimumAudioFileBytes {
-            DebugLog.info("Inline recording has no audio payload; skipping transcription", context: "ContentView")
-            return false
+    private func replaceHistoryRecording(_ recording: Recording, in historyManager: HistoryManager) {
+        if let existing = historyManager.recordings.first(where: { $0.id == recording.id }) {
+            historyManager.deleteRecording(existing)
         }
-
-        return true
+        historyManager.addRecording(recording)
     }
 
     private func recordingOutputMode(for preset: ContextRule?) -> TranscriptionOutputMode {
@@ -2306,39 +3257,17 @@ private final class InlineRecordingCoordinator: ObservableObject {
         return .dictation
     }
 
-    private func audioFileDuration(_ audioURL: URL) -> TimeInterval? {
-        do {
-            let file = try AVAudioFile(forReading: audioURL)
-            let sampleRate = file.processingFormat.sampleRate
-            guard sampleRate > 0 else { return nil }
-            return Double(file.length) / sampleRate
-        } catch {
-            DebugLog.info("Failed to read inline recording duration: \(error)", context: "ContentView")
-            return nil
-        }
-    }
-
     private func updateRecordingState(_ isRecording: Bool) {
-        if state == .processing || state == .paused || state == .completing {
-            return
-        }
-
-        if isRecording {
-            recorderHasStarted = true
-            return
-        }
-
-        if state == .recording, !isRecording {
-            guard recorderHasStarted else {
-                return
-            }
-            reset()
-        }
+        // Durable attempt tasks own the state machine. A native publication is deliberately not
+        // allowed to revive or reset an attempt after its deadline/cancellation won.
+        guard activeAttempt != nil, isRecording, state == .recording else { return }
     }
 
     private func reset(keepAudioBridgeAlive: Bool = false) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
         if keepAudioBridgeAlive {
-            recordingStatus.start()
+            recordingStatus.start(identity: keyboardAttemptIdentity)
         } else {
             recordingStatus.stop()
             #if os(iOS)
@@ -2346,7 +3275,10 @@ private final class InlineRecordingCoordinator: ObservableObject {
             #endif
         }
         recordingStartTime = nil
-        recorderHasStarted = false
+        activeTranscriptionRequest = nil
+        activeOutputMode = nil
+        activeTranscriptionOptions = nil
+        stopRequestedWhilePreparing = false
         state = .idle
         audioLevel = 0
         frequencyBands = Array(repeating: 0.0, count: 10)
@@ -2354,15 +3286,52 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     private func showError(_ message: String) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
         recordingStatus.stop()
+        audioRecorder.stopMonitoring()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
             state = .idle
             errorMessage = message
             completionText = nil
-            recorderHasStarted = false
+            stopRequestedWhilePreparing = false
+            recordingStartTime = nil
+            activeTranscriptionRequest = nil
+            activeOutputMode = nil
+            activeTranscriptionOptions = nil
             audioLevel = 0
             frequencyBands = Array(repeating: 0.0, count: 10)
         }
+    }
+
+    private func userMessage(for error: Error) -> String {
+        if let deadlineError = error as? IOSAudioProcessingDeadlineError {
+            return deadlineError.localizedDescription
+        }
+        if let recorderError = error as? ManagedAudioRecordingError {
+            return recorderError.localizedDescription
+        }
+        if let storeError = error as? MobileAudioProcessingStore.StoreError {
+            return storeError.localizedDescription
+        }
+        if let openAIError = error as? OpenAIError {
+            return openAIError.localizedDescription
+        }
+        if let httpFailure = error as? AppleAudioHTTPRecovery.Failure {
+            return httpFailure.localizedDescription
+        }
+        return "Transcription failed. Your recording was kept. Please try again."
+    }
+
+    private func publishKeyboardStartFailure(
+        identity: KeyboardDictationHandoff.AttemptIdentity?,
+        message: String
+    ) {
+        guard let identity else { return }
+        _ = KeyboardDictationHandoff.publishHostFailure(
+            identity: identity,
+            userMessage: message
+        )
     }
 }
 

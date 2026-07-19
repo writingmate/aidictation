@@ -4,6 +4,14 @@ import SwiftUI
 import WidgetKit
 import WhisperMateShared
 
+private enum KeyboardDictationIntentError: LocalizedError {
+    case storageUnavailable
+
+    var errorDescription: String? {
+        "Couldn't update this recording. Open AI Dictation and try again."
+    }
+}
+
 @available(iOSApplicationExtension 17.0, *)
 struct KeyboardDictationLiveActivity: Widget {
     var body: some WidgetConfiguration {
@@ -53,7 +61,7 @@ private struct KeyboardDictationLiveActivityView: View {
                     .lineLimit(1)
 
                 if isProcessing {
-                    Text("Keeping microphone ready")
+                    Text("Transcribing your recording")
                         .font(.system(size: compact ? 11 : 13, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -67,17 +75,42 @@ private struct KeyboardDictationLiveActivityView: View {
 
             Spacer(minLength: 8)
 
-            Button(intent: StopKeyboardDictationIntent(sessionID: context.attributes.sessionID)) {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: compact ? 28 : 34, height: compact ? 28 : 34)
-                    .background(Circle().fill(Color.red))
+            if isProcessing {
+                Button(
+                    intent: CancelKeyboardDictationIntent(
+                        sessionID: context.attributes.sessionID,
+                        attemptID: context.attributes.attemptID,
+                        generation: Int(clamping: context.attributes.generation)
+                    )
+                ) {
+                    stopButtonImage
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel transcription")
+            } else {
+                Button(
+                    intent: StopKeyboardDictationIntent(
+                        sessionID: context.attributes.sessionID,
+                        attemptID: context.attributes.attemptID,
+                        generation: Int(clamping: context.attributes.generation)
+                    )
+                ) {
+                    stopButtonImage
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Finish recording")
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, compact ? 0 : 14)
         .padding(.vertical, compact ? 0 : 12)
+    }
+
+    private var stopButtonImage: some View {
+        Image(systemName: "stop.fill")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: compact ? 28 : 34, height: compact ? 28 : 34)
+            .background(Circle().fill(Color.red))
     }
 }
 
@@ -89,17 +122,103 @@ struct StopKeyboardDictationIntent: LiveActivityIntent {
     @Parameter(title: "Session")
     var sessionID: String
 
+    @Parameter(title: "Attempt")
+    var attemptID: String
+
+    @Parameter(title: "Generation")
+    var generation: Int
+
     init() {
         sessionID = ""
+        attemptID = ""
+        generation = 0
     }
 
-    init(sessionID: String) {
+    init(sessionID: String, attemptID: String, generation: Int) {
         self.sessionID = sessionID
+        self.attemptID = attemptID
+        self.generation = generation
     }
 
     func perform() async throws -> some IntentResult {
-        KeyboardDictationHandoff.publish(command: .stop, sessionID: sessionID.isEmpty ? nil : sessionID)
-        KeyboardDictationHandoff.appendDiagnostic("live activity requested stop sessionID=\(sessionID)")
+        if !sessionID.isEmpty, !attemptID.isEmpty, generation > 0 {
+            let identity = KeyboardDictationHandoff.AttemptIdentity(
+                sessionID: sessionID,
+                attemptID: attemptID,
+                generation: UInt64(generation)
+            )
+            let accepted = KeyboardDictationHandoff.publish(command: .stop, identity: identity)
+            if !accepted {
+                let phase = KeyboardDictationHandoff.snapshot(for: identity)?.phase
+                guard phase == .processing || phase?.isTerminal == true else {
+                    throw KeyboardDictationIntentError.storageUnavailable
+                }
+            }
+            KeyboardDictationHandoff.appendDiagnostic(
+                "live activity requested stop sessionID=\(sessionID) attemptID=\(attemptID) generation=\(generation)"
+            )
+        } else {
+            // An activity created by an older build carries only a session ID. The compatibility
+            // path still rejects it when that session is no longer current.
+            guard !sessionID.isEmpty else { return .result() }
+            guard KeyboardDictationHandoff.publish(command: .stop, sessionID: sessionID) else {
+                throw KeyboardDictationIntentError.storageUnavailable
+            }
+            KeyboardDictationHandoff.appendDiagnostic("legacy live activity requested stop sessionID=\(sessionID)")
+        }
+        return .result()
+    }
+}
+
+@available(iOSApplicationExtension 17.0, *)
+struct CancelKeyboardDictationIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Cancel Transcription"
+    static var description = IntentDescription("Stops transcription. Your recording stays saved in the app.")
+
+    @Parameter(title: "Session")
+    var sessionID: String
+
+    @Parameter(title: "Attempt")
+    var attemptID: String
+
+    @Parameter(title: "Generation")
+    var generation: Int
+
+    init() {
+        sessionID = ""
+        attemptID = ""
+        generation = 0
+    }
+
+    init(sessionID: String, attemptID: String, generation: Int) {
+        self.sessionID = sessionID
+        self.attemptID = attemptID
+        self.generation = generation
+    }
+
+    func perform() async throws -> some IntentResult {
+        if !sessionID.isEmpty, !attemptID.isEmpty, generation > 0 {
+            let identity = KeyboardDictationHandoff.AttemptIdentity(
+                sessionID: sessionID,
+                attemptID: attemptID,
+                generation: UInt64(generation)
+            )
+            let accepted = KeyboardDictationHandoff.publish(command: .cancel, identity: identity)
+            if !accepted,
+               KeyboardDictationHandoff.snapshot(for: identity)?.phase.isTerminal != true
+            {
+                throw KeyboardDictationIntentError.storageUnavailable
+            }
+            KeyboardDictationHandoff.appendDiagnostic(
+                "live activity requested cancel sessionID=\(sessionID) attemptID=\(attemptID) generation=\(generation)"
+            )
+        } else {
+            guard !sessionID.isEmpty else { return .result() }
+            guard KeyboardDictationHandoff.publish(command: .cancel, sessionID: sessionID) else {
+                throw KeyboardDictationIntentError.storageUnavailable
+            }
+            KeyboardDictationHandoff.appendDiagnostic("legacy live activity requested cancel sessionID=\(sessionID)")
+        }
         return .result()
     }
 }

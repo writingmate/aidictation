@@ -7,25 +7,71 @@ public import Combine
     import UIKit
 #endif
 
-public class AudioRecorder: NSObject, ObservableObject {
+public enum ManagedAudioRecordingError: LocalizedError, Equatable, Sendable {
+    case alreadyActive
+    case staleAttempt
+    case audioSessionUnavailable
+    case recorderUnavailable
+    case writeFailed
+    case noAudioWritten
+    case interrupted
+    case audioServicesReset
+    case cancelled
+
+    public var errorDescription: String? {
+        switch self {
+        case .alreadyActive:
+            return "Another recording is already active."
+        case .staleAttempt:
+            return "This recording attempt is no longer active."
+        case .audioSessionUnavailable, .recorderUnavailable:
+            return "Recording could not start. Please try again."
+        case .writeFailed, .noAudioWritten:
+            return "The recording was not complete, so it was not sent."
+        case .interrupted:
+            return "Recording was interrupted, so it was not sent."
+        case .audioServicesReset:
+            return "Audio became unavailable, so the recording was not sent."
+        case .cancelled:
+            return "Recording cancelled."
+        }
+    }
+}
+
+public struct ManagedAudioRecordingFailure: Equatable, Sendable {
+    public let attemptID: UUID
+    public let error: ManagedAudioRecordingError
+}
+
+public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate, @unchecked Sendable {
     private static let frequencyBandCount = 10
     private static let recordingQueueKey = DispatchSpecificKey<Void>()
+    #if os(iOS)
+        private static let audioSessionOwnership = IOSExclusiveResourceOwnership<AudioRecorder>()
+    #endif
 
     @Published public var isRecording = false
     @Published public var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published public var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount)
+    @Published public private(set) var managedAttemptFailure: ManagedAudioRecordingFailure?
 
     private var audioRecorder: AVAudioRecorder?
     private var audioEngine: AVAudioEngine?
-    private var audioFile: AVAudioFile?
-    private var outputFormat: AVAudioFormat?
     private var recordingURL: URL?
     private var isMonitoringOnly = false
-    private var levelTimer: Timer?
+    private var levelTimer: DispatchSourceTimer?
     private lazy var frequencyAnalyzer = SharedFrequencyAnalyzer()
     private let recordingQueue = DispatchQueue(label: "com.whispermate.audio-recorder", qos: .userInitiated)
+    private var activeAttemptID: UUID?
+    private var managedStartContinuation: CheckedContinuation<URL, Error>?
+    private var managedDidWriteAudio = false
+    private var managedWriteFailed = false
+    private var recorderReadinessProbe: DispatchSourceTimer?
+    private var managedCaptureGeneration: UInt64 = 0
+    private var activeManagedCaptureGeneration: UInt64?
     #if os(iOS)
         private var isAudioSessionConfigured = false
+        private var managedAudioSessionObserverTokens: [NSObjectProtocol] = []
     #endif
 
     // App Group identifier for sharing data between app and keyboard extension
@@ -40,9 +86,11 @@ public class AudioRecorder: NSObject, ObservableObject {
         @discardableResult
         private func configureAudioSession() -> Bool {
             do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playAndRecord, mode: .measurement, options: [.allowBluetooth])
-                try session.setActive(true)
+                try Self.audioSessionOwnership.claim(self) {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.playAndRecord, mode: .measurement, options: [.allowBluetoothHFP])
+                    try session.setActive(true)
+                }
                 isAudioSessionConfigured = true
                 DebugLog.info("Audio session configured for iOS category=playAndRecord mode=measurement", context: "AudioRecorder")
                 return true
@@ -56,27 +104,157 @@ public class AudioRecorder: NSObject, ObservableObject {
             guard isAudioSessionConfigured else { return }
 
             do {
-                try AVAudioSession.sharedInstance().setActive(false)
+                _ = try Self.audioSessionOwnership.relinquish(self) {
+                    try AVAudioSession.sharedInstance().setActive(false)
+                }
                 isAudioSessionConfigured = false
             } catch {
                 DebugLog.info("Failed to deactivate audio session: \(error)", context: "AudioRecorder LOG")
             }
         }
+
+        private func installManagedAudioSessionObserversOnQueue(
+            attemptID: UUID,
+            generation: UInt64,
+            recorder: AVAudioRecorder
+        ) {
+            removeManagedAudioSessionObserversOnQueue()
+
+            let recorderID = ObjectIdentifier(recorder)
+            let notificationCenter = NotificationCenter.default
+            let interruptionObserver = notificationCenter.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] notification in
+                guard let rawType = (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue,
+                      AVAudioSession.InterruptionType(rawValue: rawType) == .began
+                else { return }
+
+                self?.recordingQueue.async { [weak self] in
+                    self?.terminallyFailManagedCaptureOnQueue(
+                        attemptID: attemptID,
+                        generation: generation,
+                        recorderID: recorderID,
+                        error: .interrupted,
+                        reason: "Audio session interruption began"
+                    )
+                }
+            }
+            let mediaServicesResetObserver = notificationCenter.addObserver(
+                forName: AVAudioSession.mediaServicesWereResetNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                self?.recordingQueue.async { [weak self] in
+                    self?.terminallyFailManagedCaptureOnQueue(
+                        attemptID: attemptID,
+                        generation: generation,
+                        recorderID: recorderID,
+                        error: .audioServicesReset,
+                        reason: "Audio services were reset"
+                    )
+                }
+            }
+            managedAudioSessionObserverTokens = [
+                interruptionObserver,
+                mediaServicesResetObserver,
+            ]
+        }
+
+        private func removeManagedAudioSessionObserversOnQueue() {
+            let notificationCenter = NotificationCenter.default
+            for token in managedAudioSessionObserverTokens {
+                notificationCenter.removeObserver(token)
+            }
+            managedAudioSessionObserverTokens.removeAll()
+        }
     #endif
 
     public func startRecording() {
         recordingQueue.async { [weak self] in
-            self?.startRecordingOnQueue()
+            self?.startRecordingOnQueue(destinationURL: nil, attemptID: nil)
         }
     }
 
-    private func startRecordingOnQueue() {
+    /// Starts a managed capture into a caller-owned durable URL. The call returns only after the
+    /// recorder has successfully written audio for this exact attempt.
+    public func startRecording(at destinationURL: URL, attemptID: UUID) async throws -> URL {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                recordingQueue.async { [weak self] in
+                    guard let self else {
+                        continuation.resume(throwing: ManagedAudioRecordingError.recorderUnavailable)
+                        return
+                    }
+                    guard self.activeAttemptID == nil else {
+                        continuation.resume(throwing: ManagedAudioRecordingError.alreadyActive)
+                        return
+                    }
+
+                    self.activeAttemptID = attemptID
+                    self.managedCaptureGeneration &+= 1
+                    self.activeManagedCaptureGeneration = self.managedCaptureGeneration
+                    self.managedStartContinuation = continuation
+                    self.managedDidWriteAudio = false
+                    self.managedWriteFailed = false
+                    DispatchQueue.main.async {
+                        self.managedAttemptFailure = nil
+                    }
+                    self.startRecordingOnQueue(destinationURL: destinationURL, attemptID: attemptID)
+                }
+            }
+        } onCancel: {
+            self.recordingQueue.async { [weak self] in
+                // A timed-out generation may complete after a replacement recorder has activated
+                // the process-wide audio session. It may close only its private recorder here.
+                self?.cancelManagedAttemptOnQueue(
+                    attemptID: attemptID,
+                    deactivateAudioSession: false
+                )
+            }
+        }
+    }
+
+    /// Abandons only the matching attempt. A late callback from that attempt cannot affect a
+    /// subsequent recording owned by a different attempt ID.
+    public func abandonRecording(attemptID: UUID, deactivateAudioSession: Bool = true) async {
+        await withCheckedContinuation { continuation in
+            recordingQueue.async { [weak self] in
+                if self?.activeAttemptID == attemptID {
+                    self?.cancelManagedAttemptOnQueue(
+                        attemptID: attemptID,
+                        deactivateAudioSession: deactivateAudioSession
+                    )
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    private func startRecordingOnQueue(destinationURL: URL?, attemptID: UUID?) {
         DebugLog.info("startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
 
         // Guard against multiple recording sessions
-        if audioRecorder != nil || audioEngine != nil || audioFile != nil {
-            DebugLog.info("⚠️ Already recording - stopping previous session first", context: "AudioRecorder LOG")
+        if audioRecorder != nil || audioEngine != nil {
+            #if os(iOS)
+                if isMonitoringOnly {
+                    stopMonitoringOnQueue(deactivateAudioSession: false)
+                } else if attemptID != nil {
+                    abortManagedStartOnQueue(.alreadyActive)
+                    return
+                } else {
+                    DebugLog.info("Already recording - stopping previous session first", context: "AudioRecorder LOG")
+                    _ = stopRecordingOnQueue(deactivateAudioSession: false)
+                }
+            #else
+            if attemptID != nil {
+                abortManagedStartOnQueue(.alreadyActive)
+                return
+            }
+            DebugLog.info("Already recording - stopping previous session first", context: "AudioRecorder LOG")
             _ = stopRecordingOnQueue(deactivateAudioSession: false)
+            #endif
         }
         isMonitoringOnly = false
 
@@ -84,11 +262,7 @@ public class AudioRecorder: NSObject, ObservableObject {
 
         #if os(iOS)
             guard configureAudioSession() else {
-                DispatchQueue.main.async {
-                    self.isRecording = false
-                    self.audioLevel = 0.0
-                    self.frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
-                }
+                abortManagedStartOnQueue(.audioSessionUnavailable)
                 return
             }
         #endif
@@ -98,32 +272,34 @@ public class AudioRecorder: NSObject, ObservableObject {
             self.frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
         }
 
-        // Use App Group container on iOS, temp directory on macOS
-        #if os(iOS)
-            let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
-            if let containerURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AudioRecorder.appGroupIdentifier) {
-                recordingURL = containerURL.appendingPathComponent(fileName)
-            } else {
-                #if targetEnvironment(simulator)
-                    DebugLog.info("App Group container unavailable, using simulator temporary directory", context: "AudioRecorder LOG")
-                    recordingURL = fileManager.temporaryDirectory.appendingPathComponent(fileName)
-                #else
-                    DebugLog.info("Failed to get app group container", context: "AudioRecorder LOG")
-                    publishStopped()
-                    return
-                #endif
-            }
-        #else
-            let tempDirectory = fileManager.temporaryDirectory
-            let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
-            recordingURL = tempDirectory.appendingPathComponent(fileName)
-        #endif
+        if let destinationURL {
+            recordingURL = destinationURL
+        } else {
+            // Legacy callers still receive an isolated temporary file.
+            #if os(iOS)
+                let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
+                if let containerURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AudioRecorder.appGroupIdentifier) {
+                    recordingURL = containerURL.appendingPathComponent(fileName)
+                } else {
+                    #if targetEnvironment(simulator)
+                        DebugLog.info("App Group container unavailable, using simulator temporary directory", context: "AudioRecorder LOG")
+                        recordingURL = fileManager.temporaryDirectory.appendingPathComponent(fileName)
+                    #else
+                        DebugLog.info("Failed to get app group container", context: "AudioRecorder LOG")
+                        publishStopped()
+                        return
+                    #endif
+                }
+            #else
+                let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
+                recordingURL = fileManager.temporaryDirectory.appendingPathComponent(fileName)
+            #endif
+        }
 
-        #if os(iOS) && !targetEnvironment(simulator)
-            startEngineRecording()
-        #else
-            startMeteredRecorderRecording()
-        #endif
+        // AVAudioRecorder owns the encoder and closes a valid M4A container synchronously on
+        // stop. The previous engine-tap path asked AVAudioFile to encode AAC directly, which can
+        // fail before the first write and leave an unreadable container.
+        startMeteredRecorderRecording(attemptID: attemptID)
     }
 
     #if os(iOS)
@@ -140,7 +316,7 @@ public class AudioRecorder: NSObject, ObservableObject {
         }
 
         private func startMonitoringOnQueue() {
-            guard audioRecorder == nil, audioEngine == nil, audioFile == nil else {
+            guard audioRecorder == nil, audioEngine == nil else {
                 return
             }
 
@@ -202,103 +378,6 @@ public class AudioRecorder: NSObject, ObservableObject {
             DebugLog.info("stopMonitoring completed", context: "AudioRecorder LOG")
         }
 
-        private func startEngineRecording() {
-            guard let recordingURL else {
-                publishStopped()
-                return
-            }
-
-            let engine = AVAudioEngine()
-            let inputNode = engine.inputNode
-            let bus = 0
-
-            do {
-                audioFile = try AVAudioFile(
-                    forWriting: recordingURL,
-                    settings: [
-                        AVFormatIDKey: kAudioFormatMPEG4AAC,
-                        AVSampleRateKey: 44100.0,
-                        AVNumberOfChannelsKey: 1,
-                        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-                    ],
-                    commonFormat: .pcmFormatFloat32,
-                    interleaved: false
-                )
-
-                outputFormat = audioFile?.processingFormat
-                _ = frequencyAnalyzer
-
-                inputNode.installTap(onBus: bus, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-                    guard let self else { return }
-
-                    let bands = self.frequencyAnalyzer.analyze(buffer: buffer)
-                    let level = self.calculateAudioLevel(from: buffer)
-
-                    DispatchQueue.main.async {
-                        self.frequencyBands = bands
-                        self.audioLevel = level
-                    }
-
-                    self.write(buffer)
-                }
-
-                audioEngine = engine
-                try engine.start()
-
-                DispatchQueue.main.async {
-                    self.isRecording = true
-                }
-
-                DebugLog.info("startRecording success - engine recording started", context: "AudioRecorder LOG")
-            } catch {
-                inputNode.removeTap(onBus: bus)
-                audioEngine?.stop()
-                audioEngine = nil
-                audioFile = nil
-                outputFormat = nil
-                publishStopped()
-                DebugLog.info("Failed to start engine recording: \(error)", context: "AudioRecorder LOG")
-            }
-        }
-
-        private func write(_ buffer: AVAudioPCMBuffer) {
-            guard let audioFile else { return }
-
-            do {
-                guard let outputFormat else {
-                    try audioFile.write(from: buffer)
-                    return
-                }
-
-                let bufferFormat = buffer.format
-                if bufferFormat.sampleRate != outputFormat.sampleRate || bufferFormat.channelCount != outputFormat.channelCount,
-                   let converter = AVAudioConverter(from: bufferFormat, to: outputFormat)
-                {
-                    let ratio = outputFormat.sampleRate / bufferFormat.sampleRate
-                    guard let convertedBuffer = AVAudioPCMBuffer(
-                        pcmFormat: outputFormat,
-                        frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-                    ) else {
-                        return
-                    }
-
-                    var error: NSError?
-                    converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
-                        outStatus.pointee = .haveData
-                        return buffer
-                    }
-
-                    if error == nil {
-                        try audioFile.write(from: convertedBuffer)
-                    }
-                } else {
-                    try audioFile.write(from: buffer)
-                }
-            } catch {
-                DebugLog.info("Failed to write audio buffer: \(error)", context: "AudioRecorder LOG")
-            }
-        }
-
         private func calculateAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {
             guard let channelData = buffer.floatChannelData?[0] else { return 0.0 }
 
@@ -320,8 +399,11 @@ public class AudioRecorder: NSObject, ObservableObject {
         }
     }
 
-    private func startMeteredRecorderRecording() {
-        guard let recordingURL else { return }
+    private func startMeteredRecorderRecording(attemptID: UUID?) {
+        guard let recordingURL else {
+            abortManagedStartOnQueue(.recorderUnavailable)
+            return
+        }
 
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -332,30 +414,50 @@ public class AudioRecorder: NSObject, ObservableObject {
 
         do {
             let recorder = try AVAudioRecorder(url: recordingURL, settings: settings)
+            recorder.delegate = self
             recorder.isMeteringEnabled = true
+            audioRecorder = recorder
+
+            #if os(iOS)
+                if let attemptID,
+                   let generation = activeManagedCaptureGeneration
+                {
+                    installManagedAudioSessionObserversOnQueue(
+                        attemptID: attemptID,
+                        generation: generation,
+                        recorder: recorder
+                    )
+                }
+            #endif
+
             guard recorder.record() else {
                 DebugLog.info("AVAudioRecorder refused to start recording", context: "AudioRecorder LOG")
-                publishStopped()
+                abortManagedStartOnQueue(.recorderUnavailable)
                 return
             }
 
-            audioRecorder = recorder
-
             startMeteringTimer()
 
-            DispatchQueue.main.async {
-                self.isRecording = true
+            if let attemptID {
+                startRecorderReadinessProbe(attemptID: attemptID, url: recordingURL)
+            } else {
+                DispatchQueue.main.async {
+                    self.isRecording = true
+                }
             }
 
             DebugLog.info("startRecording success - isRecording after: \(isRecording)", context: "AudioRecorder LOG")
         } catch {
             DebugLog.info("Failed to start recording: \(error)", context: "AudioRecorder LOG")
+            abortManagedStartOnQueue(.recorderUnavailable)
         }
     }
 
     private func startMeteringTimer() {
-        levelTimer?.invalidate()
-        levelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        levelTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: recordingQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
             guard let self = self, let recorder = self.audioRecorder else { return }
             recorder.updateMeters()
             let normalizedLevel = self.normalizeAudioLevel(recorder.averagePower(forChannel: 0))
@@ -365,6 +467,134 @@ public class AudioRecorder: NSObject, ObservableObject {
                 self.frequencyBands = Self.fallbackBands(for: normalizedLevel)
             }
         }
+        levelTimer = timer
+        timer.resume()
+    }
+
+    private func startRecorderReadinessProbe(attemptID: UUID, url: URL) {
+        recorderReadinessProbe?.cancel()
+        let probe = DispatchSource.makeTimerSource(queue: recordingQueue)
+        probe.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25))
+        probe.setEventHandler { [weak self] in
+            guard let self, self.activeAttemptID == attemptID else {
+                self?.recorderReadinessProbe?.cancel()
+                self?.recorderReadinessProbe = nil
+                return
+            }
+            guard let recorder = self.audioRecorder,
+                  recorder.isRecording,
+                  recorder.currentTime > 0,
+                  let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let bytes = attributes[.size] as? NSNumber,
+                  bytes.int64Value > 0
+            else { return }
+
+            self.managedAudioWasWrittenOnQueue(attemptID: attemptID)
+        }
+        recorderReadinessProbe = probe
+        probe.resume()
+    }
+
+    private func managedAudioWasWrittenOnQueue(attemptID: UUID) {
+        guard activeAttemptID == attemptID, !managedWriteFailed else { return }
+        managedDidWriteAudio = true
+        recorderReadinessProbe?.cancel()
+        recorderReadinessProbe = nil
+
+        guard let continuation = managedStartContinuation,
+              let recordingURL
+        else { return }
+        managedStartContinuation = nil
+        DispatchQueue.main.async {
+            self.isRecording = true
+        }
+        continuation.resume(returning: recordingURL)
+    }
+
+    private func terminallyFailManagedCaptureOnQueue(
+        attemptID: UUID,
+        generation: UInt64,
+        recorderID: ObjectIdentifier,
+        error: ManagedAudioRecordingError = .writeFailed,
+        reason: String
+    ) {
+        guard activeAttemptID == attemptID,
+              activeManagedCaptureGeneration == generation,
+              let recorder = audioRecorder,
+              ObjectIdentifier(recorder) == recorderID
+        else { return }
+
+        DebugLog.info(reason, context: "AudioRecorder LOG")
+        managedWriteFailed = true
+        failManagedStartOnQueue(error)
+        let failure = ManagedAudioRecordingFailure(attemptID: attemptID, error: error)
+
+        // Closing the recorder here is essential: a container containing only the valid prefix
+        // from before an interruption must never remain eligible for finalization/submission.
+        _ = stopRecordingOnQueue(deactivateAudioSession: true)
+        DispatchQueue.main.async {
+            self.managedAttemptFailure = failure
+        }
+    }
+
+    public func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        recordingQueue.async { [weak self, weak recorder] in
+            guard let self, let recorder, self.audioRecorder === recorder,
+                  let attemptID = self.activeAttemptID
+            else { return }
+            DebugLog.info(
+                "Recorder reported an encoding error: \(error?.localizedDescription ?? "unknown error")",
+                context: "AudioRecorder LOG"
+            )
+            guard let generation = self.activeManagedCaptureGeneration else { return }
+            self.terminallyFailManagedCaptureOnQueue(
+                attemptID: attemptID,
+                generation: generation,
+                recorderID: ObjectIdentifier(recorder),
+                reason: "Recorder reported an encoding error"
+            )
+        }
+    }
+
+    public func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        recordingQueue.async { [weak self, weak recorder] in
+            guard let self, let recorder, self.audioRecorder === recorder,
+                  let attemptID = self.activeAttemptID
+            else { return }
+            DebugLog.info(
+                flag ? "Recorder stopped before finalization." : "Recorder stopped unsuccessfully.",
+                context: "AudioRecorder LOG"
+            )
+            guard let generation = self.activeManagedCaptureGeneration else { return }
+            self.terminallyFailManagedCaptureOnQueue(
+                attemptID: attemptID,
+                generation: generation,
+                recorderID: ObjectIdentifier(recorder),
+                reason: flag
+                    ? "Recorder stopped before requested finalization"
+                    : "Recorder stopped unsuccessfully"
+            )
+        }
+    }
+
+    private func failManagedStartOnQueue(_ error: ManagedAudioRecordingError) {
+        guard let continuation = managedStartContinuation else { return }
+        managedStartContinuation = nil
+        continuation.resume(throwing: error)
+    }
+
+    private func abortManagedStartOnQueue(_ error: ManagedAudioRecordingError) {
+        failManagedStartOnQueue(error)
+        _ = stopRecordingOnQueue(deactivateAudioSession: true)
+    }
+
+    private func cancelManagedAttemptOnQueue(
+        attemptID: UUID,
+        deactivateAudioSession: Bool = true
+    ) {
+        guard activeAttemptID == attemptID else { return }
+        failManagedStartOnQueue(.cancelled)
+        _ = stopRecordingOnQueue(deactivateAudioSession: deactivateAudioSession)
     }
 
     private func normalizeAudioLevel(_ power: Float) -> Float {
@@ -394,14 +624,22 @@ public class AudioRecorder: NSObject, ObservableObject {
     public func pauseRecording() {
         #if os(iOS)
             recordingQueue.async { [weak self] in
-                guard let self, self.audioEngine?.isRunning == true else { return }
-                self.audioEngine?.pause()
+                guard let self else { return }
+                if self.audioRecorder?.isRecording == true {
+                    self.audioRecorder?.pause()
+                    self.levelTimer?.cancel()
+                    self.levelTimer = nil
+                } else if self.audioEngine?.isRunning == true {
+                    self.audioEngine?.pause()
+                } else {
+                    return
+                }
                 DebugLog.info("Recording paused", context: "AudioRecorder LOG")
             }
         #else
             guard isRecording else { return }
             audioRecorder?.pause()
-            levelTimer?.invalidate()
+            levelTimer?.cancel()
             levelTimer = nil
 
             DebugLog.info("Recording paused", context: "AudioRecorder LOG")
@@ -411,13 +649,33 @@ public class AudioRecorder: NSObject, ObservableObject {
     public func resumeRecording() {
         #if os(iOS)
             recordingQueue.async { [weak self] in
-                guard let self, let audioEngine = self.audioEngine else { return }
-                guard !audioEngine.isRunning else { return }
-
-                do {
-                    try audioEngine.start()
-                } catch {
-                    DebugLog.info("Failed to resume engine recording: \(error)", context: "AudioRecorder LOG")
+                guard let self else { return }
+                if let recorder = self.audioRecorder, !recorder.isRecording {
+                    guard recorder.record() else {
+                        if let attemptID = self.activeAttemptID,
+                           let generation = self.activeManagedCaptureGeneration
+                        {
+                            self.terminallyFailManagedCaptureOnQueue(
+                                attemptID: attemptID,
+                                generation: generation,
+                                recorderID: ObjectIdentifier(recorder),
+                                reason: "Recorder could not resume"
+                            )
+                        } else {
+                            self.publishStopped()
+                        }
+                        return
+                    }
+                    self.startMeteringTimer()
+                } else if let audioEngine = self.audioEngine, !audioEngine.isRunning {
+                    do {
+                        try audioEngine.start()
+                    } catch {
+                        DebugLog.info("Failed to resume audio monitoring: \(error)", context: "AudioRecorder LOG")
+                        return
+                    }
+                } else {
+                    return
                 }
 
                 DebugLog.info("Recording resumed", context: "AudioRecorder LOG")
@@ -450,6 +708,40 @@ public class AudioRecorder: NSObject, ObservableObject {
         }
     }
 
+    /// Finalizes only the matching managed capture. The URL is returned only when at least one
+    /// audio write succeeded and no later write failed.
+    public func stopRecording(
+        attemptID: UUID,
+        deactivateAudioSession: Bool = true
+    ) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            recordingQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: ManagedAudioRecordingError.recorderUnavailable)
+                    return
+                }
+                guard self.activeAttemptID == attemptID else {
+                    continuation.resume(throwing: ManagedAudioRecordingError.staleAttempt)
+                    return
+                }
+
+                let didWrite = self.managedDidWriteAudio
+                let writeFailed = self.managedWriteFailed
+                guard let url = self.stopRecordingOnQueue(deactivateAudioSession: deactivateAudioSession) else {
+                    continuation.resume(throwing: ManagedAudioRecordingError.recorderUnavailable)
+                    return
+                }
+                if writeFailed {
+                    continuation.resume(throwing: ManagedAudioRecordingError.writeFailed)
+                } else if !didWrite {
+                    continuation.resume(throwing: ManagedAudioRecordingError.noAudioWritten)
+                } else {
+                    continuation.resume(returning: url)
+                }
+            }
+        }
+    }
+
     private func stopRecordingOnQueue(deactivateAudioSession: Bool = true) -> URL? {
         DebugLog.info("stopRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
         let completedRecordingURL = recordingURL
@@ -458,9 +750,16 @@ public class AudioRecorder: NSObject, ObservableObject {
         isMonitoringOnly = false
 
         // Stop timer
-        levelTimer?.invalidate()
+        levelTimer?.cancel()
         levelTimer = nil
+        recorderReadinessProbe?.cancel()
+        recorderReadinessProbe = nil
 
+        #if os(iOS)
+            removeManagedAudioSessionObserversOnQueue()
+        #endif
+
+        audioRecorder?.delegate = nil
         audioRecorder?.stop()
         audioRecorder = nil
 
@@ -469,8 +768,11 @@ public class AudioRecorder: NSObject, ObservableObject {
             engine.stop()
         }
         audioEngine = nil
-        audioFile = nil
-        outputFormat = nil
+        activeAttemptID = nil
+        activeManagedCaptureGeneration = nil
+        failManagedStartOnQueue(.cancelled)
+        managedDidWriteAudio = false
+        managedWriteFailed = false
 
         #if os(iOS)
             if deactivateAudioSession {
@@ -491,16 +793,19 @@ public class AudioRecorder: NSObject, ObservableObject {
         if audioRecorder?.isRecording == true {
             audioRecorder?.stop()
         }
-        levelTimer?.invalidate()
+        levelTimer?.cancel()
         levelTimer = nil
+        recorderReadinessProbe?.cancel()
+        recorderReadinessProbe = nil
+        #if os(iOS)
+            removeManagedAudioSessionObserversOnQueue()
+        #endif
         audioRecorder = nil
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
         audioEngine = nil
-        audioFile = nil
-        outputFormat = nil
         #if os(iOS)
             deactivateSession()
         #endif

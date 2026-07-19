@@ -5,7 +5,7 @@ import WhisperMateShared
 
 struct RecordingSheetView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var audioRecorder = AudioRecorder()
+    @StateObject private var audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
     @StateObject private var recordingViewModel = AIDictationRecordingViewModel()
     @ObservedObject var historyManager: HistoryManager
     @ObservedObject var dictionaryManager: DictionaryManager
@@ -25,7 +25,17 @@ struct RecordingSheetView: View {
     @State private var isPlaying = false
     @State private var selectedOutputMode: TranscriptionOutputMode = .dictation
     @State private var activeOutputMode: TranscriptionOutputMode?
+    @State private var activeTranscriptionOptions: TranscriptionOptions?
+    @State private var activeTranscriptionRequest: SharedTranscriptionService.RequestSnapshot?
     @State private var showCloudTranscriptionConsent = false
+    @State private var activeAttempt: MobileAudioProcessingStore.Lease?
+    @State private var activeAttemptTask: Task<Void, Never>?
+    @State private var captureDeadlineTask: Task<Void, Never>?
+    @State private var currentRecoverySnapshot: MobileAudioProcessingStore.Snapshot?
+    @State private var cancellationReconciliationStarted = false
+
+    private let processingStore = MobileAudioProcessingStore.shared
+    private var audioRecorder: AudioRecorder { audioRecorderSlot.current }
 
     private var selectedPreset: ContextRule? {
         recordingPreset(for: selectedOutputMode, manager: toneStyleManager)
@@ -33,6 +43,10 @@ struct RecordingSheetView: View {
 
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let minimumAudioFileBytes: Int64 = 1000
+    private let recordingStartDeadline: TimeInterval = 5
+    private let minimumFinalizationDeadline: TimeInterval = 15
+    private let maximumFinalizationDeadline: TimeInterval = 120
+    private let maximumRecordingDuration: TimeInterval = 4 * 60 * 60
 
     enum SheetState {
         case idle
@@ -70,10 +84,18 @@ struct RecordingSheetView: View {
         .onAppear {
             updateRecordingSurface(animated: false)
             prepareSelectedModeIfNeeded()
+            if let recording = currentRecording {
+                Task { @MainActor in
+                    await refreshRecoveryState(recordingID: recording.id)
+                }
+            }
         }
         .onChange(of: selectedOutputMode) { _ in
             errorMessage = ""
             prepareSelectedModeIfNeeded()
+        }
+        .onDisappear {
+            cancelActiveAttemptOnDisappear()
         }
         .onReceive(audioRecorder.$isRecording.dropFirst()) { isRecording in
             updateRecordingState(isRecording)
@@ -83,6 +105,9 @@ struct RecordingSheetView: View {
         }
         .onReceive(audioRecorder.$frequencyBands) { bands in
             updateFrequencyBands(bands)
+        }
+        .onReceive(audioRecorder.$managedAttemptFailure.compactMap { $0 }) { failure in
+            handleCaptureFailure(failure)
         }
         .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCloudTranscriptionConsent) {
             Button("Allow Cloud Transcription") {
@@ -279,7 +304,18 @@ struct RecordingSheetView: View {
             }
 
             // Bottom toolbar
-            VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                if currentRecording != nil, currentRecordingCanRetry {
+                    Button(action: retryCurrentRecording) {
+                        Label("Try Again", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.dsPrimary)
+                    .controlSize(.large)
+                    .padding(.horizontal, 20)
+                }
+
                 Button(action: shareTranscription) {
                     Label("Share", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
@@ -288,8 +324,9 @@ struct RecordingSheetView: View {
                 .tint(Color.dsPrimary)
                 .controlSize(.large)
                 .padding(.horizontal, 20)
-                .padding(.top, 16)
+                .disabled(transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .padding(.bottom, 20)
+                .padding(.top, 16)
             }
             .background(Color.white)
         }
@@ -312,14 +349,99 @@ struct RecordingSheetView: View {
         }
     }
 
-    private func handleCancel() {
-        if sheetState == .recording || sheetState == .paused {
-            let recorder = audioRecorder
-            Task {
-                _ = await recorder.stopRecordingAsync(deactivateAudioSession: true)
+    private var currentRecordingCanRetry: Bool {
+        guard let snapshot = currentRecoverySnapshot,
+              snapshot.sourceIntegrity == .complete
+        else { return false }
+        return snapshot.stage == .failed || snapshot.stage == .cancelled
+    }
+
+    @MainActor
+    private func refreshRecoveryState(recordingID: UUID) async {
+        do {
+            let snapshot = try await processingStore.snapshot(recordingID: recordingID)
+            guard currentRecording?.id == recordingID else { return }
+            currentRecoverySnapshot = snapshot
+            if snapshot?.stage == .failed || snapshot?.stage == .cancelled {
+                errorMessage = snapshot?.userMessage ?? "Processing did not finish. Your recording was kept."
+            }
+        } catch {
+            guard currentRecording?.id == recordingID else { return }
+            errorMessage = "This saved recording could not be checked. Restart the app and try again."
+        }
+    }
+
+    private func retryCurrentRecording() {
+        guard let recording = currentRecording,
+              currentRecoverySnapshot?.recordingID == recording.id,
+              currentRecordingCanRetry
+        else { return }
+
+        let access = subscriptionManager.checkCanTranscribe()
+        guard access.canTranscribe else {
+            errorMessage = access.reason ?? "Log in to continue transcribing."
+            return
+        }
+
+        let preset = recordingPreset(for: recording.outputMode, manager: toneStyleManager)
+        let options = recording.transcriptionOptions
+        let request: SharedTranscriptionService.RequestSnapshot
+        do {
+            request = try SharedTranscriptionService.RequestSnapshot.capture(
+                dictionaryManager: dictionaryManager,
+                toneStyleManager: toneStyleManager,
+                shortcutManager: shortcutManager,
+                outputMode: recording.outputMode,
+                transcriptionOptions: options,
+                selectedPreset: preset
+            )
+        } catch {
+            errorMessage = userMessage(for: error)
+            return
+        }
+
+        let duration = recording.duration ?? 0
+        let deadline = max(90, min(600, (duration * 2) + 60))
+        activeOutputMode = recording.outputMode
+        activeTranscriptionOptions = options
+        activeTranscriptionRequest = request
+        sheetState = .processing
+        errorMessage = ""
+        updateRecordingSurface(animated: true)
+
+        activeAttemptTask?.cancel()
+        activeAttemptTask = Task { @MainActor in
+            do {
+                let lease = try await processingStore.beginRetry(
+                    recordingID: recording.id,
+                    attemptID: UUID(),
+                    deadlineAt: Date().addingTimeInterval(deadline)
+                )
+                activeAttempt = lease
+                guard !Task.isCancelled else { throw CancellationError() }
+                await transcribeAudio(
+                    audioURL: lease.sourceURL,
+                    lease: lease,
+                    duration: duration,
+                    outputMode: recording.outputMode,
+                    transcriptionOptions: options,
+                    request: request
+                )
+            } catch {
+                guard activeAttempt == nil else { return }
+                activeAttemptTask = nil
+                activeOutputMode = nil
+                activeTranscriptionOptions = nil
+                activeTranscriptionRequest = nil
+                sheetState = .viewing
+                errorMessage = error is CancellationError ? "Processing cancelled." : userMessage(for: error)
+                updateRecordingSurface(animated: true)
             }
         }
-        dismiss()
+    }
+
+    private func handleCancel() {
+        cancelAndReconcileActiveAttempt(dismissAfterStart: true)
     }
 
     private func startRecording() {
@@ -464,12 +586,115 @@ struct RecordingSheetView: View {
     }
 
     private func beginRecording() {
-        recordingStartTime = Date()
-        activeOutputMode = nil
+        let startOutputMode = selectedOutputMode
+        let startPreset = recordingPreset(for: startOutputMode, manager: toneStyleManager)
+        let startOptions = transcriptionOptions(for: startOutputMode, preset: startPreset)
+        let request: SharedTranscriptionService.RequestSnapshot
+        do {
+            request = try SharedTranscriptionService.RequestSnapshot.capture(
+                dictionaryManager: dictionaryManager,
+                toneStyleManager: toneStyleManager,
+                shortcutManager: shortcutManager,
+                outputMode: startOutputMode,
+                transcriptionOptions: startOptions,
+                selectedPreset: startPreset
+            )
+        } catch {
+            resetRecordingState(message: userMessage(for: error))
+            return
+        }
+
+        activeOutputMode = startOutputMode
+        activeTranscriptionOptions = startOptions
+        activeTranscriptionRequest = request
         errorMessage = ""
-        sheetState = .recording
+        sheetState = .processing
         updateRecordingSurface(animated: true)
-        audioRecorder.startRecording()
+
+        let recordingID = UUID()
+        let attemptID = UUID()
+        let recorder = audioRecorder
+        activeAttemptTask?.cancel()
+        activeAttemptTask = Task { @MainActor in
+            var lease: MobileAudioProcessingStore.Lease?
+            do {
+                let prepared = try await processingStore.beginNewAttempt(
+                    recordingID: recordingID,
+                    attemptID: attemptID,
+                    outputModeRaw: startOutputMode.rawValue,
+                    transcriptionOptions: startOptions,
+                    deadlineAt: Date().addingTimeInterval(recordingStartDeadline)
+                )
+                lease = prepared
+                guard !Task.isCancelled else { throw CancellationError() }
+                activeAttempt = prepared
+
+                _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
+                    try await recorder.startRecording(
+                        at: prepared.sourceURL,
+                        attemptID: prepared.attemptID
+                    )
+                }
+                let captureDeadline = Date().addingTimeInterval(maximumRecordingDuration)
+                try await processingStore.captureBecameReady(
+                    prepared,
+                    deadlineAt: captureDeadline
+                )
+                guard activeAttempt == prepared, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+
+                recordingStartTime = Date()
+                sheetState = .recording
+                errorMessage = ""
+                activeAttemptTask = nil
+                scheduleCaptureDeadline(for: prepared, deadlineAt: captureDeadline)
+                updateRecordingSurface(animated: true)
+            } catch {
+                if let lease {
+                    _ = audioRecorderSlot.retire(ifCurrent: recorder)
+                    if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
+                        try? await processingStore.markCancelled(lease)
+                    } else {
+                        try? await processingStore.markFailed(
+                            lease,
+                            message: userMessage(for: error),
+                            integrity: .unfinalized
+                        )
+                    }
+                    Task {
+                        await recorder.abandonRecording(
+                            attemptID: lease.attemptID,
+                            deactivateAudioSession: false
+                        )
+                        try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
+                    }
+                }
+                guard activeAttempt?.attemptID == attemptID || activeAttempt == nil else { return }
+                activeAttempt = nil
+                activeAttemptTask = nil
+                resetRecordingState(message: error is CancellationError ? nil : userMessage(for: error))
+            }
+        }
+    }
+
+    private func scheduleCaptureDeadline(
+        for lease: MobileAudioProcessingStore.Lease,
+        deadlineAt: Date
+    ) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = Task { @MainActor in
+            let remaining = max(0, deadlineAt.timeIntervalSinceNow)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard activeAttempt == lease,
+                  sheetState == .recording || sheetState == .paused
+            else { return }
+            stopRecording()
+        }
     }
 
     private func togglePauseRecording() {
@@ -488,83 +713,145 @@ struct RecordingSheetView: View {
     }
 
     private func stopRecording() {
-        let recordingStartedAt = recordingStartTime
-        let stopOutputMode = selectedOutputMode
+        guard let activeAttempt,
+              let request = activeTranscriptionRequest,
+              let transcriptionOptions = activeTranscriptionOptions
+        else {
+            resetRecordingState(message: "Recording could not be finished. Please try again.")
+            return
+        }
+        let stopOutputMode = activeOutputMode ?? selectedOutputMode
         activeOutputMode = stopOutputMode
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
         sheetState = .processing
         updateRecordingSurface(animated: true)
 
-        Task {
-            guard let audioURL = await audioRecorder.stopRecordingAsync(deactivateAudioSession: false) else {
-                await MainActor.run {
-                    resetRecordingState()
-                }
-                return
-            }
-
-            guard validateRecordingForTranscription(audioURL, recordingStartTime: recordingStartedAt) else {
-                try? FileManager.default.removeItem(at: audioURL)
-                await MainActor.run {
-                    resetRecordingState()
-                }
-                return
-            }
-
-            await MainActor.run {
-                transcribeAudio(audioURL: audioURL, outputMode: stopOutputMode)
-            }
-        }
-    }
-
-    private func validateRecordingForTranscription(_ audioURL: URL, recordingStartTime: Date?) -> Bool {
-        let elapsed = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-
-        let fileSize: Int64
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
-            fileSize = attributes[.size] as? Int64 ?? 0
-        } catch {
-            DebugLog.info("Failed to verify sheet recording file: \(error)", context: "RecordingSheetView")
-            return false
-        }
-
-        let audioDuration = audioFileDuration(audioURL)
-        DebugLog.info(
-            "Sheet recording ready: elapsed=\(String(format: "%.2f", elapsed))s, audioDuration=\(String(format: "%.2f", audioDuration ?? -1))s, fileSize=\(fileSize) bytes",
-            context: "RecordingSheetView"
+        let recorder = audioRecorder
+        let capturedDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
+        let finalizationSeconds = max(
+            minimumFinalizationDeadline,
+            min(maximumFinalizationDeadline, 10 + (capturedDuration * 0.05))
         )
+        let finalizationDeadlineAt = Date().addingTimeInterval(finalizationSeconds)
+        activeAttemptTask?.cancel()
+        activeAttemptTask = Task { @MainActor in
+            var recorderClosed = false
+            do {
+                try await processingStore.beginFinalization(
+                    activeAttempt,
+                    deadlineAt: finalizationDeadlineAt
+                )
+                let partialURL = try await IOSAudioProcessingDeadline.run(
+                    seconds: finalizationSeconds
+                ) {
+                    try await recorder.stopRecording(
+                        attemptID: activeAttempt.attemptID,
+                        deactivateAudioSession: true
+                    )
+                }
+                recorderClosed = true
+                guard self.activeAttempt == activeAttempt, !Task.isCancelled else {
+                    throw CancellationError()
+                }
 
-        if elapsed < minimumRecordingDuration || (audioDuration ?? elapsed) < minimumRecordingDuration {
-            DebugLog.info("Sheet recording too short; skipping transcription", context: "RecordingSheetView")
-            return false
+                guard partialURL == activeAttempt.sourceURL else {
+                    throw MobileAudioProcessingStore.StoreError.sourceConflict
+                }
+                let proof = try await processingStore.proveFinalizedSource(
+                    activeAttempt,
+                    minimumBytes: minimumAudioFileBytes,
+                    minimumDuration: minimumRecordingDuration
+                )
+                try await processingStore.checkpointFinalizedSourceProof(
+                    activeAttempt,
+                    proof: proof
+                )
+                let finalized = try await processingStore.acceptFinalizedSource(
+                    activeAttempt,
+                    proof: proof
+                )
+                guard self.activeAttempt == activeAttempt, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+
+                await transcribeAudio(
+                    audioURL: finalized.url,
+                    lease: activeAttempt,
+                    duration: finalized.duration,
+                    outputMode: stopOutputMode,
+                    transcriptionOptions: transcriptionOptions,
+                    request: request
+                )
+            } catch {
+                if !recorderClosed {
+                    _ = audioRecorderSlot.retire(ifCurrent: recorder)
+                }
+                if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
+                    try? await processingStore.markCancelled(activeAttempt)
+                } else {
+                    let integrity: MobileAudioProcessingStore.SourceIntegrity =
+                        recorderClosed
+                            || (error as? MobileAudioProcessingStore.StoreError) == .sourceIncomplete
+                        ? .knownIncomplete
+                        : .unfinalized
+                    try? await processingStore.markFailed(
+                        activeAttempt,
+                        message: userMessage(for: error),
+                        integrity: integrity
+                    )
+                }
+                Task {
+                    await recorder.abandonRecording(
+                        attemptID: activeAttempt.attemptID,
+                        deactivateAudioSession: false
+                    )
+                    try? await processingStore.purgePayloadsIfDeleted(
+                        recordingID: activeAttempt.recordingID
+                    )
+                }
+                guard self.activeAttempt == activeAttempt else { return }
+                if recorderClosed {
+                    await showTerminalRecording(
+                        lease: activeAttempt,
+                        audioURL: activeAttempt.sourceURL,
+                        duration: capturedDuration,
+                        outputMode: stopOutputMode,
+                        transcriptionOptions: transcriptionOptions,
+                        fallbackMessage: error is CancellationError
+                            ? "Processing cancelled."
+                            : userMessage(for: error)
+                    )
+                    return
+                }
+                self.activeAttempt = nil
+                activeAttemptTask = nil
+                resetRecordingState(message: error is CancellationError ? nil : userMessage(for: error))
+            }
         }
-
-        if fileSize < minimumAudioFileBytes {
-            DebugLog.info("Sheet recording has no audio payload; skipping transcription", context: "RecordingSheetView")
-            return false
-        }
-
-        return true
     }
 
-    private func audioFileDuration(_ audioURL: URL) -> TimeInterval? {
-        do {
-            let file = try AVAudioFile(forReading: audioURL)
-            let sampleRate = file.processingFormat.sampleRate
-            guard sampleRate > 0 else { return nil }
-            return Double(file.length) / sampleRate
-        } catch {
-            DebugLog.info("Failed to read sheet recording duration: \(error)", context: "RecordingSheetView")
-            return nil
-        }
-    }
-
-    private func transcribeAudio(audioURL: URL, outputMode: TranscriptionOutputMode) {
+    private func transcribeAudio(
+        audioURL: URL,
+        lease: MobileAudioProcessingStore.Lease,
+        duration: TimeInterval,
+        outputMode: TranscriptionOutputMode,
+        transcriptionOptions: TranscriptionOptions,
+        request: SharedTranscriptionService.RequestSnapshot
+    ) async {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
-            errorMessage = access.reason ?? "Log in to continue transcribing."
-            sheetState = .viewing
-            try? FileManager.default.removeItem(at: audioURL)
+            let message = access.reason ?? "Log in to continue transcribing."
+            try? await processingStore.markFailed(lease, message: message, integrity: .complete)
+            guard activeAttempt == lease else { return }
+            await showTerminalRecording(
+                lease: lease,
+                audioURL: audioURL,
+                duration: duration,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions,
+                fallbackMessage: message
+            )
             return
         }
 
@@ -573,78 +860,140 @@ struct RecordingSheetView: View {
             updateRecordingSurface(animated: false)
         }
 
-        Task {
-            do {
-                let preset = recordingPreset(for: outputMode, manager: toneStyleManager)
-                let transcriptionOptions = transcriptionOptions(for: outputMode, preset: preset)
-                let processedResult = try await SharedTranscriptionService.transcribe(
-                    audioURL: audioURL,
-                    dictionaryManager: dictionaryManager,
-                    toneStyleManager: toneStyleManager,
-                    shortcutManager: shortcutManager,
-                    outputMode: outputMode,
-                    transcriptionOptions: transcriptionOptions,
-                    selectedPreset: preset
-                )
-
-                guard !processedResult.isEmpty else {
-                    DebugLog.info("Sheet transcription was empty after sanitization; skipping history item", context: "RecordingSheetView")
-                    try? FileManager.default.removeItem(at: audioURL)
-                    await MainActor.run {
-                        transcription = ""
-                        sheetState = .idle
-                        recordingStartTime = nil
-                        activeOutputMode = nil
-                        errorMessage = ""
-                        updateRecordingSurface(animated: true)
+        do {
+            let deadline = max(90, min(600, (duration * 2) + 60))
+            let recognitionURL = try await processingStore.beginRecognition(
+                lease,
+                deadlineAt: Date().addingTimeInterval(deadline)
+            )
+            let processedResult = try await IOSAudioProcessingDeadline.runOnMainActor(
+                seconds: deadline
+            ) {
+                try await SharedTranscriptionService.transcribe(
+                    audioURL: recognitionURL,
+                    request: request,
+                    onRecognitionCheckpoint: { checkpoint in
+                        try await self.processingStore.checkpointRecognitionPartial(checkpoint, lease: lease)
+                    },
+                    onRawTranscript: { raw in
+                        try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
+                    },
+                    onCleanupStarted: {
+                        try await self.processingStore.cleanupStarted(lease)
                     }
-                    return
-                }
-
-                let wordCount = subscriptionManager.wordCount(for: processedResult)
-                await subscriptionManager.recordWords(wordCount)
-
-                await MainActor.run {
-                    transcription = processedResult
-                    sheetState = .viewing
-                    errorMessage = ""
-
-                    // Calculate duration
-                    let duration = recordingStartTime.map { Date().timeIntervalSince($0) }
-                    recordingStartTime = nil
-                    activeOutputMode = nil
-
-                    // Create recording with unique ID
-                    let recordingID = UUID()
-
-                    // Save audio file to persistent storage
-                    let permanentAudioURL = historyManager.saveAudioFile(from: audioURL, for: recordingID)
-
-                    // Save to history with audio file URL
-                    let recording = Recording(
-                        id: recordingID,
-                        transcription: processedResult,
-                        duration: duration,
-                        audioFileURL: permanentAudioURL,
-                        outputMode: outputMode,
-                        transcriptionOptions: transcriptionOptions
-                    )
-                    historyManager.addRecording(recording)
-                    currentRecording = recording
-
-                    // Delete temporary audio file
-                    try? FileManager.default.removeItem(at: audioURL)
-                }
-            } catch {
-                await MainActor.run {
-                    transcription = ""
-                    sheetState = .viewing
-                    recordingStartTime = nil
-                    activeOutputMode = nil
-                    errorMessage = "Transcription failed: \(error.localizedDescription)"
-                }
+                )
             }
+            guard activeAttempt == lease, !Task.isCancelled else {
+                throw CancellationError()
+            }
+
+            let durableResult = try await processingStore.checkpointFinalText(
+                processedResult,
+                lease: lease
+            )
+
+            let recording = Recording(
+                id: lease.recordingID,
+                transcription: durableResult,
+                duration: duration,
+                audioFileURL: audioURL,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions
+            )
+            try await processingStore.markSucceeded(lease)
+            guard activeAttempt == lease, !Task.isCancelled else { return }
+            replaceHistoryRecording(recording)
+            currentRecoverySnapshot = try? await processingStore.snapshot(recordingID: lease.recordingID)
+
+            transcription = durableResult
+            sheetState = .viewing
+            errorMessage = ""
+            recordingStartTime = nil
+            activeOutputMode = nil
+            activeTranscriptionOptions = nil
+            activeTranscriptionRequest = nil
+            activeAttempt = nil
+            activeAttemptTask = nil
+            captureDeadlineTask = nil
+            currentRecording = recording
+            // Completion is already durable and visible before this await.
+            await MobileAudioUsageAccounting.flush(
+                recordingID: lease.recordingID,
+                store: processingStore,
+                subscriptionManager: subscriptionManager
+            )
+        } catch {
+            if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
+                try? await processingStore.markCancelled(lease)
+            } else {
+                try? await processingStore.markFailed(
+                    lease,
+                    message: userMessage(for: error),
+                    integrity: .complete
+                )
+            }
+            guard activeAttempt == lease else { return }
+            await showTerminalRecording(
+                lease: lease,
+                audioURL: audioURL,
+                duration: duration,
+                outputMode: outputMode,
+                transcriptionOptions: transcriptionOptions,
+                fallbackMessage: error is CancellationError
+                    ? "Processing cancelled."
+                    : userMessage(for: error)
+            )
         }
+    }
+
+    private func showTerminalRecording(
+        lease: MobileAudioProcessingStore.Lease,
+        audioURL: URL,
+        duration: TimeInterval,
+        outputMode: TranscriptionOutputMode,
+        transcriptionOptions: TranscriptionOptions,
+        fallbackMessage: String
+    ) async {
+        let snapshot = try? await processingStore.snapshot(recordingID: lease.recordingID)
+        let recoveredText = try? await processingStore.recognizedText(for: lease.recordingID)
+        let succeeded = snapshot?.stage == .succeeded
+        let message = snapshot?.userMessage ?? fallbackMessage
+        let recording = Recording(
+            id: lease.recordingID,
+            transcription: recoveredText ?? "",
+            duration: snapshot?.duration ?? duration,
+            audioFileURL: snapshot?.sourceURL ?? audioURL,
+            outputMode: outputMode,
+            transcriptionOptions: transcriptionOptions
+        )
+        replaceHistoryRecording(recording)
+        transcription = recoveredText ?? ""
+        currentRecording = recording
+        currentRecoverySnapshot = snapshot
+        sheetState = .viewing
+        errorMessage = succeeded ? "" : message
+        recordingStartTime = nil
+        activeOutputMode = nil
+        activeTranscriptionOptions = nil
+        activeTranscriptionRequest = nil
+        activeAttempt = nil
+        activeAttemptTask = nil
+        captureDeadlineTask = nil
+        updateRecordingSurface(animated: true)
+        if succeeded {
+            await MobileAudioUsageAccounting.flush(
+                recordingID: lease.recordingID,
+                store: processingStore,
+                subscriptionManager: subscriptionManager
+            )
+        }
+    }
+
+    private func replaceHistoryRecording(_ recording: Recording) {
+        if let existing = historyManager.recordings.first(where: { $0.id == recording.id }) {
+            historyManager.deleteRecording(existing)
+        }
+        historyManager.addRecording(recording)
     }
 
     private func transcriptionOptions(for outputMode: TranscriptionOutputMode, preset: ContextRule?) -> TranscriptionOptions {
@@ -654,22 +1003,25 @@ struct RecordingSheetView: View {
         return preset?.transcriptionOptions ?? .default
     }
 
-    private func resetRecordingState() {
+    private func resetRecordingState(message: String?) {
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
         recordingStartTime = nil
         activeOutputMode = nil
+        activeTranscriptionOptions = nil
+        activeTranscriptionRequest = nil
         sheetState = .idle
-        errorMessage = ""
+        errorMessage = message ?? ""
         recordingViewModel.audioLevel = 0.0
         recordingViewModel.frequencyBands = Array(repeating: 0.0, count: 10)
         updateRecordingSurface(animated: true)
     }
 
     private func updateRecordingState(_ isRecording: Bool) {
-        if sheetState == .processing || sheetState == .paused || sheetState == .viewing {
-            return
-        }
-
-        sheetState = isRecording ? .recording : .idle
+        // Managed start/finalization tasks own UI state. The recorder's publication is only a
+        // visualization signal; accepting it here would let a late native callback revive an
+        // abandoned attempt.
+        guard activeAttempt != nil, isRecording, sheetState == .recording else { return }
         updateRecordingSurface(animated: false)
     }
 
@@ -683,6 +1035,116 @@ struct RecordingSheetView: View {
         if sheetState == .recording {
             recordingViewModel.frequencyBands = bands
         }
+    }
+
+    private func handleCaptureFailure(_ failure: ManagedAudioRecordingFailure) {
+        guard let lease = activeAttempt,
+              lease.attemptID == failure.attemptID,
+              sheetState == .recording || sheetState == .paused
+        else { return }
+
+        activeAttemptTask?.cancel()
+        captureDeadlineTask?.cancel()
+        let abandonedRecorder = audioRecorder
+        _ = audioRecorderSlot.retire(ifCurrent: abandonedRecorder)
+        activeAttempt = nil
+        activeAttemptTask = nil
+        resetRecordingState(message: failure.error.localizedDescription)
+
+        Task {
+            try? await processingStore.markFailed(
+                lease,
+                message: failure.error.localizedDescription,
+                integrity: .knownIncomplete
+            )
+            await abandonedRecorder.abandonRecording(
+                attemptID: lease.attemptID,
+                deactivateAudioSession: false
+            )
+            try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
+        }
+    }
+
+    private func cancelActiveAttemptOnDisappear() {
+        cancelAndReconcileActiveAttempt(dismissAfterStart: false)
+    }
+
+    private func cancelAndReconcileActiveAttempt(dismissAfterStart: Bool) {
+        guard !cancellationReconciliationStarted else { return }
+        guard let activeAttempt else {
+            if dismissAfterStart { dismiss() }
+            return
+        }
+
+        cancellationReconciliationStarted = true
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        activeAttemptTask?.cancel()
+        let recorder = audioRecorder
+        let outputMode = activeOutputMode ?? selectedOutputMode
+        let transcriptionOptions = activeTranscriptionOptions
+            ?? self.transcriptionOptions(for: outputMode, preset: selectedPreset)
+        let fallbackDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
+        _ = audioRecorderSlot.retire(ifCurrent: recorder)
+        self.activeAttempt = nil
+        activeAttemptTask = nil
+        resetRecordingState(message: nil)
+        if dismissAfterStart { dismiss() }
+
+        Task { @MainActor in
+            try? await processingStore.markCancelled(activeAttempt)
+            let snapshot = try? await processingStore.snapshot(recordingID: activeAttempt.recordingID)
+            let recoveredText = try? await processingStore.recognizedText(
+                for: activeAttempt.recordingID
+            )
+            Task {
+                await recorder.abandonRecording(
+                    attemptID: activeAttempt.attemptID,
+                    deactivateAudioSession: false
+                )
+                try? await processingStore.purgePayloadsIfDeleted(
+                    recordingID: activeAttempt.recordingID
+                )
+            }
+            guard snapshot?.stage == .succeeded,
+                  let recoveredText,
+                  !recoveredText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+
+            let recording = Recording(
+                id: activeAttempt.recordingID,
+                transcription: recoveredText,
+                duration: snapshot?.duration ?? fallbackDuration,
+                audioFileURL: snapshot?.sourceURL ?? activeAttempt.sourceURL,
+                outputMode: outputMode,
+                transcriptionOptions: snapshot?.transcriptionOptions ?? transcriptionOptions
+            )
+            replaceHistoryRecording(recording)
+            await MobileAudioUsageAccounting.flush(
+                recordingID: activeAttempt.recordingID,
+                store: processingStore,
+                subscriptionManager: subscriptionManager
+            )
+        }
+    }
+
+    private func userMessage(for error: Error) -> String {
+        if let deadlineError = error as? IOSAudioProcessingDeadlineError {
+            return deadlineError.localizedDescription
+        }
+        if let recorderError = error as? ManagedAudioRecordingError {
+            return recorderError.localizedDescription
+        }
+        if let storeError = error as? MobileAudioProcessingStore.StoreError {
+            return storeError.localizedDescription
+        }
+        if let openAIError = error as? OpenAIError {
+            return openAIError.localizedDescription
+        }
+        if let httpFailure = error as? AppleAudioHTTPRecovery.Failure {
+            return httpFailure.localizedDescription
+        }
+        return "Transcription failed. Your recording was kept. Please try again."
     }
 
     private func updateRecordingSurface(animated: Bool) {

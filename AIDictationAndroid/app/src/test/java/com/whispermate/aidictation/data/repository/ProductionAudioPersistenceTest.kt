@@ -194,6 +194,85 @@ class ProductionAudioPersistenceTest {
     }
 
     @Test
+    fun ownedAudioWorkspaceNeverFollowsSymlinksOutsideManagedStorage() {
+        val outside = java.io.File(
+            context.cacheDir,
+            "audio-workspace-outside-${UUID.randomUUID()}"
+        ).apply { assertTrue(mkdirs()) }
+        val temporaryRoot = ManagedAudioTemporaryFiles.temporaryRoot(managedAudioDirectory)
+
+        try {
+            managedAudioDirectory.mkdirs()
+            val sourceThroughLinkedRoot = managedSource("linked-root")
+            val outsideRecording = java.io.File(outside, sourceThroughLinkedRoot.name)
+                .apply { assertTrue(mkdirs()) }
+            val rootSentinel = java.io.File(outsideRecording, "keep.txt")
+                .apply { writeText("keep") }
+            java.nio.file.Files.createSymbolicLink(
+                temporaryRoot.toPath(),
+                outside.toPath().toAbsolutePath()
+            )
+
+            assertTrue(ManagedAudioTemporaryFiles.retireAndSweepForSource(sourceThroughLinkedRoot))
+            assertTrue("per-recording sweep traversed a linked temporary root", rootSentinel.exists())
+            assertFalse(
+                java.nio.file.Files.exists(
+                    temporaryRoot.toPath(),
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS
+                )
+            )
+
+            assertTrue(temporaryRoot.mkdir())
+            val source = managedSource("symlink")
+            val workspace = ManagedAudioTemporaryFiles.openWorkspace(source)
+            val recordingDirectory = ManagedAudioTemporaryFiles.recordingDirectory(source)
+            val outsideWorkspace = java.io.File(outside, workspace.directory.name)
+                .apply { assertTrue(mkdirs()) }
+            val workspaceSentinel = java.io.File(outsideWorkspace, "keep.txt")
+                .apply { writeText("keep") }
+            java.nio.file.Files.createSymbolicLink(
+                recordingDirectory.toPath(),
+                outside.toPath().toAbsolutePath()
+            )
+
+            assertThrows(IOException::class.java) {
+                workspace.createTemporaryFile("blocked_chunk_", ".m4a")
+            }
+            assertTrue("workspace creation traversed an outside symlink", workspaceSentinel.exists())
+            assertTrue(workspace.retire())
+            assertTrue("workspace retirement traversed an outside symlink", workspaceSentinel.exists())
+            assertFalse(
+                "workspace retirement left the owned intermediate link behind",
+                java.nio.file.Files.exists(
+                    recordingDirectory.toPath(),
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS
+                )
+            )
+
+            assertTrue(temporaryRoot.mkdir())
+            val danglingSource = managedSource("dangling")
+            val danglingWorkspace = ManagedAudioTemporaryFiles.openWorkspace(danglingSource)
+            val danglingRecordingDirectory =
+                ManagedAudioTemporaryFiles.recordingDirectory(danglingSource)
+            java.nio.file.Files.createSymbolicLink(
+                danglingRecordingDirectory.toPath(),
+                java.io.File(outside, "missing-target").toPath().toAbsolutePath()
+            )
+            assertTrue(danglingWorkspace.retire())
+            assertFalse(
+                "workspace retirement falsely kept a dangling owned link",
+                java.nio.file.Files.exists(
+                    danglingRecordingDirectory.toPath(),
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS
+                )
+            )
+        } finally {
+            ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)
+            outside.deleteRecursively()
+        }
+    }
+
+    @Test
     fun productionClearRefusesActiveRowsWithoutDeletingTheirSource() = runBlocking {
         repository.normalizeAbandonedAttempts(now = 6_000L)
         val source = managedSource("active").apply { writeBytes(byteArrayOf(1, 2, 3)) }

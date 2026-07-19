@@ -132,6 +132,10 @@ private struct ParakeetRuntimeRecoveryContract {
         let slot = RuntimeBridgeSlot()
         let oldBridge = FakeRuntimeBridge()
         _ = slot.installIfEmpty(oldBridge)
+        let oldGeneration = try requireValue(
+            slot.generation(of: oldBridge),
+            "old runtime generation was not assigned"
+        )
         let cancellation = RuntimeAttemptCancellation(
             bridge: oldBridge,
             attemptID: "old-generation",
@@ -149,6 +153,29 @@ private struct ParakeetRuntimeRecoveryContract {
             "an immediate explicit retry must install a fresh generation"
         )
         try require(slot.current() === retryBridge, "late old-generation work replaced the retry bridge")
+        let retryGeneration = try requireValue(
+            slot.generation(of: retryBridge),
+            "retry runtime generation was not assigned"
+        )
+
+        var staleCatchPublished = false
+        try require(
+            !slot.withLatestGeneration(oldGeneration) { staleCatchPublished = true },
+            "an old cancelled catch was allowed to publish into the retry generation"
+        )
+        try require(!staleCatchPublished, "old catch overwrote retry-visible state")
+
+        var retryPublished = false
+        try require(
+            slot.withLatestGeneration(retryGeneration) { retryPublished = true },
+            "current retry generation could not publish state"
+        )
+        try require(retryPublished, "retry state publication did not run")
+    }
+
+    private static func requireValue<T>(_ value: T?, _ message: String) throws -> T {
+        guard let value else { throw ContractFailure.failed(message) }
+        return value
     }
 
     private static func validateSourceIntegration() throws {
@@ -189,6 +216,7 @@ private struct ParakeetRuntimeRecoveryContract {
             try require(source.contains("retireRuntimeBridge(bridge)"), "cancelled native generation must be retired for explicit retry")
             try require(source.contains("private let runtimeBridgeSlot = RuntimeBridgeSlot()"), "runtime generations need an atomic slot")
             try require(source.contains("bridgeSlot: runtimeBridgeSlot"), "cancellation must synchronously retire the generation")
+            try require(source.contains("withLatestGeneration(generation)"), "state publication must be generation-fenced")
         }
     }
 }

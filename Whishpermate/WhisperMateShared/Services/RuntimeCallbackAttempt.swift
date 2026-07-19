@@ -111,6 +111,7 @@ public final class RuntimeAttemptCancellation: @unchecked Sendable {
 public final class RuntimeBridgeSlot: @unchecked Sendable {
     private let lock = NSLock()
     private var bridge: NSObject?
+    private var generation: UInt64 = 0
 
     public init() {}
 
@@ -127,6 +128,7 @@ public final class RuntimeBridgeSlot: @unchecked Sendable {
             lock.unlock()
             return bridge
         }
+        generation &+= 1
         bridge = candidate
         lock.unlock()
         return candidate
@@ -150,5 +152,38 @@ public final class RuntimeBridgeSlot: @unchecked Sendable {
         bridge = nil
         lock.unlock()
         return value
+    }
+
+    public func generation(of expected: NSObject) -> UInt64? {
+        lock.lock()
+        let value = bridge === expected ? generation : nil
+        lock.unlock()
+        return value
+    }
+
+    public func latestGeneration() -> UInt64 {
+        lock.lock()
+        let value = generation
+        lock.unlock()
+        return value
+    }
+
+    /// Runs `body` while the slot lock proves that no newer generation can be
+    /// installed between the identity check and the state publication. A
+    /// retired generation remains latest until an explicit retry installs the
+    /// next bridge, allowing cancellation to publish idle only when safe.
+    @discardableResult
+    public func withLatestGeneration(
+        _ expectedGeneration: UInt64,
+        _ body: () -> Void
+    ) -> Bool {
+        lock.lock()
+        guard generation == expectedGeneration else {
+            lock.unlock()
+            return false
+        }
+        body()
+        lock.unlock()
+        return true
     }
 }

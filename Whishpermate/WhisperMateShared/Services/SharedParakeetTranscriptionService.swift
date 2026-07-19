@@ -70,24 +70,33 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
             }
 
             let bridge = try loadRuntimeBridge()
+            guard let generation = runtimeBridgeSlot.generation(of: bridge) else {
+                throw CancellationError()
+            }
 
             do {
                 try await initializeRuntimeBridge(bridge)
                 await MainActor.run {
-                    state = .ready
-                    isModelDownloaded = true
+                    runtimeBridgeSlot.withLatestGeneration(generation) {
+                        state = .ready
+                        isModelDownloaded = true
+                    }
                 }
             } catch is CancellationError {
                 retireRuntimeBridge(bridge)
                 await MainActor.run {
-                    state = .notInitialized
-                    isModelDownloaded = false
+                    runtimeBridgeSlot.withLatestGeneration(generation) {
+                        state = .notInitialized
+                        isModelDownloaded = false
+                    }
                 }
                 throw CancellationError()
             } catch {
                 await MainActor.run {
-                    state = .error(error.localizedDescription)
-                    isModelDownloaded = false
+                    runtimeBridgeSlot.withLatestGeneration(generation) {
+                        state = .error(error.localizedDescription)
+                        isModelDownloaded = false
+                    }
                 }
                 throw error
             }
@@ -114,30 +123,42 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
 
         let bridge = try loadRuntimeBridge()
+        guard let generation = runtimeBridgeSlot.generation(of: bridge) else {
+            throw CancellationError()
+        }
         // The published state can lag a synchronously retired generation.
         // Initializing the exact loaded bridge is idempotent when already ready.
         try await initializeRuntimeBridge(bridge)
 
-        await MainActor.run {
-            state = .transcribing
+        let ownsPublishedState = await MainActor.run {
+            runtimeBridgeSlot.withLatestGeneration(generation) {
+                state = .transcribing
+            }
         }
+        guard ownsPublishedState else { throw CancellationError() }
 
         do {
             let text = try await transcribeWithRuntimeBridge(bridge, audioPath: audioURL.path)
             await MainActor.run {
-                state = .ready
+                runtimeBridgeSlot.withLatestGeneration(generation) {
+                    state = .ready
+                }
             }
             return text
         } catch is CancellationError {
             retireRuntimeBridge(bridge)
             await MainActor.run {
-                state = .notInitialized
-                isModelDownloaded = false
+                runtimeBridgeSlot.withLatestGeneration(generation) {
+                    state = .notInitialized
+                    isModelDownloaded = false
+                }
             }
             throw CancellationError()
         } catch {
             await MainActor.run {
-                state = .error(error.localizedDescription)
+                runtimeBridgeSlot.withLatestGeneration(generation) {
+                    state = .error(error.localizedDescription)
+                }
             }
             throw error
         }
@@ -150,28 +171,40 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
 
         let bridge = try loadRuntimeBridge()
+        guard let generation = runtimeBridgeSlot.generation(of: bridge) else {
+            throw CancellationError()
+        }
         try await initializeRuntimeBridge(bridge)
 
-        await MainActor.run {
-            state = .transcribing
+        let ownsPublishedState = await MainActor.run {
+            runtimeBridgeSlot.withLatestGeneration(generation) {
+                state = .transcribing
+            }
         }
+        guard ownsPublishedState else { throw CancellationError() }
 
         do {
             let text = try await transcribeDiarizedWithRuntimeBridge(bridge, audioPath: audioURL.path)
             await MainActor.run {
-                state = .ready
+                runtimeBridgeSlot.withLatestGeneration(generation) {
+                    state = .ready
+                }
             }
             return text
         } catch is CancellationError {
             retireRuntimeBridge(bridge)
             await MainActor.run {
-                state = .notInitialized
-                isModelDownloaded = false
+                runtimeBridgeSlot.withLatestGeneration(generation) {
+                    state = .notInitialized
+                    isModelDownloaded = false
+                }
             }
             throw CancellationError()
         } catch {
             await MainActor.run {
-                state = .error(error.localizedDescription)
+                runtimeBridgeSlot.withLatestGeneration(generation) {
+                    state = .error(error.localizedDescription)
+                }
             }
             throw error
         }
@@ -182,6 +215,7 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
     }
 
     public func cleanup() {
+        let generation = runtimeBridgeSlot.latestGeneration()
         let bridge = runtimeBridgeSlot.take()
 
         if let bridge {
@@ -189,8 +223,10 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
 
         Task { @MainActor in
-            state = .notInitialized
-            isModelDownloaded = false
+            runtimeBridgeSlot.withLatestGeneration(generation) {
+                state = .notInitialized
+                isModelDownloaded = false
+            }
         }
     }
 

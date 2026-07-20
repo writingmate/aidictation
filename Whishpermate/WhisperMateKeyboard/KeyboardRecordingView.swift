@@ -5,9 +5,47 @@ import WhisperMateShared
 typealias KeyboardRecordingState = AIDictationRecordingState
 typealias KeyboardRecordingViewModel = AIDictationRecordingViewModel
 
+/// Typing layout shown by the AI Dictation keyboard, switched in place
+/// without leaving the keyboard (unlike the system globe key).
+enum KeyboardLayoutLanguage: String, CaseIterable {
+    case english
+    case russian
+
+    var rows: [[String]] {
+        switch self {
+        case .english:
+            return [
+                ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+                ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
+                ["z", "x", "c", "v", "b", "n", "m"],
+            ]
+        case .russian:
+            return [
+                ["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х"],
+                ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"],
+                ["я", "ч", "с", "м", "и", "т", "ь", "б", "ю"],
+            ]
+        }
+    }
+
+    /// Label for the toggle key: the language a tap switches to.
+    var toggleLabel: String {
+        switch self {
+        case .english: return "РУ"
+        case .russian: return "EN"
+        }
+    }
+
+    var next: KeyboardLayoutLanguage {
+        self == .english ? .russian : .english
+    }
+}
+
 struct KeyboardRecordingView: View {
     @ObservedObject var model: KeyboardRecordingViewModel
     let isShifted: Bool
+    let layoutLanguage: KeyboardLayoutLanguage
+    let showsGlobeKey: Bool
     let onPrimaryAction: () -> Void
     let onPauseAction: () -> Void
     let onKeyPress: (String) -> Void
@@ -15,14 +53,11 @@ struct KeyboardRecordingView: View {
     let onSpace: () -> Void
     let onReturn: () -> Void
     let onShift: () -> Void
+    let onToggleLayout: () -> Void
     let onNextKeyboard: () -> Void
     @ObservedObject private var toneStyleManager = ToneStyleManager.shared
 
-    private let rows = [
-        ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
-        ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
-        ["z", "x", "c", "v", "b", "n", "m"],
-    ]
+    private var rows: [[String]] { layoutLanguage.rows }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -60,7 +95,7 @@ struct KeyboardRecordingView: View {
 
             letterRow(rows[0])
             letterRow(rows[1])
-                .padding(.horizontal, 18)
+                .padding(.horizontal, layoutLanguage == .english ? 18 : 0)
 
             HStack(spacing: 6) {
                 KeyboardKey(title: "shift", systemImage: isShifted ? "shift.fill" : "shift", style: .utility, action: onShift)
@@ -71,8 +106,12 @@ struct KeyboardRecordingView: View {
             }
 
             HStack(spacing: 6) {
-                KeyboardKey(title: "next keyboard", systemImage: "globe", style: .utility, action: onNextKeyboard)
+                KeyboardKey(title: "switch to \(layoutLanguage.next.rawValue)", text: layoutLanguage.toggleLabel, style: .utility, action: onToggleLayout)
                     .frame(width: 44)
+                if showsGlobeKey {
+                    KeyboardKey(title: "next keyboard", systemImage: "globe", style: .utility, action: onNextKeyboard)
+                        .frame(width: 44)
+                }
                 KeyboardKey(title: "space", text: "space", style: .space, repeatsWhilePressed: true, action: onSpace)
                 KeyboardKey(title: "return", text: "return", style: .utility, repeatsWhilePressed: true, action: onReturn)
                     .frame(width: 76)

@@ -19,6 +19,14 @@ class KeyboardViewController: UIInputViewController {
     private var displayedAudioLevel: Float = 0.0
     private var displayedFrequencyBands: [Float] = Array(repeating: 0.0, count: 10)
     private var isShifted = false
+    private var layoutLanguage = KeyboardViewController.loadLayoutLanguage()
+
+    private static let layoutLanguageKey = "keyboardLayoutLanguage"
+
+    private static func loadLayoutLanguage() -> KeyboardLayoutLanguage {
+        AppDefaults.shared.string(forKey: layoutLanguageKey)
+            .flatMap(KeyboardLayoutLanguage.init(rawValue:)) ?? .english
+    }
     private var pendingTextTimer: Timer?
     private var recordingMeterTimer: Timer?
     private var startFallbackTimer: Timer?
@@ -112,6 +120,8 @@ class KeyboardViewController: UIInputViewController {
         let recordingView = KeyboardRecordingView(
             model: recordingViewModel,
             isShifted: isShifted,
+            layoutLanguage: layoutLanguage,
+            showsGlobeKey: needsInputModeSwitchKey,
             onPrimaryAction: { [weak self] in
                 self?.handlePrimaryAction()
             },
@@ -132,6 +142,9 @@ class KeyboardViewController: UIInputViewController {
             },
             onShift: { [weak self] in
                 self?.toggleShift()
+            },
+            onToggleLayout: { [weak self] in
+                self?.toggleLayoutLanguage()
             },
             onNextKeyboard: { [weak self] in
                 self?.advanceToNextInputMode()
@@ -210,11 +223,19 @@ class KeyboardViewController: UIInputViewController {
         refreshKeyboardRootView()
     }
 
+    private func toggleLayoutLanguage() {
+        layoutLanguage = layoutLanguage.next
+        AppDefaults.shared.set(layoutLanguage.rawValue, forKey: Self.layoutLanguageKey)
+        refreshKeyboardRootView()
+    }
+
     private func refreshKeyboardRootView() {
         ensureKeyboardUI()
         hostingController?.rootView = KeyboardRecordingView(
             model: recordingViewModel,
             isShifted: isShifted,
+            layoutLanguage: layoutLanguage,
+            showsGlobeKey: needsInputModeSwitchKey,
             onPrimaryAction: { [weak self] in self?.handlePrimaryAction() },
             onPauseAction: { [weak self] in self?.togglePauseRecording() },
             onKeyPress: { [weak self] text in self?.insertKey(text) },
@@ -222,6 +243,7 @@ class KeyboardViewController: UIInputViewController {
             onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
             onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
             onShift: { [weak self] in self?.toggleShift() },
+            onToggleLayout: { [weak self] in self?.toggleLayoutLanguage() },
             onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() }
         )
     }

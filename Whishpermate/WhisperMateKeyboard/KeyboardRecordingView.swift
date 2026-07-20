@@ -5,63 +5,32 @@ import WhisperMateShared
 typealias KeyboardRecordingState = AIDictationRecordingState
 typealias KeyboardRecordingViewModel = AIDictationRecordingViewModel
 
-/// Typing layout shown by the AI Dictation keyboard, switched in place
-/// without leaving the keyboard (unlike the system globe key).
-enum KeyboardLayoutLanguage: String, CaseIterable {
-    case english
-    case russian
-
-    var rows: [[String]] {
-        switch self {
-        case .english:
-            return [
-                ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
-                ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
-                ["z", "x", "c", "v", "b", "n", "m"],
-            ]
-        case .russian:
-            return [
-                ["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х"],
-                ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"],
-                ["я", "ч", "с", "м", "и", "т", "ь", "б", "ю"],
-            ]
-        }
-    }
-
-    /// Label for the toggle key: the language a tap switches to.
-    var toggleLabel: String {
-        switch self {
-        case .english: return "РУ"
-        case .russian: return "EN"
-        }
-    }
-
-    var next: KeyboardLayoutLanguage {
-        self == .english ? .russian : .english
-    }
-}
-
 struct KeyboardRecordingView: View {
     @ObservedObject var model: KeyboardRecordingViewModel
     let isShifted: Bool
-    let layoutLanguage: KeyboardLayoutLanguage
+    let layout: KeyboardTypingLayout
     let showsGlobeKey: Bool
     let onPrimaryAction: () -> Void
     let onPauseAction: () -> Void
     let onKeyPress: (String) -> Void
+    let onAccentPick: (String) -> Void
     let onBackspace: () -> Void
     let onSpace: () -> Void
     let onReturn: () -> Void
     let onShift: () -> Void
     let onToggleLayout: () -> Void
+    let onSelectLanguage: (String) -> Void
     let onNextKeyboard: () -> Void
     @ObservedObject private var toneStyleManager = ToneStyleManager.shared
-
-    private var rows: [[String]] { layoutLanguage.rows }
+    @State private var accentKey: KeyboardTypingKey?
+    @State private var showLanguagePicker = false
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if model.state == .idle {
+            if showLanguagePicker {
+                languagePicker
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else if model.state == .idle {
                 keyRows
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             } else {
@@ -69,21 +38,28 @@ struct KeyboardRecordingView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
 
-            recordButton
-                .padding(.top, 3)
-                .padding(.trailing, 8)
+            if !showLanguagePicker {
+                recordButton
+                    .padding(.top, 3)
+                    .padding(.trailing, 8)
+            }
         }
         .padding(.horizontal, 6)
         .padding(.top, 7)
         .padding(.bottom, 6)
         .background(Color.clear)
         .animation(.spring(response: 0.32, dampingFraction: 0.84, blendDuration: 0.06), value: model.state)
+        .onChange(of: layout) { _ in
+            accentKey = nil
+        }
     }
 
     private var keyRows: some View {
         VStack(spacing: 7) {
             HStack {
-                if toneStyleManager.isNotesModeActive() {
+                if let accentKey {
+                    accentBar(for: accentKey)
+                } else if toneStyleManager.isNotesModeActive() {
                     Label("Notes", systemImage: "note.text")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
@@ -93,21 +69,27 @@ struct KeyboardRecordingView: View {
             }
             .frame(height: 42)
 
-            letterRow(rows[0])
-            letterRow(rows[1])
-                .padding(.horizontal, layoutLanguage == .english ? 18 : 0)
+            letterRow(layout.rows[0])
+            letterRow(layout.rows[1])
+                .padding(.horizontal, middleRowPadding)
 
             HStack(spacing: 6) {
-                KeyboardKey(title: "shift", systemImage: isShifted ? "shift.fill" : "shift", style: .utility, action: onShift)
-                    .frame(width: 42)
-                letterRow(rows[2])
+                if layout.hasCase {
+                    KeyboardKey(title: "shift", systemImage: isShifted ? "shift.fill" : "shift", style: .utility, action: onShift)
+                        .frame(width: 42)
+                }
+                letterRow(layout.rows[2])
                 KeyboardKey(title: "delete", systemImage: "delete.left", style: .utility, repeatsWhilePressed: true, action: onBackspace)
                     .frame(width: 42)
             }
 
             HStack(spacing: 6) {
-                KeyboardKey(title: "switch to \(layoutLanguage.next.rawValue)", text: layoutLanguage.toggleLabel, style: .utility, action: onToggleLayout)
-                    .frame(width: 44)
+                LanguageKey(
+                    label: layout.toggleLabel,
+                    onTap: onToggleLayout,
+                    onHold: { showLanguagePicker = true }
+                )
+                .frame(width: 44)
                 if showsGlobeKey {
                     KeyboardKey(title: "next keyboard", systemImage: "globe", style: .utility, action: onNextKeyboard)
                         .frame(width: 44)
@@ -116,6 +98,102 @@ struct KeyboardRecordingView: View {
                 KeyboardKey(title: "return", text: "return", style: .utility, repeatsWhilePressed: true, action: onReturn)
                     .frame(width: 76)
             }
+        }
+        // Row data is already in visual order; keep it stable under RTL locales.
+        .environment(\.layoutDirection, .leftToRight)
+    }
+
+    /// Center a short middle row the way the system keyboard does.
+    private var middleRowPadding: CGFloat {
+        layout.rows[1].count < layout.rows[0].count ? 18 : 0
+    }
+
+    private var languagePicker: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Keyboard Language")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    showLanguagePicker = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close language picker")
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 42)
+
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(KeyboardLayoutData.layouts) { candidate in
+                        Button {
+                            showLanguagePicker = false
+                            onSelectLanguage(candidate.code)
+                        } label: {
+                            HStack {
+                                Text(candidate.name)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                Text(candidate.toggleLabel)
+                                    .foregroundColor(.secondary)
+                                if candidate.code == layout.code {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundColor(.accentColor)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(height: 40)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(candidate.code == layout.code
+                                        ? Color(uiColor: KeyboardPalette.utilityKeyColor)
+                                        : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func accentBar(for key: KeyboardTypingKey) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                ForEach(layout.alternates(for: key, shifted: isShifted), id: \.self) { alt in
+                    Button {
+                        accentKey = nil
+                        onAccentPick(alt)
+                    } label: {
+                        Text(alt)
+                            .font(.system(size: 20))
+                            .foregroundColor(.primary)
+                            .frame(minWidth: 38)
+                            .frame(height: 38)
+                            .background(Color(uiColor: KeyboardPalette.keyColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    accentKey = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(width: 32, height: 38)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss accents")
+            }
+            .padding(.leading, 8)
         }
     }
 
@@ -159,15 +237,16 @@ struct KeyboardRecordingView: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
-    private func letterRow(_ keys: [String]) -> some View {
+    private func letterRow(_ keys: [KeyboardTypingKey]) -> some View {
         HStack(spacing: 6) {
             ForEach(keys, id: \.self) { key in
                 KeyboardKey(
-                    title: key,
-                    text: isShifted ? key.uppercased() : key,
+                    title: key.label(shifted: isShifted),
+                    text: key.label(shifted: isShifted),
                     style: .letter,
                     repeatsWhilePressed: true,
-                    action: { onKeyPress(isShifted ? key.uppercased() : key) }
+                    onHold: layout.popups[key.lower] != nil ? { accentKey = key } : nil,
+                    action: { onKeyPress(key.label(shifted: isShifted)) }
                 )
             }
         }
@@ -198,6 +277,27 @@ struct KeyboardRecordingView: View {
 
 }
 
+private struct LanguageKey: View {
+    let label: String
+    let onTap: () -> Void
+    let onHold: () -> Void
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 15, weight: .medium))
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+            .foregroundColor(.primary)
+            .background(Color(uiColor: KeyboardPalette.utilityKeyColor))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 0, x: 0, y: 1)
+            .onTapGesture(perform: onTap)
+            .onLongPressGesture(minimumDuration: 0.4, perform: onHold)
+            .accessibilityLabel("switch keyboard language")
+            .accessibilityHint("Double tap to switch, touch and hold to pick a language")
+    }
+}
+
 private struct KeyboardKey: View {
     enum Style {
         case letter
@@ -210,6 +310,7 @@ private struct KeyboardKey: View {
     var systemImage: String?
     let style: Style
     var repeatsWhilePressed = false
+    var onHold: (() -> Void)?
     let action: () -> Void
     @State private var isPressing = false
     @State private var initialRepeatTimer: Timer?
@@ -269,6 +370,10 @@ private struct KeyboardKey: View {
         action()
 
         let initialTimer = Timer(timeInterval: 0.42, repeats: false) { _ in
+            if let onHold {
+                onHold()
+                return
+            }
             repeatTimer?.invalidate()
             let repeatingTimer = Timer(timeInterval: 0.075, repeats: true) { _ in
                 action()

@@ -1,5 +1,5 @@
 This update fixes account login and improves the keyboard.
 
 • The Log In button in Settings now opens the sign-in form reliably.
-• The keyboard can now switch between English and Russian layouts without leaving AI Dictation.
+• The keyboard now supports 18 language layouts — tap the language key to switch, hold it to pick, and hold letters for accents.
 • Simplified the Settings screen.

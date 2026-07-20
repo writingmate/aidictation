@@ -19,13 +19,57 @@ class KeyboardViewController: UIInputViewController {
     private var displayedAudioLevel: Float = 0.0
     private var displayedFrequencyBands: [Float] = Array(repeating: 0.0, count: 10)
     private var isShifted = false
-    private var layoutLanguage = KeyboardViewController.loadLayoutLanguage()
+    private var currentLayout = KeyboardViewController.loadCurrentLayout()
+    private var previousLayoutCode = KeyboardViewController.loadPreviousLayoutCode()
 
-    private static let layoutLanguageKey = "keyboardLayoutLanguage"
+    private static let layoutCodeKey = "keyboardLayoutCode"
+    private static let previousLayoutCodeKey = "keyboardPreviousLayoutCode"
+    private static let legacyLayoutKey = "keyboardLayoutLanguage"
 
-    private static func loadLayoutLanguage() -> KeyboardLayoutLanguage {
-        AppDefaults.shared.string(forKey: layoutLanguageKey)
-            .flatMap(KeyboardLayoutLanguage.init(rawValue:)) ?? .english
+    private static func loadCurrentLayout() -> KeyboardTypingLayout {
+        if let code = AppDefaults.shared.string(forKey: layoutCodeKey),
+           let layout = KeyboardLayoutData.layout(for: code)
+        {
+            return layout
+        }
+
+        // Older builds stored "english"/"russian".
+        if let legacy = AppDefaults.shared.string(forKey: legacyLayoutKey) {
+            let migrated = legacy == "russian" ? "ru" : "en"
+            if let layout = KeyboardLayoutData.layout(for: migrated) {
+                return layout
+            }
+        }
+
+        if let match = preferredLayoutCodes().first,
+           let layout = KeyboardLayoutData.layout(for: match)
+        {
+            return layout
+        }
+
+        return KeyboardLayoutData.layouts[0]
+    }
+
+    private static func loadPreviousLayoutCode() -> String {
+        if let code = AppDefaults.shared.string(forKey: previousLayoutCodeKey),
+           KeyboardLayoutData.layout(for: code) != nil
+        {
+            return code
+        }
+
+        let current = loadCurrentLayout().code
+        if let second = preferredLayoutCodes().first(where: { $0 != current }) {
+            return second
+        }
+        return current == "en" ? "ru" : "en"
+    }
+
+    /// Layout codes matching the user's device language list, in preference order.
+    private static func preferredLayoutCodes() -> [String] {
+        Locale.preferredLanguages.compactMap { identifier in
+            let code = identifier.split(separator: "-").first.map(String.init) ?? identifier
+            return KeyboardLayoutData.layout(for: code)?.code
+        }
     }
     private var pendingTextTimer: Timer?
     private var recordingMeterTimer: Timer?
@@ -120,7 +164,7 @@ class KeyboardViewController: UIInputViewController {
         let recordingView = KeyboardRecordingView(
             model: recordingViewModel,
             isShifted: isShifted,
-            layoutLanguage: layoutLanguage,
+            layout: currentLayout,
             showsGlobeKey: needsInputModeSwitchKey,
             onPrimaryAction: { [weak self] in
                 self?.handlePrimaryAction()
@@ -130,6 +174,9 @@ class KeyboardViewController: UIInputViewController {
             },
             onKeyPress: { [weak self] text in
                 self?.insertKey(text)
+            },
+            onAccentPick: { [weak self] text in
+                self?.replaceLastCharacter(with: text)
             },
             onBackspace: { [weak self] in
                 self?.textDocumentProxy.deleteBackward()
@@ -145,6 +192,9 @@ class KeyboardViewController: UIInputViewController {
             },
             onToggleLayout: { [weak self] in
                 self?.toggleLayoutLanguage()
+            },
+            onSelectLanguage: { [weak self] code in
+                self?.selectLayout(code: code)
             },
             onNextKeyboard: { [weak self] in
                 self?.advanceToNextInputMode()
@@ -224,9 +274,30 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func toggleLayoutLanguage() {
-        layoutLanguage = layoutLanguage.next
-        AppDefaults.shared.set(layoutLanguage.rawValue, forKey: Self.layoutLanguageKey)
+        let target = previousLayoutCode
+        previousLayoutCode = currentLayout.code
+        applyLayout(code: target)
+    }
+
+    private func selectLayout(code: String) {
+        guard code != currentLayout.code else { return }
+        previousLayoutCode = currentLayout.code
+        applyLayout(code: code)
+    }
+
+    private func applyLayout(code: String) {
+        guard let layout = KeyboardLayoutData.layout(for: code) else { return }
+        currentLayout = layout
+        isShifted = false
+        AppDefaults.shared.set(currentLayout.code, forKey: Self.layoutCodeKey)
+        AppDefaults.shared.set(previousLayoutCode, forKey: Self.previousLayoutCodeKey)
         refreshKeyboardRootView()
+    }
+
+    /// Accent picks replace the base letter the long press already inserted.
+    private func replaceLastCharacter(with text: String) {
+        textDocumentProxy.deleteBackward()
+        insertKey(text)
     }
 
     private func refreshKeyboardRootView() {
@@ -234,16 +305,18 @@ class KeyboardViewController: UIInputViewController {
         hostingController?.rootView = KeyboardRecordingView(
             model: recordingViewModel,
             isShifted: isShifted,
-            layoutLanguage: layoutLanguage,
+            layout: currentLayout,
             showsGlobeKey: needsInputModeSwitchKey,
             onPrimaryAction: { [weak self] in self?.handlePrimaryAction() },
             onPauseAction: { [weak self] in self?.togglePauseRecording() },
             onKeyPress: { [weak self] text in self?.insertKey(text) },
+            onAccentPick: { [weak self] text in self?.replaceLastCharacter(with: text) },
             onBackspace: { [weak self] in self?.textDocumentProxy.deleteBackward() },
             onSpace: { [weak self] in self?.textDocumentProxy.insertText(" ") },
             onReturn: { [weak self] in self?.textDocumentProxy.insertText("\n") },
             onShift: { [weak self] in self?.toggleShift() },
             onToggleLayout: { [weak self] in self?.toggleLayoutLanguage() },
+            onSelectLanguage: { [weak self] code in self?.selectLayout(code: code) },
             onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() }
         )
     }

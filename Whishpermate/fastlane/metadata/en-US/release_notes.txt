@@ -1,5 +1,4 @@
-This update improves cloud cleanup reliability.
+This update fixes account login.
 
-• Personal vocabulary now guides recognition without being copied into your dictation.
-• Longer dictations are preserved through the final sentence.
-• Cleanup is less likely to add invented or repeated words.
+• The Log In button in Settings now opens the sign-in form reliably.
+• Referral invites and invite codes prompt for login correctly again.

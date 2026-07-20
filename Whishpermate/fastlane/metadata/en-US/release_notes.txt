@@ -1,4 +1,5 @@
-This update fixes account login.
+This update fixes account login and improves the keyboard.
 
 • The Log In button in Settings now opens the sign-in form reliably.
+• The keyboard can now switch between English and Russian layouts without leaving AI Dictation.
 • Simplified the Settings screen.

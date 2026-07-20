@@ -1,4 +1,4 @@
 This update fixes account login.
 
 • The Log In button in Settings now opens the sign-in form reliably.
-• Referral invites and invite codes prompt for login correctly again.
+• Simplified the Settings screen.

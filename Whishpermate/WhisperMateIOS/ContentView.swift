@@ -54,6 +54,9 @@ struct ContentView: View {
                 consumePendingKeyboardCommandIfNeeded()
                 #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-showAccountLoginForValidation") {
+                        // The login sheet now lives inside the settings sheet,
+                        // matching the path real users take to reach it.
+                        showSettings = true
                         showLoginSheet = true
                     }
                 #endif
@@ -88,9 +91,6 @@ struct ContentView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(loginConfigurationMessage)
-            }
-            .sheet(isPresented: $showLoginSheet) {
-                AccountLoginView(authManager: authManager)
             }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
                 if canDownloadOfflineModelFromAlert {
@@ -640,20 +640,6 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Get More Words") {
-                    ReferralInviteView(
-                        user: authManager.currentUser,
-                        isAuthenticated: authManager.isAuthenticated,
-                        isLoading: isPreparingReferral,
-                        isRedeeming: isRedeemingReferral,
-                        codeToRedeem: $referralCodeToRedeem,
-                        error: referralError,
-                        onInvite: prepareReferralInvite,
-                        onRedeem: redeemReferralCode,
-                        onLogin: openLogin
-                    )
-                }
-
                 Section("Permissions") {
                     Button(action: openAppSettings) {
                         HStack {
@@ -746,6 +732,11 @@ struct ContentView: View {
             .navigationTitle("Settings")
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        // Present from inside the settings sheet: a sheet attached to the root
+        // view cannot present while this sheet is already showing.
+        .sheet(isPresented: $showLoginSheet) {
+            AccountLoginView(authManager: authManager)
+        }
     }
 
     // MARK: - Permission Helpers

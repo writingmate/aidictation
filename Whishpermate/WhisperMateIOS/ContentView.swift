@@ -1173,6 +1173,7 @@ struct ContentView: View {
                 KeyboardDictationHandoff.publishAppReady()
                 drainKeyboardDiagnostics()
                 consumePendingKeyboardCommandIfNeeded()
+                tearDownExpiredKeyboardBridge()
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 if scenePhase != .active, !shouldKeepKeyboardCommandPolling {
                     keyboardCommandPollTask = nil
@@ -1180,6 +1181,17 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// The keyboard refreshes the bridge while it is in use; once it has been
+    /// quiet past the deadline, release the mic, Now Playing entry, and Live
+    /// Activity instead of letting them linger until iOS kills the app.
+    private func tearDownExpiredKeyboardBridge() {
+        guard let expiry = keyboardBridgeAliveUntil, expiry <= Date() else { return }
+        guard inlineRecording.state == .idle else { return }
+
+        DebugLog.info("keyboard bridge expired; shutting down dictation session", context: "KEYBOARD_DIAG")
+        shutdownKeyboardDictation(sessionID: activeKeyboardDictationSessionID)
     }
 
     private func keepKeyboardBridgeAlive() {
@@ -1235,9 +1247,9 @@ private struct KeyboardDictationReturnView: View {
     private var message: String {
         switch state {
         case .processing, .completing:
-            return "Go back to the keyboard. Your text will appear there when it is ready."
+            return "Your text will appear in the keyboard when it is ready."
         default:
-            return "Swipe back to the keyboard. Microphone access is active now."
+            return "Microphone access is active now."
         }
     }
 
@@ -1275,12 +1287,28 @@ private struct KeyboardDictationReturnView: View {
                         .lineSpacing(3)
                 }
 
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.left")
-                    Text("Return to the keyboard")
+                VStack(alignment: .leading, spacing: 14) {
+                    Label {
+                        Text("Tap the back button in the top-left corner to return to the app you were typing in.")
+                    } icon: {
+                        Image(systemName: "arrow.up.left.circle.fill")
+                            .foregroundStyle(Color.dsPrimary)
+                    }
+
+                    Label {
+                        Text("The Live Activity keeps the microphone ready for the keyboard and ends on its own shortly after you finish dictating.")
+                    } icon: {
+                        Image(systemName: "waveform.circle.fill")
+                            .foregroundStyle(Color.dsPrimary)
+                    }
                 }
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 14))
                 .foregroundStyle(Color.secondary)
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(uiColor: .secondarySystemBackground))
+                )
                 .padding(.top, 8)
             }
             .padding(.horizontal, 32)

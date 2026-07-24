@@ -10,6 +10,7 @@ on:
       - 'scripts/validate_ios_audio_processing_recovery.swift'
       - 'scripts/validate_keyboard_audio_recovery.swift'
       - 'scripts/validate_macos_audio_processing_store.swift'
+      - 'scripts/validate_macos_lifecycle_guards.swift'
       - 'scripts/validate_macos_recording_recovery.swift'
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
@@ -30,6 +31,7 @@ on:
       - 'scripts/validate_ios_audio_processing_recovery.swift'
       - 'scripts/validate_keyboard_audio_recovery.swift'
       - 'scripts/validate_macos_audio_processing_store.swift'
+      - 'scripts/validate_macos_lifecycle_guards.swift'
       - 'scripts/validate_macos_recording_recovery.swift'
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
@@ -58,6 +60,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify checked out commit
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$GITHUB_SHA" ]; then
+            echo "Recovery contracts checked out $actual_sha instead of event commit $GITHUB_SHA." >&2
+            exit 1
+          fi
 
       - name: Run deterministic recovery matrix
         run: bash scripts/validate_apple_audio_recovery.sh
@@ -70,6 +82,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify checked out commit
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$GITHUB_SHA" ]; then
+            echo "Apple builds checked out $actual_sha instead of event commit $GITHUB_SHA." >&2
+            exit 1
+          fi
 
       - name: Build macOS universal app
         run: |

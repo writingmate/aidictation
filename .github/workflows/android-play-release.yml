@@ -114,7 +114,7 @@ jobs:
         with:
           fetch-depth: 0
           lfs: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 
       - name: Resolve release metadata
         id: release_meta
@@ -162,7 +162,20 @@ jobs:
             exit 1
           fi
 
-          tag_sha=$(git rev-list -n 1 "$release_tag")
+          if ! git rev-parse -q --verify "refs/tags/$release_tag^{commit}" >/dev/null; then
+            echo "Release tag $release_tag does not exist." >&2
+            exit 1
+          fi
+          tag_sha=$(git rev-list -n 1 "refs/tags/$release_tag")
+          actual_sha=$(git rev-parse HEAD)
+          if [ "$actual_sha" != "$tag_sha" ]; then
+            echo "Play release checkout $actual_sha does not match tag $release_tag at $tag_sha." >&2
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "Release tag $release_tag does not match push event commit $GITHUB_SHA." >&2
+            exit 1
+          fi
           git fetch origin main --prune
           if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
             echo "Release tag $release_tag points to $tag_sha, which is not on origin/main." >&2
@@ -173,6 +186,8 @@ jobs:
           echo "VERSION_CODE=$version_code" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$version_name" >> "$GITHUB_ENV"
           echo "PLAY_RELEASE_NAME=AIDictation Android ${version_name} (${version_code})" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG_SHA=$tag_sha" >> "$GITHUB_ENV"
 
       - name: Download Parakeet model assets
         env:
@@ -354,6 +369,15 @@ jobs:
       - name: Validate release bundle
         run: |
           ./gradlew :app:bundleRelease -PPARAKEET_RUNTIME="${PARAKEET_RUNTIME}" --stacktrace
+
+      - name: Verify release source before publishing
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
+          if [ "$actual_sha" != "$RELEASE_TAG_SHA" ] || [ "$tag_sha" != "$RELEASE_TAG_SHA" ]; then
+            echo "Refusing to publish artifacts not built from tag $RELEASE_TAG at $RELEASE_TAG_SHA." >&2
+            exit 1
+          fi
 
       - name: Publish Play listing assets
         run: |

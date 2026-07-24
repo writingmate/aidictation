@@ -18,9 +18,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Verify release commit is on main
         run: |
+          actual_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-list -n 1 "refs/tags/$GITHUB_REF_NAME")"
+          if [ "$actual_sha" != "$GITHUB_SHA" ] || [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "Release checkout ($actual_sha) or tag ($tag_sha) does not match event commit $GITHUB_SHA." >&2
+            exit 1
+          fi
           git fetch origin main --prune
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "Release tag ${GITHUB_REF_NAME} is not based on origin/main." >&2
@@ -40,27 +47,29 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify tagged source checkout
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-list -n 1 "refs/tags/$GITHUB_REF_NAME")"
+          if [ "$actual_sha" != "$GITHUB_SHA" ] || [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "Release checkout ($actual_sha) or tag ($tag_sha) does not match event commit $GITHUB_SHA." >&2
+            exit 1
+          fi
 
       - name: Extract version info
         id: version
         run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Release tags must match v<major>.<minor>.<patch>; got $GITHUB_REF_NAME." >&2
+            exit 1
+          fi
+          TAG="${BASH_REMATCH[1]}"
           BUILD="${TAG##*.}"
-          echo "version=$TAG" >> $GITHUB_OUTPUT
-          echo "build=$BUILD" >> $GITHUB_OUTPUT
-          echo "tag=v$TAG" >> $GITHUB_OUTPUT
-
-      - name: Bump version in project
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          BUILD="${{ steps.version.outputs.build }}"
-          awk -v v="$VERSION" -v b="$BUILD" '
-            /MARKETING_VERSION/     { sub(/= [^;]+/, "= " v) }
-            /CURRENT_PROJECT_VERSION/ { sub(/= [^;]+/, "= " b) }
-            { print }
-          ' Whishpermate/Whispermate.xcodeproj/project.pbxproj \
-            > /tmp/project.pbxproj.tmp
-          mv /tmp/project.pbxproj.tmp Whishpermate/Whispermate.xcodeproj/project.pbxproj
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=v$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Cache SPM packages
         uses: actions/cache@v4
@@ -124,19 +133,83 @@ jobs:
             -project Whishpermate/Whispermate.xcodeproj \
             -scheme Whispermate
 
-      - name: Build archive
+      - name: Verify release build settings
         run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Tracked source changed after checking out release tag ${GITHUB_REF_NAME}." >&2
+            git status --short >&2
+            exit 1
+          fi
           xcodebuild \
             -project Whishpermate/Whispermate.xcodeproj \
             -scheme Whispermate \
             -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -showBuildSettings \
+            -json \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            > /tmp/release-build-settings.json
+          python3 - "$VERSION" "$BUILD" <<'PYEOF'
+          import json
+          import sys
+
+          expected_version, expected_build = sys.argv[1:]
+          with open("/tmp/release-build-settings.json", encoding="utf-8") as settings_file:
+              targets = json.load(settings_file)
+          if not targets:
+              raise SystemExit("xcodebuild returned no archived targets")
+
+          mismatches = []
+          for target in targets:
+              name = target.get("target", "<unknown>")
+              settings = target.get("buildSettings", {})
+              actual_version = settings.get("MARKETING_VERSION")
+              actual_build = settings.get("CURRENT_PROJECT_VERSION")
+              if (actual_version, actual_build) != (expected_version, expected_build):
+                  mismatches.append(
+                      f"{name}: MARKETING_VERSION={actual_version!r}, "
+                      f"CURRENT_PROJECT_VERSION={actual_build!r}"
+                  )
+          if mismatches:
+              raise SystemExit(
+                  "release version overrides did not reach every archived target:\n"
+                  + "\n".join(mismatches)
+              )
+          print(
+              f"verified {len(targets)} archived target(s) at "
+              f"{expected_version} ({expected_build})"
+          )
+          PYEOF
+
+      - name: Build archive
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          xcodebuild \
+            -project Whishpermate/Whispermate.xcodeproj \
+            -scheme Whispermate \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
             -archivePath /tmp/AIDictation.xcarchive \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM=G7DJ6P37KU \
             ARCHS="arm64 x86_64" \
             ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
             archive
+
+      - name: Verify archive kept tagged source unchanged
+        run: |
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Tracked source changed while archiving release tag ${GITHUB_REF_NAME}." >&2
+            git status --short >&2
+            exit 1
+          fi
 
       - name: Export with Developer ID signing
         run: |
@@ -163,6 +236,15 @@ jobs:
           AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
         run: |
           APP=/tmp/AIDictation-export/AIDictation.app
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          INFO_PLIST="$APP/Contents/Info.plist"
+          packaged_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+          packaged_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
+          if [ "$packaged_version" != "$VERSION" ] || [ "$packaged_build" != "$BUILD" ]; then
+            echo "Packaged app is $packaged_version ($packaged_build), expected $VERSION ($BUILD)." >&2
+            exit 1
+          fi
           scripts/validate_macos_universal_app.sh "$APP"
           python3 scripts/validate_release_transcription_config.py \
             --secrets "$APP/Contents/Resources/Secrets.plist" \
@@ -232,6 +314,13 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           TAG="v${VERSION}"
           DMG="/tmp/AIDictation-v${VERSION}.dmg"
+          actual_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-list -n 1 "refs/tags/$TAG")"
+          if [ "$actual_sha" != "$GITHUB_SHA" ] || [ "$tag_sha" != "$GITHUB_SHA" ] \
+            || ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Refusing to publish artifacts not built from event commit $GITHUB_SHA." >&2
+            exit 1
+          fi
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$TAG" "$DMG" --clobber --repo "${{ github.repository }}"
             gh release edit "$TAG" --title "AIDictation v${VERSION}" --repo "${{ github.repository }}"
@@ -302,11 +391,17 @@ jobs:
           print(f"appcast validated for v{version} (build {build}, macOS {minimum_os})")
           PYEOF
 
-      - name: Commit appcast and version bump to main
+          unexpected_changes="$(git diff --name-only -- . ':(exclude)appcast.xml')"
+          if [ -n "$unexpected_changes" ]; then
+            echo "Only appcast.xml may change after building release tag ${GITHUB_REF_NAME}." >&2
+            printf '%s\n' "$unexpected_changes" >&2
+            exit 1
+          fi
+
+      - name: Commit appcast to main
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cp appcast.xml /tmp/appcast.xml
-          cp Whishpermate/Whispermate.xcodeproj/project.pbxproj /tmp/project.pbxproj
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -314,11 +409,9 @@ jobs:
           git checkout -f -B release-feed-update FETCH_HEAD
 
           cp /tmp/appcast.xml appcast.xml
-          cp /tmp/project.pbxproj Whishpermate/Whispermate.xcodeproj/project.pbxproj
           git add appcast.xml
-          git add -f Whishpermate/Whispermate.xcodeproj/project.pbxproj
           if git diff --cached --quiet; then
-            echo "No appcast or version changes to commit"
+            echo "No appcast changes to commit"
             exit 0
           fi
           git commit -m "update appcast for v${VERSION} release"

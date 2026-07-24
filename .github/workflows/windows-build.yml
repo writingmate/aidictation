@@ -38,10 +38,16 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
 
     - name: Verify trusted ref
       shell: bash
       run: |
+        actual_sha="$(git rev-parse HEAD)"
+        if [ "$actual_sha" != "$GITHUB_SHA" ]; then
+          echo "Provenance checkout $actual_sha does not match event commit $GITHUB_SHA." >&2
+          exit 1
+        fi
         if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
           exit 0
         fi
@@ -64,6 +70,15 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+
+    - name: Verify checked out commit
+      shell: pwsh
+      run: |
+        $actualSha = (git rev-parse HEAD).Trim()
+        if ($actualSha -ne $env:GITHUB_SHA) {
+          throw "Windows build checkout $actualSha does not match event commit $env:GITHUB_SHA."
+        }
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -172,6 +187,17 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        ref: ${{ github.sha }}
+
+    - name: Verify release source
+      shell: pwsh
+      run: |
+        $tag = "${{ github.ref_name }}"
+        $actualSha = (git rev-parse HEAD).Trim()
+        $tagSha = (git rev-list -n 1 "refs/tags/$tag").Trim()
+        if ($actualSha -ne $env:GITHUB_SHA -or $tagSha -ne $env:GITHUB_SHA) {
+          throw "Release checkout ($actualSha) or tag ($tagSha) does not match event commit $env:GITHUB_SHA."
+        }
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -228,6 +254,11 @@ jobs:
       run: |
         $version = "${{ steps.version.outputs.VERSION }}"
         $tag = "${{ github.ref_name }}"
+        $actualSha = (git rev-parse HEAD).Trim()
+        $tagSha = (git rev-list -n 1 "refs/tags/$tag").Trim()
+        if ($actualSha -ne $env:GITHUB_SHA -or $tagSha -ne $env:GITHUB_SHA) {
+          throw "Refusing to publish artifacts not built from event commit $env:GITHUB_SHA."
+        }
         $zip = "./AIDictation-Windows-v$version.zip"
         $installer = "./installer/AIDictation-Windows-Setup-v$version.exe"
         $notes = @"

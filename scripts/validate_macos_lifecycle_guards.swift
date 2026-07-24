@@ -125,9 +125,21 @@ private func testProductionIntegrationContracts() throws {
         appState.contains("terminationOwnedStoreIDs.formUnion(pendingPreparationStoreIDs.keys)"),
         "Quit ownership does not include store preparation that has not reached AudioRecorder"
     )
+    let startRecordingStart = appState.range(of: "func startRecording(")!.lowerBound
+    let startRecordingEnd = appState.range(
+        of: "private func beginPreparedCapture(",
+        range: startRecordingStart..<appState.endIndex
+    )!.lowerBound
+    let startRecordingBody = appState[startRecordingStart..<startRecordingEnd]
+    let retranscribeStart = appState.range(of: "func retranscribe(recording: Recording)")!.lowerBound
+    let retranscribeEnd = appState.range(
+        of: "private func runRetranscription(",
+        range: retranscribeStart..<appState.endIndex
+    )!.lowerBound
+    let retranscribeBody = appState[retranscribeStart..<retranscribeEnd]
     try require(
-        appState.contains("!recording.isInProgress,\\n              !terminationBarrierActive")
-            && appState.contains("retranscriptionAttemptIDs.isEmpty,\\n              !terminationBarrierActive"),
+        startRecordingBody.contains("!terminationBarrierActive")
+            && retranscribeBody.contains("!terminationBarrierActive"),
         "start or retry can run while a refused Quit still owns unresolved work"
     )
     try require(
@@ -171,7 +183,7 @@ private func testProductionIntegrationContracts() throws {
     try require(
         client.contains("MacBoundedNativeOperation<Void>")
             && client.contains("chunkExportTimeoutNanoseconds")
-            && client.contains("transientWorkspace.validateCompletedOutput"),
+            && client.contains("workspace.validateCompletedOutput"),
         "the production chunk exporter is not independently bounded and capability-validated"
     )
 }

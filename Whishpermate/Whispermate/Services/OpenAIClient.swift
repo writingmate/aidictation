@@ -611,6 +611,7 @@ final class OpenAIClient: @unchecked Sendable {
     /// Transcribe audio and optionally apply formatting rules
     func transcribeAndFormat(
         audioURL: URL,
+        transientWorkspace: MacTransientWorkspace,
         prompt: String? = nil,
         formattingRules: [String] = [],
         languageCodes _: String? = nil,
@@ -656,7 +657,8 @@ final class OpenAIClient: @unchecked Sendable {
         // The custom API will handle two-stage processing (Whisper + LLM refinement)
         let rawTranscription = try await transcribe(
             audioURL: audioURL,
-            prompt: combinedPrompt.isEmpty ? nil : combinedPrompt
+            prompt: combinedPrompt.isEmpty ? nil : combinedPrompt,
+            transientWorkspace: transientWorkspace
         )
 
         // Check if transcription is empty

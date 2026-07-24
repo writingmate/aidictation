@@ -44,6 +44,9 @@ class AudioRecorder: NSObject, ObservableObject {
     private var pendingPreparation: MacCapturePreparation?
     private var activeCapture: MacCaptureSession?
     private var pendingFinalization: MacCaptureFinalization?
+    private var nativeCloseProofs: [UUID: MacNativeRecorderCloseProof] = [:]
+    private var nativeRecordingURLs: [UUID: URL] = [:]
+    private var terminationCloseRequested = false
     private let realtimeHandlerLock = NSLock()
     private var storedRealtimeAudioChunkHandler: ((Data) -> Void)?
     private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
@@ -162,16 +165,29 @@ class AudioRecorder: NSObject, ObservableObject {
         guard pendingPreparation == nil,
               pendingFinalization == nil,
               activeCapture == nil,
-              !isRecording
+              !isRecording,
+              !terminationCloseRequested,
+              !nativeCloseProofs.values.contains(where: { !$0.isConfirmedClosed })
         else {
             completion(.failed("Recording is already active."))
             return
         }
 
+        let retainedIDs = Set(
+            nativeCloseProofs
+                .filter { !$0.value.isConfirmedClosed }
+                .map(\.key)
+        )
+        nativeCloseProofs = nativeCloseProofs.filter { retainedIDs.contains($0.key) }
+        nativeRecordingURLs = nativeRecordingURLs.filter { retainedIDs.contains($0.key) }
         let deviceSnapshot = AudioDeviceManager.shared.makeCaptureSelectionSnapshot()
+        let closeProof = MacNativeRecorderCloseProof()
+        nativeCloseProofs[recordingID] = closeProof
+        nativeRecordingURLs[recordingID] = recordingURL
         let preparation = MacCapturePreparation(
             recordingID: recordingID,
             recordingURL: recordingURL,
+            closeProof: closeProof,
             completion: completion
         )
         pendingPreparation = preparation
@@ -248,6 +264,64 @@ class AudioRecorder: NSObject, ObservableObject {
         }
     }
 
+    /// Transfers every matching native writer into retained termination
+    /// ownership before clearing its public slot. Returned proof identities are
+    /// stable across repeated Quit attempts and are never consumed by polling.
+    func beginTerminationClose(
+        recordingIDs: Set<UUID>
+    ) -> [UUID: MacNativeRecorderCloseProof] {
+        precondition(Thread.isMainThread)
+        terminationCloseRequested = true
+
+        if let preparation = pendingPreparation,
+           recordingIDs.contains(preparation.recordingID) {
+            _ = preparation.attempt.resolve(.cancelled)
+            preparation.retireSession()
+            pendingPreparation = nil
+            resetFailedStart()
+            preparation.completion(.cancelled)
+            preparation.scheduleCleanup(deleteFile: false)
+        }
+
+        if let session = activeCapture,
+           recordingIDs.contains(session.recordingID) {
+            activeCapture = nil
+            session.retire()
+            resetFailedStart()
+            DispatchQueue(
+                label: "ai.writingmate.audio-termination.\(session.recordingID.uuidString)",
+                qos: .utility
+            ).async {
+                session.cleanup(deleteFile: false)
+            }
+        }
+
+        // A finalization already owns cleanup on its serial queue. Its stable
+        // proof remains in nativeCloseProofs until the caller observes closure.
+        return nativeCloseProofs.filter { recordingIDs.contains($0.key) }
+    }
+
+    func acknowledgeConfirmedClose(recordingID: UUID) {
+        precondition(Thread.isMainThread)
+        guard nativeCloseProofs[recordingID]?.isConfirmedClosed == true else { return }
+        nativeCloseProofs.removeValue(forKey: recordingID)
+        nativeRecordingURLs.removeValue(forKey: recordingID)
+    }
+
+    @discardableResult
+    func releaseTerminationBarrierIfClosed(recordingIDs: Set<UUID>) -> Bool {
+        precondition(Thread.isMainThread)
+        let unresolved = recordingIDs.contains { nativeCloseProofs[$0]?.isConfirmedClosed == false }
+        guard !unresolved else { return false }
+        terminationCloseRequested = false
+        for recordingID in recordingIDs
+            where nativeCloseProofs[recordingID]?.isConfirmedClosed == true {
+            nativeCloseProofs.removeValue(forKey: recordingID)
+            nativeRecordingURLs.removeValue(forKey: recordingID)
+        }
+        return true
+    }
+
     private func prepareCapture(
         _ preparation: MacCapturePreparation,
         deviceSnapshot: AudioDeviceManager.CaptureSelectionSnapshot
@@ -305,7 +379,8 @@ class AudioRecorder: NSObject, ObservableObject {
                 audioFile: audioFile,
                 recordingURL: recordingURL,
                 outputFormat: outputFormat,
-                deviceResolution: deviceResolution
+                deviceResolution: deviceResolution,
+                closeProof: preparation.closeProof
             )
             preparation.setSession(session)
 
@@ -694,6 +769,16 @@ class AudioRecorder: NSObject, ObservableObject {
         }
         guard let session = activeCapture else {
             resetFailedStart()
+            let closedCandidates = nativeCloseProofs.compactMap { recordingID, proof in
+                proof.isConfirmedClosed
+                    ? nativeRecordingURLs[recordingID]
+                    : nil
+            }
+            if closedCandidates.count == 1,
+               let closedURL = closedCandidates.first {
+                completion(.finalized(closedURL))
+                return
+            }
             completion(.unavailable("No recording is available to save."))
             return
         }
@@ -815,6 +900,7 @@ private final class MacCapturePreparation: @unchecked Sendable {
     let recordingID: UUID
     let attempt: RecordingPreparationAttempt
     let recordingURL: URL
+    let closeProof: MacNativeRecorderCloseProof
     let queue = DispatchQueue(
         label: "ai.writingmate.audio-preparation.\(UUID().uuidString)",
         qos: .userInitiated
@@ -829,6 +915,7 @@ private final class MacCapturePreparation: @unchecked Sendable {
     init(
         recordingID: UUID,
         recordingURL: URL,
+        closeProof: MacNativeRecorderCloseProof,
         completion: @escaping (RecordingPreparationAttempt.Terminal) -> Void
     ) {
         self.recordingID = recordingID
@@ -836,6 +923,7 @@ private final class MacCapturePreparation: @unchecked Sendable {
             token: RecordingPreparationAttempt.Token(rawValue: recordingID)
         )
         self.recordingURL = recordingURL
+        self.closeProof = closeProof
         self.completion = completion
     }
 
@@ -895,7 +983,11 @@ private final class MacCapturePreparation: @unchecked Sendable {
             self.lock.lock()
             let session = self.storedSession
             self.lock.unlock()
-            session?.cleanup(deleteFile: deleteFile)
+            if let session {
+                session.cleanup(deleteFile: deleteFile)
+            } else {
+                self.closeProof.confirmClosed()
+            }
         }
     }
 }
@@ -947,6 +1039,7 @@ private final class MacCaptureSession: @unchecked Sendable {
     let recordingURL: URL
     let outputFormat: AVAudioFormat
     let deviceResolution: AudioDeviceManager.CaptureDeviceResolution
+    let closeProof: MacNativeRecorderCloseProof
 
     private let condition = NSCondition()
     private let cleanupClaim = RecordingPreparationCleanupClaim()
@@ -964,7 +1057,8 @@ private final class MacCaptureSession: @unchecked Sendable {
         audioFile: AVAudioFile,
         recordingURL: URL,
         outputFormat: AVAudioFormat,
-        deviceResolution: AudioDeviceManager.CaptureDeviceResolution
+        deviceResolution: AudioDeviceManager.CaptureDeviceResolution,
+        closeProof: MacNativeRecorderCloseProof
     ) {
         self.recordingID = recordingID
         self.engine = engine
@@ -972,6 +1066,7 @@ private final class MacCaptureSession: @unchecked Sendable {
         self.recordingURL = recordingURL
         self.outputFormat = outputFormat
         self.deviceResolution = deviceResolution
+        self.closeProof = closeProof
     }
 
     var isActive: Bool {
@@ -1089,6 +1184,7 @@ private final class MacCaptureSession: @unchecked Sendable {
         }
         audioFile = nil
         condition.unlock()
+        closeProof.confirmClosed()
 
         if deleteFile {
             try? FileManager.default.removeItem(at: recordingURL)

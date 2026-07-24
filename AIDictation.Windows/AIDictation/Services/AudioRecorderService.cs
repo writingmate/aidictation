@@ -25,6 +25,10 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource<RecorderFinalizationResult> Finalized =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<bool> WriterClosed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<bool> SetupCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public WasapiCapture? Capture;
         public WaveFileWriter? Writer;
         public EventHandler<WaveInEventArgs>? DataHandler;
@@ -35,8 +39,8 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
 
     private static readonly TimeSpan FirstWriteDeadline = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DefaultFinalizationDeadline = TimeSpan.FromSeconds(10);
-    private readonly object _sessionLock = new();
-    private CaptureSession? _session;
+    private readonly object _lifetimeLock = new();
+    private readonly RetiredNativeCloseRegistry<CaptureSession> _closeRegistry = new();
     private bool _disposed;
 
     public static AudioRecorderService Instance { get; } = new();
@@ -50,7 +54,7 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
     {
         get
         {
-            lock (_sessionLock) return _session != null;
+            return _closeRegistry.HasCurrent;
         }
     }
 
@@ -82,16 +86,17 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
     {
         ThrowIfDisposed();
         var session = new CaptureSession { Lease = lease, PartialSourcePath = partialSourcePath };
-        lock (_sessionLock)
-        {
-            if (_session != null)
-                return RecorderStartResult.Failure("Another recording is already active.");
-            _session = session;
-        }
+        if (!_closeRegistry.TryInstall(session))
+            return RecorderStartResult.Failure("Another recording is already active.");
 
         try
         {
-            var setupTask = Task.Run(() => StartWasapiSession(session, selectedDeviceId), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var setupTask = Task.Run(() =>
+            {
+                try { StartWasapiSession(session, selectedDeviceId); }
+                finally { session.SetupCompleted.TrySetResult(true); }
+            }, CancellationToken.None);
             try
             {
                 await setupTask.WaitAsync(FirstWriteDeadline, cancellationToken).ConfigureAwait(false);
@@ -223,6 +228,77 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         await AbandonSessionAsync(session, reason).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<RecorderFinalizationResult?> ShutdownAsync(
+        AudioAttemptLease? activeLease,
+        TimeSpan deadline,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lifetimeLock) _disposed = true;
+        var stopwatch = Stopwatch.StartNew();
+        var snapshot = _closeRegistry.BeginShutdown();
+        var session = snapshot.Current?.Resource;
+        if (session != null)
+        {
+            _ = session.TerminalFence.TryClaimTerminal();
+            session.FirstWrite.TrySetCanceled();
+            _ = StartTrackedClose(session, snapshot.Current);
+        }
+
+        RecorderFinalizationResult? result = null;
+        if (session != null)
+        {
+            var matchesLease = activeLease != null &&
+                               session.Lease.RecordingId == activeLease.RecordingId &&
+                               session.Lease.AttemptId == activeLease.AttemptId &&
+                               session.Lease.DeletionGeneration == activeLease.DeletionGeneration &&
+                               session.Lease.ClearGeneration == activeLease.ClearGeneration;
+            try
+            {
+                await session.WriterClosed.Task
+                    .WaitAsync(Remaining(deadline, stopwatch), cancellationToken)
+                    .ConfigureAwait(false);
+                var validation = AudioContainerValidator.ValidateFinalizedWave(session.PartialSourcePath);
+                result = new RecorderFinalizationResult(
+                    matchesLease && session.WriteFailure == null && validation.IsValid,
+                    session.PartialSourcePath,
+                    matchesLease && session.WriteFailure == null && validation.IsValid
+                        ? null
+                        : validation.ErrorMessage ??
+                          "The recording did not finish closing before the app exited.");
+            }
+            catch (TimeoutException)
+            {
+                result = new RecorderFinalizationResult(
+                    false,
+                    session.PartialSourcePath,
+                    "The microphone did not finish closing before the app exited.",
+                    TimedOut: true);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                result = new RecorderFinalizationResult(
+                    false,
+                    session.PartialSourcePath,
+                    "Recording finalization was cancelled while the app was exiting.",
+                    TimedOut: true);
+            }
+            session.Finalized.TrySetResult(result);
+        }
+
+        try
+        {
+            if (snapshot.CloseTasks.Count > 0)
+            {
+                await Task.WhenAll(snapshot.CloseTasks)
+                    .WaitAsync(Remaining(deadline, stopwatch), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (TimeoutException) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        return result;
+    }
+
     public static float CalculateRmsLevel(byte[] buffer, int bytesRecorded, int bitsPerSample)
     {
         if (bytesRecorded == 0) return 0;
@@ -300,7 +376,6 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         }
         catch
         {
-            _ = session.TerminalFence.TryClaimTerminal();
             if (capture != null)
             {
                 if (session.DataHandler != null) capture.DataAvailable -= session.DataHandler;
@@ -368,8 +443,8 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         _ = Task.Run(async () =>
         {
             if (!session.TerminalFence.TryClaimTerminal()) return;
-            await DisposeSessionResourcesAsync(session).ConfigureAwait(false);
-            ClearCurrent(session);
+            _ = StartTrackedClose(session);
+            await session.WriterClosed.Task.ConfigureAwait(false);
             var failure = session.WriteFailure ?? args.Exception;
             session.Finalized.TrySetResult(new RecorderFinalizationResult(
                 failure == null,
@@ -392,7 +467,7 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
     private async Task<bool> AbandonSessionAsync(CaptureSession session, string message, bool timedOut = false)
     {
         var wonTerminal = session.TerminalFence.TryClaimTerminal();
-        ClearCurrent(session);
+        if (wonTerminal) _ = StartTrackedClose(session);
         session.FirstWrite.TrySetCanceled();
         // Complete the UI-facing deadline immediately even when native WASAPI
         // teardown ignores cancellation or stalls. Resource cleanup is fenced
@@ -402,53 +477,77 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
             session.PartialSourcePath,
             message,
             timedOut));
-        if (wonTerminal) _ = DisposeSessionResourcesAsync(session);
         await Task.CompletedTask;
         return wonTerminal;
     }
 
-    private static Task DisposeSessionResourcesAsync(CaptureSession session) => Task.Run(() =>
+    private Task StartTrackedClose(
+        CaptureSession session,
+        NativeCloseRegistration<CaptureSession>? registration = null)
     {
-        lock (session.WriterLock)
+        registration ??= _closeRegistry.Retire(session);
+        if (registration == null) return Task.CompletedTask;
+        if (!registration.OwnsClose) return registration.Completion;
+
+        _ = Task.Run(async () =>
         {
-            try { session.Writer?.Dispose(); } catch (Exception ex) { session.WriteFailure ??= ex; }
-            session.Writer = null;
-        }
+            try
+            {
+                DisposeSessionResourcesCore(session);
+                await session.SetupCompleted.Task.ConfigureAwait(false);
+                // A setup that observed retirement disposes its locals itself.
+                // Run once more in case it published a resource immediately
+                // before observing the terminal fence.
+                DisposeSessionResourcesCore(session);
+            }
+            finally
+            {
+                session.WriterClosed.TrySetResult(session.WriteFailure == null);
+                _closeRegistry.Complete(session);
+            }
+        });
+        return registration.Completion;
+    }
+
+    private static void DisposeSessionResourcesCore(CaptureSession session)
+    {
         var capture = session.Capture;
         if (capture != null)
         {
             if (session.DataHandler != null) capture.DataAvailable -= session.DataHandler;
             if (session.StoppedHandler != null) capture.RecordingStopped -= session.StoppedHandler;
+        }
+        var hadWriter = false;
+        lock (session.WriterLock)
+        {
+            hadWriter = session.Writer != null;
+            try { session.Writer?.Dispose(); }
+            catch (Exception ex) { session.WriteFailure ??= ex; }
+            session.Writer = null;
+        }
+        // A durable WAV header no longer depends on potentially wedged native
+        // capture disposal. Signal it before disposing the WASAPI generation.
+        if (hadWriter || session.SetupCompleted.Task.IsCompleted)
+            session.WriterClosed.TrySetResult(session.WriteFailure == null);
+        if (capture != null)
+        {
             try { capture.Dispose(); } catch { }
             session.Capture = null;
         }
-    });
+    }
 
     private CaptureSession? CurrentMatchingSession(AudioAttemptLease lease)
     {
-        lock (_sessionLock)
-        {
-            return _session != null && _session.Lease.RecordingId == lease.RecordingId &&
-                   _session.Lease.AttemptId == lease.AttemptId &&
-                   _session.Lease.DeletionGeneration == lease.DeletionGeneration &&
-                   _session.Lease.ClearGeneration == lease.ClearGeneration
-                ? _session
-                : null;
-        }
+        var session = _closeRegistry.Current;
+        return session != null && session.Lease.RecordingId == lease.RecordingId &&
+               session.Lease.AttemptId == lease.AttemptId &&
+               session.Lease.DeletionGeneration == lease.DeletionGeneration &&
+               session.Lease.ClearGeneration == lease.ClearGeneration
+            ? session
+            : null;
     }
 
-    private bool IsCurrent(CaptureSession session)
-    {
-        lock (_sessionLock) return ReferenceEquals(_session, session);
-    }
-
-    private void ClearCurrent(CaptureSession session)
-    {
-        lock (_sessionLock)
-        {
-            if (ReferenceEquals(_session, session)) _session = null;
-        }
-    }
+    private bool IsCurrent(CaptureSession session) => _closeRegistry.IsCurrent(session);
 
     private static List<AudioDevice> GetInputDevicesCore()
     {
@@ -583,7 +682,17 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
 
     private void ThrowIfDisposed()
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(AudioRecorderService));
+        lock (_lifetimeLock)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(AudioRecorderService));
+        }
+    }
+
+    private static TimeSpan Remaining(TimeSpan deadline, Stopwatch stopwatch)
+    {
+        var remaining = deadline - stopwatch.Elapsed;
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException();
+        return remaining;
     }
 
     private static void ObserveLateTask(Task task)
@@ -597,12 +706,23 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        CaptureSession? session;
-        lock (_sessionLock) session = _session;
-        if (session != null)
-            AbandonSessionAsync(session, "The app closed during recording.").GetAwaiter().GetResult();
+        lock (_lifetimeLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+        var snapshot = _closeRegistry.BeginShutdown();
+        if (snapshot.Current != null)
+        {
+            var session = snapshot.Current.Resource;
+            _ = session.TerminalFence.TryClaimTerminal();
+            session.FirstWrite.TrySetCanceled();
+            session.Finalized.TrySetResult(new RecorderFinalizationResult(
+                false,
+                session.PartialSourcePath,
+                "The app closed during recording."));
+            _ = StartTrackedClose(session, snapshot.Current);
+        }
     }
 }
 

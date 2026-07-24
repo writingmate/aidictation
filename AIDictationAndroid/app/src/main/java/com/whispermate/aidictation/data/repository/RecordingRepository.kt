@@ -1,7 +1,7 @@
 package com.whispermate.aidictation.data.repository
 
 import android.content.Context
-import com.whispermate.aidictation.data.local.ManagedAudioTemporaryFiles
+import com.whispermate.aidictation.data.local.ManagedAudioSourceFiles
 import com.whispermate.aidictation.data.local.dao.RecordingDao
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
 import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
@@ -20,11 +20,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -48,7 +55,9 @@ internal fun writeFinalizedAudioMarker(
     source: File,
     durationMs: Long
 ) {
-    require(source.isFile && source.length() > 0L) { "The finalized audio is empty" }
+    require(Files.isRegularFile(source.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+        source.length() > 0L
+    ) { "The finalized audio is empty" }
     require(durationMs > 0L) { "The finalized audio has no duration" }
     val marker = finalizedAudioMarkerFile(source)
     val temporary = File(marker.parentFile, "${marker.name}.${lease.attemptId}.tmp")
@@ -61,24 +70,37 @@ internal fun writeFinalizedAudioMarker(
         source.length().toString()
     ).joinToString("\n")
     try {
-        FileOutputStream(temporary, false).use { output ->
-            output.write(payload.toByteArray(Charsets.UTF_8))
-            output.fd.sync()
+        Files.deleteIfExists(temporary.toPath())
+        FileChannel.open(
+            temporary.toPath(),
+            setOf(
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS
+            )
+        ).use { output ->
+            val bytes = ByteBuffer.wrap(payload.toByteArray(Charsets.UTF_8))
+            while (bytes.hasRemaining()) output.write(bytes)
+            output.force(true)
         }
-        if (marker.exists() && !marker.delete()) {
-            throw IOException("The previous finalized-audio marker could not be replaced")
-        }
-        if (!temporary.renameTo(marker)) {
-            throw IOException("The finalized-audio marker could not be committed")
-        }
+        Files.deleteIfExists(marker.toPath())
+        Files.move(
+            temporary.toPath(),
+            marker.toPath(),
+            StandardCopyOption.ATOMIC_MOVE
+        )
     } finally {
-        if (temporary.exists()) temporary.delete()
+        runCatching { Files.deleteIfExists(temporary.toPath()) }
     }
 }
 
 internal fun readFinalizedAudioMarker(source: File): FinalizedAudioMarker? {
+    if (!Files.isRegularFile(source.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
     val marker = finalizedAudioMarkerFile(source)
-    val fields = runCatching { marker.readLines(Charsets.UTF_8) }.getOrNull() ?: return null
+    if (!Files.isRegularFile(marker.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
+    val fields = runCatching {
+        Files.readAllLines(marker.toPath(), Charsets.UTF_8)
+    }.getOrNull() ?: return null
     if (fields.size != 6 || fields[0] != FINALIZED_AUDIO_MARKER_VERSION) return null
     val parsed = FinalizedAudioMarker(
         recordingId = fields[1],
@@ -88,7 +110,9 @@ internal fun readFinalizedAudioMarker(source: File): FinalizedAudioMarker? {
         sourceLength = fields[5].toLongOrNull() ?: return null
     )
     return parsed.takeIf {
-        it.durationMs > 0L && it.sourceLength > 0L && source.isFile && source.length() == it.sourceLength
+        it.durationMs > 0L && it.sourceLength > 0L &&
+            Files.isRegularFile(source.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+            source.length() == it.sourceLength
     }
 }
 
@@ -103,15 +127,15 @@ class RecordingRepository @Inject constructor(
 
     private val startupRecoveryComplete = CompletableDeferred<Unit>()
     private val recoveryOperationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val managedAudioDirectory = File(context.filesDir, "audio/recordings")
+    private val managedAudioSources = ManagedAudioSourceFiles(context)
 
     val recordings: Flow<List<Recording>> = flow {
         startupRecoveryComplete.await()
         emitAll(
             recordingDao.getAllRecordings()
-                .map { entities -> entities.map { it.toDomain() } }
+                .map { entities -> entities.map { it.toVisibleDomain() } }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     val pendingUsageClaimCount: Flow<Int> = recordingDao.observePendingUsageClaimCount()
 
@@ -122,10 +146,11 @@ class RecordingRepository @Inject constructor(
         usageEligible: Boolean,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease {
+        val managedSource = managedAudioSources.prepareCaptureSource(recordingId, partialSourcePath)
         val row = Recording(
             id = recordingId,
             timestamp = now,
-            audioFilePath = partialSourcePath,
+            audioFilePath = managedSource.absolutePath,
             status = AudioProcessingStatus.CAPTURING,
             attemptId = attemptId,
             generation = 1,
@@ -134,8 +159,23 @@ class RecordingRepository @Inject constructor(
             usageEligible = usageEligible
         )
         recordingDao.insertRecording(RecordingEntity.fromDomain(row))
-        return AudioAttemptLease(recordingId, attemptId, 1, partialSourcePath, AudioProcessingStatus.CAPTURING)
+        return AudioAttemptLease(
+            recordingId,
+            attemptId,
+            1,
+            managedSource.absolutePath,
+            AudioProcessingStatus.CAPTURING
+        )
     }
+
+    fun managedSourceFile(recordingId: String): File =
+        managedAudioSources.sourceForRecording(recordingId)
+
+    fun isManagedFinalizedSource(lease: AudioAttemptLease, source: File): Boolean =
+        source.absolutePath == lease.sourcePath &&
+            managedAudioSources.existingCurrentSource(lease.recordingId, lease.sourcePath)
+                ?.takeIf { it.length() > 0L }
+                ?.absolutePath == source.absolutePath
 
     suspend fun markFinalizing(lease: AudioAttemptLease, now: Long = System.currentTimeMillis()): Boolean =
         recordingDao.advanceCapture(
@@ -157,13 +197,18 @@ class RecordingRepository @Inject constructor(
         durationMs: Long,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease? {
+        if (durationMs <= 0L || finalSourcePath != lease.sourcePath) return null
+        val managedSource =
+            managedAudioSources.existingCurrentSource(lease.recordingId, finalSourcePath)
+                ?.takeIf { it.length() > 0L }
+                ?: return null
         val updated = recordingDao.advanceCapture(
             id = lease.recordingId,
             attemptId = lease.attemptId,
             generation = lease.generation,
             expectedStatus = AudioProcessingStatus.FINALIZING.persistedValue,
             nextStatus = AudioProcessingStatus.PROCESSING.persistedValue,
-            audioFilePath = finalSourcePath,
+            audioFilePath = managedSource.absolutePath,
             durationMs = durationMs,
             sourceIntegrity = AudioSourceIntegrity.COMPLETE.persistedValue,
             errorMessage = null,
@@ -174,7 +219,7 @@ class RecordingRepository @Inject constructor(
                 lease.recordingId,
                 lease.attemptId,
                 lease.generation,
-                finalSourcePath,
+                managedSource.absolutePath,
                 AudioProcessingStatus.PROCESSING
             )
         } else {
@@ -188,8 +233,11 @@ class RecordingRepository @Inject constructor(
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease? {
         val current = recordingDao.getRecordingById(recordingId) ?: return null
-        val source = current.audioFilePath ?: return null
-        if (current.sourceIntegrity != AudioSourceIntegrity.COMPLETE.persistedValue || !File(source).isFile) return null
+        val sourcePath = current.audioFilePath ?: return null
+        val source = managedAudioSources.existingCurrentSource(recordingId, sourcePath)
+            ?.takeIf { it.length() > 0L }
+            ?: return null
+        if (current.sourceIntegrity != AudioSourceIntegrity.COMPLETE.persistedValue) return null
         val attemptId = UUID.randomUUID().toString()
         val updated = recordingDao.claimRetry(
             id = recordingId,
@@ -200,7 +248,13 @@ class RecordingRepository @Inject constructor(
             updatedAt = now
         )
         return if (updated == 1) {
-            AudioAttemptLease(recordingId, attemptId, current.generation + 1, source, AudioProcessingStatus.RETRYING)
+            AudioAttemptLease(
+                recordingId,
+                attemptId,
+                current.generation + 1,
+                source.absolutePath,
+                AudioProcessingStatus.RETRYING
+            )
         } else {
             null
         }
@@ -275,7 +329,7 @@ class RecordingRepository @Inject constructor(
         repeat(3) { attempt ->
             try {
                 withRecoveryOperationDeadline {
-                    if (!ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)) {
+                    if (!managedAudioSources.retireAndSweepAllTemporaryFiles()) {
                         throw IOException("Temporary audio cleanup did not finish")
                     }
                 }
@@ -316,10 +370,7 @@ class RecordingRepository @Inject constructor(
             ) != 1
         ) return false
         val sourcePath = current.audioFilePath ?: return true
-        val source = File(sourcePath)
-        val temporaryRemoved = ManagedAudioTemporaryFiles.retireAndSweepForSource(source)
-        val sourceRemoved = removeManagedSource(source)
-        val removed = temporaryRemoved && sourceRemoved
+        val removed = managedAudioSources.removePersistedSource(current.id, sourcePath)
         if (removed) {
             runCatching {
                 recordingDao.clearDeletedSourcePath(
@@ -339,13 +390,10 @@ class RecordingRepository @Inject constructor(
         } catch (_: RecordingDao.ActiveRecordingConflictException) {
             return false
         }
-        var allRemoved = ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)
+        var allRemoved = managedAudioSources.retireAndSweepAllTemporaryFiles()
         inactive.forEach { row ->
             val sourcePath = row.audioFilePath ?: return@forEach
-            val source = File(sourcePath)
-            val temporaryRemoved = ManagedAudioTemporaryFiles.retireAndSweepForSource(source)
-            val sourceRemoved = removeManagedSource(source)
-            val removed = temporaryRemoved && sourceRemoved
+            val removed = managedAudioSources.removePersistedSource(row.id, sourcePath)
             allRemoved = allRemoved && removed
             if (removed) {
                 runCatching {
@@ -361,7 +409,9 @@ class RecordingRepository @Inject constructor(
     }
 
     suspend fun getRecordingById(id: String): Recording? {
-        return recordingDao.getRecordingById(id)?.toDomain()
+        return withContext(Dispatchers.IO) {
+            recordingDao.getRecordingById(id)?.toVisibleDomain()
+        }
     }
 
     suspend fun claimUsage(
@@ -379,7 +429,12 @@ class RecordingRepository @Inject constructor(
         now: Long = System.currentTimeMillis()
     ): Boolean {
         if (source.absolutePath != lease.sourcePath) return false
-        val marker = readFinalizedAudioMarker(source) ?: return false
+        val managedSource =
+            managedAudioSources.existingCurrentSource(lease.recordingId, lease.sourcePath)
+                ?.takeIf { it.length() > 0L }
+                ?: return false
+        if (source.absolutePath != managedSource.absolutePath) return false
+        val marker = readFinalizedAudioMarker(managedSource) ?: return false
         if (marker.recordingId != lease.recordingId || marker.attemptId != lease.attemptId ||
             marker.generation != lease.generation
         ) {
@@ -392,7 +447,7 @@ class RecordingRepository @Inject constructor(
             durationMs = marker.durationMs,
             updatedAt = now
         ) == 1
-        if (promoted) finalizedAudioMarkerFile(source).delete()
+        if (promoted) finalizedAudioMarkerFile(managedSource).delete()
         return promoted
     }
 
@@ -402,7 +457,8 @@ class RecordingRepository @Inject constructor(
             .forEach { row ->
                 val attemptId = row.attemptId ?: return@forEach
                 val sourcePath = row.audioFilePath ?: return@forEach
-                val source = File(sourcePath)
+                val source = managedAudioSources.existingCurrentSource(row.id, sourcePath)
+                    ?: return@forEach
                 val lease = AudioAttemptLease(
                     recordingId = row.id,
                     attemptId = attemptId,
@@ -418,11 +474,8 @@ class RecordingRepository @Inject constructor(
         withRecoveryOperationDeadline { recordingDao.getDeletedRecordingsWithSources() }
             .forEach { row ->
                 val sourcePath = row.audioFilePath ?: return@forEach
-                val source = File(sourcePath)
                 val removed = withRecoveryOperationDeadline {
-                    val temporaryRemoved = ManagedAudioTemporaryFiles.retireAndSweepForSource(source)
-                    val sourceRemoved = removeManagedSource(source)
-                    temporaryRemoved && sourceRemoved
+                    managedAudioSources.removePersistedSource(row.id, sourcePath)
                 }
                 if (!removed) return@forEach
                 withRecoveryOperationDeadline {
@@ -431,14 +484,11 @@ class RecordingRepository @Inject constructor(
             }
     }
 
-    private fun removeManagedSource(source: File): Boolean {
-        fun removeIfPresent(file: File): Boolean = runCatching {
-            !file.exists() || file.delete() || !file.exists()
-        }.getOrDefault(false)
-
-        val markerRemoved = removeIfPresent(finalizedAudioMarkerFile(source))
-        val sourceRemoved = removeIfPresent(source)
-        return markerRemoved && sourceRemoved
+    private fun RecordingEntity.toVisibleDomain(): Recording {
+        val recording = toDomain()
+        return recording.copy(
+            audioFilePath = managedAudioSources.visibleSource(id, audioFilePath)
+        )
     }
 
     private suspend fun <T> withRecoveryOperationDeadline(block: suspend () -> T): T {

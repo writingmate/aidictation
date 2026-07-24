@@ -1413,7 +1413,7 @@ struct ContentView: View {
             do {
                 try await MobileAudioProcessingStore.shared.tombstone(recordingID: recording.id)
                 try historyManager.removeAudioFileIfPresent(for: recording)
-                historyManager.deleteRecording(recording)
+                try await historyManager.deleteRecording(recording)
             } catch {
                 historyActionMessage = "This recording could not be deleted. Please try again."
             }
@@ -1444,7 +1444,7 @@ struct ContentView: View {
                 for recording in recordings {
                     try historyManager.removeAudioFileIfPresent(for: recording)
                 }
-                historyManager.clearAll()
+                try await historyManager.clearAll(recordingIDs: recordings.map(\.id))
             } catch {
                 historyActionMessage = "History could not be cleared. Please try again."
             }
@@ -1467,22 +1467,19 @@ struct ContentView: View {
         MobileAudioHostLaunchRecoveryGate.attempted = true
 
         do {
+            try await historyManager.reload()
             _ = try await MobileAudioProcessingStore.shared.normalizeInterruptedAttempts()
             let snapshots = try await MobileAudioProcessingStore.shared.allSnapshots()
             let usageRecordingIDs = snapshots.compactMap { snapshot -> UUID? in
-                guard snapshot.usageAccountingState != .acknowledged else { return nil }
-                if snapshot.stage == .succeeded { return snapshot.recordingID }
-                if snapshot.stage == .deleted,
-                   snapshot.usageAccountingWordCount != nil
-                {
-                    return snapshot.recordingID
-                }
-                return nil
+                guard snapshot.stage == .succeeded,
+                      snapshot.usageAccountingState != .acknowledged
+                else { return nil }
+                return snapshot.recordingID
             }
             for snapshot in snapshots where snapshot.stage == .deleted {
                 if let recording = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
                     try historyManager.removeAudioFileIfPresent(for: recording)
-                    historyManager.deleteRecording(recording)
+                    try await historyManager.deleteRecording(recording)
                 }
             }
 
@@ -1509,8 +1506,7 @@ struct ContentView: View {
                        let text,
                        existing.transcription != text
                     {
-                        historyManager.deleteRecording(existing)
-                        historyManager.addRecording(Recording(
+                        try await historyManager.upsertRecording(Recording(
                             id: existing.id,
                             timestamp: existing.timestamp,
                             transcription: text,
@@ -1521,7 +1517,7 @@ struct ContentView: View {
                         ))
                     }
                 } else {
-                    historyManager.addRecording(Recording(
+                    try await historyManager.upsertRecording(Recording(
                         id: snapshot.recordingID,
                         timestamp: snapshot.createdAt,
                         transcription: text ?? "",
@@ -1539,7 +1535,10 @@ struct ContentView: View {
             // this follow-up task; once claimed, a request is deliberately never replayed.
             Task { @MainActor in
                 for recordingID in usageRecordingIDs {
-                    await MobileAudioUsageAccounting.flush(recordingID: recordingID)
+                    await MobileAudioUsageAccounting.flush(
+                        recordingID: recordingID,
+                        historyManager: historyManager
+                    )
                 }
             }
         } catch {
@@ -2332,6 +2331,9 @@ private final class InlineRecordingCoordinator: ObservableObject {
     private var activeTranscriptionOptions: TranscriptionOptions?
     private var keyboardAttemptIdentity: KeyboardDictationHandoff.AttemptIdentity?
     private var stopRequestedWhilePreparing = false
+    private var pendingAttemptID: UUID?
+    private weak var pendingAttemptRecorder: AudioRecorder?
+    private var cancelledPendingAttemptID: UUID?
     private var recorderCancellables = Set<AnyCancellable>()
 
     private let minimumRecordingDuration: TimeInterval = 0.35
@@ -2537,6 +2539,14 @@ private final class InlineRecordingCoordinator: ObservableObject {
         activeAttemptTask?.cancel()
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
+        if let pendingAttemptID {
+            cancelledPendingAttemptID = pendingAttemptID
+            self.pendingAttemptID = nil
+            if let pendingAttemptRecorder {
+                retireAudioRecorderIfCurrent(pendingAttemptRecorder)
+            }
+            pendingAttemptRecorder = nil
+        }
         if let activeAttempt {
             let recorder = audioRecorder
             retireAudioRecorderIfCurrent(recorder)
@@ -2624,9 +2634,14 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 outputMode: outputMode,
                 transcriptionOptions: snapshot?.transcriptionOptions ?? transcriptionOptions
             )
-            replaceHistoryRecording(recording, in: historyManager)
+            do {
+                try await replaceHistoryRecording(recording, in: historyManager)
+            } catch {
+                return nil
+            }
             await MobileAudioUsageAccounting.flush(
                 recordingID: lease.recordingID,
+                historyManager: historyManager,
                 store: processingStore,
                 subscriptionManager: subscriptionManager
             )
@@ -2749,6 +2764,8 @@ private final class InlineRecordingCoordinator: ObservableObject {
         let recordingID = UUID()
         let attemptID = UUID()
         let recorder = audioRecorder
+        pendingAttemptID = attemptID
+        pendingAttemptRecorder = recorder
         activeAttemptTask?.cancel()
         activeAttemptTask = Task { @MainActor in
             var lease: MobileAudioProcessingStore.Lease?
@@ -2761,8 +2778,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     deadlineAt: Date().addingTimeInterval(recordingStartDeadline)
                 )
                 lease = prepared
+                guard pendingAttemptID == attemptID,
+                      cancelledPendingAttemptID != attemptID,
+                      !Task.isCancelled
+                else { throw CancellationError() }
+                pendingAttemptID = nil
+                pendingAttemptRecorder = nil
                 activeAttempt = prepared
-                guard !Task.isCancelled else { throw CancellationError() }
                 if let keyboardIdentity {
                     guard KeyboardDictationHandoff.snapshot(for: keyboardIdentity)?.phase == .preparing else {
                         throw CancellationError()
@@ -2843,6 +2865,17 @@ private final class InlineRecordingCoordinator: ObservableObject {
                         userMessage: userMessage(for: error)
                     )
                 }
+                let stillOwnsSurface = pendingAttemptID == attemptID
+                    || activeAttempt?.attemptID == attemptID
+                if pendingAttemptID == attemptID {
+                    pendingAttemptID = nil
+                    pendingAttemptRecorder = nil
+                }
+                let cancellationWon = cancelledPendingAttemptID == attemptID
+                if cancellationWon {
+                    cancelledPendingAttemptID = nil
+                }
+                guard !cancellationWon, stillOwnsSurface else { return }
                 guard activeAttempt?.attemptID == attemptID || activeAttempt == nil else { return }
                 activeAttempt = nil
                 activeAttemptTask = nil
@@ -3084,12 +3117,15 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 lease,
                 deadlineAt: Date().addingTimeInterval(deadline)
             )
+            let chunkWorkspace = try await processingStore.makeChunkWorkspace(for: lease)
+            defer { chunkWorkspace.cleanupAll() }
             let processedResult = try await IOSAudioProcessingDeadline.runOnMainActor(
                 seconds: deadline
             ) {
                 try await SharedTranscriptionService.transcribe(
                     audioURL: recognitionURL,
                     request: request,
+                    chunkWorkspace: chunkWorkspace,
                     onRecognitionCheckpoint: { checkpoint in
                         try await self.processingStore.checkpointRecognitionPartial(checkpoint, lease: lease)
                     },
@@ -3118,6 +3154,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
             try await processingStore.markSucceeded(lease)
             guard activeAttempt == lease, !Task.isCancelled else { return }
+            try await replaceHistoryRecording(recording, in: historyManager)
             let keyboardDeliverySucceeded: Bool
             if let keyboardAttemptIdentity {
                 keyboardDeliverySucceeded = KeyboardDictationHandoff.publishHostResult(
@@ -3128,7 +3165,6 @@ private final class InlineRecordingCoordinator: ObservableObject {
             } else {
                 keyboardDeliverySucceeded = true
             }
-            replaceHistoryRecording(recording, in: historyManager)
 
             withAnimation(.spring(response: 0.42, dampingFraction: 0.92)) {
                 activeAttempt = nil
@@ -3144,6 +3180,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             // accounting structured so app suspension cannot silently drop it.
             await MobileAudioUsageAccounting.flush(
                 recordingID: lease.recordingID,
+                historyManager: historyManager,
                 store: processingStore,
                 subscriptionManager: subscriptionManager
             )
@@ -3197,7 +3234,14 @@ private final class InlineRecordingCoordinator: ObservableObject {
             outputMode: outputMode,
             transcriptionOptions: transcriptionOptions
         )
-        replaceHistoryRecording(recording, in: historyManager)
+        do {
+            try await replaceHistoryRecording(recording, in: historyManager)
+        } catch {
+            activeAttempt = nil
+            activeAttemptTask = nil
+            showError(userMessage(for: error))
+            return
+        }
         var keyboardDeliverySucceeded = true
         if let keyboardAttemptIdentity {
             if succeeded, let recoveredText, !recoveredText.isEmpty {
@@ -3225,6 +3269,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             }
             await MobileAudioUsageAccounting.flush(
                 recordingID: lease.recordingID,
+                historyManager: historyManager,
                 store: processingStore,
                 subscriptionManager: subscriptionManager
             )
@@ -3233,11 +3278,11 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
     }
 
-    private func replaceHistoryRecording(_ recording: Recording, in historyManager: HistoryManager) {
-        if let existing = historyManager.recordings.first(where: { $0.id == recording.id }) {
-            historyManager.deleteRecording(existing)
-        }
-        historyManager.addRecording(recording)
+    private func replaceHistoryRecording(
+        _ recording: Recording,
+        in historyManager: HistoryManager
+    ) async throws {
+        try await historyManager.upsertRecording(recording)
     }
 
     private func recordingOutputMode(for preset: ContextRule?) -> TranscriptionOutputMode {
@@ -3312,6 +3357,9 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
         if let httpFailure = error as? AppleAudioHTTPRecovery.Failure {
             return httpFailure.localizedDescription
+        }
+        if let historyError = error as? HistoryPersistenceError {
+            return historyError.localizedDescription
         }
         return "Transcription failed. Your recording was kept. Please try again."
     }

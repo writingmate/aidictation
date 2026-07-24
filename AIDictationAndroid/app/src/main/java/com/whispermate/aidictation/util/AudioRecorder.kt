@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.MediaRecorder
 import android.os.Build
 import android.util.Log
+import com.whispermate.aidictation.data.local.ManagedAudioSourceFiles
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -88,6 +89,7 @@ internal class AudioRecorder(
     }
 
     private val recorderFence = TerminalResourceFence<MediaRecorder> { it.release() }
+    private val managedAudioSources = ManagedAudioSourceFiles(context)
     private var audioLevelJob: Job? = null
     private var outputFile: File? = null
     private var startTime: Long = 0
@@ -134,11 +136,9 @@ internal class AudioRecorder(
     }
 
     @SuppressLint("MissingPermission")
-    fun start(managedOutputFile: File? = null): File? {
+    fun start(managedOutputFile: File): File? {
         try {
-            val recordingsDir = File(context.filesDir, "recordings").apply { mkdirs() }
-            outputFile = managedOutputFile ?: File(recordingsDir, "recording_${System.currentTimeMillis()}.m4a")
-            outputFile?.parentFile?.mkdirs()
+            outputFile = managedAudioSources.requireRecorderTarget(managedOutputFile)
 
             captureFailure.set(null)
             // Publish the native recorder before any potentially blocking setup call. A release
@@ -165,7 +165,7 @@ internal class AudioRecorder(
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44100)
                 setAudioEncodingBitRate(128000)
-                setOutputFile(outputFile?.absolutePath)
+                setOutputFile(checkNotNull(outputFile).absolutePath)
                 prepare()
                 if (recorderFence.current() !== recorder) {
                     throw IllegalStateException("Recording start was cancelled during setup")

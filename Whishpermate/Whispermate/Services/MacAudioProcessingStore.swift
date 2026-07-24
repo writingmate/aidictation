@@ -50,6 +50,10 @@ actor MacAudioProcessingStore {
         var rawText: String?
         var resultText: String?
         var failureMessage: String?
+        /// Present only after History durably accepted the successful result.
+        /// Claiming is persisted before the non-idempotent account sink.
+        var pendingUsageWordCount: Int? = nil
+        var usageWasClaimed: Bool? = nil
         var updatedAt: Date
     }
 
@@ -187,9 +191,11 @@ actor MacAudioProcessingStore {
     nonisolated let rootDirectory: URL
     nonisolated let incomingDirectory: URL
     nonisolated let recordingsDirectory: URL
+    nonisolated let transientDirectory: URL
     nonisolated let journalURL: URL
     private nonisolated let lockURL: URL
     private nonisolated let testHooks: TestHooks
+    private nonisolated let transientRoot: MacTransientWorkspaceRoot?
 
     private struct Journal: Codable, Equatable {
         static let currentSchemaVersion = 1
@@ -232,25 +238,36 @@ actor MacAudioProcessingStore {
         let storeDirectory = rootDirectory.appendingPathComponent("AudioProcessing", isDirectory: true)
         let incomingDirectory = storeDirectory.appendingPathComponent("Incoming", isDirectory: true)
         let recordingsDirectory = storeDirectory.appendingPathComponent("Recordings", isDirectory: true)
+        let transientDirectory = storeDirectory.appendingPathComponent("Transient", isDirectory: true)
         let journalURL = storeDirectory.appendingPathComponent("journal.json", isDirectory: false)
         let lockURL = storeDirectory.appendingPathComponent(".journal.lock", isDirectory: false)
 
         self.rootDirectory = rootDirectory
         self.incomingDirectory = incomingDirectory
         self.recordingsDirectory = recordingsDirectory
+        self.transientDirectory = transientDirectory
         self.journalURL = journalURL
         self.lockURL = lockURL
         self.testHooks = testHooks
 
         var loadedJournal = Journal.empty
         var loadedHealth = Health.healthy
+        var loadedTransientRoot: MacTransientWorkspaceRoot?
 
         do {
             try Self.createDirectories(
                 storeDirectory: storeDirectory,
                 incomingDirectory: incomingDirectory,
-                recordingsDirectory: recordingsDirectory
+                recordingsDirectory: recordingsDirectory,
+                transientDirectory: transientDirectory
             )
+            let transientRoot = try MacTransientWorkspaceRoot(
+                rootDirectory: rootDirectory,
+                storeDirectory: storeDirectory,
+                transientDirectory: transientDirectory
+            )
+            try transientRoot.sweepAfterRestart()
+            loadedTransientRoot = transientRoot
 
             try Self.withExclusiveLock(at: lockURL) {
                 if FileManager.default.fileExists(atPath: journalURL.path) {
@@ -300,6 +317,7 @@ actor MacAudioProcessingStore {
 
         self.journal = loadedJournal
         self.health = loadedHealth
+        self.transientRoot = loadedTransientRoot
     }
 
     // MARK: - Read API
@@ -328,6 +346,29 @@ actor MacAudioProcessingStore {
 
     nonisolated func finalURL(for recordingID: UUID) -> URL {
         recordingsDirectory.appendingPathComponent("\(recordingID.uuidString).m4a", isDirectory: false)
+    }
+
+    /// Creates an attempt-scoped directory for derived exports. The returned
+    /// capability owns an open directory descriptor, so Delete/Clear can remove
+    /// the original derived files even if a same-user process later substitutes
+    /// one of the path ancestors. New path-based writes fail closed after such a
+    /// substitution.
+    func makeTransientWorkspace(_ lease: Lease) throws -> MacTransientWorkspace {
+        try requireWritable()
+        let current = try currentRecord(for: lease)
+        guard current.stage == .recognizing else { throw StoreError.invalidTransition }
+        guard let transientRoot else { throw StoreError.storageUnavailable }
+        do {
+            return try transientRoot.makeWorkspace(
+                recordingID: current.recordingID,
+                attemptID: current.attemptID
+            )
+        } catch {
+            health = .readOnly(
+                message: "Saved recordings need attention. No files were changed."
+            )
+            throw StoreError.readOnly
+        }
     }
 
     // MARK: - Recording lifecycle
@@ -799,6 +840,8 @@ actor MacAudioProcessingStore {
         proposed.records[refreshedIndex].rawText = nil
         proposed.records[refreshedIndex].resultText = nil
         proposed.records[refreshedIndex].failureMessage = nil
+        proposed.records[refreshedIndex].pendingUsageWordCount = nil
+        proposed.records[refreshedIndex].usageWasClaimed = nil
         proposed.records[refreshedIndex].updatedAt = Date()
         try commit(proposed)
         return mutation(for: proposed.records[refreshedIndex])
@@ -897,8 +940,52 @@ actor MacAudioProcessingStore {
         )
     }
 
-    func markSucceeded(_ lease: Lease) throws -> Mutation {
-        try transition(lease, from: .resultReady, to: .succeeded)
+    func markSucceeded(
+        _ lease: Lease,
+        pendingUsageWordCount: Int? = nil
+    ) throws -> Mutation {
+        if let pendingUsageWordCount {
+            guard pendingUsageWordCount > 0 else { throw StoreError.invalidTransition }
+        }
+        return try transition(
+            lease,
+            from: .resultReady,
+            to: .succeeded,
+            pendingUsageWordCount: pendingUsageWordCount,
+            resetsUsageClaim: pendingUsageWordCount != nil
+        )
+    }
+
+    /// Atomically claims one pending usage event. A crash after this commit can
+    /// under-report, but it can never charge twice. Callers must not invoke this
+    /// until both the terminal journal and History projection are durable.
+    func claimPendingUsage(
+        recordingID: UUID,
+        expectedRevision: UInt64
+    ) throws -> Int? {
+        try requireWritable()
+        guard let index = index(of: recordingID) else {
+            throw StoreError.recordingNotFound
+        }
+        let current = journal.records[index]
+        guard current.stage == .succeeded,
+              current.revision == expectedRevision else {
+            throw StoreError.staleLease
+        }
+        guard current.usageWasClaimed != true,
+              let wordCount = current.pendingUsageWordCount,
+              wordCount > 0 else {
+            return nil
+        }
+
+        let revision = try nextRevision(after: journal.revision)
+        var proposed = journal
+        proposed.revision = revision
+        proposed.records[index].revision = revision
+        proposed.records[index].usageWasClaimed = true
+        proposed.records[index].updatedAt = Date()
+        try commit(proposed)
+        return wordCount
     }
 
     /// Records a terminal failure while preserving every source file. This is
@@ -1056,10 +1143,13 @@ actor MacAudioProcessingStore {
             proposed.records[index].rawText = nil
             proposed.records[index].resultText = nil
             proposed.records[index].failureMessage = nil
+            proposed.records[index].pendingUsageWordCount = nil
+            proposed.records[index].usageWasClaimed = nil
             proposed.records[index].updatedAt = Date()
             try commit(proposed)
         }
         closedAudioValidations.removeValue(forKey: recordingID)
+        transientRoot?.invalidate(recordingID: recordingID)
 
         return CleanupResult(
             failedURLs: Self.removeSources(
@@ -1091,6 +1181,8 @@ actor MacAudioProcessingStore {
             proposed.records[index].rawText = nil
             proposed.records[index].resultText = nil
             proposed.records[index].failureMessage = nil
+            proposed.records[index].pendingUsageWordCount = nil
+            proposed.records[index].usageWasClaimed = nil
             proposed.records[index].updatedAt = Date()
         }
 
@@ -1102,6 +1194,7 @@ actor MacAudioProcessingStore {
 
         try commit(proposed)
         closedAudioValidations.removeAll()
+        transientRoot?.invalidateAll()
 
         var failures: [URL] = []
         for record in proposed.records {
@@ -1127,7 +1220,9 @@ actor MacAudioProcessingStore {
         resultText: String? = nil,
         failureMessage: String? = nil,
         deadline: Date? = nil,
-        permitsExpiredCurrentDeadline: Bool = false
+        permitsExpiredCurrentDeadline: Bool = false,
+        pendingUsageWordCount: Int? = nil,
+        resetsUsageClaim: Bool = false
     ) throws -> Mutation {
         try requireWritable()
         let current = try currentRecord(for: lease)
@@ -1168,6 +1263,12 @@ actor MacAudioProcessingStore {
         }
         if let resultText {
             proposed.records[index].resultText = resultText
+        }
+        if let pendingUsageWordCount {
+            proposed.records[index].pendingUsageWordCount = pendingUsageWordCount
+        }
+        if resetsUsageClaim {
+            proposed.records[index].usageWasClaimed = false
         }
         proposed.records[index].failureMessage = failureMessage
         proposed.records[index].updatedAt = Date()
@@ -1395,11 +1496,13 @@ actor MacAudioProcessingStore {
     private static func createDirectories(
         storeDirectory: URL,
         incomingDirectory: URL,
-        recordingsDirectory: URL
+        recordingsDirectory: URL,
+        transientDirectory: URL
     ) throws {
         try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: incomingDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: transientDirectory, withIntermediateDirectories: true)
     }
 
     private static func persist(
@@ -1611,6 +1714,8 @@ actor MacAudioProcessingStore {
                 && lhsRecord.rawText == rhsRecord.rawText
                 && lhsRecord.resultText == rhsRecord.resultText
                 && lhsRecord.failureMessage == rhsRecord.failureMessage
+                && lhsRecord.pendingUsageWordCount == rhsRecord.pendingUsageWordCount
+                && lhsRecord.usageWasClaimed == rhsRecord.usageWasClaimed
         }
     }
 
@@ -1673,6 +1778,15 @@ actor MacAudioProcessingStore {
                 throw StoreError.readOnly
             }
             if record.stage == .succeeded, record.resultText == nil {
+                throw StoreError.readOnly
+            }
+            if let wordCount = record.pendingUsageWordCount {
+                guard record.stage == .succeeded, wordCount > 0 else {
+                    throw StoreError.readOnly
+                }
+            }
+            if record.usageWasClaimed == true,
+               record.pendingUsageWordCount == nil {
                 throw StoreError.readOnly
             }
         }
@@ -1805,7 +1919,7 @@ actor MacAudioProcessingStore {
 
             case .rawResultReady:
                 if let rawText = current.rawText {
-                    nextStage = .succeeded
+                    nextStage = .resultReady
                     nextResultText = rawText
                     nextMessage = "Cleanup was interrupted. The complete raw transcript was kept."
                 } else {
@@ -1816,7 +1930,7 @@ actor MacAudioProcessingStore {
 
             case .cleaning:
                 if let rawText = current.rawText {
-                    nextStage = .succeeded
+                    nextStage = .resultReady
                     nextResultText = rawText
                     nextMessage = "Cleanup was interrupted. The complete raw transcript was kept."
                 } else {
@@ -1826,8 +1940,9 @@ actor MacAudioProcessingStore {
                 shouldChange = true
 
             case .resultReady:
-                nextStage = .succeeded
-                shouldChange = true
+                // History must accept the terminal projection before this stage
+                // can advance to succeeded and become usage-eligible.
+                break
 
             case .succeeded, .failed:
                 break
@@ -2054,6 +2169,464 @@ actor MacAudioProcessingStore {
             }
         }
         return failures
+    }
+}
+
+/// Attempt-scoped capability for derived audio exports.
+///
+/// The public URL is needed by AVFoundation and URLSession, but ownership and
+/// cleanup never trust that path. Every mutation uses the retained directory
+/// descriptor and a generated basename. `validateCompletedOutput` additionally
+/// proves that the visible path still names the retained inode before an export
+/// can be uploaded.
+nonisolated final class MacTransientWorkspace: @unchecked Sendable {
+    enum WorkspaceError: Error {
+        case unavailable
+        case invalidOutput
+    }
+
+    let recordingID: UUID
+    let attemptID: UUID
+    let directoryURL: URL
+
+    private weak var owner: MacTransientWorkspaceRoot?
+    private let directoryName: String
+    private let directoryIdentity: MacDirectoryIdentity
+    private let lock = NSLock()
+    private var directoryDescriptor: Int32
+    private var generatedNames: Set<String> = []
+    private var active = true
+
+    fileprivate init(
+        recordingID: UUID,
+        attemptID: UUID,
+        directoryName: String,
+        directoryURL: URL,
+        directoryDescriptor: Int32,
+        directoryIdentity: MacDirectoryIdentity,
+        owner: MacTransientWorkspaceRoot
+    ) {
+        self.recordingID = recordingID
+        self.attemptID = attemptID
+        self.directoryName = directoryName
+        self.directoryURL = directoryURL
+        self.directoryDescriptor = directoryDescriptor
+        self.directoryIdentity = directoryIdentity
+        self.owner = owner
+    }
+
+    func makeOutputURL(fileExtension: String = "m4a") throws -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        guard active,
+              directoryDescriptor >= 0,
+              owner?.visiblePathStillNames(
+                directoryURL: directoryURL,
+                expected: directoryIdentity
+              ) == true
+        else {
+            throw WorkspaceError.unavailable
+        }
+
+        let normalizedExtension = fileExtension.lowercased()
+        guard !normalizedExtension.isEmpty,
+              normalizedExtension.allSatisfy({ $0.isLetter || $0.isNumber })
+        else {
+            throw WorkspaceError.invalidOutput
+        }
+        let name = "\(UUID().uuidString.lowercased()).\(normalizedExtension)"
+        var status = Darwin.stat()
+        let statResult = name.withCString {
+            Darwin.fstatat(directoryDescriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+        }
+        guard statResult != 0, errno == ENOENT else {
+            throw WorkspaceError.invalidOutput
+        }
+        generatedNames.insert(name)
+        return directoryURL.appendingPathComponent(name, isDirectory: false)
+    }
+
+    /// Accepts only a generated direct child that is a nonempty regular file
+    /// under the retained directory capability.
+    func validateCompletedOutput(_ url: URL) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard active,
+              directoryDescriptor >= 0,
+              url.deletingLastPathComponent().standardizedFileURL
+                == directoryURL.standardizedFileURL,
+              generatedNames.contains(url.lastPathComponent),
+              owner?.visiblePathStillNames(
+                directoryURL: directoryURL,
+                expected: directoryIdentity
+              ) == true
+        else {
+            throw WorkspaceError.unavailable
+        }
+
+        let descriptor = url.lastPathComponent.withCString {
+            Darwin.openat(directoryDescriptor, $0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else { throw WorkspaceError.invalidOutput }
+        defer { _ = Darwin.close(descriptor) }
+
+        var status = Darwin.stat()
+        guard Darwin.fstat(descriptor, &status) == 0,
+              (status.st_mode & S_IFMT) == S_IFREG,
+              status.st_nlink == 1,
+              status.st_size > 0
+        else {
+            throw WorkspaceError.invalidOutput
+        }
+    }
+
+    func removeOutput(_ url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard directoryDescriptor >= 0,
+              url.deletingLastPathComponent().standardizedFileURL
+                == directoryURL.standardizedFileURL,
+              generatedNames.remove(url.lastPathComponent) != nil
+        else { return }
+        _ = url.lastPathComponent.withCString {
+            Darwin.unlinkat(directoryDescriptor, $0, 0)
+        }
+    }
+
+    /// Invalidates new writes first, then removes the original directory via
+    /// retained descriptors. A substituted visible ancestor is never followed.
+    func cleanup() {
+        let descriptor: Int32
+        lock.lock()
+        guard directoryDescriptor >= 0 else {
+            active = false
+            lock.unlock()
+            return
+        }
+        active = false
+        descriptor = directoryDescriptor
+        directoryDescriptor = -1
+        generatedNames.removeAll()
+        lock.unlock()
+
+        _ = try? MacDescriptorTree.removeAllEntries(in: descriptor)
+        _ = Darwin.close(descriptor)
+        owner?.removeWorkspaceDirectory(
+            recordingID: recordingID,
+            workspace: self,
+            directoryName: directoryName
+        )
+    }
+
+    fileprivate func invalidate() {
+        cleanup()
+    }
+
+    deinit {
+        cleanup()
+    }
+}
+
+private nonisolated struct MacDirectoryIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+}
+
+private nonisolated final class MacTransientWorkspaceRoot: @unchecked Sendable {
+    private let transientDirectory: URL
+    private let lock = NSLock()
+    private var transientDescriptor: Int32
+    private let transientIdentity: MacDirectoryIdentity
+    private var workspaces: [ObjectIdentifier: MacTransientWorkspace] = [:]
+    private var blockedRecordingIDs: Set<UUID> = []
+
+    init(
+        rootDirectory: URL,
+        storeDirectory: URL,
+        transientDirectory: URL
+    ) throws {
+        let rootDescriptor = try MacDescriptorTree.openDirectory(at: rootDirectory)
+        defer { _ = Darwin.close(rootDescriptor) }
+        let storeDescriptor = try MacDescriptorTree.openDirectory(
+            named: storeDirectory.lastPathComponent,
+            relativeTo: rootDescriptor
+        )
+        defer { _ = Darwin.close(storeDescriptor) }
+        let transientDescriptor = try MacDescriptorTree.openDirectory(
+            named: transientDirectory.lastPathComponent,
+            relativeTo: storeDescriptor
+        )
+
+        self.transientDirectory = transientDirectory
+        self.transientDescriptor = transientDescriptor
+        self.transientIdentity = try MacDescriptorTree.identity(of: transientDescriptor)
+        guard visiblePathStillNames(
+            directoryURL: transientDirectory,
+            expected: transientIdentity
+        ) else {
+            _ = Darwin.close(transientDescriptor)
+            self.transientDescriptor = -1
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+    }
+
+    func sweepAfterRestart() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard transientDescriptor >= 0,
+              visiblePathStillNames(
+                directoryURL: transientDirectory,
+                expected: transientIdentity
+              )
+        else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+        try MacDescriptorTree.removeAllEntries(in: transientDescriptor)
+    }
+
+    func makeWorkspace(recordingID: UUID, attemptID: UUID) throws -> MacTransientWorkspace {
+        lock.lock()
+        defer { lock.unlock() }
+        guard transientDescriptor >= 0,
+              !blockedRecordingIDs.contains(recordingID),
+              visiblePathStillNames(
+                directoryURL: transientDirectory,
+                expected: transientIdentity
+              )
+        else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+
+        let directoryName = [
+            recordingID.uuidString.lowercased(),
+            attemptID.uuidString.lowercased(),
+            UUID().uuidString.lowercased()
+        ].joined(separator: "_")
+        let creationResult = directoryName.withCString {
+            Darwin.mkdirat(transientDescriptor, $0, S_IRWXU)
+        }
+        guard creationResult == 0 else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+
+        var workspaceDescriptor: Int32 = -1
+        do {
+            workspaceDescriptor = try MacDescriptorTree.openDirectory(
+                named: directoryName,
+                relativeTo: transientDescriptor
+            )
+            let workspace = MacTransientWorkspace(
+                recordingID: recordingID,
+                attemptID: attemptID,
+                directoryName: directoryName,
+                directoryURL: transientDirectory.appendingPathComponent(
+                    directoryName,
+                    isDirectory: true
+                ),
+                directoryDescriptor: workspaceDescriptor,
+                directoryIdentity: try MacDescriptorTree.identity(of: workspaceDescriptor),
+                owner: self
+            )
+            workspaces[ObjectIdentifier(workspace)] = workspace
+            return workspace
+        } catch {
+            if workspaceDescriptor >= 0 {
+                _ = Darwin.close(workspaceDescriptor)
+            }
+            _ = directoryName.withCString {
+                Darwin.unlinkat(transientDescriptor, $0, AT_REMOVEDIR)
+            }
+            throw error
+        }
+    }
+
+    func invalidate(recordingID: UUID) {
+        lock.lock()
+        blockedRecordingIDs.insert(recordingID)
+        let matches = workspaces.values.filter { $0.recordingID == recordingID }
+        lock.unlock()
+        matches.forEach { $0.invalidate() }
+    }
+
+    func invalidateAll() {
+        lock.lock()
+        blockedRecordingIDs.formUnion(workspaces.values.map(\.recordingID))
+        let current = Array(workspaces.values)
+        lock.unlock()
+        current.forEach { $0.invalidate() }
+    }
+
+    fileprivate func visiblePathStillNames(
+        directoryURL: URL,
+        expected: MacDirectoryIdentity
+    ) -> Bool {
+        guard let descriptor = try? MacDescriptorTree.openDirectory(at: directoryURL) else {
+            return false
+        }
+        defer { _ = Darwin.close(descriptor) }
+        return (try? MacDescriptorTree.identity(of: descriptor)) == expected
+    }
+
+    fileprivate func removeWorkspaceDirectory(
+        recordingID: UUID,
+        workspace: MacTransientWorkspace,
+        directoryName: String
+    ) {
+        lock.lock()
+        workspaces.removeValue(forKey: ObjectIdentifier(workspace))
+        let descriptor = transientDescriptor
+        lock.unlock()
+        guard descriptor >= 0 else { return }
+        _ = directoryName.withCString {
+            Darwin.unlinkat(descriptor, $0, AT_REMOVEDIR)
+        }
+    }
+
+    deinit {
+        invalidateAll()
+        lock.lock()
+        let descriptor = transientDescriptor
+        transientDescriptor = -1
+        lock.unlock()
+        if descriptor >= 0 {
+            _ = Darwin.close(descriptor)
+        }
+    }
+}
+
+private nonisolated enum MacDescriptorTree {
+    static func openDirectory(at url: URL) throws -> Int32 {
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+        do {
+            _ = try identity(of: descriptor)
+            return descriptor
+        } catch {
+            _ = Darwin.close(descriptor)
+            throw error
+        }
+    }
+
+    static func openDirectory(named name: String, relativeTo parent: Int32) throws -> Int32 {
+        guard isDirectChildName(name) else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+        let descriptor = name.withCString {
+            Darwin.openat(parent, $0, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+        do {
+            _ = try identity(of: descriptor)
+            return descriptor
+        } catch {
+            _ = Darwin.close(descriptor)
+            throw error
+        }
+    }
+
+    static func identity(of descriptor: Int32) throws -> MacDirectoryIdentity {
+        var status = Darwin.stat()
+        guard Darwin.fstat(descriptor, &status) == 0,
+              (status.st_mode & S_IFMT) == S_IFDIR
+        else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+        return MacDirectoryIdentity(
+            device: UInt64(status.st_dev),
+            inode: UInt64(status.st_ino)
+        )
+    }
+
+    /// Uses a fresh open-file description for every enumeration. `dup` is
+    /// intentionally forbidden here because duplicated directory descriptors
+    /// share their read offset and can make a later Clear incorrectly see EOF.
+    static func removeAllEntries(in directoryDescriptor: Int32) throws {
+        let enumerationDescriptor = ".".withCString {
+            Darwin.openat(
+                directoryDescriptor,
+                $0,
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+            )
+        }
+        guard enumerationDescriptor >= 0,
+              let stream = Darwin.fdopendir(enumerationDescriptor)
+        else {
+            if enumerationDescriptor >= 0 {
+                _ = Darwin.close(enumerationDescriptor)
+            }
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+        defer { _ = Darwin.closedir(stream) }
+
+        errno = 0
+        while let entry = Darwin.readdir(stream) {
+            let name = entryName(entry)
+            guard name != ".", name != ".." else { continue }
+            guard isDirectChildName(name) else {
+                throw MacTransientWorkspace.WorkspaceError.unavailable
+            }
+
+            var status = Darwin.stat()
+            let statResult = name.withCString {
+                Darwin.fstatat(directoryDescriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+            }
+            if statResult != 0 {
+                guard errno == ENOENT else {
+                    throw MacTransientWorkspace.WorkspaceError.unavailable
+                }
+                errno = 0
+                continue
+            }
+
+            if (status.st_mode & S_IFMT) == S_IFDIR {
+                let child = try openDirectory(named: name, relativeTo: directoryDescriptor)
+                do {
+                    try removeAllEntries(in: child)
+                    _ = Darwin.close(child)
+                } catch {
+                    _ = Darwin.close(child)
+                    throw error
+                }
+                let result = name.withCString {
+                    Darwin.unlinkat(directoryDescriptor, $0, AT_REMOVEDIR)
+                }
+                guard result == 0 || errno == ENOENT else {
+                    throw MacTransientWorkspace.WorkspaceError.unavailable
+                }
+            } else {
+                let result = name.withCString {
+                    Darwin.unlinkat(directoryDescriptor, $0, 0)
+                }
+                guard result == 0 || errno == ENOENT else {
+                    throw MacTransientWorkspace.WorkspaceError.unavailable
+                }
+            }
+            errno = 0
+        }
+        guard errno == 0 else {
+            throw MacTransientWorkspace.WorkspaceError.unavailable
+        }
+    }
+
+    private static func entryName(_ entry: UnsafeMutablePointer<dirent>) -> String {
+        withUnsafePointer(to: &entry.pointee.d_name) { namePointer in
+            namePointer.withMemoryRebound(
+                to: CChar.self,
+                capacity: MemoryLayout.size(ofValue: entry.pointee.d_name)
+            ) {
+                String(cString: $0)
+            }
+        }
+    }
+
+    private static func isDirectChildName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." && !name.contains("/")
     }
 }
 

@@ -14,8 +14,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  provenance:
+    name: Verify upload provenance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify upload commit is on main
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "App Store uploads must run from the main branch, not $GITHUB_REF." >&2
+            exit 1
+          fi
+          git fetch origin main --prune
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Upload commit $GITHUB_SHA is not on origin/main." >&2
+            exit 1
+          fi
+
   archive-and-upload:
     name: Archive and upload
+    needs: provenance
     runs-on: macos-26
     timeout-minutes: 90
 
@@ -51,6 +75,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate audio recovery contracts
         run: bash scripts/validate_apple_audio_recovery.sh

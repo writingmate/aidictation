@@ -53,13 +53,13 @@ object TranscriptionClient {
     private const val TAG = "TranscriptionClient"
     private const val MAX_SINGLE_UPLOAD_AUDIO_BYTES = 3_600_000L
     private const val MAX_CHUNK_DURATION_US = 240_000_000L
-    private const val MIN_CHUNK_DURATION_US = 20_000_000L
+    private const val MIN_CHUNK_DURATION_US = 250_000L
     private const val MIN_TRAILING_CHUNK_DURATION_US = 250_000L
     private const val CHUNK_DURATION_SAFETY_FACTOR = 0.9
     private const val CHUNK_EXPORT_TIMEOUT_MS = 60_000L
     private const val CLEANUP_TIMEOUT_MS = 35_000L
 
-    private data class AudioUploadChunk(
+    internal data class AudioUploadChunk(
         val file: File,
         val isTemporary: Boolean
     )
@@ -98,6 +98,50 @@ object TranscriptionClient {
         requestSnapshot: RequestSnapshot = captureRequestSnapshot(),
         checkpoint: suspend (mergedText: String, completedLeafCount: Int) -> Boolean = { _, _ -> true },
         rawComplete: suspend (rawText: String) -> Boolean = { true }
+    ): Result<String> = transcribeInternal(
+        audioFile = audioFile,
+        prompt = prompt,
+        language = language,
+        sttPrompt = sttPrompt,
+        postProcessingPrompt = postProcessingPrompt,
+        oneStageCleanup = oneStageCleanup,
+        requestSnapshot = requestSnapshot,
+        checkpoint = checkpoint,
+        rawComplete = rawComplete,
+        chunkExportTimeoutMillis = CHUNK_EXPORT_TIMEOUT_MS,
+        initialChunkExporter = ::makeUploadChunks
+    )
+
+    internal suspend fun transcribeWithInitialChunkExporterForTest(
+        audioFile: File,
+        requestSnapshot: RequestSnapshot,
+        chunkExportTimeoutMillis: Long,
+        initialChunkExporter: (
+            File,
+            ManagedAudioTemporaryWorkspace
+        ) -> List<AudioUploadChunk>
+    ): Result<String> = transcribeInternal(
+        audioFile = audioFile,
+        requestSnapshot = requestSnapshot,
+        chunkExportTimeoutMillis = chunkExportTimeoutMillis,
+        initialChunkExporter = initialChunkExporter
+    )
+
+    private suspend fun transcribeInternal(
+        audioFile: File,
+        prompt: String? = null,
+        language: String? = null,
+        sttPrompt: String? = null,
+        postProcessingPrompt: String? = null,
+        oneStageCleanup: Boolean = false,
+        requestSnapshot: RequestSnapshot,
+        checkpoint: suspend (mergedText: String, completedLeafCount: Int) -> Boolean = { _, _ -> true },
+        rawComplete: suspend (rawText: String) -> Boolean = { true },
+        chunkExportTimeoutMillis: Long,
+        initialChunkExporter: (
+            File,
+            ManagedAudioTemporaryWorkspace
+        ) -> List<AudioUploadChunk>
     ): Result<String> = withContext(Dispatchers.IO) {
         val temporaryFiles = linkedSetOf<File>()
         val temporaryWorkspace = ManagedAudioTemporaryFiles.openWorkspace(audioFile)
@@ -115,15 +159,13 @@ object TranscriptionClient {
                 return@withContext Result.failure(AudioHttpException(401, "Cloud mode is not configured"))
             }
 
-            val leaves = withTimeout(CHUNK_EXPORT_TIMEOUT_MS) {
-                if (shouldUseChunkedUpload(requestSnapshot.endpoint) &&
-                    audioFile.length() > MAX_SINGLE_UPLOAD_AUDIO_BYTES
-                ) {
+            val leaves = withTimeout(chunkExportTimeoutMillis) {
+                if (shouldProactivelySplitAudio(requestSnapshot.endpoint, audioFile.length())) {
                     runDisposableBlocking(
                         onLateResult = { chunks ->
                             chunks.filter { it.isTemporary }.forEach { it.file.delete() }
                         }
-                    ) { makeUploadChunks(audioFile, temporaryWorkspace) }
+                    ) { initialChunkExporter(audioFile, temporaryWorkspace) }
                 } else {
                     listOf(AudioUploadChunk(audioFile, isTemporary = false))
                 }
@@ -318,10 +360,6 @@ object TranscriptionClient {
         }
 
         val metadata = readAudioMetadata(audioFile)
-        if (metadata.durationUs <= MIN_CHUNK_DURATION_US) {
-            return listOf(AudioUploadChunk(audioFile, isTemporary = false))
-        }
-
         val bytesPerMicrosecond = audioFile.length().toDouble() / metadata.durationUs.toDouble()
         var segmentDurationUs = min(
             MAX_CHUNK_DURATION_US,
@@ -553,9 +591,11 @@ object TranscriptionClient {
         throw IllegalArgumentException("No audio track found in ${extractor.toString()}")
     }
 
-    private fun shouldUseChunkedUpload(endpoint: String): Boolean {
-        return endpoint.contains("://writingmate.ai/", ignoreCase = true) ||
-            endpoint.contains(".writingmate.ai/", ignoreCase = true)
+    @Suppress("UNUSED_PARAMETER")
+    internal fun shouldProactivelySplitAudio(endpoint: String, audioBytes: Long): Boolean {
+        // Keep the endpoint in this contract so tests guard every provider route against a future
+        // provider-specific regression. Upload safety depends only on the source size.
+        return audioBytes > MAX_SINGLE_UPLOAD_AUDIO_BYTES
     }
 
     private fun contentTypeFor(audioFile: File): String {
@@ -567,7 +607,7 @@ object TranscriptionClient {
         }
     }
 
-    private fun parseTranscriptionText(responseBody: String, contentType: String?): String {
+    internal fun parseTranscriptionText(responseBody: String, contentType: String?): String {
         val trimmed = responseBody.trim()
         if (trimmed.isEmpty()) throw AudioEmptyResponseException()
 

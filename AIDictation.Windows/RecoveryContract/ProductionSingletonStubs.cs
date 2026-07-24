@@ -28,6 +28,11 @@ public sealed class AudioRecorderService : IAudioRecorderService
         AudioAttemptLease lease,
         string reason,
         CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<RecorderFinalizationResult?> ShutdownAsync(
+        AudioAttemptLease? activeLease,
+        TimeSpan deadline,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<RecorderFinalizationResult?>(null);
 }
 
 public sealed class TranscriptionService : ITranscriptionPipeline

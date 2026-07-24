@@ -111,6 +111,7 @@ public enum SharedTranscriptionService {
         outputMode: TranscriptionOutputMode? = nil,
         transcriptionOptions: TranscriptionOptions = .default,
         selectedPreset: ContextRule? = nil,
+        chunkWorkspace: MobileAudioProcessingStore.ChunkWorkspace? = nil,
         onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
         onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
         onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
@@ -126,6 +127,7 @@ public enum SharedTranscriptionService {
         return try await transcribe(
             audioURL: audioURL,
             request: request,
+            chunkWorkspace: chunkWorkspace,
             onRecognitionCheckpoint: onRecognitionCheckpoint,
             onRawTranscript: onRawTranscript,
             onCleanupStarted: onCleanupStarted
@@ -135,6 +137,7 @@ public enum SharedTranscriptionService {
     public static func transcribe(
         audioURL: URL,
         request: RequestSnapshot,
+        chunkWorkspace: MobileAudioProcessingStore.ChunkWorkspace? = nil,
         onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
         onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
         onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
@@ -158,6 +161,7 @@ public enum SharedTranscriptionService {
                     audioURL: audioURL,
                     request: request,
                     timedOutDiarization: error is TranscriptionTimeoutError,
+                    chunkWorkspace: chunkWorkspace,
                     checkpointForwarder: checkpointForwarder,
                     onRawTranscript: onRawTranscript,
                     onCleanupStarted: onCleanupStarted
@@ -174,6 +178,7 @@ public enum SharedTranscriptionService {
             recognitionResult = try await transcribeWithCloud(
                 audioURL: audioURL,
                 request: request,
+                chunkWorkspace: chunkWorkspace,
                 checkpointForwarder: checkpointForwarder,
                 onRawTranscript: onRawTranscript,
                 onCleanupStarted: onCleanupStarted
@@ -330,6 +335,7 @@ public enum SharedTranscriptionService {
         audioURL: URL,
         request: RequestSnapshot,
         timedOutDiarization: Bool,
+        chunkWorkspace: MobileAudioProcessingStore.ChunkWorkspace?,
         checkpointForwarder: RecognitionCheckpointForwarder,
         onRawTranscript: @escaping @Sendable (String) async throws -> Void,
         onCleanupStarted: @escaping @Sendable () async throws -> Void
@@ -338,6 +344,7 @@ public enum SharedTranscriptionService {
             return try await transcribeWithCloud(
                 audioURL: audioURL,
                 request: request,
+                chunkWorkspace: chunkWorkspace,
                 checkpointForwarder: checkpointForwarder,
                 onRawTranscript: onRawTranscript,
                 onCleanupStarted: onCleanupStarted
@@ -356,6 +363,7 @@ public enum SharedTranscriptionService {
     private static func transcribeWithCloud(
         audioURL: URL,
         request: RequestSnapshot,
+        chunkWorkspace: MobileAudioProcessingStore.ChunkWorkspace?,
         checkpointForwarder: RecognitionCheckpointForwarder,
         onRawTranscript: @escaping @Sendable (String) async throws -> Void,
         onCleanupStarted: @escaping @Sendable () async throws -> Void
@@ -384,6 +392,7 @@ public enum SharedTranscriptionService {
             sttPrompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
             postProcessingPrompt: cloud.isOneStage ? request.serverPostProcessingPrompt : nil,
             serverPostProcessingEnabledByDefault: cloud.isOneStage,
+            chunkWorkspace: chunkWorkspace,
             onChunkCheckpoint: { completedLeafIndex, transcript in
                 try await checkpointForwarder.checkpointLeaf(
                     completedLeafIndex: completedLeafIndex,

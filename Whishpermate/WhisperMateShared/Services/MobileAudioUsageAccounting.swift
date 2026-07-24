@@ -7,9 +7,17 @@ import Foundation
 public enum MobileAudioUsageAccounting {
     public static func flush(
         recordingID: UUID,
+        historyManager: HistoryManager,
         store: MobileAudioProcessingStore = .shared,
         subscriptionManager: SubscriptionManager = .shared
     ) async {
+        guard (try? await historyManager.containsDurably(recordingID: recordingID)) == true else {
+            DebugLog.warning(
+                "Word usage remains pending until the transcription is durably visible in History.",
+                context: "MobileAudioUsageAccounting"
+            )
+            return
+        }
         guard let lease = try? await store.beginUsageAccounting(recordingID: recordingID) else {
             return
         }

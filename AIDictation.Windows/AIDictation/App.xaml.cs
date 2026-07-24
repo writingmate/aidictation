@@ -523,14 +523,18 @@ public partial class App : Application
 
     private void CleanupServices()
     {
-        // Stop any active recording
-        if (AudioProcessingCoordinator.Instance.HasActiveAttempt)
+        // One total exit budget owns native writer finalization, journal
+        // terminalization, and History publication. Recorder.Dispose below is
+        // idempotent and never starts a second wait window.
+        try
         {
-            // Do not block the WPF dispatcher waiting for callbacks that may
-            // themselves dispatch UI work. The durable active journal is
-            // normalized to a recoverable failure on the next launch.
-            try { AudioRecorderService.Instance.Dispose(); } catch { }
+            AudioProcessingCoordinator.Instance
+                .ShutdownAsync(TimeSpan.FromSeconds(10))
+                .GetAwaiter()
+                .GetResult();
         }
+        catch { }
+        try { AudioRecorderService.Instance.Dispose(); } catch { }
         RestoreSystemAudioAfterRecording();
 
         // Cleanup hotkey service

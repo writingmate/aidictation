@@ -87,6 +87,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let onboardingManager = OnboardingManager.shared
     private let authManager = AuthManager.shared
     private let subscriptionManager = SubscriptionManager.shared
+    private let terminationReplyGuard = MacTerminationReplyGuard()
 
     func applicationDidFinishLaunching(_: Notification) {
         SentryTelemetry.start()
@@ -138,6 +139,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         showMainSettingsWindow()
         return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let token = terminationReplyGuard.begin() else {
+            // One terminate-later reply already owns the handoff. Repeated Quit
+            // cannot consume native-close proof or create a second AppKit reply.
+            return .terminateLater
+        }
+        Task { @MainActor [weak self, weak sender] in
+            guard let self else { return }
+            let canTerminate = await appState.prepareForTermination()
+            guard terminationReplyGuard.resolve(token), let sender else { return }
+            sender.reply(toApplicationShouldTerminate: canTerminate)
+        }
+        return .terminateLater
     }
 
     func applicationDidBecomeActive(_: Notification) {

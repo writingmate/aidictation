@@ -171,11 +171,20 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         }
     #endif
 
-    public func startRecording() {
-        recordingQueue.async { [weak self] in
-            self?.startRecordingOnQueue(destinationURL: nil, attemptID: nil)
+    #if os(iOS)
+        @available(
+            iOS,
+            unavailable,
+            message: "iOS recording requires a durable MobileAudioProcessingStore destination."
+        )
+        public func startRecording() {}
+    #else
+        public func startRecording() {
+            recordingQueue.async { [weak self] in
+                self?.startRecordingOnQueue(destinationURL: nil, attemptID: nil)
+            }
         }
-    }
+    #endif
 
     /// Starts a managed capture into a caller-owned durable URL. The call returns only after the
     /// recorder has successfully written audio for this exact attempt.
@@ -275,21 +284,11 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         if let destinationURL {
             recordingURL = destinationURL
         } else {
-            // Legacy callers still receive an isolated temporary file.
             #if os(iOS)
-                let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
-                if let containerURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AudioRecorder.appGroupIdentifier) {
-                    recordingURL = containerURL.appendingPathComponent(fileName)
-                } else {
-                    #if targetEnvironment(simulator)
-                        DebugLog.info("App Group container unavailable, using simulator temporary directory", context: "AudioRecorder LOG")
-                        recordingURL = fileManager.temporaryDirectory.appendingPathComponent(fileName)
-                    #else
-                        DebugLog.info("Failed to get app group container", context: "AudioRecorder LOG")
-                        publishStopped()
-                        return
-                    #endif
-                }
+                // All iOS callers must allocate a stable source in the durable attempt journal
+                // before native capture starts.
+                abortManagedStartOnQueue(.recorderUnavailable)
+                return
             #else
                 let fileName = "recording_\(Date().timeIntervalSince1970).m4a"
                 recordingURL = fileManager.temporaryDirectory.appendingPathComponent(fileName)

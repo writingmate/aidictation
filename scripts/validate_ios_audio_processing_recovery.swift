@@ -12,6 +12,56 @@ private enum ValidationFailure: Error, CustomStringConvertible {
 }
 
 private struct InjectedDeletionCrash: Error, Sendable {}
+private struct InjectedHistoryCommitFailure: Error, Sendable {}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func increment() {
+        lock.lock()
+        storage += 1
+        lock.unlock()
+    }
+}
+
+private final class StalledNativeExport: @unchecked Sendable {
+    typealias Completion = @Sendable (Result<Void, Error>) -> Void
+
+    private let lock = NSLock()
+    private var completion: Completion?
+    private var cancellationCountStorage = 0
+
+    var cancellationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancellationCountStorage
+    }
+
+    func start(_ completion: @escaping Completion) -> @Sendable () -> Void {
+        lock.lock()
+        self.completion = completion
+        lock.unlock()
+        return { [weak self] in
+            self?.lock.lock()
+            self?.cancellationCountStorage += 1
+            self?.lock.unlock()
+        }
+    }
+
+    func completeLate() {
+        lock.lock()
+        let completion = completion
+        lock.unlock()
+        completion?(.success(()))
+    }
+}
 
 private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     guard condition() else { throw ValidationFailure.failed(message) }
@@ -45,6 +95,15 @@ private func makeRoot(_ name: String) throws -> URL {
         .appendingPathComponent("ios-audio-recovery-\(name)-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
+}
+
+private func waitForSemaphore(_ semaphore: DispatchSemaphore) async {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            semaphore.wait()
+            continuation.resume()
+        }
+    }
 }
 
 private func writeM4AAudioFixture(to url: URL) throws {
@@ -135,6 +194,273 @@ private func testDeadlineReturnsWithoutWaitingForLateWork() async throws {
         throw ValidationFailure.failed("Infinite deadline was accepted")
     } catch let error as IOSAudioProcessingDeadlineError {
         try require(error == .timedOut, "Infinite deadline did not fail closed")
+    }
+}
+
+private func testStalledNativeExportReturnsTerminalAndFencesLateCompletion() async throws {
+    let root = try makeRoot("stalled-native-export")
+    let store = MobileAudioProcessingStore(rootDirectory: root)
+    let (lease, finalized) = try await makeFinalizedAttempt(store: store)
+    _ = try await store.beginRecognition(
+        lease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let workspace = try await store.makeChunkWorkspace(for: lease)
+    let derivedLeaf = try workspace.allocateOutputURL()
+    let exporter = StalledNativeExport()
+    let started = Date()
+
+    do {
+        _ = try await IOSAudioProcessingDeadline.run(seconds: 0.05) {
+            try await IOSNativeCallbackOperation.run(start: exporter.start)
+        } as Void
+        throw ValidationFailure.failed("A stalled native export escaped its deadline")
+    } catch let error as IOSAudioProcessingDeadlineError {
+        try require(error == .timedOut, "Stalled native export returned \(error)")
+    }
+    try require(
+        Date().timeIntervalSince(started) < 0.25,
+        "Native export deadline waited for the missing callback"
+    )
+    try require(
+        exporter.cancellationCount == 1,
+        "Native export was not cancelled exactly once at the deadline"
+    )
+
+    try await store.markFailed(
+        lease,
+        message: "Audio preparation timed out.",
+        integrity: .complete
+    )
+    let terminal = try await store.snapshot(recordingID: lease.recordingID)
+    try require(terminal?.stage == .failed, "Export timeout did not return the store to terminal")
+    try require(
+        terminal?.sourceIntegrity == .complete
+            && FileManager.default.fileExists(atPath: finalized.url.path),
+        "Export timeout lost the recoverable source"
+    )
+
+    exporter.completeLate()
+    try await Task.sleep(nanoseconds: 30_000_000)
+    let afterLateCompletion = try await store.snapshot(recordingID: lease.recordingID)
+    try require(
+        afterLateCompletion?.stage == .failed,
+        "A late native export callback revived the abandoned attempt"
+    )
+    workspace.remove(derivedLeaf)
+    workspace.cleanupAll()
+}
+
+private func testStickyCancellationBeforeNewAndRetryAllocationReturns() async throws {
+    let newEntered = DispatchSemaphore(value: 0)
+    let releaseNew = DispatchSemaphore(value: 0)
+    let nativeStartCount = LockedCounter()
+    let newRoot = try makeRoot("sticky-new-allocation")
+    let newStore = MobileAudioProcessingStore(
+        rootDirectory: newRoot,
+        beforeAttemptAllocation: {
+            newEntered.signal()
+            releaseNew.wait()
+        }
+    )
+    let newRecordingID = UUID()
+    let newAttemptID = UUID()
+    let delayedNew = Task {
+        let lease = try await newStore.beginNewAttempt(
+            recordingID: newRecordingID,
+            attemptID: newAttemptID,
+            deadlineAt: Date().addingTimeInterval(30)
+        )
+        guard !Task.isCancelled else {
+            try? await newStore.markCancelled(lease)
+            throw CancellationError()
+        }
+        nativeStartCount.increment()
+        return lease
+    }
+    await waitForSemaphore(newEntered)
+    delayedNew.cancel()
+    releaseNew.signal()
+    do {
+        _ = try await delayedNew.value
+        throw ValidationFailure.failed("Cancelled delayed allocation started native capture")
+    } catch is CancellationError {}
+
+    let cancelledNew = try await newStore.snapshot(recordingID: newRecordingID)
+    try require(cancelledNew?.stage == .cancelled, "Late new lease was not durably cancelled")
+    try require(
+        nativeStartCount.value == 0,
+        "Microphone start ran after cancellation won before lease allocation"
+    )
+    try require(
+        cancelledNew.map { FileManager.default.fileExists(atPath: $0.sourcePath) } == true,
+        "Late new-attempt journal is not recoverable"
+    )
+
+    let retryRoot = try makeRoot("sticky-retry-allocation")
+    let setupStore = MobileAudioProcessingStore(rootDirectory: retryRoot)
+    let (initialLease, _) = try await makeFinalizedAttempt(store: setupStore)
+    try await setupStore.markFailed(
+        initialLease,
+        message: "Retry fixture",
+        integrity: .complete
+    )
+    let retryEntered = DispatchSemaphore(value: 0)
+    let releaseRetry = DispatchSemaphore(value: 0)
+    let recognitionStartCount = LockedCounter()
+    let retryStore = MobileAudioProcessingStore(
+        rootDirectory: retryRoot,
+        beforeAttemptAllocation: {
+            retryEntered.signal()
+            releaseRetry.wait()
+        }
+    )
+    let retryAttemptID = UUID()
+    let delayedRetry = Task {
+        let lease = try await retryStore.beginRetry(
+            recordingID: initialLease.recordingID,
+            attemptID: retryAttemptID,
+            deadlineAt: Date().addingTimeInterval(30)
+        )
+        guard !Task.isCancelled else {
+            try? await retryStore.markCancelled(lease)
+            throw CancellationError()
+        }
+        recognitionStartCount.increment()
+        return lease
+    }
+    await waitForSemaphore(retryEntered)
+    delayedRetry.cancel()
+    releaseRetry.signal()
+    do {
+        _ = try await delayedRetry.value
+        throw ValidationFailure.failed("Cancelled delayed retry started recognition")
+    } catch is CancellationError {}
+
+    let cancelledRetry = try await retryStore.snapshot(recordingID: initialLease.recordingID)
+    try require(cancelledRetry?.stage == .cancelled, "Late retry lease was not durably cancelled")
+    try require(
+        recognitionStartCount.value == 0,
+        "Recognition ran after cancellation won before retry allocation"
+    )
+    try require(
+        cancelledRetry?.sourceIntegrity == .complete,
+        "Cancelled late retry lost the complete canonical source"
+    )
+}
+
+private func testAttemptOwnedChunkWorkspaceCrashSweepAndSymlinkFence() async throws {
+    let root = try makeRoot("chunk-workspace-sweep")
+    let store = MobileAudioProcessingStore(rootDirectory: root)
+    let (lease, finalized) = try await makeFinalizedAttempt(store: store)
+    _ = try await store.beginRecognition(
+        lease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let workspace = try await store.makeChunkWorkspace(for: lease)
+    let derivedLeaf = try workspace.allocateOutputURL()
+    try Data("derived upload leaf".utf8).write(to: derivedLeaf)
+    try require(
+        FileManager.default.fileExists(atPath: derivedLeaf.path),
+        "Chunk workspace fixture was not created"
+    )
+
+    let restarted = MobileAudioProcessingStore(rootDirectory: root)
+    _ = try await restarted.normalizeInterruptedAttempts()
+    try require(
+        !FileManager.default.fileExists(atPath: derivedLeaf.path),
+        "Launch recovery did not sweep the crashed attempt workspace"
+    )
+    let recovered = try await restarted.snapshot(recordingID: lease.recordingID)
+    try require(
+        recovered?.stage == .failed
+            && recovered?.sourceIntegrity == .complete
+            && FileManager.default.fileExists(atPath: finalized.url.path),
+        "Workspace sweep damaged the durable source or left work active"
+    )
+    workspace.remove(derivedLeaf)
+    workspace.cleanupAll()
+
+    let hostileRoot = try makeRoot("chunk-workspace-symlink")
+    let hostileStore = MobileAudioProcessingStore(rootDirectory: hostileRoot)
+    _ = try await hostileStore.normalizeInterruptedAttempts()
+    let outside = try makeRoot("chunk-workspace-outside")
+    let sentinel = outside.appendingPathComponent("sentinel.txt")
+    try Data("must survive".utf8).write(to: sentinel)
+    let hostileRecordingDirectory = hostileRoot
+        .appendingPathComponent("ChunkWorkspaces", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createSymbolicLink(
+        at: hostileRecordingDirectory,
+        withDestinationURL: outside
+    )
+    try await requireThrows(.quarantined) {
+        _ = try await hostileStore.normalizeInterruptedAttempts()
+    }
+    try require(
+        FileManager.default.fileExists(atPath: sentinel.path),
+        "Workspace recovery followed a symlink outside its ownership root"
+    )
+}
+
+@MainActor
+private func testRevisionedHistoryMultiSceneTombstoneAndTruthfulFailure() async throws {
+    let root = try makeRoot("history-multi-scene")
+    let first = HistoryManager(rootDirectory: root)
+    let second = HistoryManager(rootDirectory: root)
+    try await first.reload()
+    try await second.reload()
+
+    let firstRecording = Recording(transcription: "first durable row")
+    let secondRecording = Recording(transcription: "second durable row")
+    try await first.upsertRecording(firstRecording)
+    try await second.upsertRecording(secondRecording)
+    try await first.reload()
+    try require(
+        first.recordings.map(\.id) == [secondRecording.id, firstRecording.id],
+        "Two scenes lost a committed row or changed durable order"
+    )
+
+    try await second.deleteRecording(firstRecording)
+    do {
+        try await first.upsertRecording(firstRecording)
+        throw ValidationFailure.failed("A stale scene resurrected a tombstoned recording")
+    } catch let error as HistoryPersistenceError {
+        try require(error == .deleted, "Tombstone returned the wrong error: \(error)")
+    }
+    try await first.reload()
+    try require(
+        !first.recordings.contains(where: { $0.id == firstRecording.id }),
+        "Deleted history row reappeared after cross-scene reload"
+    )
+
+    let failedCommit = HistoryManager(
+        rootDirectory: root,
+        beforeCommit: { throw InjectedHistoryCommitFailure() }
+    )
+    try await failedCommit.reload()
+    let beforeFailure = failedCommit.recordings
+    do {
+        try await failedCommit.upsertRecording(Recording(transcription: "must not publish"))
+        throw ValidationFailure.failed("Injected History commit failure was swallowed")
+    } catch is InjectedHistoryCommitFailure {}
+    try require(
+        failedCommit.recordings.map(\.id) == beforeFailure.map(\.id),
+        "History projection advanced despite a failed durable commit"
+    )
+
+    try Data("{corrupt".utf8).write(
+        to: root.appendingPathComponent("history.json"),
+        options: .atomic
+    )
+    try await first.clearAll(recordingIDs: [secondRecording.id])
+    try await second.reload()
+    try require(second.recordings.isEmpty, "Clear did not repair corrupt History")
+    do {
+        try await second.upsertRecording(secondRecording)
+        throw ValidationFailure.failed("Clear repair lost its deletion tombstone")
+    } catch let error as HistoryPersistenceError {
+        try require(error == .deleted, "Clear tombstone returned the wrong error")
     }
 }
 
@@ -635,6 +961,13 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
             options: .backwards
         ) != nil,
         "iOS keyboard delivery occurs before durable terminal success"
+    )
+    try require(
+        beforeDelivery.range(
+            of: "try await replaceHistoryRecording(recording, in: historyManager)",
+            options: .backwards
+        ) != nil,
+        "iOS keyboard delivery occurs before durable History publication"
     )
 
     let rawRoot = try makeRoot("cleanup-failure-fallback")
@@ -1176,9 +1509,9 @@ private func testIOSCallerRecoveryContracts() throws {
     )
     try require(
         content.contains("let usageRecordingIDs = snapshots.compactMap")
-            && content.contains("snapshot.stage == .deleted,")
-            && content.contains("snapshot.usageAccountingWordCount != nil"),
-        "Launch recovery does not claim pending usage after Delete or Clear"
+            && content.contains("guard snapshot.stage == .succeeded,")
+            && !content.contains("snapshot.stage == .deleted,\n                   snapshot.usageAccountingWordCount"),
+        "Launch recovery can claim usage for text that Delete/Clear removed from History"
     )
     guard let deletedHistoryLoop = content.range(
         of: "for snapshot in snapshots where snapshot.stage == .deleted"
@@ -1236,27 +1569,140 @@ private func testIOSCallerRecoveryContracts() throws {
         sheet.contains("MobileAudioUsageAccounting.flush("),
         "Sheet raw fallback skips durably claimed usage accounting"
     )
+    try require(
+        sheet.contains("pendingAttemptID = retryAttemptID")
+            && sheet.contains("pendingAttemptID = attemptID")
+            && sheet.contains("cancelledPendingAttemptID")
+            && sheet.contains("_ = audioRecorderSlot.retire(ifCurrent: pendingAttemptRecorder)")
+            && sheet.contains("guard pendingAttemptID == retryAttemptID")
+            && sheet.contains("guard pendingAttemptID == attemptID"),
+        "Sheet cancellation is not sticky while new/retry allocation is suspended"
+    )
+    try require(
+        sheet.contains("currentRecoverySnapshot = nil"),
+        "Successful retry leaves the stale Try Again state visible"
+    )
+    try require(
+        content.contains("private var pendingAttemptID: UUID?")
+            && content.contains("cancelledPendingAttemptID")
+            && content.contains("guard pendingAttemptID == attemptID"),
+        "Inline/keyboard cancellation is not sticky before lease allocation returns"
+    )
+
+    let storeSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "Whishpermate/WhisperMateShared/Services/MobileAudioProcessingStore.swift"
+        ),
+        encoding: .utf8
+    )
+    try require(
+        storeSource.contains("trustedAppGroupContainerDirectory()")
+            && storeSource.contains("MobileAudioProcessingStore(unavailable: ())")
+            && !storeSource.contains("defaultRootDirectory()"),
+        "Production mobile audio store still falls back outside the App Group"
+    )
+    try require(
+        storeSource.contains("public final class ChunkWorkspace")
+            && storeSource.contains("Darwin.unlinkat")
+            && storeSource.contains("sweepChunkWorkspacesLocked()"),
+        "Attempt-owned derived audio lacks descriptor cleanup or launch sweep"
+    )
+
+    try require(
+        !historySource.contains("temporaryDirectory")
+            && historySource.contains("public func upsertRecording")
+            && historySource.contains("async throws")
+            && historySource.contains("deletedRecordingIDs"),
+        "History still falls back privately or hides durable mutation failures"
+    )
+
+    let usageSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "Whishpermate/WhisperMateShared/Services/MobileAudioUsageAccounting.swift"
+        ),
+        encoding: .utf8
+    )
+    guard let durableHistoryCheck = usageSource.range(of: "historyManager.containsDurably"),
+          let usageClaim = usageSource.range(of: "store.beginUsageAccounting")
+    else { throw ValidationFailure.failed("History-gated usage accounting is missing") }
+    try require(
+        durableHistoryCheck.lowerBound < usageClaim.lowerBound,
+        "Usage is irrevocably claimed before durable History publication"
+    )
+
+    let sharedTranscriptionSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "Whishpermate/WhisperMateShared/Services/SharedTranscriptionService.swift"
+        ),
+        encoding: .utf8
+    )
+    try require(
+        sharedTranscriptionSource.contains("if cloud.isOneStage")
+            && sharedTranscriptionSource.contains("rawTranscript: transcript")
+            && sharedTranscriptionSource.contains("cleanedTranscript: transcript"),
+        "One-request final response is not retained as recoverable client text"
+    )
+
+    let openAIClientSource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "Whishpermate/WhisperMateShared/Networking/OpenAIClient.swift"
+        ),
+        encoding: .utf8
+    )
+    try require(
+        openAIClientSource.contains("IOSNativeCallbackOperation.run")
+            && openAIClientSource.contains("workspace.allocateOutputURL()")
+            && openAIClientSource.contains("#if os(iOS)")
+            && openAIClientSource.contains(
+                "throw MobileAudioProcessingStore.StoreError.unavailable"
+            ),
+        "Production native chunk export can stall or spill to an iOS temp directory"
+    )
 }
 
 @main
 private struct IOSAudioRecoveryValidator {
     static func main() async {
         do {
+            print("testDeadlineReturnsWithoutWaitingForLateWork")
             try await testDeadlineReturnsWithoutWaitingForLateWork()
+            print("testStalledNativeExportReturnsTerminalAndFencesLateCompletion")
+            try await testStalledNativeExportReturnsTerminalAndFencesLateCompletion()
+            print("testStickyCancellationBeforeNewAndRetryAllocationReturns")
+            try await testStickyCancellationBeforeNewAndRetryAllocationReturns()
+            print("testAttemptOwnedChunkWorkspaceCrashSweepAndSymlinkFence")
+            try await testAttemptOwnedChunkWorkspaceCrashSweepAndSymlinkFence()
+            print("testRevisionedHistoryMultiSceneTombstoneAndTruthfulFailure")
+            try await testRevisionedHistoryMultiSceneTombstoneAndTruthfulFailure()
+            print("testBoundedDeepValidationAndCaptureLimitFinalization")
             try await testBoundedDeepValidationAndCaptureLimitFinalization()
+            print("testRecorderGenerationRetirementAndLateClearCleanup")
             try await testRecorderGenerationRetirementAndLateClearCleanup()
+            print("testManagedCaptureInterruptionFenceContract")
             try testManagedCaptureInterruptionFenceContract()
+            print("testDurabilityIntegrityRawRecoveryAndRetry")
             try await testDurabilityIntegrityRawRecoveryAndRetry()
+            print("testFullDecodeRejectsTruncation")
             try await testFullDecodeRejectsTruncation()
+            print("testPayloadBeforeManifestRecovery")
             try await testPayloadBeforeManifestRecovery()
+            print("testDurableWriteFailureDoesNotAdvanceManifest")
             try await testDurableWriteFailureDoesNotAdvanceManifest()
+            print("testPathEscapeQuarantinesWithoutDeletingOutsideFile")
             try await testPathEscapeQuarantinesWithoutDeletingOutsideFile()
+            print("testCrashAfterMoveAndLateCallbackFence")
             try await testCrashAfterMoveAndLateCallbackFence()
+            print("testTerminalSuccessCannotBeDowngradedByDeliveryFailure")
             try await testTerminalSuccessCannotBeDowngradedByDeliveryFailure()
+            print("testUsageClaimIsAtMostOnceAcrossRestartDeleteAndClear")
             try await testUsageClaimIsAtMostOnceAcrossRestartDeleteAndClear()
+            print("testLegacyHistoryDeletionIntentSurvivesCrash")
             try await testLegacyHistoryDeletionIntentSurvivesCrash()
+            print("testCorruptionQuarantinesWithoutOverwrite")
             try await testCorruptionQuarantinesWithoutOverwrite()
+            print("testHistoryDoesNotResurrectEvictedStoreAttempts")
             try await testHistoryDoesNotResurrectEvictedStoreAttempts()
+            print("testIOSCallerRecoveryContracts")
             try testIOSCallerRecoveryContracts()
             print("iOS audio recovery validation passed")
         } catch {

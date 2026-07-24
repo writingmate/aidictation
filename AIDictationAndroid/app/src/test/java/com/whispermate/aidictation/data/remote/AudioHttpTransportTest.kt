@@ -14,7 +14,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class AudioHttpTransportTest {
     private lateinit var server: MockWebServer
     private lateinit var client: OkHttpClient
@@ -166,6 +171,65 @@ class AudioHttpTransportTest {
         assertEquals("complete transcript", complete.body)
         assertEquals("text/plain", complete.contentType)
         assertTrue(disconnected is IOException)
+    }
+
+    @Test
+    fun fullyReceivedMalformed200IsOneShot() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"unexpected":"shape"}""")
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"text":"wrong retry"}""")
+        )
+        val engine = SequentialAudioRecognitionEngine(
+            transport = AudioLeafTransport<String> { leaf ->
+                val response = execute(leaf)
+                TranscriptionClient.parseTranscriptionText(response.body, response.contentType)
+            },
+            splitter = AudioLeafSplitter { _, _ -> null },
+            recoveryDelay = RecoveryDelay { }
+        )
+
+        val error = failure { engine.recognize(listOf("malformed")) { _, _ -> true } }
+
+        assertTrue(error is AudioMalformedResponseException)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun disconnected200BodyRetriesTwiceAndThirdCompleteBodyWins() = runBlocking {
+        repeat(2) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "text/plain")
+                    .setBody("incomplete ".repeat(4_096))
+                    .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
+            )
+        }
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "text/plain")
+                .setBody("complete after reconnect")
+        )
+        val engine = SequentialAudioRecognitionEngine(
+            transport = AudioLeafTransport<String> { execute(it).body },
+            splitter = AudioLeafSplitter { _, _ -> null },
+            recoveryDelay = RecoveryDelay { }
+        )
+
+        assertEquals(
+            "complete after reconnect",
+            engine.recognize(listOf("disconnected")) { _, _ -> true }
+        )
+        assertEquals(3, server.requestCount)
     }
 
     private suspend fun execute(leaf: String): CompleteAudioHttpResponse {

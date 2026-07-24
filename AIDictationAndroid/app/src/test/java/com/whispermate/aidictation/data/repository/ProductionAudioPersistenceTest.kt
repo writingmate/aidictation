@@ -7,14 +7,22 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.local.AppDatabase
+import com.whispermate.aidictation.data.local.ManagedAudioSourceFiles
 import com.whispermate.aidictation.data.local.ManagedAudioTemporaryFiles
 import com.whispermate.aidictation.data.local.dao.RecordingDao
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
 import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.domain.model.AudioProcessingStatus
+import com.whispermate.aidictation.domain.model.AudioSourceIntegrity
 import com.whispermate.aidictation.domain.model.audioUsageClaimId
 import java.io.IOException
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -47,6 +55,7 @@ class ProductionAudioPersistenceTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        resetOwnedAudioStorage()
         managedAudioDirectory = java.io.File(context.filesDir, "audio/recordings")
         ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)
         database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
@@ -59,7 +68,7 @@ class ProductionAudioPersistenceTest {
     @After
     fun tearDown() {
         database.close()
-        ManagedAudioTemporaryFiles.retireAndSweepAll(managedAudioDirectory)
+        resetOwnedAudioStorage()
     }
 
     @Test
@@ -273,6 +282,173 @@ class ProductionAudioPersistenceTest {
     }
 
     @Test
+    fun decodedExternalAndUnnormalizedPathsAreNeverOpenedRetriedOrDeleted() = runBlocking {
+        val outsideDirectory = java.io.File(
+            context.cacheDir,
+            "decoded-source-outside-${UUID.randomUUID()}"
+        ).apply { assertTrue(mkdirs()) }
+        try {
+            val outsideSource = java.io.File(outsideDirectory, "outside.m4a")
+                .apply { writeBytes(byteArrayOf(1, 2, 3)) }
+            val outsideRow = terminalRow("external", outsideSource)
+            dao.insertRecording(outsideRow)
+
+            assertNull(repository.getRecordingById(outsideRow.id)?.audioFilePath)
+            assertNull(repository.claimRetry(outsideRow.id, usageEligible = true))
+            assertFalse(
+                repository.recoverFinalizedSource(
+                    outsideRow.lease().copy(status = AudioProcessingStatus.FINALIZING),
+                    outsideSource
+                )
+            )
+            assertTrue(repository.deleteRecording(outsideRow.toDomain()))
+            assertTrue("an external decoded source was deleted", outsideSource.exists())
+            assertNull(dao.getRecordingById(outsideRow.id)?.audioFilePath)
+
+            val dotSource = managedSource("dot-segment")
+                .apply { writeBytes(byteArrayOf(4, 5, 6)) }
+            val dotSegmentPath =
+                "${managedAudioDirectory.absolutePath}/../recordings/${dotSource.name}"
+            val dotRow = terminalRow("dot-segment", dotSource)
+                .copy(audioFilePath = dotSegmentPath)
+            dao.insertRecording(dotRow)
+
+            assertNull(repository.getRecordingById(dotRow.id)?.audioFilePath)
+            assertNull(repository.claimRetry(dotRow.id, usageEligible = true))
+            assertTrue(repository.deleteRecording(dotRow.toDomain()))
+            assertTrue("a non-normalized decoded source was deleted", dotSource.exists())
+            assertNull(dao.getRecordingById(dotRow.id)?.audioFilePath)
+        } finally {
+            outsideDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun knownLegacyTimestampSourceIsDeletedWithoutTrustingOtherLegacyNames() = runBlocking {
+        val legacyDirectory = java.io.File(context.filesDir, "recordings")
+        assertTrue(legacyDirectory.mkdir())
+        val knownLegacySource = java.io.File(legacyDirectory, "recording_1720000000000.m4a")
+            .apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val knownRow = terminalRow("known-legacy", knownLegacySource)
+        dao.insertRecording(knownRow)
+
+        assertTrue(repository.deleteRecording(knownRow.toDomain()))
+        assertFalse(knownLegacySource.exists())
+        assertNull(dao.getRecordingById(knownRow.id)?.audioFilePath)
+
+        val unknownLegacySource = java.io.File(legacyDirectory, "recording_customer.m4a")
+            .apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val unknownRow = terminalRow("unknown-legacy", unknownLegacySource)
+        dao.insertRecording(unknownRow)
+
+        assertTrue(repository.deleteRecording(unknownRow.toDomain()))
+        assertTrue("a broad legacy filename was deleted", unknownLegacySource.exists())
+        assertNull(dao.getRecordingById(unknownRow.id)?.audioFilePath)
+    }
+
+    @Test
+    fun linkedOwnedSourceFailsClosedAndPreservesOutsideTargetAndDatabasePath() = runBlocking {
+        val outsideDirectory = java.io.File(
+            context.cacheDir,
+            "linked-source-outside-${UUID.randomUUID()}"
+        ).apply { assertTrue(mkdirs()) }
+        val outsideSource = java.io.File(outsideDirectory, "keep.m4a")
+            .apply { writeBytes(byteArrayOf(7, 8, 9)) }
+        val sourceLink = managedSource("linked-source")
+        Files.createSymbolicLink(sourceLink.toPath(), outsideSource.toPath().toAbsolutePath())
+        val row = terminalRow("linked-source", sourceLink)
+        dao.insertRecording(row)
+
+        try {
+            assertNull(repository.getRecordingById(row.id)?.audioFilePath)
+            assertNull(repository.claimRetry(row.id, usageEligible = true))
+            assertFalse(repository.deleteRecording(row.toDomain()))
+            assertTrue("source-link deletion followed the outside target", outsideSource.exists())
+            assertTrue(Files.exists(sourceLink.toPath(), LinkOption.NOFOLLOW_LINKS))
+            assertEquals(sourceLink.absolutePath, dao.getRecordingById(row.id)?.audioFilePath)
+        } finally {
+            Files.deleteIfExists(sourceLink.toPath())
+            outsideDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun existingOutputEntryIsRejectedBeforeCaptureIsJournaled() = runBlocking {
+        val source = managedSource("existing-output")
+            .apply { writeBytes(byteArrayOf(10, 11, 12)) }
+
+        val recorderValidation = runCatching {
+            ManagedAudioSourceFiles(context).requireRecorderTarget(source)
+        }.exceptionOrNull()
+        assertTrue(recorderValidation is IOException)
+
+        val beginFailure = runCatching {
+            repository.beginCapture(
+                recordingId = "existing-output",
+                attemptId = "attempt",
+                partialSourcePath = source.absolutePath,
+                usageEligible = true
+            )
+        }.exceptionOrNull()
+        assertTrue(beginFailure is IOException)
+        assertNull(dao.getRecordingById("existing-output"))
+        assertTrue(source.readBytes().contentEquals(byteArrayOf(10, 11, 12)))
+    }
+
+    @Test
+    fun linkedAudioParentBlocksCaptureDeleteAndClearWithoutFollowingOutside() = runBlocking {
+        val audioDirectory = java.io.File(context.filesDir, "audio")
+        removeEntryWithoutFollowing(audioDirectory.toPath())
+        val outsideDirectory = java.io.File(
+            context.cacheDir,
+            "linked-audio-parent-${UUID.randomUUID()}"
+        ).apply { assertTrue(mkdirs()) }
+        val outsideRecordings = java.io.File(outsideDirectory, "recordings")
+            .apply { assertTrue(mkdir()) }
+        val sentinel = java.io.File(outsideDirectory, "keep.txt").apply { writeText("keep") }
+        Files.createSymbolicLink(audioDirectory.toPath(), outsideDirectory.toPath().toAbsolutePath())
+
+        try {
+            val capturePath = repository.managedSourceFile("blocked-capture")
+            val captureFailure = runCatching {
+                repository.beginCapture(
+                    recordingId = "blocked-capture",
+                    attemptId = "attempt",
+                    partialSourcePath = capturePath.absolutePath,
+                    usageEligible = true
+                )
+            }.exceptionOrNull()
+            assertTrue(captureFailure is IOException)
+            assertNull(dao.getRecordingById("blocked-capture"))
+            assertFalse(java.io.File(outsideRecordings, capturePath.name).exists())
+
+            val deletePath = repository.managedSourceFile("blocked-delete")
+            val outsideDeleteSource = java.io.File(outsideRecordings, deletePath.name)
+                .apply { writeBytes(byteArrayOf(1, 2, 3)) }
+            val deleteRow = terminalRow("blocked-delete", deletePath)
+            dao.insertRecording(deleteRow)
+            assertFalse(repository.deleteRecording(deleteRow.toDomain()))
+            assertTrue(outsideDeleteSource.exists())
+            assertEquals(deletePath.absolutePath, dao.getRecordingById(deleteRow.id)?.audioFilePath)
+
+            val clearPath = repository.managedSourceFile("blocked-clear")
+            val outsideClearSource = java.io.File(outsideRecordings, clearPath.name)
+                .apply { writeBytes(byteArrayOf(4, 5, 6)) }
+            val clearRow = terminalRow("blocked-clear", clearPath)
+            dao.insertRecording(clearRow)
+            assertFalse(repository.clearAllRecordings())
+            assertTrue(outsideClearSource.exists())
+            assertEquals(clearPath.absolutePath, dao.getRecordingById(clearRow.id)?.audioFilePath)
+
+            assertTrue("linked parent traversal removed the outside sentinel", sentinel.exists())
+            assertTrue(Files.isSymbolicLink(audioDirectory.toPath()))
+        } finally {
+            Files.deleteIfExists(audioDirectory.toPath())
+            outsideDirectory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun productionClearRefusesActiveRowsWithoutDeletingTheirSource() = runBlocking {
         repository.normalizeAbandonedAttempts(now = 6_000L)
         val source = managedSource("active").apply { writeBytes(byteArrayOf(1, 2, 3)) }
@@ -347,10 +523,38 @@ class ProductionAudioPersistenceTest {
         status = AudioProcessingStatus.PROCESSING
     )
 
-    private fun managedSource(id: String) = java.io.File(
-        managedAudioDirectory.apply { mkdirs() },
-        "$id-${UUID.randomUUID()}.m4a"
-    )
+    private fun managedSource(id: String): java.io.File {
+        val paths = ManagedAudioSourceFiles(context)
+        val source = paths.sourceForRecording(id)
+        return paths.prepareCaptureSource(id, source.absolutePath)
+    }
+
+    private fun resetOwnedAudioStorage() {
+        removeEntryWithoutFollowing(java.io.File(context.filesDir, "audio").toPath())
+        removeEntryWithoutFollowing(java.io.File(context.filesDir, "recordings").toPath())
+    }
+
+    private fun removeEntryWithoutFollowing(path: Path) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return
+        Files.walkFileTree(path, object : SimpleFileVisitor<Path>() {
+            override fun visitFile(
+                file: Path,
+                attributes: BasicFileAttributes
+            ): FileVisitResult {
+                Files.deleteIfExists(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(
+                directory: Path,
+                error: IOException?
+            ): FileVisitResult {
+                if (error != null) throw error
+                Files.deleteIfExists(directory)
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
 
     private fun resourceExcludes(resourceId: Int, domain: String, path: String): Boolean {
         val parser = context.resources.getXml(resourceId)

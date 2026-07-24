@@ -99,6 +99,161 @@ public actor MobileAudioProcessingStore {
         public let duration: TimeInterval
     }
 
+    /// A per-attempt, app-group-owned directory for derived upload leaves.
+    ///
+    /// The directory descriptor is retained for the lifetime of the workspace so cleanup never
+    /// trusts a decoded or reconstructed path. Every removable leaf has a UUID basename and is
+    /// unlinked relative to that descriptor; a late exporter therefore cannot escape through a
+    /// replaced parent or delete another attempt's file.
+    public final class ChunkWorkspace: @unchecked Sendable {
+        private let directoryURL: URL
+        #if canImport(Darwin)
+            private var directoryDescriptor: Int32
+            private let directoryDevice: UInt64
+            private let directoryInode: UInt64
+        #endif
+        private let lock = NSLock()
+        private var ownedNames = Set<String>()
+        private var closed = false
+
+        fileprivate init(directoryURL: URL) throws {
+            self.directoryURL = directoryURL
+            #if canImport(Darwin)
+                let descriptor = directoryURL.path.withCString {
+                    Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                }
+                guard descriptor >= 0 else { throw StoreError.unavailable }
+                var status = stat()
+                guard Darwin.fstat(descriptor, &status) == 0,
+                      (status.st_mode & S_IFMT) == S_IFDIR
+                else {
+                    Darwin.close(descriptor)
+                    throw StoreError.unavailable
+                }
+                directoryDescriptor = descriptor
+                directoryDevice = UInt64(status.st_dev)
+                directoryInode = UInt64(status.st_ino)
+            #endif
+        }
+
+        deinit {
+            cleanupAll()
+            #if canImport(Darwin)
+                lock.lock()
+                let descriptor = directoryDescriptor
+                directoryDescriptor = -1
+                closed = true
+                lock.unlock()
+                if descriptor >= 0 {
+                    Darwin.close(descriptor)
+                }
+                var status = stat()
+                let stillNamesSameDirectory = directoryURL.path.withCString {
+                    Darwin.lstat($0, &status)
+                } == 0
+                    && (status.st_mode & S_IFMT) == S_IFDIR
+                    && UInt64(status.st_dev) == directoryDevice
+                    && UInt64(status.st_ino) == directoryInode
+                if stillNamesSameDirectory {
+                    _ = directoryURL.path.withCString { Darwin.rmdir($0) }
+                }
+            #endif
+        }
+
+        public func allocateOutputURL() throws -> URL {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !closed else { throw StoreError.unavailable }
+
+            for _ in 0 ..< 32 {
+                let name = "\(UUID().uuidString).m4a"
+                #if canImport(Darwin)
+                    var status = stat()
+                    let result = name.withCString {
+                        Darwin.fstatat(
+                            directoryDescriptor,
+                            $0,
+                            &status,
+                            AT_SYMLINK_NOFOLLOW
+                        )
+                    }
+                    guard result != 0 else { continue }
+                    guard errno == ENOENT else { throw StoreError.unavailable }
+                #else
+                    guard !FileManager.default.fileExists(
+                        atPath: directoryURL.appendingPathComponent(name).path
+                    ) else { continue }
+                #endif
+                ownedNames.insert(name)
+                return directoryURL.appendingPathComponent(name, isDirectory: false)
+            }
+            throw StoreError.unavailable
+        }
+
+        public func remove(_ url: URL) {
+            let name = url.lastPathComponent
+            guard Self.isOwnedLeafName(name),
+                  url.deletingLastPathComponent().standardizedFileURL
+                    == directoryURL.standardizedFileURL
+            else { return }
+
+            lock.lock()
+            guard !closed, ownedNames.remove(name) != nil else {
+                lock.unlock()
+                return
+            }
+            #if canImport(Darwin)
+                let descriptor = directoryDescriptor
+                lock.unlock()
+                let result = name.withCString { Darwin.unlinkat(descriptor, $0, 0) }
+                if result != 0, errno != ENOENT {
+                    DebugLog.warning(
+                        "Could not remove a managed upload part.",
+                        context: "MobileAudioProcessingStore"
+                    )
+                }
+            #else
+                lock.unlock()
+                try? FileManager.default.removeItem(at: url)
+            #endif
+        }
+
+        public func cleanupAll() {
+            lock.lock()
+            guard !closed else {
+                lock.unlock()
+                return
+            }
+            let names = ownedNames
+            ownedNames.removeAll()
+            #if canImport(Darwin)
+                let descriptor = directoryDescriptor
+                lock.unlock()
+                for name in names {
+                    let result = name.withCString { Darwin.unlinkat(descriptor, $0, 0) }
+                    if result != 0, errno != ENOENT {
+                        DebugLog.warning(
+                            "Could not remove a managed upload part.",
+                            context: "MobileAudioProcessingStore"
+                        )
+                    }
+                }
+            #else
+                lock.unlock()
+                for name in names {
+                    try? FileManager.default.removeItem(
+                        at: directoryURL.appendingPathComponent(name)
+                    )
+                }
+            #endif
+        }
+
+        fileprivate static func isOwnedLeafName(_ name: String) -> Bool {
+            guard name.hasSuffix(".m4a") else { return false }
+            return UUID(uuidString: String(name.dropLast(4))) != nil
+        }
+    }
+
     /// Immutable proof produced once, off the store actor, after a full decode of the closed
     /// container. Normal recognition and restart paths compare only this stable file identity.
     public struct ClosedSourceProof: Codable, Equatable, Sendable {
@@ -176,21 +331,52 @@ public actor MobileAudioProcessingStore {
         let duration: TimeInterval
     }
 
-    public static let shared = MobileAudioProcessingStore(rootDirectory: defaultRootDirectory())
+    public static let shared: MobileAudioProcessingStore = {
+        #if os(iOS)
+            do {
+                let container = try trustedAppGroupContainerDirectory()
+                let root = try ensureDirectoryNoFollow(
+                    parent: try ensureDirectoryNoFollow(parent: container, name: "WhisperMate"),
+                    name: "MobileAudioProcessing"
+                )
+                return MobileAudioProcessingStore(
+                    trustedRootDirectory: root,
+                    trustedContainerDirectory: container
+                )
+            } catch {
+                return MobileAudioProcessingStore(unavailable: ())
+            }
+        #else
+            guard let applicationSupport = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first else {
+                return MobileAudioProcessingStore(unavailable: ())
+            }
+            return MobileAudioProcessingStore(
+                rootDirectory: applicationSupport
+                    .appendingPathComponent("WhisperMate", isDirectory: true)
+                    .appendingPathComponent("MobileAudioProcessing", isDirectory: true)
+            )
+        #endif
+    }()
 
     private let rootDirectory: URL
     private let attemptsDirectory: URL
+    private let chunkWorkspacesDirectory: URL
     private let metadataURL: URL
     private let quarantineURL: URL
     private let lockURL: URL
+    private let trustedContainerDirectory: URL?
     private let fileManager: FileManager
+    private let beforeAttemptAllocation: @Sendable () -> Void
     private let beforeDeepSourceValidation: @Sendable () -> Void
     private let afterHistoryDeletionIntentPersisted: @Sendable () throws -> Void
     private var initializationFailed = false
 
     private static let schemaVersion = 4
     private static let finalizationStartGrace: TimeInterval = 5
-    private static let appGroupIdentifier = "group.com.whispermate.shared"
+    static let appGroupIdentifier = "group.com.whispermate.shared"
     private static let allowedPayloadNames: Set<String> = [
         "attempt.json", "source.partial.m4a", "source.m4a",
         "recognition-partial.txt", "raw.txt", "result.txt", "previous-result.txt",
@@ -199,24 +385,88 @@ public actor MobileAudioProcessingStore {
     public init(
         rootDirectory: URL,
         fileManager: FileManager = .default,
+        beforeAttemptAllocation: @escaping @Sendable () -> Void = {},
         beforeDeepSourceValidation: @escaping @Sendable () -> Void = {},
         afterHistoryDeletionIntentPersisted: @escaping @Sendable () throws -> Void = {}
     ) {
         self.rootDirectory = rootDirectory
         attemptsDirectory = rootDirectory.appendingPathComponent("Attempts", isDirectory: true)
+        chunkWorkspacesDirectory = rootDirectory.appendingPathComponent(
+            "ChunkWorkspaces",
+            isDirectory: true
+        )
         metadataURL = rootDirectory.appendingPathComponent("store.json")
         quarantineURL = rootDirectory.appendingPathComponent("QUARANTINED")
         lockURL = rootDirectory.appendingPathComponent("store.lock")
+        trustedContainerDirectory = nil
         self.fileManager = fileManager
+        self.beforeAttemptAllocation = beforeAttemptAllocation
         self.beforeDeepSourceValidation = beforeDeepSourceValidation
         self.afterHistoryDeletionIntentPersisted = afterHistoryDeletionIntentPersisted
 
         do {
             try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: attemptsDirectory, withIntermediateDirectories: true)
+            try fileManager.createDirectory(
+                at: chunkWorkspacesDirectory,
+                withIntermediateDirectories: true
+            )
         } catch {
             initializationFailed = true
         }
+    }
+
+    private init(
+        trustedRootDirectory rootDirectory: URL,
+        trustedContainerDirectory: URL,
+        fileManager: FileManager = .default
+    ) {
+        self.rootDirectory = rootDirectory
+        attemptsDirectory = rootDirectory.appendingPathComponent("Attempts", isDirectory: true)
+        chunkWorkspacesDirectory = rootDirectory.appendingPathComponent(
+            "ChunkWorkspaces",
+            isDirectory: true
+        )
+        metadataURL = rootDirectory.appendingPathComponent("store.json")
+        quarantineURL = rootDirectory.appendingPathComponent("QUARANTINED")
+        lockURL = rootDirectory.appendingPathComponent("store.lock")
+        self.trustedContainerDirectory = trustedContainerDirectory
+        self.fileManager = fileManager
+        beforeAttemptAllocation = {}
+        beforeDeepSourceValidation = {}
+        afterHistoryDeletionIntentPersisted = {}
+
+        do {
+            _ = try Self.ensureDirectoryNoFollow(parent: rootDirectory, name: "Attempts")
+            _ = try Self.ensureDirectoryNoFollow(
+                parent: rootDirectory,
+                name: "ChunkWorkspaces"
+            )
+        } catch {
+            initializationFailed = true
+        }
+    }
+
+    private init(unavailable _: Void) {
+        let unavailableRoot = URL(
+            fileURLWithPath: "/WhisperMate-AppGroup-Unavailable",
+            isDirectory: true
+        )
+        rootDirectory = unavailableRoot
+        attemptsDirectory = unavailableRoot.appendingPathComponent("Attempts", isDirectory: true)
+        chunkWorkspacesDirectory = unavailableRoot.appendingPathComponent(
+            "ChunkWorkspaces",
+            isDirectory: true
+        )
+        metadataURL = unavailableRoot.appendingPathComponent("store.json")
+        quarantineURL = unavailableRoot.appendingPathComponent("QUARANTINED")
+        lockURL = unavailableRoot.appendingPathComponent("store.lock")
+        trustedContainerDirectory = nil
+        fileManager = .default
+        beforeAttemptAllocation = {}
+        beforeDeepSourceValidation = {}
+        afterHistoryDeletionIntentPersisted = {}
+        initializationFailed = true
     }
 
     /// Creates a never-before-used stable recording ID. Existing payloads are never replaced.
@@ -233,6 +483,7 @@ public actor MobileAudioProcessingStore {
             guard !historyDeletionIDs(metadata).contains(recordingID) else {
                 throw StoreError.recordingIDAlreadyExists
             }
+            beforeAttemptAllocation()
             let directory = attemptDirectory(recordingID: recordingID)
             guard !fileManager.fileExists(atPath: directory.path) else {
                 throw StoreError.recordingIDAlreadyExists
@@ -295,6 +546,7 @@ public actor MobileAudioProcessingStore {
             guard old.generation < UInt64.max, old.revision < UInt64.max else {
                 throw StoreError.counterExhausted
             }
+            beforeAttemptAllocation()
 
             let previousResultURL = attemptDirectory(recordingID: recordingID)
                 .appendingPathComponent("previous-result.txt")
@@ -516,6 +768,45 @@ public actor MobileAudioProcessingStore {
         }
     }
 
+    /// Allocates a fresh derived-audio workspace only for the current recognition lease.
+    /// Delete/Clear can unlink its pathname while a late exporter still holds the descriptor;
+    /// that exporter can then clean only the detached directory it originally owned.
+    public func makeChunkWorkspace(for lease: Lease) throws -> ChunkWorkspace {
+        try withExclusiveLock {
+            let snapshot = try currentSnapshotLocked(for: lease, enforceDeadline: true)
+            guard snapshot.stage == .recognizing || snapshot.stage == .recognitionPartial else {
+                throw StoreError.invalidTransition
+            }
+
+            let recordingDirectory = chunkWorkspacesDirectory.appendingPathComponent(
+                lease.recordingID.uuidString,
+                isDirectory: true
+            )
+            if !fileManager.fileExists(atPath: recordingDirectory.path) {
+                _ = try Self.ensureDirectoryNoFollow(
+                    parent: chunkWorkspacesDirectory,
+                    name: lease.recordingID.uuidString
+                )
+            } else {
+                try validateDirectoryNoFollow(recordingDirectory)
+            }
+
+            let workspaceDirectory = recordingDirectory.appendingPathComponent(
+                lease.attemptID.uuidString,
+                isDirectory: true
+            )
+            guard !fileManager.fileExists(atPath: workspaceDirectory.path) else {
+                throw StoreError.sourceConflict
+            }
+            _ = try Self.ensureDirectoryNoFollow(
+                parent: recordingDirectory,
+                name: lease.attemptID.uuidString
+            )
+            try synchronizeDirectoryLocked(recordingDirectory)
+            return try ChunkWorkspace(directoryURL: workspaceDirectory)
+        }
+    }
+
     /// The shared service supplies the cumulative ordered transcript after every completed leaf.
     /// Replacing this checkpoint avoids duplicated text if the process stops between leaves.
     public func checkpointRecognitionPartial(_ text: String, lease: Lease) throws {
@@ -682,6 +973,7 @@ public actor MobileAudioProcessingStore {
                 try afterHistoryDeletionIntentPersisted()
             }
             try applyHistoryDeletionIntentLocked(recordingID: recordingID, metadata: metadata)
+            try removeChunkWorkspacesLocked(recordingID: recordingID)
         }
     }
 
@@ -714,8 +1006,12 @@ public actor MobileAudioProcessingStore {
                 try advanceRevision(&snapshot)
                 try saveLocked(snapshot)
                 try removePayloadsLocked(snapshot)
+                try removeChunkWorkspacesLocked(recordingID: snapshot.recordingID)
             }
             try applyHistoryDeletionIntentsLocked(metadata)
+            for recordingID in recordingIDs {
+                try removeChunkWorkspacesLocked(recordingID: recordingID)
+            }
         }
     }
 
@@ -733,6 +1029,7 @@ public actor MobileAudioProcessingStore {
             ), snapshot.stage == .deleted || snapshot.storeGeneration != metadata.generation
             else { return }
             try removePayloadsLocked(snapshot)
+            try removeChunkWorkspacesLocked(recordingID: recordingID)
         }
     }
 
@@ -770,6 +1067,7 @@ public actor MobileAudioProcessingStore {
         try withExclusiveLock {
             let metadata = try requireWritableMetadataLocked()
             try applyHistoryDeletionIntentsLocked(metadata)
+            try sweepChunkWorkspacesLocked()
             var normalized: [Snapshot] = []
             for var snapshot in try scanSnapshotsLocked() {
                 if snapshot.storeGeneration != metadata.generation {
@@ -1722,6 +2020,63 @@ public actor MobileAudioProcessingStore {
             }
         }
         if removed { try synchronizeDirectoryLocked(directory) }
+        try removeChunkWorkspacesLocked(recordingID: recordingID)
+    }
+
+    private func sweepChunkWorkspacesLocked() throws {
+        let recordingDirectories = try fileManager.contentsOfDirectory(
+            at: chunkWorkspacesDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        )
+        for recordingDirectory in recordingDirectories {
+            guard let recordingID = UUID(uuidString: recordingDirectory.lastPathComponent) else {
+                throw StoreError.quarantined
+            }
+            try validateDirectoryNoFollow(recordingDirectory)
+            try removeChunkWorkspacesLocked(recordingID: recordingID)
+        }
+    }
+
+    private func removeChunkWorkspacesLocked(recordingID: UUID) throws {
+        let recordingDirectory = chunkWorkspacesDirectory.appendingPathComponent(
+            recordingID.uuidString,
+            isDirectory: true
+        )
+        guard fileManager.fileExists(atPath: recordingDirectory.path) else { return }
+        try validateDirectoryNoFollow(recordingDirectory)
+
+        let workspaces = try fileManager.contentsOfDirectory(
+            at: recordingDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        )
+        for workspace in workspaces {
+            guard UUID(uuidString: workspace.lastPathComponent) != nil else {
+                throw StoreError.quarantined
+            }
+            try validateDirectoryNoFollow(workspace)
+            let leaves = try fileManager.contentsOfDirectory(
+                at: workspace,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: []
+            )
+            for leaf in leaves {
+                guard ChunkWorkspace.isOwnedLeafName(leaf.lastPathComponent) else {
+                    throw StoreError.quarantined
+                }
+                let values = try leaf.resourceValues(
+                    forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                )
+                guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                    throw StoreError.quarantined
+                }
+                try fileManager.removeItem(at: leaf)
+            }
+            try fileManager.removeItem(at: workspace)
+        }
+        try fileManager.removeItem(at: recordingDirectory)
+        try synchronizeDirectoryLocked(chunkWorkspacesDirectory)
     }
 
     private func readNonEmptyTextIfPresentLocked(_ url: URL) throws -> String? {
@@ -1967,6 +2322,8 @@ public actor MobileAudioProcessingStore {
     }
 
     private func withExclusiveLock<T>(_ body: () throws -> T) throws -> T {
+        guard !initializationFailed else { throw StoreError.unavailable }
+        try validateManagedDirectoryTree()
         #if canImport(Darwin)
             let descriptor = lockURL.path.withCString {
                 Darwin.open($0, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
@@ -1979,20 +2336,114 @@ public actor MobileAudioProcessingStore {
         return try body()
     }
 
-    private static func defaultRootDirectory() -> URL {
-        #if os(iOS)
-            if let containerURL = FileManager.default.containerURL(
-                forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
-            ) {
-                return containerURL
-                    .appendingPathComponent("WhisperMate", isDirectory: true)
-                    .appendingPathComponent("MobileAudioProcessing", isDirectory: true)
+    private func validateManagedDirectoryTree() throws {
+        if let trustedContainerDirectory {
+            try validateDirectoryNoFollow(trustedContainerDirectory)
+            let containerPath = trustedContainerDirectory.standardizedFileURL.path
+            let rootPath = rootDirectory.standardizedFileURL.path
+            guard rootPath.hasPrefix(containerPath + "/") else {
+                throw StoreError.quarantined
+            }
+        }
+        try validateDirectoryNoFollow(rootDirectory)
+        try validateDirectoryNoFollow(attemptsDirectory)
+        try validateDirectoryNoFollow(chunkWorkspacesDirectory)
+    }
+
+    private func validateDirectoryNoFollow(_ directory: URL) throws {
+        #if canImport(Darwin)
+            let descriptor = directory.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            }
+            guard descriptor >= 0 else { throw StoreError.quarantined }
+            defer { Darwin.close(descriptor) }
+            var status = stat()
+            guard Darwin.fstat(descriptor, &status) == 0,
+                  (status.st_mode & S_IFMT) == S_IFDIR
+            else { throw StoreError.quarantined }
+        #else
+            let values = try directory.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw StoreError.quarantined
             }
         #endif
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("WhisperMate", isDirectory: true)
-            .appendingPathComponent("MobileAudioProcessing", isDirectory: true)
+    }
+
+    static func trustedAppGroupContainerDirectory(
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        #if os(iOS)
+            guard let containerURL = fileManager.containerURL(
+                forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier
+            ) else { throw StoreError.unavailable }
+            #if canImport(Darwin)
+                let descriptor = containerURL.path.withCString {
+                    Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                }
+                guard descriptor >= 0 else { throw StoreError.unavailable }
+                defer { Darwin.close(descriptor) }
+                var status = stat()
+                guard Darwin.fstat(descriptor, &status) == 0,
+                      (status.st_mode & S_IFMT) == S_IFDIR
+                else { throw StoreError.unavailable }
+            #endif
+            return containerURL
+        #else
+            guard let applicationSupport = fileManager.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first else { throw StoreError.unavailable }
+            return applicationSupport
+        #endif
+    }
+
+    @discardableResult
+    static func ensureDirectoryNoFollow(parent: URL, name: String) throws -> URL {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
+            throw StoreError.quarantined
+        }
+        let directory = parent.appendingPathComponent(name, isDirectory: true)
+        #if canImport(Darwin)
+            let parentDescriptor = parent.path.withCString {
+                Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            }
+            guard parentDescriptor >= 0 else { throw StoreError.unavailable }
+            defer { Darwin.close(parentDescriptor) }
+
+            let creationResult = name.withCString {
+                Darwin.mkdirat(parentDescriptor, $0, S_IRWXU)
+            }
+            guard creationResult == 0 || errno == EEXIST else {
+                throw StoreError.unavailable
+            }
+            let childDescriptor = name.withCString {
+                Darwin.openat(
+                    parentDescriptor,
+                    $0,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+            }
+            guard childDescriptor >= 0 else { throw StoreError.quarantined }
+            defer { Darwin.close(childDescriptor) }
+            var status = stat()
+            guard Darwin.fstat(childDescriptor, &status) == 0,
+                  (status.st_mode & S_IFMT) == S_IFDIR
+            else { throw StoreError.quarantined }
+            guard Darwin.fsync(parentDescriptor) == 0 else { throw StoreError.unavailable }
+        #else
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false
+            )
+            let values = try directory.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw StoreError.quarantined
+            }
+        #endif
+        return directory
     }
 }

@@ -86,6 +86,9 @@ public interface IAudioProcessingStore
         AudioAttemptLease lease,
         string finalText,
         CancellationToken cancellationToken = default);
+    Task<AudioUsageClaim?> ClaimUsageAsync(
+        Guid recordingId,
+        CancellationToken cancellationToken = default);
     Task<AudioStoreMutation> FailAsync(
         AudioAttemptLease lease,
         string message,
@@ -136,6 +139,10 @@ public interface IAudioRecorderService
     Task AbortRecordingAsync(
         AudioAttemptLease lease,
         string reason,
+        CancellationToken cancellationToken = default);
+    Task<RecorderFinalizationResult?> ShutdownAsync(
+        AudioAttemptLease? activeLease,
+        TimeSpan deadline,
         CancellationToken cancellationToken = default);
 }
 

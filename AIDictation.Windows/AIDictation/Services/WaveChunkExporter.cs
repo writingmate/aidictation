@@ -16,60 +16,50 @@ public static class WaveChunkExporter
 
     public static async Task<IReadOnlyList<AudioUploadLeaf>> CreateInitialLeavesAsync(
         string sourcePath,
-        string temporaryDirectory,
+        ManagedAudioWorkspace workspace,
         long maximumUploadBytes,
         CancellationToken cancellationToken)
     {
         if (new FileInfo(sourcePath).Length <= maximumUploadBytes)
             return new[] { new AudioUploadLeaf(sourcePath, false) };
 
-        Directory.CreateDirectory(temporaryDirectory);
+        workspace.EnsureOwnedDirectory();
         var safeDataBytes = maximumUploadBytes - (256 * 1024);
         if (safeDataBytes <= MinimumLeafDataBytes)
             throw new InvalidOperationException("The configured upload limit is too small for audio chunks.");
 
         return await RunExportAsync(
-            token => SplitByMaximumData(sourcePath, temporaryDirectory, safeDataBytes, token),
-            temporaryDirectory,
+            token => SplitByMaximumData(sourcePath, workspace, safeDataBytes, token),
+            workspace,
             cancellationToken).ConfigureAwait(false);
     }
 
     public static async Task<IReadOnlyList<AudioUploadLeaf>> SplitRejectedLeafAsync(
         AudioUploadLeaf leaf,
-        string temporaryDirectory,
+        ManagedAudioWorkspace workspace,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(temporaryDirectory);
+        workspace.EnsureOwnedDirectory();
         return await RunExportAsync(
-            token => SplitInHalf(leaf.Path, temporaryDirectory, token),
-            temporaryDirectory,
+            token => SplitInHalf(leaf.Path, workspace, token),
+            workspace,
             cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<IReadOnlyList<AudioUploadLeaf>> RunExportAsync(
         Func<CancellationToken, IReadOnlyList<AudioUploadLeaf>> export,
-        string temporaryDirectory,
+        ManagedAudioWorkspace workspace,
         CancellationToken cancellationToken) =>
         await AudioExportDeadline.RunAsync(
                 export,
                 ExportDeadline,
                 cancellationToken,
-                () => DeleteTemporaryWorkspace(temporaryDirectory))
+                workspace.Dispose)
             .ConfigureAwait(false);
-
-    public static void DeleteTemporaryWorkspace(string temporaryDirectory)
-    {
-        try
-        {
-            if (Directory.Exists(temporaryDirectory))
-                Directory.Delete(temporaryDirectory, recursive: true);
-        }
-        catch { }
-    }
 
     private static IReadOnlyList<AudioUploadLeaf> SplitByMaximumData(
         string sourcePath,
-        string temporaryDirectory,
+        ManagedAudioWorkspace workspace,
         long maximumDataBytes,
         CancellationToken cancellationToken)
     {
@@ -87,7 +77,7 @@ public static class WaveChunkExporter
             var bytes = Math.Min(remaining, alignedMaximum);
             bytes = AlignDown(bytes, blockAlign);
             if (bytes <= 0) throw new InvalidDataException("Audio contains no complete frames.");
-            var path = Path.Combine(temporaryDirectory, $"leaf-{Guid.NewGuid():N}.wav");
+            var path = workspace.FilePath($"leaf-{Guid.NewGuid():N}.wav");
             WriteRange(reader, path, bytes, cancellationToken);
             leaves.Add(new AudioUploadLeaf(path, true));
             remaining -= bytes;
@@ -97,7 +87,7 @@ public static class WaveChunkExporter
 
     private static IReadOnlyList<AudioUploadLeaf> SplitInHalf(
         string sourcePath,
-        string temporaryDirectory,
+        ManagedAudioWorkspace workspace,
         CancellationToken cancellationToken)
     {
         using var reader = new WaveFileReader(sourcePath);
@@ -107,8 +97,8 @@ public static class WaveChunkExporter
         if (firstBytes < MinimumLeafDataBytes || secondBytes < MinimumLeafDataBytes)
             throw new AudioPayloadTooLargeException("This audio part is still too large at the minimum safe split size.");
 
-        var firstPath = Path.Combine(temporaryDirectory, $"leaf-{Guid.NewGuid():N}.wav");
-        var secondPath = Path.Combine(temporaryDirectory, $"leaf-{Guid.NewGuid():N}.wav");
+        var firstPath = workspace.FilePath($"leaf-{Guid.NewGuid():N}.wav");
+        var secondPath = workspace.FilePath($"leaf-{Guid.NewGuid():N}.wav");
         WriteRange(reader, firstPath, firstBytes, cancellationToken);
         WriteRange(reader, secondPath, secondBytes, cancellationToken);
         return new[]

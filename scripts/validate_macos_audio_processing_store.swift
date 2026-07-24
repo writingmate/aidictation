@@ -176,6 +176,33 @@ private func finishValidatedAudio(
     return try await store.finishFinalization(checkpoint.lease, proof: proof)
 }
 
+private func beginRecognizing(
+    in store: MacAudioProcessingStore,
+    recordingID: UUID = UUID()
+) async throws -> MacAudioProcessingStore.Mutation {
+    var mutation = try await store.prepare(
+        recordingID: recordingID,
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    try writeValidAudio(to: store.partialURL(for: recordingID))
+    mutation = try await store.markRecording(
+        mutation.lease,
+        captureDeadline: futureDeadline()
+    )
+    mutation = try await store.beginFinalization(
+        mutation.lease,
+        deadline: futureDeadline()
+    )
+    mutation = try await finishValidatedAudio(in: store, mutation: mutation)
+    return try await store.beginRecognition(
+        recordingID: recordingID,
+        attemptID: UUID(),
+        expectedRevision: mutation.record.revision,
+        deadline: futureDeadline()
+    )
+}
+
 private func testOldAttemptAndRevisionRejection() async throws {
     let root = try temporaryRoot("old-attempt")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -469,8 +496,17 @@ private func testTimeoutAndResultRecoveryPreserveSource() async throws {
 
     let restarted = MacAudioProcessingStore(rootDirectory: resultRoot)
     let recovered = try await onlyRecord(in: restarted)
-    try require(recovered.stage == .succeeded, "a complete raw result must become terminal on first restart")
+    try require(
+        recovered.stage == .resultReady,
+        "a complete raw result must wait for durable History before success"
+    )
     try require(recovered.resultText == "durable raw result", "restart must retain the complete raw result")
+    let secondRestart = MacAudioProcessingStore(rootDirectory: resultRoot)
+    let stillPendingHistory = try await onlyRecord(in: secondRestart)
+    try require(
+        stillPendingHistory.stage == .resultReady,
+        "restart must not bypass the durable History publication gate"
+    )
 }
 
 private func testRenameJournalCrashReconciliation() async throws {
@@ -1265,6 +1301,206 @@ private func testMissingJournalWithAudioFailsClosed() async throws {
     }
 }
 
+private func testUsageClaimRequiresDurableSuccessAndIsAtMostOnce() async throws {
+    let root = try temporaryRoot("usage-claim")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = MacAudioProcessingStore(rootDirectory: root)
+    var mutation = try await beginRecognizing(in: store)
+    mutation = try await store.markRawResultReady(
+        mutation.lease,
+        rawText: "three durable words"
+    )
+    mutation = try await store.beginCleanup(mutation.lease)
+    mutation = try await store.finishCleanup(
+        mutation.lease,
+        cleanedText: "three durable words"
+    )
+
+    try await requireStoreError(
+        .staleLease,
+        "usage cannot be claimed while History publication is still pending"
+    ) {
+        _ = try await store.claimPendingUsage(
+            recordingID: mutation.record.recordingID,
+            expectedRevision: mutation.record.revision
+        )
+    }
+
+    mutation = try await store.markSucceeded(
+        mutation.lease,
+        pendingUsageWordCount: 3
+    )
+    let claimed = try await store.claimPendingUsage(
+        recordingID: mutation.record.recordingID,
+        expectedRevision: mutation.record.revision
+    )
+    try require(claimed == 3, "the durable terminal result should expose one usage claim")
+
+    let restarted = MacAudioProcessingStore(rootDirectory: root)
+    let recovered = try await onlyRecord(in: restarted)
+    let duplicate = try await restarted.claimPendingUsage(
+        recordingID: recovered.recordingID,
+        expectedRevision: recovered.revision
+    )
+    try require(duplicate == nil, "a restart must not claim the same usage event twice")
+}
+
+private func testTransientWorkspaceCapabilityAndSweeps() async throws {
+    let root = try temporaryRoot("transient-capability")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = MacAudioProcessingStore(rootDirectory: root)
+    let recognizing = try await beginRecognizing(in: store)
+    let first = try await store.makeTransientWorkspace(recognizing.lease)
+    let firstOutput = try first.makeOutputURL()
+    try Data([0x01, 0x02, 0x03]).write(to: firstOutput)
+    try first.validateCompletedOutput(firstOutput)
+
+    let second = try await store.makeTransientWorkspace(recognizing.lease)
+    let secondOutput = try second.makeOutputURL()
+    try Data([0x04, 0x05]).write(to: secondOutput)
+    try second.validateCompletedOutput(secondOutput)
+    let secondDirectory = second.directoryURL
+
+    first.cleanup()
+    second.cleanup()
+    try require(
+        !FileManager.default.fileExists(atPath: secondDirectory.path),
+        "a second workspace cleanup must not inherit the first enumeration offset"
+    )
+
+    let tampered = try await store.makeTransientWorkspace(recognizing.lease)
+    let originalWorkspace = tampered.directoryURL
+    let transientDirectory = store.transientDirectory
+    let retainedDirectory = transientDirectory.deletingLastPathComponent()
+        .appendingPathComponent("Transient-retained", isDirectory: true)
+    try FileManager.default.moveItem(at: transientDirectory, to: retainedDirectory)
+
+    let outside = root.appendingPathComponent("outside", isDirectory: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let sentinel = outside.appendingPathComponent("sentinel.txt")
+    try Data("keep".utf8).write(to: sentinel)
+    try FileManager.default.createSymbolicLink(
+        at: transientDirectory,
+        withDestinationURL: outside
+    )
+
+    do {
+        _ = try tampered.makeOutputURL()
+        throw ValidationFailure.assertion(
+            "a substituted transient ancestor must reject new path-based writes"
+        )
+    } catch is MacTransientWorkspace.WorkspaceError {
+        // Expected.
+    }
+    tampered.cleanup()
+    let retainedWorkspace = retainedDirectory.appendingPathComponent(
+        originalWorkspace.lastPathComponent,
+        isDirectory: true
+    )
+    try require(
+        !FileManager.default.fileExists(atPath: retainedWorkspace.path),
+        "cleanup must remove the original workspace through its retained capability"
+    )
+    let sentinelContents = try Data(contentsOf: sentinel)
+    try require(
+        sentinelContents == Data("keep".utf8),
+        "cleanup followed the substituted ancestor and touched an outside sentinel"
+    )
+}
+
+private func testStartupSweepsOnlyManagedTransientChildren() async throws {
+    let root = try temporaryRoot("transient-startup-sweep")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let layout = MacAudioProcessingStore(rootDirectory: root)
+    let orphan = layout.transientDirectory
+        .appendingPathComponent("orphan", isDirectory: true)
+    try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+    try Data([0x01]).write(to: orphan.appendingPathComponent("chunk.m4a"))
+    _ = MacAudioProcessingStore(rootDirectory: root)
+    try require(
+        !FileManager.default.fileExists(atPath: orphan.path),
+        "startup must sweep crash-orphaned derived workspaces"
+    )
+}
+
+private func testLegacyHistoryDeletionNeverTrustsDecodedPaths() throws {
+    let root = try temporaryRoot("legacy-history-delete")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let applicationSupport = root.appendingPathComponent(
+        "Application Support",
+        isDirectory: true
+    )
+    let recordings = applicationSupport
+        .appendingPathComponent("WhisperMate", isDirectory: true)
+        .appendingPathComponent("Recordings", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: recordings,
+        withIntermediateDirectories: true
+    )
+
+    let recordingID = UUID()
+    let expected = recordings.appendingPathComponent(
+        "recording_\(recordingID.uuidString).m4a"
+    )
+    try Data([0x01]).write(to: expected)
+    let removed = MacHistoryAudioDeletion.remove(
+        recordingID: recordingID,
+        candidateURL: expected,
+        applicationSupportDirectory: applicationSupport
+    )
+    try require(removed == .removed, "the exact trusted legacy child should be removable")
+    try require(
+        !FileManager.default.fileExists(atPath: expected.path),
+        "the exact trusted legacy child remained after accepted deletion"
+    )
+
+    let outside = root.appendingPathComponent("outside", isDirectory: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let outsideSentinel = outside.appendingPathComponent("sentinel.m4a")
+    try Data("outside".utf8).write(to: outsideSentinel)
+    let refusedOutside = MacHistoryAudioDeletion.remove(
+        recordingID: recordingID,
+        candidateURL: outsideSentinel,
+        applicationSupportDirectory: applicationSupport
+    )
+    try require(refusedOutside == .refused, "an absolute decoded outside path was not refused")
+    let outsideContents = try Data(contentsOf: outsideSentinel)
+    try require(
+        outsideContents == Data("outside".utf8),
+        "Delete/Clear followed a decoded outside path and changed its sentinel"
+    )
+
+    let trustedRecordings = recordings.deletingLastPathComponent()
+        .appendingPathComponent("Recordings-trusted", isDirectory: true)
+    try FileManager.default.moveItem(at: recordings, to: trustedRecordings)
+    try FileManager.default.createSymbolicLink(
+        at: recordings,
+        withDestinationURL: outside
+    )
+    let symlinkedCandidate = recordings.appendingPathComponent(
+        "recording_\(recordingID.uuidString).m4a"
+    )
+    try Data("symlink sentinel".utf8).write(to: outside.appendingPathComponent(
+        symlinkedCandidate.lastPathComponent
+    ))
+    let refusedAncestor = MacHistoryAudioDeletion.remove(
+        recordingID: recordingID,
+        candidateURL: symlinkedCandidate,
+        applicationSupportDirectory: applicationSupport
+    )
+    try require(
+        refusedAncestor == .refused,
+        "a symlinked legacy Recordings ancestor was not refused"
+    )
+    let symlinkSentinel = try Data(
+        contentsOf: outside.appendingPathComponent(symlinkedCandidate.lastPathComponent)
+    )
+    try require(
+        symlinkSentinel == Data("symlink sentinel".utf8),
+        "legacy deletion followed a symlinked ancestor"
+    )
+}
+
 @main
 private struct MacAudioProcessingStoreValidator {
     static func main() async {
@@ -1309,6 +1545,14 @@ private struct MacAudioProcessingStoreValidator {
             try await testCorruptJournalPreservesAudio()
             print("test: missing journal")
             try await testMissingJournalWithAudioFailsClosed()
+            print("test: usage claim")
+            try await testUsageClaimRequiresDurableSuccessAndIsAtMostOnce()
+            print("test: transient capability")
+            try await testTransientWorkspaceCapabilityAndSweeps()
+            print("test: transient startup sweep")
+            try await testStartupSweepsOnlyManagedTransientChildren()
+            print("test: legacy decoded path deletion")
+            try testLegacyHistoryDeletionNeverTrustsDecodedPaths()
             print("PASS: macOS audio-processing journal recovery and fencing")
         } catch {
             fputs("FAIL: \(error)\n", stderr)

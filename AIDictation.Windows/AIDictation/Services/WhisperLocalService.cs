@@ -178,31 +178,22 @@ public sealed class WhisperLocalService : IDisposable
         var factory = factoryLease.Resource;
         var whisperLanguage = NormalizeLanguage(languageCode);
 
-        var resampledPath = Path.Combine(
-            Path.GetTempPath(),
-            $"aidictation_whisper_{Guid.NewGuid():N}.wav");
+        using var workspace = ManagedAudioWorkspace.CreateDefault("offline");
+        var resampledPath = workspace.FilePath("resampled.wav");
+        ResampleToWhisperFormat(audioFilePath, resampledPath);
 
-        try
+        using var processor = factory.CreateBuilder()
+            .WithLanguage(whisperLanguage)
+            .Build();
+
+        var text = new StringBuilder();
+        await using var fileStream = File.OpenRead(resampledPath);
+        await foreach (var segment in processor.ProcessAsync(fileStream, cancellationToken))
         {
-            ResampleToWhisperFormat(audioFilePath, resampledPath);
-
-            using var processor = factory.CreateBuilder()
-                .WithLanguage(whisperLanguage)
-                .Build();
-
-            var text = new StringBuilder();
-            await using var fileStream = File.OpenRead(resampledPath);
-            await foreach (var segment in processor.ProcessAsync(fileStream, cancellationToken))
-            {
-                text.Append(segment.Text);
-            }
-
-            return text.ToString().Trim();
+            text.Append(segment.Text);
         }
-        finally
-        {
-            try { File.Delete(resampledPath); } catch { }
-        }
+
+        return text.ToString().Trim();
     }
 
     public void Dispose()

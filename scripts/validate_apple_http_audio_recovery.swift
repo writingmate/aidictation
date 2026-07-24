@@ -348,7 +348,10 @@ private func expectFailure(
 }
 
 private func validatePermanentStatuses() async throws {
-    for status in [202, 206, 400, 401, 403, 404, 409, 422] {
+    let permanentClientStatuses = (400...499).filter {
+        $0 != 408 && $0 != 413 && $0 != 429
+    }
+    for status in [202, 206] + permanentClientStatuses {
         var attempts = 0
         var sleeps = 0
         try await expectFailure(.permanentHTTP(statusCode: status)) {

@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AIDictation.Helpers;
@@ -166,8 +165,6 @@ public sealed class TranscriptionService : ITranscriptionPipeline
                     .ConfigureAwait(false);
             }
 
-            processedText = ApplyLiteralReplacements(processedText, snapshot.Replacements);
-            processedText = ApplyLiteralReplacements(processedText, snapshot.Expansions);
             if (string.IsNullOrWhiteSpace(processedText)) processedText = rawText;
 
             // A native recognizer or HTTP stack may finish after the owning
@@ -210,34 +207,25 @@ public sealed class TranscriptionService : ITranscriptionPipeline
         if (string.IsNullOrEmpty(BuildConfig.TranscriptionApiKey))
             throw new InvalidOperationException("Cloud mode is not configured in this build.");
 
-        var temporaryDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"aidictation-upload-{Guid.NewGuid():N}");
-        try
-        {
-            var initialLeaves = await WaveChunkExporter.CreateInitialLeavesAsync(
-                    audioFilePath,
-                    temporaryDirectory,
-                    Constants.MaxUploadBytes,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            var processor = new CloudAudioLeafProcessor<AudioUploadLeaf>();
-            return await processor.ProcessAsync(
-                    initialLeaves,
-                    (leaf, allowOneStageCleanup, token) => UploadCloudLeafAsync(
-                        leaf.Path,
-                        snapshot,
-                        allowOneStageCleanup,
-                        token),
-                    (leaf, token) => WaveChunkExporter.SplitRejectedLeafAsync(leaf, temporaryDirectory, token),
-                    persistCheckpoint,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            WaveChunkExporter.DeleteTemporaryWorkspace(temporaryDirectory);
-        }
+        using var workspace = ManagedAudioWorkspace.CreateDefault("upload");
+        var initialLeaves = await WaveChunkExporter.CreateInitialLeavesAsync(
+                audioFilePath,
+                workspace,
+                Constants.MaxUploadBytes,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var processor = new CloudAudioLeafProcessor<AudioUploadLeaf>();
+        return await processor.ProcessAsync(
+                initialLeaves,
+                (leaf, allowOneStageCleanup, token) => UploadCloudLeafAsync(
+                    leaf.Path,
+                    snapshot,
+                    allowOneStageCleanup,
+                    token),
+                (leaf, token) => WaveChunkExporter.SplitRejectedLeafAsync(leaf, workspace, token),
+                persistCheckpoint,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<string> UploadCloudLeafAsync(
@@ -426,18 +414,6 @@ public sealed class TranscriptionService : ITranscriptionPipeline
         return names.Count > 0
             ? names
             : new[] { "auto" };
-    }
-
-    private static string ApplyLiteralReplacements(
-        string text,
-        IEnumerable<TextReplacementSnapshot> replacements)
-    {
-        foreach (var entry in replacements)
-        {
-            var pattern = $@"\b{Regex.Escape(entry.Trigger)}\b";
-            text = Regex.Replace(text, pattern, _ => entry.Replacement, RegexOptions.IgnoreCase);
-        }
-        return text;
     }
 
     private static StringContent CreateFormField(string name, string value)

@@ -20,32 +20,50 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   DOTNET_VERSION: '8.0.x'
   PROJECT_PATH: 'AIDictation.Windows/AIDictation/AIDictation.csproj'
   PUBLISH_DIR: 'AIDictation.Windows/artifacts/win-x64'
   INSTALLER_DIR: 'AIDictation.Windows/artifacts/installer'
-  # Backend configuration baked into the build via AssemblyMetadata (see csproj).
-  # MSBuild reads these environment variables as properties.
-  TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
-  TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
-  TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
-  AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
-  AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-  AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
-  STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
 
 jobs:
+  provenance:
+    name: Verify build provenance
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Verify trusted ref
+      shell: bash
+      run: |
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          exit 0
+        fi
+        if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+          echo "Manual builds must run from main, not $GITHUB_REF." >&2
+          exit 1
+        fi
+        git fetch origin main --prune
+        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          echo "Build commit $GITHUB_SHA is not based on origin/main." >&2
+          exit 1
+        fi
+
   build:
+    needs: provenance
     runs-on: windows-latest
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -132,13 +150,28 @@ jobs:
         retention-days: 30
 
   release:
-    needs: build
+    needs: [provenance, build]
     runs-on: windows-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')
+    permissions:
+      contents: write
+    env:
+      # Release-only configuration baked into AssemblyMetadata by MSBuild.
+      TRANSCRIPTION_API_KEY: ${{ secrets.TRANSCRIPTION_API_KEY }}
+      TRANSCRIPTION_ENDPOINT: ${{ secrets.TRANSCRIPTION_ENDPOINT }}
+      TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
+      AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
+      AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+      STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4

@@ -1,0 +1,43 @@
+name: Transcription Contracts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Whishpermate/**'
+      - 'AIDictationAndroid/**'
+      - 'AIDictation.Windows/**'
+      - 'scripts/validate_transcription_prompt_routing.py'
+      - 'scripts/validate_transcription_cleanup_prompt.swift'
+      - 'AGENTS.md'
+      - '.github/workflows/transcription-contracts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Whishpermate/**'
+      - 'AIDictationAndroid/**'
+      - 'AIDictation.Windows/**'
+      - 'scripts/validate_transcription_prompt_routing.py'
+      - 'scripts/validate_transcription_cleanup_prompt.swift'
+      - 'AGENTS.md'
+      - '.github/workflows/transcription-contracts.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transcription-contracts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  routing:
+    name: Cross-platform prompt routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate transcription prompt routing
+        run: python3 scripts/validate_transcription_prompt_routing.py

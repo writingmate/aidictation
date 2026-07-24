@@ -12,6 +12,8 @@
     <Compile Include="..\AIDictation\Services\AudioExportDeadline.cs" Link="AudioExportDeadline.cs" />
     <Compile Include="..\AIDictation\Services\CleanupCompletionPolicy.cs" Link="CleanupCompletionPolicy.cs" />
     <Compile Include="..\AIDictation\Services\HistoryTombstoneFence.cs" Link="HistoryTombstoneFence.cs" />
+    <Compile Include="..\AIDictation\Services\ManagedAudioFileSystem.cs" Link="ManagedAudioFileSystem.cs" />
+    <Compile Include="..\AIDictation\Services\RetiredNativeCloseRegistry.cs" Link="RetiredNativeCloseRegistry.cs" />
     <Compile Include="..\AIDictation\Services\AudioHttpRecoveryPolicy.cs" Link="AudioHttpRecoveryPolicy.cs" />
     <Compile Include="..\AIDictation\Services\AudioProcessingContracts.cs" Link="AudioProcessingContracts.cs" />
     <Compile Include="..\AIDictation\Services\AudioProcessingCoordinator.cs" Link="AudioProcessingCoordinator.cs" />

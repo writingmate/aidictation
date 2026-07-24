@@ -1,5 +1,5 @@
 using System;
-using System.IO;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,6 +41,8 @@ public sealed class AudioProcessingCoordinator
         public int PipelineFenced;
         public required CancellationTokenSource Cancellation;
         public SemaphoreSlim MutationGate { get; } = new(1, 1);
+        public TaskCompletionSource<bool> ForegroundReleased { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class PendingStart
@@ -60,8 +62,10 @@ public sealed class AudioProcessingCoordinator
     private readonly AudioCoordinatorDeadlines _deadlines;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly object _activeLock = new();
+    private readonly object _shutdownLock = new();
     private ActiveAttempt? _active;
     private PendingStart? _pendingStart;
+    private Task? _shutdownTask;
 
     public static AudioProcessingCoordinator Instance { get; } = new(
         AudioProcessingStore.Instance,
@@ -117,7 +121,7 @@ public sealed class AudioProcessingCoordinator
         var migrationSnapshot = _transcription.CaptureAttemptSnapshot();
         foreach (var legacy in _history.GetAll().Where(recording => !knownIds.Contains(recording.Id)))
         {
-            if (string.IsNullOrWhiteSpace(legacy.AudioFilePath) || !File.Exists(legacy.AudioFilePath))
+            if (string.IsNullOrWhiteSpace(legacy.AudioFilePath))
                 continue;
             AudioStoreMutation imported;
             try
@@ -167,19 +171,28 @@ public sealed class AudioProcessingCoordinator
                         token),
                     cancellationToken)
                 .ConfigureAwait(false);
+            repointed &= HistoryMatches(entry);
             historyReady &= repointed;
-            if (repointed && entry.LegacySourceOwned)
+            if (repointed)
             {
-                try
+                if (entry.LegacySourceOwned)
                 {
-                    _ = await _store.AcceptLegacySourceOwnershipAsync(entry.RecordingId, cancellationToken)
-                        .ConfigureAwait(false);
+                    try
+                    {
+                        _ = await _store.AcceptLegacySourceOwnershipAsync(entry.RecordingId, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Ownership remains journaled and is retried on launch or
+                        // when the recording is deleted/History is cleared.
+                    }
                 }
-                catch
-                {
-                    // Ownership remains journaled and is retried on launch or
-                    // when the recording is deleted/History is cleared.
-                }
+                var usage = await TryClaimUsageWithDeadlineAsync(
+                        entry.RecordingId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                ReportUsage(usage);
             }
         }
         if (historyReady)
@@ -193,6 +206,8 @@ public sealed class AudioProcessingCoordinator
         string? selectedDeviceId,
         CancellationToken cancellationToken = default)
     {
+        if (IsShuttingDown())
+            return new CaptureStartOutcome(false, null, "The app is closing.");
         // Capture foreground context/settings before the first await.
         var snapshot = _transcription.CaptureAttemptSnapshot();
         if (!_appState.StartPreparing(isCommandMode))
@@ -586,6 +601,8 @@ public sealed class AudioProcessingCoordinator
         string provider,
         CancellationToken cancellationToken = default)
     {
+        if (IsShuttingDown())
+            return TranscriptionResult.Failure("The app is closing.");
         var snapshot = _transcription.CaptureAttemptSnapshot(provider);
         ActiveAttempt? active = null;
         PendingStart? pending = null;
@@ -748,6 +765,145 @@ public sealed class AudioProcessingCoordinator
             active.SourceIntegrity,
             duration: null);
         return Task.CompletedTask;
+    }
+
+    public Task ShutdownAsync(
+        TimeSpan totalDeadline,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_shutdownLock)
+        {
+            return _shutdownTask ??= ShutdownCoreAsync(totalDeadline, cancellationToken);
+        }
+    }
+
+    private async Task ShutdownCoreAsync(
+        TimeSpan totalDeadline,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        PendingStart? pending;
+        ActiveAttempt? active;
+        lock (_activeLock)
+        {
+            pending = _pendingStart;
+            _pendingStart = null;
+            active = _active;
+            if (pending != null) pending.UserCancelled = true;
+            if (active != null)
+            {
+                active.UserCancelled = true;
+                Interlocked.Exchange(ref active.Abandoned, 1);
+                Interlocked.Exchange(ref active.PipelineFenced, 1);
+            }
+        }
+        if (pending != null) RequestCancellation(pending.Cancellation);
+        if (active != null) RequestCancellation(active.Cancellation);
+
+        // Native close ownership is transferred before any journal read or
+        // write. The stable attempt identity is enough for the recorder; its
+        // current->retired transition is atomic and visible to every exit path.
+        Task<RecorderFinalizationResult?> recorderShutdown;
+        try
+        {
+            recorderShutdown = _recorder.ShutdownAsync(
+                active?.Lease,
+                Remaining(totalDeadline, stopwatch),
+                cancellationToken);
+        }
+        catch
+        {
+            recorderShutdown = Task.FromResult<RecorderFinalizationResult?>(null);
+        }
+
+        if (active != null) ClearActive(active);
+        _appState.Reset();
+        _ = Task.Run(() =>
+        {
+            if (active == null) return;
+            try { _transcription.AbandonLocalRecognition(active.Snapshot); }
+            catch { }
+        });
+
+        RecorderFinalizationResult? recorderResult = null;
+        try
+        {
+            recorderResult = await recorderShutdown
+                .WaitAsync(Remaining(totalDeadline, stopwatch), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException) { }
+
+        if (active == null) return;
+        var mutationGateHeld = false;
+        try
+        {
+            await active.MutationGate
+                .WaitAsync(Remaining(totalDeadline, stopwatch), cancellationToken)
+                .ConfigureAwait(false);
+            mutationGateHeld = true;
+
+            var integrity = active.SourceIntegrity;
+            if (!active.IsRecognition && recorderResult?.IsFinalized == true)
+            {
+                var finalizing = await RunExitOperationAsync(
+                        token => _store.BeginFinalizationAsync(active.Lease, token),
+                        totalDeadline,
+                        stopwatch,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (finalizing.Applied && finalizing.Lease != null)
+                    active.Lease = finalizing.Lease;
+
+                if (finalizing.Applied ||
+                    finalizing.Entry?.Stage == AudioProcessingStage.Finalizing)
+                {
+                    var accepted = await RunExitOperationAsync(
+                            token => _store.AcceptFinalizedSourceAsync(active.Lease, token),
+                            totalDeadline,
+                            stopwatch,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (accepted.Applied && accepted.Lease != null)
+                        active.Lease = accepted.Lease;
+                    if (accepted.Entry?.SourceIntegrity == AudioSourceIntegrity.Complete)
+                        integrity = AudioSourceIntegrity.Complete;
+                }
+            }
+
+            var terminal = await RunExitOperationAsync(
+                    token => _store.AbandonAttemptAsync(
+                        active.Lease,
+                        cancelled: true,
+                        "The app closed during audio processing. Retry from History.",
+                        integrity,
+                        token),
+                    totalDeadline,
+                    stopwatch,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (terminal.Applied && terminal.Lease != null) active.Lease = terminal.Lease;
+            if (terminal.Entry != null)
+            {
+                _ = await RunExitOperationAsync(
+                        token => _history.UpsertAsync(
+                            ToHistoryRecording(terminal.Entry, _history.Get(terminal.Entry.RecordingId)),
+                            token),
+                        totalDeadline,
+                        stopwatch,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // The bounded exit deadline wins. Any committed active journal is
+            // normalized by launch recovery; no second Dispose budget is added.
+        }
+        finally
+        {
+            if (mutationGateHeld) active.MutationGate.Release();
+        }
     }
 
     public async Task<(bool Deleted, string? ErrorMessage)> DeleteAsync(
@@ -1008,15 +1164,19 @@ public sealed class AudioProcessingCoordinator
             return TranscriptionResult.Failure(message);
         }
         if (active.UserCancelled || IsAbandoned(active)) return CancelledResult();
-        if (!_appState.SetResult(result.Text))
+        var usage = await TryClaimUsageWithDeadlineAsync(
+                completed.Entry.RecordingId,
+                CancellationToken.None,
+                active.ForegroundReleased.Task)
+            .ConfigureAwait(false);
+        var delivered = _appState.SetResult(result.Text);
+        ClearActive(active);
+        ReportUsage(usage);
+        if (!delivered)
         {
-            ClearActive(active);
             return TranscriptionResult.Failure(
                 "The transcript was saved in History, but could not be delivered to the current window.");
         }
-        ClearActive(active);
-        try { _usageReporter.Report(result.Text); }
-        catch { }
         return result;
     }
 
@@ -1172,18 +1332,22 @@ public sealed class AudioProcessingCoordinator
         }
     }
 
-    private Task<bool> UpdateHistoryFromEntryAsync(
+    private async Task<bool> UpdateHistoryFromEntryAsync(
         AudioProcessingEntry? entry,
         TimeSpan? duration = null,
         CancellationToken cancellationToken = default)
     {
         if (entry == null || entry.Stage == AudioProcessingStage.Deleted)
-            return Task.FromResult(false);
-        return RunHistoryWithDeadlineAsync(
-            token => _history.UpsertAsync(
-                ToHistoryRecording(entry, _history.Get(entry.RecordingId), duration),
-                token),
-            cancellationToken);
+            return false;
+        var expected = ToHistoryRecording(
+            entry,
+            _history.Get(entry.RecordingId),
+            duration);
+        var persisted = await RunHistoryWithDeadlineAsync(
+                token => _history.UpsertAsync(expected, token),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return persisted && HistoryMatches(expected);
     }
 
     private Task<bool> UpdateHistoryFromEntryWithoutDeadlineAsync(
@@ -1195,6 +1359,54 @@ public sealed class AudioProcessingCoordinator
         return _history.UpsertAsync(
             ToHistoryRecording(entry, _history.Get(entry.RecordingId), duration),
             CancellationToken.None);
+    }
+
+    private bool HistoryMatches(AudioProcessingEntry entry) =>
+        HistoryMatches(ToHistoryRecording(
+            entry,
+            _history.Get(entry.RecordingId)));
+
+    private bool HistoryMatches(Recording expected)
+    {
+        var actual = _history.Get(expected.Id);
+        return actual != null &&
+               actual.Revision == expected.Revision &&
+               actual.Status == expected.Status &&
+               string.Equals(actual.Transcription, expected.Transcription, StringComparison.Ordinal) &&
+               string.Equals(actual.AudioFilePath, expected.AudioFilePath, StringComparison.Ordinal);
+    }
+
+    private async Task<AudioUsageClaim?> TryClaimUsageWithDeadlineAsync(
+        Guid recordingId,
+        CancellationToken cancellationToken,
+        Task? foregroundReleased = null)
+    {
+        try
+        {
+            return await RunStoreWithDeadlineAsync(
+                    () => _store.ClaimUsageAsync(recordingId, cancellationToken),
+                    cancellationToken,
+                    async claim =>
+                    {
+                        if (foregroundReleased != null)
+                            await foregroundReleased.ConfigureAwait(false);
+                        ReportUsage(claim);
+                    })
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // A claim that did not commit remains pending. A late committed
+            // claim is reported by the reconciliation callback exactly once.
+            return null;
+        }
+    }
+
+    private void ReportUsage(AudioUsageClaim? claim)
+    {
+        if (claim == null) return;
+        try { _usageReporter.Report(claim.Text); }
+        catch { }
     }
 
     private static Recording ToHistoryRecording(
@@ -1242,6 +1454,11 @@ public sealed class AudioProcessingCoordinator
         lock (_activeLock) return _active;
     }
 
+    private bool IsShuttingDown()
+    {
+        lock (_shutdownLock) return _shutdownTask != null;
+    }
+
     private bool TrySetActiveForPending(PendingStart pending, ActiveAttempt active)
     {
         lock (_activeLock)
@@ -1264,6 +1481,7 @@ public sealed class AudioProcessingCoordinator
         {
             if (ReferenceEquals(_active, active)) _active = null;
         }
+        active.ForegroundReleased.TrySetResult(true);
     }
 
     private static bool IsAbandoned(ActiveAttempt active) =>
@@ -1290,6 +1508,37 @@ public sealed class AudioProcessingCoordinator
             _deadlines.MinimumRecognition.TotalSeconds,
             _deadlines.MaximumRecognition.TotalSeconds);
         return TimeSpan.FromSeconds(seconds);
+    }
+
+    private static TimeSpan Remaining(TimeSpan totalDeadline, Stopwatch stopwatch)
+    {
+        var remaining = totalDeadline - stopwatch.Elapsed;
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException();
+        return remaining;
+    }
+
+    private static async Task<T> RunExitOperationAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        TimeSpan totalDeadline,
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
+    {
+        var remaining = Remaining(totalDeadline, stopwatch);
+        using var operationCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        operationCancellation.CancelAfter(remaining);
+        var task = Task.Run(
+            () => operation(operationCancellation.Token),
+            CancellationToken.None);
+        try
+        {
+            return await task.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            ObserveLateTask(task);
+            throw;
+        }
     }
 
     private async Task<T> RunStoreWithDeadlineAsync<T>(

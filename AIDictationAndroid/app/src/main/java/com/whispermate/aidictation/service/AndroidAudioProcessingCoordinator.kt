@@ -128,16 +128,93 @@ internal suspend fun <T> withAudioPersistenceDeadline(
     return outcome.getOrThrow()
 }
 
+internal interface AndroidTranscriptionOperations {
+    suspend fun captureAttemptConfiguration(
+        additionalPrompt: String?,
+        contextRules: String?
+    ): TranscriptionAttemptConfiguration
+
+    suspend fun transcribe(
+        audioFile: File,
+        configuration: TranscriptionAttemptConfiguration,
+        checkpoint: suspend (mergedText: String, completedLeafCount: Int) -> Boolean,
+        rawComplete: suspend (rawText: String) -> Boolean
+    ): Result<String>
+
+    fun abandonLocalRecognition()
+}
+
+private class RepositoryAndroidTranscriptionOperations(
+    private val repository: TranscriptionRepository
+) : AndroidTranscriptionOperations {
+    override suspend fun captureAttemptConfiguration(
+        additionalPrompt: String?,
+        contextRules: String?
+    ): TranscriptionAttemptConfiguration =
+        repository.captureAttemptConfiguration(additionalPrompt, contextRules)
+
+    override suspend fun transcribe(
+        audioFile: File,
+        configuration: TranscriptionAttemptConfiguration,
+        checkpoint: suspend (mergedText: String, completedLeafCount: Int) -> Boolean,
+        rawComplete: suspend (rawText: String) -> Boolean
+    ): Result<String> = repository.transcribe(
+        audioFile = audioFile,
+        configuration = configuration,
+        checkpoint = checkpoint,
+        rawComplete = rawComplete
+    )
+
+    override fun abandonLocalRecognition() {
+        repository.abandonLocalRecognition()
+    }
+}
+
+private fun readAndroidAudioDurationMs(file: File): Long {
+    val extractor = MediaExtractor()
+    return try {
+        extractor.setDataSource(file.absolutePath)
+        (0 until extractor.trackCount).firstNotNullOfOrNull { index ->
+            val format = extractor.getTrackFormat(index)
+            val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+            if (!mime.startsWith("audio/") || !format.containsKey(MediaFormat.KEY_DURATION)) null
+            else format.getLong(MediaFormat.KEY_DURATION) / 1_000L
+        } ?: throw IllegalStateException("The finalized file has no audio track")
+    } finally {
+        extractor.release()
+    }
+}
+
 /**
  * The only production owner of Android's MediaRecorder and audio attempt lifecycle. Each capture
  * has a disposable native executor so an ignored cancellation cannot poison the next recording.
  */
 @Singleton
-class AndroidAudioProcessingCoordinator @Inject constructor(
-    @ApplicationContext private val context: Context,
+class AndroidAudioProcessingCoordinator internal constructor(
+    private val context: Context,
     private val recordingRepository: RecordingRepository,
-    private val transcriptionRepository: TranscriptionRepository
+    private val transcriptionOperations: AndroidTranscriptionOperations,
+    private val audioDurationReader: (File) -> Long,
+    private val recognitionTimeoutMillis: (Long) -> Long
 ) {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        recordingRepository: RecordingRepository,
+        transcriptionRepository: TranscriptionRepository
+    ) : this(
+        context = context,
+        recordingRepository = recordingRepository,
+        transcriptionOperations = RepositoryAndroidTranscriptionOperations(transcriptionRepository),
+        audioDurationReader = ::readAndroidAudioDurationMs,
+        recognitionTimeoutMillis = { durationMs ->
+            (durationMs * 2 + 60_000L).coerceIn(
+                MIN_RECOGNITION_TIMEOUT_MS,
+                MAX_RECOGNITION_TIMEOUT_MS
+            )
+        }
+    )
+
     companion object {
         private const val START_TIMEOUT_MS = 8_000L
         private const val FINALIZE_TIMEOUT_MS = 10_000L
@@ -291,9 +368,8 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
         try {
             transcriptionConfiguration = withTimeout(CONFIGURATION_TIMEOUT_MS) {
                 recordingRepository.awaitStartupRecovery()
-                transcriptionRepository.captureAttemptConfiguration(additionalPrompt, contextRules)
+                transcriptionOperations.captureAttemptConfiguration(additionalPrompt, contextRules)
             }
-            partial.parentFile?.mkdirs()
             val lease = withPersistenceDeadline(
                 onLateCompletion = { result, abandonment ->
                     result.getOrNull()?.let { lateLease ->
@@ -483,6 +559,9 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
                     active.recorder.captureError()?.let { throw it }
                     val partial = result.first
                         ?: throw IllegalStateException("The recording source is missing")
+                    require(recordingRepository.isManagedFinalizedSource(active.lease, partial)) {
+                        "The finalized recording source is outside managed storage"
+                    }
                     validateFinalizedAudio(partial)
                     FileOutputStream(partial, true).use { output -> output.fd.sync() }
                     writeFinalizedAudioMarker(active.lease, partial, result.second)
@@ -707,7 +786,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
         target.activeRecognition?.let { recognition ->
             recognition.job.cancel(CancellationException(reason))
             if (recognition.configuration.useLocalRecognition && recognition.rawComplete.get().isBlank()) {
-                transcriptionRepository.abandonLocalRecognition()
+                transcriptionOperations.abandonLocalRecognition()
             }
         }
         val durableLease = target.lease
@@ -770,7 +849,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
         val rawComplete = AtomicReference("")
         val completedLeaves = AtomicInteger(0)
         val worker = detachedScope.async(start = CoroutineStart.LAZY) {
-            transcriptionRepository.transcribe(
+            transcriptionOperations.transcribe(
                 audioFile = finalized.sourceFile,
                 configuration = finalized.transcriptionConfiguration,
                 checkpoint = { merged, count ->
@@ -823,7 +902,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
         worker.start()
 
         return try {
-            val recognized = withTimeout(recognitionTimeout(finalized.durationMs)) { worker.await() }
+            val recognized = withTimeout(recognitionTimeoutMillis(finalized.durationMs)) { worker.await() }
                 .getOrThrow()
                 .trim()
             if (recognized.isEmpty()) throw IllegalStateException("No speech was recognized")
@@ -882,7 +961,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
                     )
                 }
             } else if (finalized.transcriptionConfiguration.useLocalRecognition) {
-                transcriptionRepository.abandonLocalRecognition()
+                transcriptionOperations.abandonLocalRecognition()
             }
             val message = userFacingRecognitionFailure(error)
             val terminalStatus =
@@ -1001,7 +1080,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
         try {
             val configuration = withTimeout(CONFIGURATION_TIMEOUT_MS) {
                 recordingRepository.awaitStartupRecovery()
-                transcriptionRepository.captureAttemptConfiguration(additionalPrompt, contextRules)
+                transcriptionOperations.captureAttemptConfiguration(additionalPrompt, contextRules)
             }
             claimed = withPersistenceDeadline(
                 onLateCompletion = { result, abandonment ->
@@ -1024,7 +1103,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
             validationWorker = detachedScope.async(start = CoroutineStart.LAZY) {
                 try {
                     withTimeout(FINALIZE_TIMEOUT_MS) {
-                        submitCancellable(validationExecutor) { audioDurationMs(source) }
+                        submitCancellable(validationExecutor) { audioDurationReader(source) }
                     }
                 } finally {
                     validationExecutor.shutdownNow()
@@ -1481,26 +1560,8 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
 
     private fun validateFinalizedAudio(file: File) {
         require(file.isFile && file.length() > 0L) { "The finalized audio is empty" }
-        require(audioDurationMs(file) > 0) { "The finalized audio has no duration" }
+        require(audioDurationReader(file) > 0) { "The finalized audio has no duration" }
     }
-
-    private fun audioDurationMs(file: File): Long {
-        val extractor = MediaExtractor()
-        return try {
-            extractor.setDataSource(file.absolutePath)
-            (0 until extractor.trackCount).firstNotNullOfOrNull { index ->
-                val format = extractor.getTrackFormat(index)
-                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
-                if (!mime.startsWith("audio/") || !format.containsKey(MediaFormat.KEY_DURATION)) null
-                else format.getLong(MediaFormat.KEY_DURATION) / 1_000L
-            } ?: throw IllegalStateException("The finalized file has no audio track")
-        } finally {
-            extractor.release()
-        }
-    }
-
-    private fun recognitionTimeout(durationMs: Long): Long =
-        (durationMs * 2 + 60_000L).coerceIn(MIN_RECOGNITION_TIMEOUT_MS, MAX_RECOGNITION_TIMEOUT_MS)
 
     private suspend fun <T> withPersistenceDeadline(
         onLateCompletion: suspend (Result<T>, Throwable) -> Unit = { _, _ -> },
@@ -1542,7 +1603,7 @@ class AndroidAudioProcessingCoordinator @Inject constructor(
     }
 
     private fun managedSourceFile(recordingId: String): File =
-        File(File(context.filesDir, "audio/recordings"), "$recordingId.m4a")
+        recordingRepository.managedSourceFile(recordingId)
 
     private val AndroidAudioAttemptOwner.recordsUsage: Boolean
         get() = this == AndroidAudioAttemptOwner.MAIN || this == AndroidAudioAttemptOwner.OVERLAY

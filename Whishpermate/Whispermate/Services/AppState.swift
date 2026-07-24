@@ -61,6 +61,11 @@ class AppState: ObservableObject {
     private var captureDeadlineTask: Task<Void, Never>?
     private var retranscriptionAttemptIDs: [UUID: UUID] = [:]
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingPreparationStoreIDs: [UUID: UUID] = [:]
+    private var terminationBarrierActive = false
+    private var terminationOwnedStoreIDs: Set<UUID> = []
+    private var terminationOwnedNativeIDs: Set<UUID> = []
+    private var terminationFinalizationTask: Task<Bool, Never>?
     private var realtimeTranscriptionClient: OpenAIRealtimeTranscriptionClient?
     private var realtimeTranscript: String = ""
     private let diarizationTimeoutSeconds: UInt64 = 75
@@ -109,7 +114,9 @@ class AppState: ObservableObject {
 
         // One app-wide owner keeps capture, local recognition, and retries from
         // competing for the same audio/model resources.
-        guard recordingState == .idle, retranscriptionAttemptIDs.isEmpty else {
+        guard recordingState == .idle,
+              retranscriptionAttemptIDs.isEmpty,
+              !terminationBarrierActive else {
             DebugLog.info("⚠️ Already in state: \(recordingState)", context: "AppState")
             return
         }
@@ -132,6 +139,7 @@ class AppState: ObservableObject {
 
         activeRecordingID = recordingID
         recordingAttemptID = attemptID
+        pendingPreparationStoreIDs[recordingID] = attemptID
         activeCaptureLease = nil
         activeTranscriptionSnapshot = nil
         recordingState = .starting
@@ -196,6 +204,7 @@ class AppState: ObservableObject {
         attemptID: UUID,
         shouldShowOverlayControls: Bool
     ) async {
+        defer { pendingPreparationStoreIDs.removeValue(forKey: recordingID) }
         let store = await MacAudioProcessingStoreProvider.shared()
         do {
             let deadline = Date().addingTimeInterval(
@@ -208,9 +217,17 @@ class AppState: ObservableObject {
             )
             guard activeRecordingID == recordingID,
                   recordingAttemptID == attemptID,
-                  recordingState == .starting
+                  recordingState == .starting,
+                  !terminationBarrierActive
             else {
-                _ = try? await store.tombstone(recordingID: recordingID)
+                if terminationBarrierActive {
+                    _ = try? await store.fail(
+                        prepared.lease,
+                        message: "Recording stopped because the app was closing. Any captured audio was kept."
+                    )
+                } else {
+                    _ = try? await store.tombstone(recordingID: recordingID)
+                }
                 return
             }
 
@@ -572,6 +589,7 @@ class AppState: ObservableObject {
 
         switch terminal {
         case .finalized:
+            audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             guard let lease = activeCaptureLease else {
                 realtimeClient?.close()
                 finishRecordingWithoutTranscription(
@@ -656,6 +674,7 @@ class AppState: ObservableObject {
             }
 
         case .failed(let message, let recoverableURL):
+            audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             realtimeClient?.close()
             let displayedMessage = terminalMessage ?? message
             if let lease = activeCaptureLease {
@@ -688,11 +707,16 @@ class AppState: ObservableObject {
             finishRecordingWithoutTranscription(recordingID: recordingID, message: displayedMessage)
 
         case .discarded:
+            audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             realtimeClient?.close()
             _ = historyManager.removeRecordingMetadata(id: recordingID)
             finishRecordingWithoutTranscription(recordingID: recordingID, message: terminalMessage)
 
         case .unavailable(let message):
+            // If the normal close completed just before this callback lookup,
+            // retain and acknowledge its proof instead of treating that gap as
+            // evidence that the writer was never closed.
+            audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             realtimeClient?.close()
             let displayedMessage = terminalMessage ?? message
             if let lease = activeCaptureLease {
@@ -843,7 +867,8 @@ class AppState: ObservableObject {
 
         guard recordingState == .idle,
               retranscriptionAttemptIDs.isEmpty,
-              !recording.isInProgress
+              !recording.isInProgress,
+              !terminationBarrierActive
         else { return }
 
         let attemptID = UUID()
@@ -936,6 +961,9 @@ class AppState: ObservableObject {
                     TimeInterval(recognitionTimeoutSeconds(for: recording.duration))
                 )
             )
+            let transientWorkspace = try await store.makeTransientWorkspace(
+                recognition.lease
+            )
             let session = MacStoreTranscriptionSession(
                 store: store,
                 mutation: recognition
@@ -954,6 +982,7 @@ class AppState: ObservableObject {
                 attemptID: attemptID,
                 session: session,
                 audioURL: finalURL,
+                transientWorkspace: transientWorkspace,
                 snapshot: snapshot,
                 realtimeClient: nil,
                 isLiveRecording: false
@@ -1016,11 +1045,14 @@ class AppState: ObservableObject {
         let legacyURL = recording.legacyAudioFileURL
             ?? (managedRecord == nil ? recording.audioFileURL : nil)
         var legacyCleanupFailed = false
-        if let legacyURL,
-           FileManager.default.fileExists(atPath: legacyURL.path) {
-            do {
-                try FileManager.default.removeItem(at: legacyURL)
-            } catch {
+        if let legacyURL {
+            switch MacHistoryAudioDeletion.remove(
+                recordingID: recording.id,
+                candidateURL: legacyURL
+            ) {
+            case .removed, .absent:
+                break
+            case .refused, .failed:
                 legacyCleanupFailed = true
             }
         }
@@ -1041,6 +1073,7 @@ class AppState: ObservableObject {
 
         let cachedRecordings = historyManager.recordings
         let store = await MacAudioProcessingStoreProvider.shared()
+        let managedRecordingIDs = Set((await store.view()).records.map(\.recordingID))
         let managedCleanupFailed: Bool
         do {
             let cleanup = try await store.clearAll()
@@ -1077,18 +1110,17 @@ class AppState: ObservableObject {
         resetProcessingUIAfterDeletion()
 
         var legacyDeleteFailed = false
-        let managedDirectory = store.rootDirectory
-            .appendingPathComponent("AudioProcessing", isDirectory: true)
-            .standardizedFileURL.path
         for recording in cachedRecordings {
-            let legacyURL = recording.legacyAudioFileURL ?? recording.audioFileURL
-            let path = legacyURL.standardizedFileURL.path
-            guard !path.hasPrefix(managedDirectory + "/"),
-                  FileManager.default.fileExists(atPath: path)
-            else { continue }
-            do {
-                try FileManager.default.removeItem(at: legacyURL)
-            } catch {
+            let legacyURL = recording.legacyAudioFileURL
+                ?? (managedRecordingIDs.contains(recording.id) ? nil : recording.audioFileURL)
+            guard let legacyURL else { continue }
+            switch MacHistoryAudioDeletion.remove(
+                recordingID: recording.id,
+                candidateURL: legacyURL
+            ) {
+            case .removed, .absent:
+                break
+            case .refused, .failed:
                 legacyDeleteFailed = true
             }
         }
@@ -1150,19 +1182,9 @@ class AppState: ObservableObject {
                 if let result = try? await store.useRawResult(
                     lease,
                     message: "Cleanup was interrupted. The complete raw transcript was kept."
-                ), let success = try? await store.markSucceeded(result.lease) {
-                    record = success.record
+                ) {
+                    record = result.record
                     if record.resultText == nil { record.resultText = raw }
-                }
-            } else if record.stage == .resultReady {
-                let lease = MacAudioProcessingStore.Lease(
-                    recordingID: record.recordingID,
-                    attemptID: record.attemptID,
-                    clearGeneration: record.clearGeneration,
-                    revision: record.revision
-                )
-                if let success = try? await store.markSucceeded(lease) {
-                    record = success.record
                 }
             }
 
@@ -1176,18 +1198,19 @@ class AppState: ObservableObject {
             case .final: sourceURL = store.finalURL(for: record.recordingID)
             case .partial, .both, .missing: sourceURL = store.partialURL(for: record.recordingID)
             }
-            let succeeded = record.stage == .succeeded
+            let resultIsComplete = record.stage == .resultReady || record.stage == .succeeded
+            let wordCount = (record.resultText ?? record.rawText)?.split(separator: " ").count
             let projected = Recording(
                 id: record.recordingID,
                 timestamp: existing?.timestamp ?? record.updatedAt,
                 audioFileURL: sourceURL,
                 transcription: record.resultText ?? record.rawText ?? existing?.transcription,
-                status: succeeded ? .success : .failed,
-                errorMessage: succeeded ? nil : (record.failureMessage
+                status: resultIsComplete ? .success : .failed,
+                errorMessage: resultIsComplete ? nil : (record.failureMessage
                     ?? "Processing was interrupted. Your recording is available to retry."),
                 retryCount: existing?.retryCount ?? 0,
                 duration: existing?.duration ?? record.audioIntegrity?.duration,
-                wordCount: (record.resultText ?? record.rawText)?.split(separator: " ").count,
+                wordCount: wordCount,
                 outputMode: existing?.outputMode ?? .dictation,
                 transcriptionOptions: existing?.transcriptionOptions ?? .default,
                 sourceIntegrity: record.source == .final && record.audioIntegrity != nil
@@ -1195,8 +1218,222 @@ class AppState: ObservableObject {
                     : (record.source == .missing ? .knownIncomplete : .unfinalized),
                 legacyAudioFilePath: existing?.legacyAudioFilePath
             )
-            _ = historyManager.upsertRecording(projected)
+            guard historyManager.upsertRecording(projected) else {
+                historyManager.showUnsavedTerminalState(projected)
+                continue
+            }
+
+            if record.stage == .resultReady {
+                let lease = MacAudioProcessingStore.Lease(
+                    recordingID: record.recordingID,
+                    attemptID: record.attemptID,
+                    clearGeneration: record.clearGeneration,
+                    revision: record.revision
+                )
+                guard let success = try? await store.markSucceeded(
+                    lease,
+                    pendingUsageWordCount: wordCount
+                ) else { continue }
+                record = success.record
+            }
+            if record.stage == .succeeded {
+                do {
+                    if let claimed = try await store.claimPendingUsage(
+                        recordingID: record.recordingID,
+                        expectedRevision: record.revision
+                    ) {
+                        await SubscriptionManager.shared.recordWords(claimed)
+                    }
+                } catch {
+                    // Leave the durable unclaimed event for the next launch.
+                }
+            }
         }
+    }
+
+    /// Bounded, repeatable Quit handoff. Native writer-close proof is retained
+    /// by AudioRecorder, while store IDs that have not reached the recorder yet
+    /// remain owned through pendingPreparationStoreIDs.
+    func prepareForTermination(closeTimeout: TimeInterval = 4.5) async -> Bool {
+        terminationBarrierActive = true
+        terminationOwnedStoreIDs.formUnion(pendingPreparationStoreIDs.keys)
+        if let activeRecordingID {
+            terminationOwnedStoreIDs.insert(activeRecordingID)
+        }
+        terminationOwnedStoreIDs.formUnion(retranscriptionAttemptIDs.keys)
+        terminationOwnedNativeIDs.formUnion(pendingPreparationStoreIDs.values)
+        if recordingState == .starting
+            || recordingState == .recording
+            || recordingState == .finalizing,
+           let recordingAttemptID {
+            terminationOwnedNativeIDs.insert(recordingAttemptID)
+        }
+
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        for task in transcriptionTasks.values { task.cancel() }
+        let realtime = stopRealtimeTranscription()
+        realtime?.close()
+
+        let nativeProofs = audioRecorder.beginTerminationClose(
+            recordingIDs: terminationOwnedNativeIDs
+        )
+        let deadline = Date().addingTimeInterval(closeTimeout)
+        let closed = await waitForTerminationOwnership(
+            nativeProofs: nativeProofs,
+            deadline: deadline
+        )
+        if let existingFinalization = terminationFinalizationTask {
+            return closed ? await existingFinalization.value : false
+        }
+        guard closed else {
+            // Keep the barrier and ownership intact. When a native operation
+            // that ignored cancellation eventually closes, finish the same
+            // handoff in the background so recording can become available
+            // again after AppKit has truthfully refused this Quit.
+            if terminationFinalizationTask == nil {
+                terminationFinalizationTask = Task { @MainActor [weak self] in
+                    guard let self else { return false }
+                    while !Task.isCancelled {
+                        let proofs = self.audioRecorder.beginTerminationClose(
+                            recordingIDs: self.terminationOwnedNativeIDs
+                        )
+                        if await self.waitForTerminationOwnership(
+                            nativeProofs: proofs,
+                            deadline: Date().addingTimeInterval(0.25)
+                        ) {
+                            return await self.finishTerminationOwnership()
+                        }
+                    }
+                    return false
+                }
+            }
+            return false
+        }
+        return await finishTerminationOwnership()
+    }
+
+    private func waitForTerminationOwnership(
+        nativeProofs: [UUID: MacNativeRecorderCloseProof],
+        deadline: Date
+    ) async -> Bool {
+        while Date() < deadline {
+            let nativeClosed = nativeProofs.values.allSatisfy(\.isConfirmedClosed)
+            if nativeClosed && pendingPreparationStoreIDs.isEmpty {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return nativeProofs.values.allSatisfy(\.isConfirmedClosed)
+            && pendingPreparationStoreIDs.isEmpty
+    }
+
+    private func finishTerminationOwnership() async -> Bool {
+        let store = await MacAudioProcessingStoreProvider.shared()
+        var durable = true
+
+        for recordingID in terminationOwnedStoreIDs {
+            guard var record = await store.record(for: recordingID) else { continue }
+            switch record.stage {
+            case .rawResultReady, .cleaning:
+                let lease = MacAudioProcessingStore.Lease(
+                    recordingID: record.recordingID,
+                    attemptID: record.attemptID,
+                    clearGeneration: record.clearGeneration,
+                    revision: record.revision
+                )
+                if let result = try? await store.useRawResult(
+                    lease,
+                    message: "Cleanup stopped because the app was closing. The complete raw transcript was kept."
+                ) {
+                    record = result.record
+                } else {
+                    durable = false
+                }
+
+            case .preparing, .recording, .finalizing, .readyForRecognition, .recognizing:
+                let lease = MacAudioProcessingStore.Lease(
+                    recordingID: record.recordingID,
+                    attemptID: record.attemptID,
+                    clearGeneration: record.clearGeneration,
+                    revision: record.revision
+                )
+                if let failed = try? await store.fail(
+                    lease,
+                    message: "Processing stopped because the app was closing. Your recording was kept."
+                ) {
+                    record = failed.record
+                } else {
+                    durable = false
+                }
+
+            case .resultReady, .succeeded, .failed, .deleted:
+                break
+            }
+
+            let existing = historyManager.recording(id: recordingID)
+            if record.stage == .deleted {
+                _ = historyManager.removeRecordingMetadata(id: recordingID)
+                continue
+            }
+            let completeResult = record.stage == .resultReady || record.stage == .succeeded
+            // Never replace a durable success projection with a failure merely
+            // because this Quit was refused or raced a final callback.
+            if existing?.status == .success && !completeResult {
+                continue
+            }
+            let sourceURL = record.source == .final
+                ? store.finalURL(for: recordingID)
+                : store.partialURL(for: recordingID)
+            let text = record.resultText ?? record.rawText ?? existing?.transcription
+            let projected = Recording(
+                id: recordingID,
+                timestamp: existing?.timestamp ?? record.updatedAt,
+                audioFileURL: sourceURL,
+                transcription: text,
+                status: completeResult ? .success : .failed,
+                errorMessage: completeResult ? nil : record.failureMessage,
+                retryCount: existing?.retryCount ?? 0,
+                duration: existing?.duration ?? record.audioIntegrity?.duration,
+                wordCount: text?.split(separator: " ").count,
+                outputMode: existing?.outputMode ?? .dictation,
+                transcriptionOptions: existing?.transcriptionOptions ?? .default,
+                sourceIntegrity: record.source == .final && record.audioIntegrity != nil
+                    ? .complete
+                    : .unfinalized,
+                legacyAudioFilePath: existing?.legacyAudioFilePath
+            )
+            if !historyManager.upsertRecording(projected) {
+                historyManager.showUnsavedTerminalState(projected)
+            }
+        }
+
+        guard durable,
+              audioRecorder.releaseTerminationBarrierIfClosed(
+                recordingIDs: terminationOwnedNativeIDs
+              )
+        else {
+            terminationFinalizationTask = nil
+            return false
+        }
+
+        for recordingID in terminationOwnedStoreIDs {
+            historyManager.unregisterActiveRecording(id: recordingID)
+        }
+        terminationOwnedStoreIDs.removeAll()
+        terminationOwnedNativeIDs.removeAll()
+        pendingPreparationStoreIDs.removeAll()
+        activeRecordingID = nil
+        recordingAttemptID = nil
+        activeCaptureLease = nil
+        activeTranscriptionSnapshot = nil
+        retranscriptionAttemptIDs.removeAll()
+        transcriptionTasks.removeAll()
+        recordingState = .idle
+        isProcessing = false
+        terminationBarrierActive = false
+        terminationFinalizationTask = nil
+        return true
     }
 
     // MARK: - Private Methods
@@ -1254,6 +1491,9 @@ class AppState: ObservableObject {
                     TimeInterval(recognitionTimeoutSeconds(for: finalizedRecordingDuration))
                 )
             )
+            let transientWorkspace = try await store.makeTransientWorkspace(
+                recognition.lease
+            )
             guard activeRecordingID == recordingID else {
                 realtimeClient?.close()
                 return
@@ -1282,6 +1522,7 @@ class AppState: ObservableObject {
                     attemptID: recognitionAttemptID,
                     session: session,
                     audioURL: store.finalURL(for: recordingID),
+                    transientWorkspace: transientWorkspace,
                     snapshot: snapshot,
                     realtimeClient: realtimeClient,
                     isLiveRecording: true
@@ -1304,10 +1545,12 @@ class AppState: ObservableObject {
         attemptID: UUID,
         session: MacStoreTranscriptionSession,
         audioURL: URL,
+        transientWorkspace: MacTransientWorkspace,
         snapshot: MacTranscriptionAttemptSnapshot,
         realtimeClient: OpenAIRealtimeTranscriptionClient? = nil,
         isLiveRecording: Bool
     ) async {
+        defer { transientWorkspace.cleanup() }
         defer { realtimeClient?.close() }
         do {
             try Task.checkCancellation()
@@ -1381,6 +1624,7 @@ class AppState: ObservableObject {
                 return try await self.performTranscription(
                     audioURL: audioURL,
                     clipboardContent: nil,
+                    transientWorkspace: transientWorkspace,
                     snapshot: snapshot,
                     onRecognitionCheckpoint: { text in
                         try await session.checkpoint(text)
@@ -1396,11 +1640,11 @@ class AppState: ObservableObject {
             try Task.checkCancellation()
             let resultReady = try await session.finishCleanup(result)
             let durableText = resultReady.record.resultText ?? resultReady.record.rawText ?? result
-            let succeeded = try await session.markSucceeded()
             await commitTranscriptionSuccess(
                 recording: recording,
                 attemptID: attemptID,
-                storeRecord: succeeded.record,
+                session: session,
+                storeRecord: resultReady.record,
                 text: durableText,
                 isLiveRecording: isLiveRecording
             )
@@ -1418,6 +1662,7 @@ class AppState: ObservableObject {
     private func commitTranscriptionSuccess(
         recording: Recording,
         attemptID: UUID,
+        session: MacStoreTranscriptionSession,
         storeRecord: MacAudioProcessingStore.Record,
         text: String,
         isLiveRecording: Bool
@@ -1437,9 +1682,24 @@ class AppState: ObservableObject {
         success.errorMessage = storeRecord.failureMessage
         success.wordCount = trimmed.split(separator: " ").count
         success.sourceIntegrity = .complete
-        if !historyManager.upsertRecording(success) {
+        let historyWasPersisted = historyManager.upsertRecording(success)
+        if !historyWasPersisted {
             historyManager.showUnsavedTerminalState(success)
             errorMessage = "The transcript is safe, but History couldn’t be updated."
+        }
+
+        var claimedUsageWordCount: Int?
+        if historyWasPersisted {
+            do {
+                claimedUsageWordCount = try await session.markSucceededAndClaimUsage(
+                    wordCount: success.wordCount ?? 0
+                )
+            } catch {
+                // History already contains the transcript and the store remains
+                // result-ready for startup recovery. Never report usage until
+                // both durable publications have succeeded.
+                errorMessage = "The transcript is safe, but its recovery status couldn’t be finalized."
+            }
         }
 
         currentRecording = success
@@ -1470,9 +1730,11 @@ class AppState: ObservableObject {
             finalizedRecordingDuration = nil
         }
 
-        // Keep accounting owned by this completion, but do it only after the
-        // transcript has been delivered so a slow account service cannot delay paste.
-        await SubscriptionManager.shared.recordWords(success.wordCount ?? 0)
+        // The durable store claim happens only after History accepted the
+        // terminal transcript. Claim-before-sink prevents duplicate charging.
+        if let claimedUsageWordCount {
+            await SubscriptionManager.shared.recordWords(claimedUsageWordCount)
+        }
     }
 
     private func finishStoredTranscriptionFailure(
@@ -1492,11 +1754,11 @@ class AppState: ObservableObject {
             let terminal = try await session.fail(message)
             if terminal.record.stage == .resultReady,
                let raw = terminal.record.resultText ?? terminal.record.rawText {
-                let succeeded = try await session.markSucceeded()
                 await commitTranscriptionSuccess(
                     recording: recording,
                     attemptID: attemptID,
-                    storeRecord: succeeded.record,
+                    session: session,
+                    storeRecord: terminal.record,
                     text: raw,
                     isLiveRecording: isLiveRecording
                 )
@@ -1972,6 +2234,7 @@ class AppState: ObservableObject {
     private func performTranscription(
         audioURL: URL,
         clipboardContent: String?,
+        transientWorkspace: MacTransientWorkspace,
         snapshot: MacTranscriptionAttemptSnapshot,
         onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
         onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
@@ -2169,6 +2432,7 @@ class AppState: ObservableObject {
                 sttPrompt: provider == .custom && !sttHintPrompt.isEmpty ? sttHintPrompt : nil,
                 postProcessingPrompt: customCleanupPrompt,
                 serverPostProcessingEnabledByDefault: provider == .custom,
+                transientWorkspace: transientWorkspace,
                 onChunkCheckpoint: { completedLeafIndex, transcript in
                     try await checkpointAccumulator.accept(
                         completedLeafIndex: completedLeafIndex,
@@ -2655,9 +2919,15 @@ private actor MacStoreTranscriptionSession {
         return mutation
     }
 
-    func markSucceeded() async throws -> MacAudioProcessingStore.Mutation {
-        mutation = try await store.markSucceeded(mutation.lease)
-        return mutation
+    func markSucceededAndClaimUsage(wordCount: Int) async throws -> Int? {
+        mutation = try await store.markSucceeded(
+            mutation.lease,
+            pendingUsageWordCount: wordCount > 0 ? wordCount : nil
+        )
+        return try await store.claimPendingUsage(
+            recordingID: mutation.record.recordingID,
+            expectedRevision: mutation.record.revision
+        )
     }
 
     func fail(_ message: String) async throws -> MacAudioProcessingStore.Mutation {

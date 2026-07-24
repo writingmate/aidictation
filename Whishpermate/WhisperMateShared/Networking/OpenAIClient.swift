@@ -34,47 +34,11 @@ public class OpenAIClient {
         let url: URL
         let isTemporary: Bool
         let usesChunkFields: Bool
-    }
-
-    private nonisolated final class ExportContinuationGate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Void, Error>?
-        private var pendingResult: Result<Void, Error>?
-        private var isResolved = false
-
-        func install(_ continuation: CheckedContinuation<Void, Error>) -> Bool {
-            lock.lock()
-            if let pendingResult {
-                lock.unlock()
-                continuation.resume(with: pendingResult)
-                return false
-            }
-            self.continuation = continuation
-            lock.unlock()
-            return true
-        }
-
-        func resolve(_ result: Result<Void, Error>) {
-            lock.lock()
-            guard !isResolved else {
-                lock.unlock()
-                return
-            }
-            isResolved = true
-            if let continuation {
-                self.continuation = nil
-                lock.unlock()
-                continuation.resume(with: result)
-            } else {
-                pendingResult = result
-                lock.unlock()
-            }
-        }
+        let workspace: MobileAudioProcessingStore.ChunkWorkspace?
     }
 
     private nonisolated final class CancellableExport: @unchecked Sendable {
         let exporter: AVAssetExportSession
-        let gate = ExportContinuationGate()
 
         init(exporter: AVAssetExportSession) {
             self.exporter = exporter
@@ -82,7 +46,6 @@ public class OpenAIClient {
 
         func cancel() {
             exporter.cancelExport()
-            gate.resolve(.failure(CancellationError()))
         }
     }
 
@@ -153,6 +116,7 @@ public class OpenAIClient {
         sttPrompt: String? = nil,
         postProcessingPrompt: String? = nil,
         serverPostProcessingEnabledByDefault: Bool = false,
+        chunkWorkspace: MobileAudioProcessingStore.ChunkWorkspace? = nil,
         onChunkCheckpoint: AppleAudioHTTPRecovery.Checkpoint? = nil,
         onMergedRawTranscript: ((String) async throws -> Void)? = nil,
         cleanupMergedTranscript: ((String) async throws -> String)? = nil
@@ -172,12 +136,16 @@ public class OpenAIClient {
         do {
             let initialChunks: [AudioUploadChunk]
             if shouldChunkImmediately {
-                initialChunks = try await Self.makeUploadChunks(for: audioURL)
+                initialChunks = try await Self.makeUploadChunks(
+                    for: audioURL,
+                    workspace: chunkWorkspace
+                )
             } else {
                 initialChunks = [AudioUploadChunk(
                     url: audioURL,
                     isTemporary: false,
-                    usesChunkFields: false
+                    usesChunkFields: false,
+                    workspace: chunkWorkspace
                 )]
             }
             defer { Self.cleanup(initialChunks) }
@@ -356,10 +324,18 @@ public class OpenAIClient {
         return text
     }
 
-    private static func makeUploadChunks(for audioURL: URL) async throws -> [AudioUploadChunk] {
+    private static func makeUploadChunks(
+        for audioURL: URL,
+        workspace: MobileAudioProcessingStore.ChunkWorkspace?
+    ) async throws -> [AudioUploadChunk] {
         let fileBytes = fileSize(at: audioURL)
         guard fileBytes > maxSingleUploadAudioBytes else {
-            return [AudioUploadChunk(url: audioURL, isTemporary: false, usesChunkFields: false)]
+            return [AudioUploadChunk(
+                url: audioURL,
+                isTemporary: false,
+                usesChunkFields: false,
+                workspace: workspace
+            )]
         }
 
         let asset = AVURLAsset(url: audioURL)
@@ -382,7 +358,8 @@ public class OpenAIClient {
                 for: asset,
                 sourceURL: audioURL,
                 sourceDuration: duration,
-                segmentDuration: segmentDuration
+                segmentDuration: segmentDuration,
+                workspace: workspace
             )
             let oversizedBytes = chunks.map { fileSize(at: $0.url) }.max() ?? 0
             if oversizedBytes <= maxSingleUploadAudioBytes {
@@ -413,7 +390,8 @@ public class OpenAIClient {
             for: asset,
             sourceURL: leaf.url,
             sourceDuration: duration,
-            segmentDuration: duration / 2
+            segmentDuration: duration / 2,
+            workspace: leaf.workspace
         )
     }
 
@@ -421,7 +399,8 @@ public class OpenAIClient {
         for asset: AVAsset,
         sourceURL: URL,
         sourceDuration: TimeInterval,
-        segmentDuration: TimeInterval
+        segmentDuration: TimeInterval,
+        workspace: MobileAudioProcessingStore.ChunkWorkspace?
     ) async throws -> [AudioUploadChunk] {
         var chunks: [AudioUploadChunk] = []
 
@@ -433,8 +412,21 @@ public class OpenAIClient {
             for (index, segment) in segments.enumerated() {
                 try Task.checkCancellation()
 
-                let outputURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("\(sourceURL.deletingPathExtension().lastPathComponent)_chunk_\(index)_\(UUID().uuidString).m4a")
+                let outputURL: URL
+                if let workspace {
+                    outputURL = try workspace.allocateOutputURL()
+                } else {
+                    #if os(iOS)
+                        // Production iOS recognition must never spill derived audio into a
+                        // process-private or global temporary directory.
+                        throw MobileAudioProcessingStore.StoreError.unavailable
+                    #else
+                        outputURL = FileManager.default.temporaryDirectory
+                            .appendingPathComponent(
+                                "\(sourceURL.deletingPathExtension().lastPathComponent)_chunk_\(index)_\(UUID().uuidString).m4a"
+                            )
+                    #endif
+                }
                 let startTime = CMTime(seconds: segment.start, preferredTimescale: 600)
                 let endTime = CMTime(
                     seconds: segment.start + segment.duration,
@@ -447,15 +439,28 @@ public class OpenAIClient {
                         outputURL: outputURL
                     )
                 } catch {
-                    try? FileManager.default.removeItem(at: outputURL)
+                    if let workspace {
+                        workspace.remove(outputURL)
+                    } else {
+                        try? FileManager.default.removeItem(at: outputURL)
+                    }
                     throw error
                 }
 
                 guard fileSize(at: outputURL) > 0 else {
-                    try? FileManager.default.removeItem(at: outputURL)
+                    if let workspace {
+                        workspace.remove(outputURL)
+                    } else {
+                        try? FileManager.default.removeItem(at: outputURL)
+                    }
                     throw OpenAIError.encodingError
                 }
-                chunks.append(AudioUploadChunk(url: outputURL, isTemporary: true, usesChunkFields: true))
+                chunks.append(AudioUploadChunk(
+                    url: outputURL,
+                    isTemporary: true,
+                    usesChunkFields: true,
+                    workspace: workspace
+                ))
             }
 
             guard chunks.count >= 2 else {
@@ -480,24 +485,22 @@ public class OpenAIClient {
         exporter.shouldOptimizeForNetworkUse = true
 
         let operation = CancellableExport(exporter: exporter)
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                guard operation.gate.install(continuation) else { return }
-                operation.exporter.exportAsynchronously {
-                    switch operation.exporter.status {
-                    case .completed:
-                        operation.gate.resolve(.success(()))
-                    case .cancelled:
-                        operation.gate.resolve(.failure(CancellationError()))
-                    case .failed:
-                        operation.gate.resolve(.failure(operation.exporter.error ?? OpenAIError.encodingError))
-                    default:
-                        operation.gate.resolve(.failure(OpenAIError.encodingError))
-                    }
+        try await IOSNativeCallbackOperation.run { completion in
+            operation.exporter.exportAsynchronously {
+                switch operation.exporter.status {
+                case .completed:
+                    completion(.success(()))
+                case .cancelled:
+                    completion(.failure(CancellationError()))
+                case .failed:
+                    completion(.failure(operation.exporter.error ?? OpenAIError.encodingError))
+                default:
+                    completion(.failure(OpenAIError.encodingError))
                 }
             }
-        } onCancel: {
-            operation.cancel()
+            return {
+                operation.cancel()
+            }
         }
         try Task.checkCancellation()
     }
@@ -527,7 +530,11 @@ public class OpenAIClient {
 
     private static func cleanup(_ chunks: [AudioUploadChunk]) {
         for chunk in chunks where chunk.isTemporary {
-            try? FileManager.default.removeItem(at: chunk.url)
+            if let workspace = chunk.workspace {
+                workspace.remove(chunk.url)
+            } else {
+                try? FileManager.default.removeItem(at: chunk.url)
+            }
         }
     }
 

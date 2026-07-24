@@ -34,8 +34,8 @@ class AudioRequestPolicyTest {
     }
 
     @Test
-    fun permanent4xxAreAttemptedOnceIncludingConflict() = runBlocking {
-        listOf(400, 401, 403, 404, 409, 422).forEach { status ->
+    fun everyPermanent4xxIsAttemptedOnceIncluding422() = runBlocking {
+        ((400..499).toSet() - setOf(408, 413, 429)).forEach { status ->
             val transport = ScriptedTransport(mapOf("leaf" to listOf(AudioHttpException(status, "bad"), "wrong")))
             val error = failure {
                 engine(transport).recognize(listOf("leaf")) { _, _ -> true }
@@ -44,6 +44,51 @@ class AudioRequestPolicyTest {
             assertEquals(listOf("leaf"), transport.calls)
         }
     }
+
+    @Test
+    fun oversizedAudioIsPreSplitForEveryProviderAndLater413NeverReplaysCompletedLeaf() =
+        runBlocking {
+            val endpoints = listOf(
+                "https://api.writingmate.ai/v1/transcribe",
+                "https://api.openai.com/v1/audio/transcriptions",
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                "https://custom.example.test/speech"
+            )
+            endpoints.forEach { endpoint ->
+                assertFalse(TranscriptionClient.shouldProactivelySplitAudio(endpoint, 3_600_000L))
+                assertTrue(TranscriptionClient.shouldProactivelySplitAudio(endpoint, 3_600_001L))
+            }
+
+            val transport = ScriptedTransport(
+                mapOf(
+                    "first" to listOf("one"),
+                    "second" to listOf(AudioHttpException(413, "large")),
+                    "second-left" to listOf("two"),
+                    "second-right" to listOf("three")
+                )
+            )
+            val checkpoints = mutableListOf<Pair<String, Int>>()
+            val text = engine(
+                transport,
+                splitter = AudioLeafSplitter { leaf, _ ->
+                    if (leaf == "second") listOf("second-left", "second-right") else null
+                }
+            ).recognize(listOf("first", "second")) { merged, count ->
+                checkpoints += merged to count
+                true
+            }
+
+            assertEquals("one two three", text)
+            assertEquals(
+                listOf("first", "second", "second-left", "second-right"),
+                transport.calls
+            )
+            assertEquals(1, transport.calls.count { it == "first" })
+            assertEquals(
+                listOf("one" to 1, "one two" to 2, "one two three" to 3),
+                checkpoints
+            )
+        }
 
     @Test
     fun incompleteSuccessStatusesAreAttemptedOnce() = runBlocking {
@@ -78,6 +123,23 @@ class AudioRequestPolicyTest {
             if (initial is AudioHttpException && initial.statusCode == 429) {
                 assertEquals(listOf(10_000L, 10_000L), delay.delays)
             }
+        }
+    }
+
+    @Test
+    fun every5xxUsesThreeTotalAttempts() = runBlocking {
+        (500..599).forEach { status ->
+            val failure = AudioHttpException(status, "server")
+            val transport = ScriptedTransport(
+                mapOf("leaf" to listOf(failure, failure, "recovered"))
+            )
+
+            assertEquals(
+                "status=$status",
+                "recovered",
+                engine(transport).recognize(listOf("leaf")) { _, _ -> true }
+            )
+            assertEquals("status=$status", 3, transport.calls.size)
         }
     }
 

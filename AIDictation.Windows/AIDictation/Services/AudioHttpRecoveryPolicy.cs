@@ -91,46 +91,41 @@ public sealed class AudioHttpRecoveryPolicy
                 if (status == HttpStatusCode.RequestEntityTooLarge)
                     throw new AudioPayloadTooLargeException("The server rejected this audio part as too large.");
 
-                // Reading the complete body is part of the request deadline.
-                // A disconnect after successful headers retries this same leaf.
+                // Every non-success is classified from headers. Diagnostic bodies
+                // are optional and may stall forever; never drain them before a
+                // permanent failure, a Retry-After decision, or a 413 split.
+                if (status != HttpStatusCode.OK)
+                {
+                    var retryable = IsRetryableStatus(status);
+                    var error = new AudioRequestException(
+                        UserMessage(status, string.Empty),
+                        status,
+                        retryable);
+                    if (!retryable || attempt == MaxAttempts)
+                        throw error;
+
+                    var retryDelay = RetryDelay(response, attempt);
+                    lastError = error;
+                    await _delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Only a complete 200 body is a transcription result. A timeout
+                // or disconnect while draining it is transient for this leaf.
+                var bodyTask = Task.Run(
+                    () => response.Content.ReadAsStringAsync(deadline.Token),
+                    CancellationToken.None);
                 string body;
                 try
                 {
-                    var bodyTask = Task.Run(
-                        () => response.Content.ReadAsStringAsync(deadline.Token),
-                        CancellationToken.None);
-                    try
-                    {
-                        body = await bodyTask.WaitAsync(deadline.Token).ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        ObserveLateTask(bodyTask);
-                        throw;
-                    }
+                    body = await bodyTask.WaitAsync(deadline.Token).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
-                                           status != HttpStatusCode.OK && !IsRetryableStatus(status) &&
-                                           ex is HttpRequestException or IOException or TimeoutException or OperationCanceledException)
+                catch
                 {
-                    // A permanent response remains one-shot even when its
-                    // optional diagnostic body cannot be drained.
-                    throw new AudioRequestException(UserMessage(status, string.Empty), status, false, ex);
+                    ObserveLateTask(bodyTask);
+                    throw;
                 }
-
-                if (status == HttpStatusCode.OK)
-                    return new AudioHttpResponse(status, mediaType, body, attempt);
-
-                var retryable = IsRetryableStatus(status);
-                var error = new AudioRequestException(
-                    UserMessage(status, body),
-                    status,
-                    retryable);
-                if (!retryable || attempt == MaxAttempts)
-                    throw error;
-
-                lastError = error;
-                await _delay(RetryDelay(response, attempt), cancellationToken).ConfigureAwait(false);
+                return new AudioHttpResponse(status, mediaType, body, attempt);
             }
             catch (AudioPayloadTooLargeException)
             {
@@ -192,12 +187,10 @@ public sealed class AudioHttpRecoveryPolicy
     }
 
     public static bool IsPermanentClientStatus(HttpStatusCode statusCode) =>
-        statusCode is HttpStatusCode.BadRequest
-            or HttpStatusCode.Unauthorized
-            or HttpStatusCode.Forbidden
-            or HttpStatusCode.NotFound
-            or HttpStatusCode.Conflict
-            or HttpStatusCode.UnprocessableEntity;
+        (int)statusCode is >= 400 and <= 499 &&
+        statusCode is not HttpStatusCode.RequestTimeout and
+        not HttpStatusCode.RequestEntityTooLarge and
+        not (HttpStatusCode)429;
 
     private static bool IsTransientTransport(Exception exception) =>
         exception is HttpRequestException or IOException or TimeoutException or OperationCanceledException;

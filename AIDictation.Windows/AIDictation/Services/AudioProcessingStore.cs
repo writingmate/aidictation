@@ -30,6 +30,14 @@ public enum AudioSourceIntegrity
     Unfinalized
 }
 
+public enum UsageAccountingState
+{
+    Pending,
+    Claimed
+}
+
+public sealed record AudioUsageClaim(Guid RecordingId, string Text);
+
 /// <summary>
 /// Immutable settings captured before an attempt starts. A running attempt never
 /// observes later changes made in Settings.
@@ -75,6 +83,7 @@ public sealed class AudioProcessingEntry
     public bool LegacySourceOwned { get; set; }
     public bool LegacySourceDeletionPending { get; set; }
     public bool FinalizationStarted { get; set; }
+    public UsageAccountingState? UsageAccounting { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }
     public DateTimeOffset UpdatedUtc { get; set; }
     public TranscriptionAttemptSnapshot? SettingsSnapshot { get; set; }
@@ -117,8 +126,11 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
 
     private readonly string _rootPath;
     private readonly string _sourcesPath;
+    private readonly string _workspacesPath;
     private readonly string _journalPath;
     private readonly string _legacyRecordingsPath;
+    private readonly string _trustedRootPath;
+    private readonly string _trustedLegacyRootPath;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -129,17 +141,29 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
     };
     private bool _persistenceHealthy = true;
 
-    public static AudioProcessingStore Instance { get; } = new(DefaultRootPath());
+    public static AudioProcessingStore Instance { get; } = new(
+        DefaultRootPath(),
+        trustedRootPath: DefaultAppDataPath(),
+        trustedLegacyRootPath: DefaultAppDataPath());
 
     public AudioProcessingStore(
         string rootPath,
         Func<DateTimeOffset>? utcNow = null,
-        string? legacyRecordingsPath = null)
+        string? legacyRecordingsPath = null,
+        string? trustedRootPath = null,
+        string? trustedLegacyRootPath = null)
     {
         _rootPath = Path.GetFullPath(rootPath);
         _sourcesPath = Path.Combine(_rootPath, "Sources");
+        _workspacesPath = Path.Combine(_rootPath, "Workspaces");
         _journalPath = Path.Combine(_rootPath, "journal.json");
         _legacyRecordingsPath = Path.GetFullPath(legacyRecordingsPath ?? DefaultLegacyRecordingsPath());
+        _trustedRootPath = Path.GetFullPath(
+            trustedRootPath ?? Directory.GetParent(_rootPath)?.FullName ??
+            throw new ArgumentException("Audio processing root needs a trusted parent.", nameof(rootPath)));
+        _trustedLegacyRootPath = Path.GetFullPath(
+            trustedLegacyRootPath ?? Directory.GetParent(_legacyRecordingsPath)?.FullName ??
+            throw new ArgumentException("Legacy recording root needs a trusted parent.", nameof(legacyRecordingsPath)));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -162,7 +186,6 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
                 return new AudioStoreMutation(false, null, Clone(existing), "Recording already exists");
             }
 
-            Directory.CreateDirectory(_sourcesPath);
             var attemptId = Guid.NewGuid();
             var now = _utcNow();
             var deletionGeneration = existing?.DeletionGeneration ?? 0;
@@ -188,6 +211,7 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             SaveDocument(document);
             try
             {
+                EnsureManagedSourceFile(entry.PartialSourcePath, mustExist: false);
                 await using var stream = new FileStream(
                     entry.PartialSourcePath,
                     FileMode.Create,
@@ -247,6 +271,8 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
                 return match;
 
             var entry = match.Entry;
+            EnsureManagedSourceFile(entry.PartialSourcePath, mustExist: true);
+            EnsureManagedSourceFile(entry.FinalSourcePath, mustExist: false);
             var validation = AudioContainerValidator.ValidateFinalizedWave(entry.PartialSourcePath);
             if (!validation.IsValid)
             {
@@ -294,9 +320,13 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
                 return new AudioStoreMutation(false, null, Clone(entry), "Recording was deleted");
             if (entry.IsActive && entry.Stage != AudioProcessingStage.ReadyForRecognition)
                 return new AudioStoreMutation(false, null, Clone(entry), "Another attempt already owns this recording");
-            if (entry.SourceIntegrity != AudioSourceIntegrity.Complete || !File.Exists(FinalPath(recordingId)))
+            var finalPath = FinalPath(recordingId);
+            EnsureManagedSourceFile(finalPath, mustExist: false);
+            if (entry.SourceIntegrity != AudioSourceIntegrity.Complete ||
+                !ManagedAudioPathPolicy.EntryExistsNoFollow(finalPath))
                 return new AudioStoreMutation(false, null, Clone(entry), "The saved audio is not complete");
-            var validation = AudioContainerValidator.ValidateFinalizedWave(FinalPath(recordingId));
+            EnsureManagedSourceFile(finalPath, mustExist: true);
+            var validation = AudioContainerValidator.ValidateFinalizedWave(finalPath);
             if (!validation.IsValid)
             {
                 entry.Stage = AudioProcessingStage.Failed;
@@ -364,7 +394,35 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             entry.FinalText = finalText;
             entry.Stage = AudioProcessingStage.Succeeded;
             entry.ErrorMessage = null;
+            entry.UsageAccounting ??= UsageAccountingState.Pending;
         }, cancellationToken);
+
+    public async Task<AudioUsageClaim?> ClaimUsageAsync(
+        Guid recordingId,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var document = LoadDocument();
+            if (!document.Entries.TryGetValue(recordingId, out var entry) ||
+                entry.Stage != AudioProcessingStage.Succeeded ||
+                entry.UsageAccounting != UsageAccountingState.Pending ||
+                string.IsNullOrWhiteSpace(entry.FinalText))
+                return null;
+
+            // Persist the one-way claim before invoking the non-idempotent usage
+            // sink. An ambiguous network result is intentionally never retried.
+            entry.UsageAccounting = UsageAccountingState.Claimed;
+            entry.UpdatedUtc = _utcNow();
+            SaveDocument(document);
+            return new AudioUsageClaim(recordingId, entry.FinalText);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public Task<AudioStoreMutation> FailAsync(
         AudioAttemptLease lease,
@@ -549,6 +607,7 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
         try
         {
             var document = LoadDocument();
+            ManagedAudioWorkspace.Sweep(_rootPath, _workspacesPath);
             var changed = false;
             foreach (var entry in document.Entries.Values)
             {
@@ -564,6 +623,7 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
                     continue;
                 }
                 if (entry.LegacySourceDeletionPending &&
+                    ManagedSourceIsRegular(entry.RecordingId, final: true) &&
                     AudioContainerValidator.ValidateFinalizedWave(FinalPath(entry.RecordingId)).IsValid &&
                     TryDeleteTrackedLegacySource(entry))
                 {
@@ -594,6 +654,7 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
                     entry.FinalText = entry.RawText;
                     entry.Stage = AudioProcessingStage.Succeeded;
                     entry.ErrorMessage = null;
+                    entry.UsageAccounting ??= UsageAccountingState.Pending;
                 }
                 else
                 {
@@ -640,14 +701,21 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             var document = LoadDocument();
             if (document.Entries.TryGetValue(recordingId, out var existing))
                 return new AudioStoreMutation(true, null, Clone(existing));
-            var validation = AudioContainerValidator.ValidateFinalizedWave(legacySourcePath);
+            if (!TryValidateOwnedLegacySource(legacySourcePath, mustExist: true, out var safeLegacySource))
+                return new AudioStoreMutation(
+                    false,
+                    null,
+                    null,
+                    "This older recording is outside the app's managed recording folder.");
+            var validation = AudioContainerValidator.ValidateFinalizedWave(safeLegacySource);
             if (!validation.IsValid)
                 return new AudioStoreMutation(false, null, null, validation.ErrorMessage);
 
-            Directory.CreateDirectory(_sourcesPath);
             var destination = FinalPath(recordingId);
             var temporary = destination + ".import";
-            File.Copy(legacySourcePath, temporary, overwrite: true);
+            EnsureManagedSourceFile(destination, mustExist: false);
+            EnsureManagedSourceFile(temporary, mustExist: false);
+            File.Copy(safeLegacySource, temporary, overwrite: true);
             var copiedValidation = AudioContainerValidator.ValidateFinalizedWave(temporary);
             if (!copiedValidation.IsValid)
             {
@@ -656,7 +724,6 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             }
             File.Move(temporary, destination, overwrite: true);
             var now = _utcNow();
-            var ownsLegacySource = IsOwnedLegacySource(legacySourcePath);
             var entry = new AudioProcessingEntry
             {
                 RecordingId = recordingId,
@@ -674,8 +741,8 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
                 ErrorMessage = string.IsNullOrWhiteSpace(finalText)
                     ? "This recording is ready to retry."
                     : null,
-                LegacySourcePath = ownsLegacySource ? Path.GetFullPath(legacySourcePath) : null,
-                LegacySourceOwned = ownsLegacySource,
+                LegacySourcePath = safeLegacySource,
+                LegacySourceOwned = true,
                 LegacySourceDeletionPending = false,
                 FinalizationStarted = true,
                 CreatedUtc = now,
@@ -711,6 +778,7 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             // again immediately before deleting the only other valid copy.
             // A crash, disk cleanup, or corruption between import and repoint
             // must leave the legacy source untouched.
+            EnsureManagedSourceFile(FinalPath(recordingId), mustExist: true);
             var managedValidation = AudioContainerValidator.ValidateFinalizedWave(FinalPath(recordingId));
             if (!managedValidation.IsValid) return false;
 
@@ -818,9 +886,13 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
 
         try
         {
-            Directory.CreateDirectory(_rootPath);
-            Directory.CreateDirectory(_sourcesPath);
-            if (!File.Exists(_journalPath)) return new JournalDocument();
+            EnsureManagedLayout();
+            ManagedAudioPathPolicy.EnsureDirectRegularFile(
+                _rootPath,
+                _journalPath,
+                mustExist: false);
+            if (!ManagedAudioPathPolicy.EntryExistsNoFollow(_journalPath))
+                return new JournalDocument();
             var json = File.ReadAllText(_journalPath);
             var document = JsonSerializer.Deserialize<JournalDocument>(json, _jsonOptions);
             if (document == null || document.SchemaVersion != 1 || document.Entries == null)
@@ -844,7 +916,14 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             _persistenceHealthy = false;
             try
             {
-                File.Copy(_journalPath, _journalPath + ".corrupt", overwrite: true);
+                if (!ManagedAudioPathPolicy.IsReparsePoint(_journalPath))
+                {
+                    ManagedAudioPathPolicy.EnsureDirectRegularFile(
+                        _rootPath,
+                        _journalPath + ".corrupt",
+                        mustExist: false);
+                    File.Copy(_journalPath, _journalPath + ".corrupt", overwrite: true);
+                }
             }
             catch { }
             throw new AudioStoreException(
@@ -859,8 +938,16 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
 
         try
         {
-            Directory.CreateDirectory(_rootPath);
+            EnsureManagedLayout();
             var tempPath = _journalPath + ".tmp";
+            ManagedAudioPathPolicy.EnsureDirectRegularFile(
+                _rootPath,
+                _journalPath,
+                mustExist: false);
+            ManagedAudioPathPolicy.EnsureDirectRegularFile(
+                _rootPath,
+                tempPath,
+                mustExist: false);
             var bytes = JsonSerializer.SerializeToUtf8Bytes(document, _jsonOptions);
             using (var stream = new FileStream(
                        tempPath,
@@ -892,11 +979,13 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
         bool allowPartialPromotion)
     {
         var finalPath = FinalPath(entry.RecordingId);
+        EnsureManagedSourceFile(finalPath, mustExist: false);
         if (AudioContainerValidator.ValidateFinalizedWave(finalPath).IsValid)
             return true;
         if (!allowPartialPromotion) return false;
 
         var partialPath = PartialPath(entry.RecordingId);
+        EnsureManagedSourceFile(partialPath, mustExist: false);
         if (!AudioContainerValidator.ValidateFinalizedWave(partialPath).IsValid)
             return false;
         try
@@ -916,18 +1005,20 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
     {
         foreach (var path in new[] { PartialPath(recordingId), FinalPath(recordingId) })
         {
-            try { if (File.Exists(path)) File.Delete(path); } catch { }
+            EnsureManagedSourceFile(path, mustExist: false);
+            if (ManagedAudioPathPolicy.EntryExistsNoFollow(path)) File.Delete(path);
         }
     }
 
     private bool TryDeleteTrackedLegacySource(AudioProcessingEntry entry)
     {
         if (!entry.LegacySourceOwned || string.IsNullOrWhiteSpace(entry.LegacySourcePath)) return false;
-        if (!IsOwnedLegacySource(entry.LegacySourcePath)) return false;
+        if (!TryValidateOwnedLegacySource(entry.LegacySourcePath, mustExist: false, out var safePath))
+            return false;
         try
         {
-            if (File.Exists(entry.LegacySourcePath)) File.Delete(entry.LegacySourcePath);
-            return !File.Exists(entry.LegacySourcePath);
+            if (ManagedAudioPathPolicy.EntryExistsNoFollow(safePath)) File.Delete(safePath);
+            return !ManagedAudioPathPolicy.EntryExistsNoFollow(safePath);
         }
         catch
         {
@@ -935,15 +1026,73 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
         }
     }
 
-    private bool IsOwnedLegacySource(string path)
+    private bool TryValidateOwnedLegacySource(
+        string path,
+        bool mustExist,
+        out string safePath)
     {
+        safePath = string.Empty;
         try
         {
             var fullPath = Path.GetFullPath(path);
-            var relative = Path.GetRelativePath(_legacyRecordingsPath, fullPath);
-            return !Path.IsPathRooted(relative) && relative != ".." &&
-                   !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
-                   string.Equals(Path.GetExtension(fullPath), ".wav", StringComparison.OrdinalIgnoreCase);
+            if (!ManagedAudioPathPolicy.PathEquals(
+                    _legacyRecordingsPath,
+                    Path.GetDirectoryName(fullPath) ?? string.Empty))
+                return false;
+            var name = Path.GetFileName(fullPath);
+            if (!name.StartsWith("recording_", StringComparison.OrdinalIgnoreCase) ||
+                !name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                !long.TryParse(name["recording_".Length..^".wav".Length], out _))
+                return false;
+            ManagedAudioPathPolicy.EnsureDirectoryChain(
+                _trustedLegacyRootPath,
+                _legacyRecordingsPath,
+                create: false);
+            safePath = ManagedAudioPathPolicy.EnsureDirectRegularFile(
+                _legacyRecordingsPath,
+                fullPath,
+                mustExist);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void EnsureManagedLayout()
+    {
+        ManagedAudioPathPolicy.EnsureDirectoryChain(
+            _trustedRootPath,
+            _rootPath,
+            create: true);
+        ManagedAudioPathPolicy.EnsureDirectoryChain(
+            _rootPath,
+            _sourcesPath,
+            create: true);
+        ManagedAudioPathPolicy.EnsureDirectoryChain(
+            _rootPath,
+            _workspacesPath,
+            create: true);
+    }
+
+    private void EnsureManagedSourceFile(string path, bool mustExist)
+    {
+        EnsureManagedLayout();
+        _ = ManagedAudioPathPolicy.EnsureDirectRegularFile(
+            _sourcesPath,
+            path,
+            mustExist);
+    }
+
+    private bool ManagedSourceIsRegular(Guid recordingId, bool final)
+    {
+        try
+        {
+            EnsureManagedSourceFile(
+                final ? FinalPath(recordingId) : PartialPath(recordingId),
+                mustExist: true);
+            return true;
         }
         catch
         {
@@ -960,15 +1109,16 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
 
     private static string DefaultRootPath()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        return Path.Combine(appData, "AIDictation", "AudioProcessing");
+        return Path.Combine(DefaultAppDataPath(), "AIDictation", "AudioProcessing");
     }
 
     private static string DefaultLegacyRecordingsPath()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        return Path.Combine(appData, "AIDictation", "Recordings");
+        return Path.Combine(DefaultAppDataPath(), "AIDictation", "Recordings");
     }
+
+    private static string DefaultAppDataPath() =>
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 
     private static AudioProcessingEntry Clone(AudioProcessingEntry entry)
     {
@@ -992,6 +1142,7 @@ public sealed class AudioProcessingStore : IAudioProcessingStore
             LegacySourceOwned = entry.LegacySourceOwned,
             LegacySourceDeletionPending = entry.LegacySourceDeletionPending,
             FinalizationStarted = entry.FinalizationStarted,
+            UsageAccounting = entry.UsageAccounting,
             CreatedUtc = entry.CreatedUtc,
             UpdatedUtc = entry.UpdatedUtc,
             SettingsSnapshot = entry.SettingsSnapshot

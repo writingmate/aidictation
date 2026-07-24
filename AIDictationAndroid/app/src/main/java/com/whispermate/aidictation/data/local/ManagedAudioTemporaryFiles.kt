@@ -93,7 +93,10 @@ internal object ManagedAudioTemporaryFiles {
         if (!root.startsWith(managedRoot) || root == managedRoot) {
             return@runCatching false
         }
-        if (!Files.exists(managedRoot, LinkOption.NOFOLLOW_LINKS)) return@runCatching true
+        val managedParent = managedRoot.parent ?: return@runCatching false
+        if (Files.notExists(managedParent, LinkOption.NOFOLLOW_LINKS)) return@runCatching true
+        if (!Files.isDirectory(managedParent, LinkOption.NOFOLLOW_LINKS)) return@runCatching false
+        if (Files.notExists(managedRoot, LinkOption.NOFOLLOW_LINKS)) return@runCatching true
         if (!Files.isDirectory(managedRoot, LinkOption.NOFOLLOW_LINKS)) return@runCatching false
 
         var current = managedRoot
@@ -136,6 +139,8 @@ internal object ManagedAudioTemporaryFiles {
         val managedAudioDirectory = temporaryRoot.parentFile
             ?: throw IOException("The managed audio directory is unavailable")
 
+        requireExistingDirectoryWithoutLinks(managedAudioDirectory.parentFile
+            ?: throw IOException("The managed audio parent is unavailable"))
         requireExistingDirectoryWithoutLinks(managedAudioDirectory)
         createDirectoryWithoutLinks(temporaryRoot)
         createDirectoryWithoutLinks(recordingDirectory)

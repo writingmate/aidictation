@@ -30,7 +30,7 @@ public enum IOSAudioProcessingDeadline {
             try await withCheckedThrowingContinuation { continuation in
                 resolver.install(continuation)
 
-                let operationTask = Task {
+                let operationTask = Task.detached {
                     do {
                         resolver.resolve(.success(try await operation()))
                     } catch is CancellationError {
@@ -40,7 +40,7 @@ public enum IOSAudioProcessingDeadline {
                     }
                 }
 
-                let timeoutTask = Task {
+                let timeoutTask = Task.detached {
                     do {
                         try await Task.sleep(nanoseconds: deadlineNanoseconds)
                         resolver.resolve(.failure(IOSAudioProcessingDeadlineError.timedOut))
@@ -79,7 +79,7 @@ public enum IOSAudioProcessingDeadline {
                     }
                 }
 
-                let timeoutTask = Task {
+                let timeoutTask = Task.detached {
                     do {
                         try await Task.sleep(nanoseconds: deadlineNanoseconds)
                         resolver.resolve(.failure(IOSAudioProcessingDeadlineError.timedOut))
@@ -101,6 +101,30 @@ public enum IOSAudioProcessingDeadline {
             throw IOSAudioProcessingDeadlineError.timedOut
         }
         return UInt64(seconds * 1_000_000_000)
+    }
+}
+
+/// Thread-safe continuation seam for callback-only native work such as AVAssetExportSession.
+/// A parent deadline can cancel the native object immediately, while a completion delivered after
+/// that cancellation is ignored and has no authority to resume or mutate the winning attempt.
+public enum IOSNativeCallbackOperation {
+    public static func run<Value: Sendable>(
+        start: (
+            @escaping @Sendable (Result<Value, Error>) -> Void
+        ) -> (@Sendable () -> Void)
+    ) async throws -> Value {
+        let resolver = IOSNativeCallbackResolver<Value>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard resolver.install(continuation) else { return }
+                let cancelNative = start { result in
+                    resolver.resolve(result)
+                }
+                resolver.installCancellation(cancelNative)
+            }
+        } onCancel: {
+            resolver.cancel()
+        }
     }
 }
 
@@ -212,5 +236,85 @@ private final class IOSAudioDeadlineResolver<Value: Sendable>: @unchecked Sendab
         operationTask?.cancel()
         timeoutTask?.cancel()
         continuation?.resume(with: result)
+    }
+}
+
+private final class IOSNativeCallbackResolver<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var pendingResult: Result<Value, Error>?
+    private var cancelNative: (@Sendable () -> Void)?
+    private var resolved = false
+    private var cancelled = false
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) -> Bool {
+        lock.lock()
+        if let pendingResult {
+            self.pendingResult = nil
+            lock.unlock()
+            continuation.resume(with: pendingResult)
+            return false
+        }
+        guard !resolved else {
+            lock.unlock()
+            continuation.resume(throwing: IOSAudioProcessingDeadlineError.cancelled)
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func installCancellation(_ cancellation: @escaping @Sendable () -> Void) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            cancellation()
+            return
+        }
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        cancelNative = cancellation
+        lock.unlock()
+    }
+
+    func resolve(_ result: Result<Value, Error>) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingResult = result
+        }
+        cancelNative = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        cancelled = true
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingResult = .failure(IOSAudioProcessingDeadlineError.cancelled)
+        }
+        let cancellation = cancelNative
+        cancelNative = nil
+        lock.unlock()
+
+        cancellation?()
+        continuation?.resume(throwing: IOSAudioProcessingDeadlineError.cancelled)
     }
 }

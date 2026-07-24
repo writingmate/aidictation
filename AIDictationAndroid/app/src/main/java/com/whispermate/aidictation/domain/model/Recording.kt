@@ -22,6 +22,7 @@ data class Recording(
     val sourceIntegrity: AudioSourceIntegrity = AudioSourceIntegrity.COMPLETE,
     val updatedAt: Long = timestamp,
     val usageEligible: Boolean = false,
+    val usageDestination: String = UsageClaimDestination.UNATTRIBUTED,
     val retrySourceAvailable: Boolean = true
 ) {
     val isProcessing: Boolean get() = status.isActive

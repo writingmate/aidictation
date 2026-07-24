@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 
 @Entity(tableName = "recordings")
 data class RecordingEntity(
@@ -23,7 +24,9 @@ data class RecordingEntity(
     val errorMessage: String? = null,
     @ColumnInfo(defaultValue = "'complete'") val sourceIntegrity: String = "complete",
     @ColumnInfo(defaultValue = "0") val updatedAt: Long = timestamp,
-    @ColumnInfo(defaultValue = "0") val usageEligible: Boolean = false
+    @ColumnInfo(defaultValue = "0") val usageEligible: Boolean = false,
+    @ColumnInfo(defaultValue = "'unattributed'")
+    val usageDestination: String = UsageClaimDestination.UNATTRIBUTED
 ) {
     fun toDomain(): Recording = Recording(
         id = id,
@@ -41,7 +44,8 @@ data class RecordingEntity(
         errorMessage = errorMessage,
         sourceIntegrity = com.whispermate.aidictation.domain.model.AudioSourceIntegrity.fromPersisted(sourceIntegrity),
         updatedAt = updatedAt,
-        usageEligible = usageEligible
+        usageEligible = usageEligible,
+        usageDestination = usageDestination
     )
 
     companion object {
@@ -61,7 +65,8 @@ data class RecordingEntity(
             errorMessage = recording.errorMessage,
             sourceIntegrity = recording.sourceIntegrity.persistedValue,
             updatedAt = recording.updatedAt,
-            usageEligible = recording.usageEligible
+            usageEligible = recording.usageEligible,
+            usageDestination = recording.usageDestination
         )
     }
 }

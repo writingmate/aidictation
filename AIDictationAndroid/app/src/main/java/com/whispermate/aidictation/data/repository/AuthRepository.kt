@@ -11,6 +11,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.domain.model.AuthState
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.UserProfile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.URLEncoder
@@ -124,6 +125,8 @@ class AuthRepository @Inject constructor(
             return
         }
 
+        // Do not expose the previous user while the secure token is being replaced.
+        _authState.value = AuthState(isLoading = true)
         storeTokens(accessToken, refreshToken)
         refreshUser()
     }
@@ -172,9 +175,21 @@ class AuthRepository @Inject constructor(
         _authState.value = AuthState(isLoading = false)
     }
 
-    suspend fun updateWordCount(wordsToAdd: Int): UserProfile? = withContext(Dispatchers.IO) {
+    internal fun currentUsageDestination(): String? {
+        val state = _authState.value
+        if (state.isLoading) return null
+        val user = state.user ?: return UsageClaimDestination.LOCAL
+        return UsageClaimDestination.account(user.userId)
+    }
+
+    suspend fun updateWordCount(
+        wordsToAdd: Int,
+        expectedUserId: String
+    ): UserProfile? = withContext(Dispatchers.IO) {
         if (wordsToAdd <= 0) return@withContext _authState.value.user
-        val user = _authState.value.user ?: return@withContext null
+        val user = _authState.value.user
+            ?.takeIf { it.userId == expectedUserId }
+            ?: return@withContext null
         val token = securePrefs.getString(SecureKeys.ACCESS_TOKEN, null) ?: return@withContext user
         val updatedCount = user.monthlyWordCount + wordsToAdd
         val body = JSONObject()
@@ -184,7 +199,7 @@ class AuthRepository @Inject constructor(
             .toRequestBody(jsonMediaType)
 
         val request = Request.Builder()
-            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/profiles?user_id=eq.${user.userId}&select=*")
+            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/profiles?user_id=eq.$expectedUserId&select=*")
             .addSupabaseHeaders(token)
             .addHeader("Prefer", "return=representation")
             .patch(body)
@@ -196,7 +211,9 @@ class AuthRepository @Inject constructor(
                 val responseBody = response.body?.string().orEmpty()
                 val updated = parseProfileArray(responseBody, user.email).firstOrNull()
                     ?: user.copy(monthlyWordCount = updatedCount)
-                _authState.value = _authState.value.copy(user = updated)
+                if (_authState.value.user?.userId == expectedUserId) {
+                    _authState.value = _authState.value.copy(user = updated)
+                }
                 updated
             }
         }.getOrElse { error ->

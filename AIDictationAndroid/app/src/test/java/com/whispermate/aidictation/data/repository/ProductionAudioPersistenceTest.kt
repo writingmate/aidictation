@@ -15,6 +15,7 @@ import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.AudioSourceIntegrity
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.audioUsageClaimId
 import java.io.IOException
 import java.nio.file.FileVisitResult
@@ -74,7 +75,13 @@ class ProductionAudioPersistenceTest {
     @Test
     fun terminalSuccessQueuesOneProductionRoomClaimAndConcurrentClaimersDispatchAtMostOnce() =
         runBlocking {
-            val row = activeRow(id = "usage", generation = 4, usageEligible = true)
+            val usageDestination = UsageClaimDestination.LOCAL
+            val row = activeRow(
+                id = "usage",
+                generation = 4,
+                usageEligible = true,
+                usageDestination = usageDestination
+            )
             dao.insertRecording(row)
             val lease = row.lease()
             val pendingSignal = async(Dispatchers.IO) {
@@ -98,14 +105,56 @@ class ProductionAudioPersistenceTest {
             assertEquals(1, pendingSignal.await())
 
             val claims = listOf(
-                async(Dispatchers.IO) { repository.claimUsage(claimId, now = 2_000L) },
-                async(Dispatchers.IO) { repository.claimUsage(claimId, now = 2_001L) }
+                async(Dispatchers.IO) {
+                    repository.claimUsage(claimId, usageDestination, now = 2_000L)
+                },
+                async(Dispatchers.IO) {
+                    repository.claimUsage(claimId, usageDestination, now = 2_001L)
+                }
             ).awaitAll().filterNotNull()
 
             assertEquals(1, claims.size)
             assertEquals(UsageClaimEntity.CLAIMED, dao.getUsageClaimById(claimId)?.state)
-            assertNull(repository.claimUsage(claimId, now = 2_002L))
+            assertNull(repository.claimUsage(claimId, usageDestination, now = 2_002L))
             assertEquals(0, repository.pendingUsageClaimCount.first { it == 0 })
+        }
+
+    @Test
+    fun pendingAccountClaimCannotBeConsumedByLocalUsageOrAnotherSignedInAccount() =
+        runBlocking {
+            val accountA = checkNotNull(UsageClaimDestination.account("user-a"))
+            val accountB = checkNotNull(UsageClaimDestination.account("user-b"))
+            val row = activeRow(
+                id = "account-bound",
+                generation = 5,
+                usageEligible = true,
+                usageDestination = accountA
+            )
+            dao.insertRecording(row)
+
+            assertTrue(
+                repository.finishAttempt(
+                    lease = row.lease(),
+                    status = AudioProcessingStatus.SUCCESS,
+                    transcription = "bound account words",
+                    rawTranscription = "bound account words"
+                )
+            )
+
+            val claimId = audioUsageClaimId(row.id, row.generation)
+            assertNull(repository.claimUsage(claimId, accountB, now = 2_000L))
+            assertNull(
+                repository.claimUsage(
+                    claimId,
+                    UsageClaimDestination.LOCAL,
+                    now = 2_001L
+                )
+            )
+            assertEquals(UsageClaimEntity.PENDING, dao.getUsageClaimById(claimId)?.state)
+            assertEquals(accountA, dao.getUsageClaimById(claimId)?.usageDestination)
+
+            assertNotNull(repository.claimUsage(claimId, accountA, now = 2_002L))
+            assertEquals(UsageClaimEntity.CLAIMED, dao.getUsageClaimById(claimId)?.state)
         }
 
     @Test
@@ -492,6 +541,11 @@ class ProductionAudioPersistenceTest {
         id: String,
         generation: Long = 1,
         usageEligible: Boolean = false,
+        usageDestination: String = if (usageEligible) {
+            UsageClaimDestination.LOCAL
+        } else {
+            UsageClaimDestination.UNATTRIBUTED
+        },
         sourcePath: String = managedSource(id).absolutePath,
         rawText: String = "",
         recognitionComplete: Boolean = false
@@ -510,7 +564,8 @@ class ProductionAudioPersistenceTest {
         generation = generation,
         sourceIntegrity = "complete",
         updatedAt = 1_000L,
-        usageEligible = usageEligible
+        usageEligible = usageEligible,
+        usageDestination = usageDestination
     )
 
     private fun terminalRow(id: String, source: java.io.File) = RecordingEntity(
@@ -528,7 +583,8 @@ class ProductionAudioPersistenceTest {
         generation = 1,
         sourceIntegrity = "complete",
         updatedAt = 1_000L,
-        usageEligible = true
+        usageEligible = true,
+        usageDestination = UsageClaimDestination.LOCAL
     )
 
     private fun RecordingEntity.lease() = AudioAttemptLease(

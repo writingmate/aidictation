@@ -8,7 +8,7 @@ import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
 
 @Database(
     entities = [RecordingEntity::class, UsageClaimEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

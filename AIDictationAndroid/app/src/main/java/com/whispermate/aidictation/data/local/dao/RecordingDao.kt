@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
 import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.audioUsageClaimId
 import com.whispermate.aidictation.domain.model.countUsageWords
 import kotlinx.coroutines.flow.Flow
@@ -49,6 +50,7 @@ interface RecordingDao {
             generation = generation + 1,
             recognitionComplete = 0,
             usageEligible = :usageEligible,
+            usageDestination = :usageDestination,
             errorMessage = NULL,
             updatedAt = :updatedAt
         WHERE id = :id
@@ -63,6 +65,7 @@ interface RecordingDao {
         attemptId: String,
         nextStatus: String,
         usageEligible: Boolean,
+        usageDestination: String,
         updatedAt: Long
     ): Int
 
@@ -377,8 +380,15 @@ interface RecordingDao {
     @Query("SELECT * FROM usage_claims WHERE id = :id")
     suspend fun getUsageClaimById(id: String): UsageClaimEntity?
 
-    @Query("SELECT id FROM usage_claims WHERE state = 'pending' ORDER BY createdAt, id LIMIT 1")
-    suspend fun getNextPendingUsageClaimId(): String?
+    @Query(
+        """
+        SELECT id FROM usage_claims
+        WHERE state = 'pending' AND usageDestination = :usageDestination
+        ORDER BY createdAt, id
+        LIMIT 1
+        """
+    )
+    suspend fun getNextPendingUsageClaimId(usageDestination: String): String?
 
     @Query("SELECT COUNT(*) FROM usage_claims WHERE state = 'pending'")
     fun observePendingUsageClaimCount(): Flow<Int>
@@ -386,21 +396,32 @@ interface RecordingDao {
     @Query(
         """
         UPDATE usage_claims SET state = 'claimed', claimedAt = :claimedAt
-        WHERE id = :id AND state = 'pending'
+        WHERE id = :id AND state = 'pending' AND usageDestination = :usageDestination
         """
     )
-    suspend fun markUsageClaimed(id: String, claimedAt: Long): Int
+    suspend fun markUsageClaimed(
+        id: String,
+        usageDestination: String,
+        claimedAt: Long
+    ): Int
 
     @Transaction
-    suspend fun claimUsage(id: String, claimedAt: Long): UsageClaimEntity? {
-        if (markUsageClaimed(id, claimedAt) != 1) return null
+    suspend fun claimUsage(
+        id: String,
+        usageDestination: String,
+        claimedAt: Long
+    ): UsageClaimEntity? {
+        if (markUsageClaimed(id, usageDestination, claimedAt) != 1) return null
         return getUsageClaimById(id)
     }
 
     @Transaction
-    suspend fun claimNextUsage(claimedAt: Long): UsageClaimEntity? {
-        val id = getNextPendingUsageClaimId() ?: return null
-        if (markUsageClaimed(id, claimedAt) != 1) return null
+    suspend fun claimNextUsage(
+        usageDestination: String,
+        claimedAt: Long
+    ): UsageClaimEntity? {
+        val id = getNextPendingUsageClaimId(usageDestination) ?: return null
+        if (markUsageClaimed(id, usageDestination, claimedAt) != 1) return null
         return getUsageClaimById(id)
     }
 
@@ -429,6 +450,12 @@ interface RecordingDao {
                 recordingId = id,
                 generation = generation,
                 wordCount = wordCount,
+                state = if (current.usageDestination == UsageClaimDestination.UNATTRIBUTED) {
+                    UsageClaimEntity.UNATTRIBUTED
+                } else {
+                    UsageClaimEntity.PENDING
+                },
+                usageDestination = current.usageDestination,
                 createdAt = createdAt
             )
         )

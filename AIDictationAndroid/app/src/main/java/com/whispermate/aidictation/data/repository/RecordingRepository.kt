@@ -8,6 +8,7 @@ import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.AudioSourceIntegrity
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.Recording
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
@@ -149,6 +150,7 @@ class RecordingRepository @Inject constructor(
         attemptId: String,
         partialSourcePath: String,
         usageEligible: Boolean,
+        usageDestination: String = UsageClaimDestination.UNATTRIBUTED,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease {
         val managedSource = managedAudioSources.prepareCaptureSource(recordingId, partialSourcePath)
@@ -161,7 +163,8 @@ class RecordingRepository @Inject constructor(
             generation = 1,
             sourceIntegrity = AudioSourceIntegrity.PARTIAL,
             updatedAt = now,
-            usageEligible = usageEligible
+            usageEligible = usageEligible,
+            usageDestination = usageDestination
         )
         recordingDao.insertRecording(RecordingEntity.fromDomain(row))
         return AudioAttemptLease(
@@ -235,6 +238,7 @@ class RecordingRepository @Inject constructor(
     suspend fun claimRetry(
         recordingId: String,
         usageEligible: Boolean,
+        usageDestination: String = UsageClaimDestination.UNATTRIBUTED,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease? {
         val current = recordingDao.getRecordingById(recordingId) ?: return null
@@ -250,6 +254,7 @@ class RecordingRepository @Inject constructor(
             attemptId = attemptId,
             nextStatus = AudioProcessingStatus.RETRYING.persistedValue,
             usageEligible = usageEligible,
+            usageDestination = usageDestination,
             updatedAt = now
         )
         return if (updated == 1) {
@@ -421,12 +426,14 @@ class RecordingRepository @Inject constructor(
 
     suspend fun claimUsage(
         id: String,
+        usageDestination: String,
         now: Long = System.currentTimeMillis()
-    ): UsageClaimEntity? = recordingDao.claimUsage(id, now)
+    ): UsageClaimEntity? = recordingDao.claimUsage(id, usageDestination, now)
 
     suspend fun claimNextUsage(
+        usageDestination: String,
         now: Long = System.currentTimeMillis()
-    ): UsageClaimEntity? = recordingDao.claimNextUsage(now)
+    ): UsageClaimEntity? = recordingDao.claimNextUsage(usageDestination, now)
 
     suspend fun recoverFinalizedSource(
         lease: AudioAttemptLease,

@@ -7,7 +7,9 @@ import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.FREE_MONTHLY_WORD_LIMIT
 import com.whispermate.aidictation.domain.model.REFERRAL_BONUS_WORDS
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.UsageStatus
+import com.whispermate.aidictation.domain.model.countUsageWords
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,14 +18,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import com.whispermate.aidictation.domain.model.countUsageWords
 
 @Singleton
 class SubscriptionRepository @Inject constructor(
@@ -77,8 +77,15 @@ class SubscriptionRepository @Inject constructor(
             runCatching {
                 authRepository.authState.first { !it.isLoading }
                 recordingRepository.awaitStartupRecovery()
-                recordingRepository.pendingUsageClaimCount.collect { pendingCount ->
-                    if (pendingCount > 0) drainPendingUsageClaims()
+                combine(
+                    recordingRepository.pendingUsageClaimCount,
+                    authRepository.authState
+                ) { pendingCount, _ ->
+                    pendingCount to authRepository.currentUsageDestination()
+                }.collect { (pendingCount, usageDestination) ->
+                    if (pendingCount > 0 && usageDestination != null) {
+                        drainPendingUsageClaims(usageDestination)
+                    }
                 }
             }.onFailure { error ->
                 Log.e("SubscriptionRepository", "Pending usage monitoring stopped", error)
@@ -103,9 +110,11 @@ class SubscriptionRepository @Inject constructor(
     suspend fun recordWords(text: String) {
         val count = countUsageWords(text)
         if (count <= 0) return
+        authRepository.authState.first { !it.isLoading }
+        val usageDestination = authRepository.currentUsageDestination() ?: return
 
         usageDispatchMutex.withLock {
-            dispatchWordsOnce(count)
+            dispatchWordsOnce(count, usageDestination)
         }
     }
 
@@ -118,25 +127,33 @@ class SubscriptionRepository @Inject constructor(
         if (claimId == null) return
         scope.launch {
             authRepository.authState.first { !it.isLoading }
-            dispatchPersistedUsageClaim(claimId)
+            val usageDestination = authRepository.currentUsageDestination() ?: return@launch
+            dispatchPersistedUsageClaim(claimId, usageDestination)
         }
     }
 
-    private suspend fun dispatchPersistedUsageClaim(claimId: String) {
+    private suspend fun dispatchPersistedUsageClaim(
+        claimId: String,
+        usageDestination: String
+    ) {
         usageDispatchMutex.withLock {
-            val claim = recordingRepository.claimUsage(claimId) ?: return@withLock
-            runCatching { dispatchWordsOnce(claim.wordCount) }
+            if (authRepository.currentUsageDestination() != usageDestination) return@withLock
+            val claim = recordingRepository.claimUsage(
+                claimId,
+                usageDestination
+            ) ?: return@withLock
+            runCatching { dispatchWordsOnce(claim.wordCount, claim.usageDestination) }
                 .onFailure { error ->
                     Log.e("SubscriptionRepository", "Claimed usage could not be dispatched", error)
                 }
         }
     }
 
-    private suspend fun drainPendingUsageClaims() {
+    private suspend fun drainPendingUsageClaims(usageDestination: String) {
         usageDispatchMutex.withLock {
-            while (true) {
-                val claim = recordingRepository.claimNextUsage() ?: break
-                runCatching { dispatchWordsOnce(claim.wordCount) }
+            while (authRepository.currentUsageDestination() == usageDestination) {
+                val claim = recordingRepository.claimNextUsage(usageDestination) ?: break
+                runCatching { dispatchWordsOnce(claim.wordCount, claim.usageDestination) }
                     .onFailure { error ->
                         Log.e("SubscriptionRepository", "Claimed usage could not be dispatched", error)
                     }
@@ -144,11 +161,14 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    private suspend fun dispatchWordsOnce(count: Int) {
-        if (authRepository.authState.value.user != null) {
-            authRepository.updateWordCount(count)
-        } else {
-            appPreferences.addLocalWords(count)
+    private suspend fun dispatchWordsOnce(count: Int, usageDestination: String) {
+        when (usageDestination) {
+            UsageClaimDestination.LOCAL -> appPreferences.addLocalWords(count)
+            else -> {
+                val expectedUserId = UsageClaimDestination.accountId(usageDestination)
+                    ?: error("Usage claim has no dispatchable destination")
+                authRepository.updateWordCount(count, expectedUserId)
+            }
         }
     }
 

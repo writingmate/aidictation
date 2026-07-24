@@ -5,6 +5,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
+import com.whispermate.aidictation.data.repository.AuthRepository
 import com.whispermate.aidictation.data.repository.RecordingRepository
 import com.whispermate.aidictation.data.repository.TranscriptionAttemptConfiguration
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
@@ -18,6 +19,7 @@ import com.whispermate.aidictation.data.remote.AudioSplitException
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.audioUsageClaimId
 import com.whispermate.aidictation.util.AudioRecorder
 import kotlinx.coroutines.CancellationException
@@ -195,13 +197,15 @@ class AndroidAudioProcessingCoordinator internal constructor(
     private val recordingRepository: RecordingRepository,
     private val transcriptionOperations: AndroidTranscriptionOperations,
     private val audioDurationReader: (File) -> Long,
-    private val recognitionTimeoutMillis: (Long) -> Long
+    private val recognitionTimeoutMillis: (Long) -> Long,
+    private val usageDestinationProvider: () -> String? = { null }
 ) {
     @Inject
     constructor(
         @ApplicationContext context: Context,
         recordingRepository: RecordingRepository,
-        transcriptionRepository: TranscriptionRepository
+        transcriptionRepository: TranscriptionRepository,
+        authRepository: AuthRepository
     ) : this(
         context = context,
         recordingRepository = recordingRepository,
@@ -212,7 +216,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 MIN_RECOGNITION_TIMEOUT_MS,
                 MAX_RECOGNITION_TIMEOUT_MS
             )
-        }
+        },
+        usageDestinationProvider = authRepository::currentUsageDestination
     )
 
     companion object {
@@ -248,7 +253,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
         val lease: AtomicReference<AudioAttemptLease?>,
         val recorder: AudioRecorder,
         val executor: ExecutorService,
-        val callerJob: Job
+        val callerJob: Job,
+        val usageDestination: String
     )
 
     private data class ActiveFinalization(
@@ -279,7 +285,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
         val recordingId: String,
         val owner: AndroidAudioAttemptOwner,
         val callerJob: Job,
-        val lease: AtomicReference<AudioAttemptLease?>
+        val lease: AtomicReference<AudioAttemptLease?>,
+        val usageDestination: String
     )
 
     private data class CancellationTarget(
@@ -355,7 +362,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 lease = AtomicReference(null),
                 recorder = AudioRecorder(context, autoStopOnSilence),
                 executor = newNativeExecutor(recordingId),
-                callerJob = checkNotNull(kotlin.coroutines.coroutineContext[Job])
+                callerJob = checkNotNull(kotlin.coroutines.coroutineContext[Job]),
+                usageDestination = owner.capturedUsageDestination()
             ).also {
                 check(captureNativeFence.reserveStart(it.token))
                 activeStart = it
@@ -385,7 +393,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                     start.provisionalLease.recordingId,
                     start.provisionalLease.attemptId,
                     partial.absolutePath,
-                    usageEligible = owner.recordsUsage
+                    usageEligible = owner.recordsUsage,
+                    usageDestination = start.usageDestination
                 )
             }
             start.lease.set(lease)
@@ -1065,7 +1074,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 recordingId = recordingId,
                 owner = owner,
                 callerJob = checkNotNull(kotlin.coroutines.coroutineContext[Job]),
-                lease = AtomicReference(null)
+                lease = AtomicReference(null),
+                usageDestination = owner.capturedUsageDestination()
             ).also {
                 check(retryStartFence.reserve(it.token))
                 activeRetryStart = it
@@ -1092,7 +1102,13 @@ class AndroidAudioProcessingCoordinator internal constructor(
                         )
                     }
                 }
-            ) { recordingRepository.claimRetry(recordingId, usageEligible = owner.recordsUsage) }
+            ) {
+                recordingRepository.claimRetry(
+                    recordingId,
+                    usageEligible = owner.recordsUsage,
+                    usageDestination = retryStart.usageDestination
+                )
+            }
                 ?: throw AudioAttemptUnavailableException(
                     "This recording is already active or cannot be retried"
                 )
@@ -1607,6 +1623,13 @@ class AndroidAudioProcessingCoordinator internal constructor(
 
     private val AndroidAudioAttemptOwner.recordsUsage: Boolean
         get() = this == AndroidAudioAttemptOwner.MAIN || this == AndroidAudioAttemptOwner.OVERLAY
+
+    private fun AndroidAudioAttemptOwner.capturedUsageDestination(): String =
+        if (recordsUsage) {
+            usageDestinationProvider() ?: UsageClaimDestination.UNATTRIBUTED
+        } else {
+            UsageClaimDestination.UNATTRIBUTED
+        }
 
     private val FinalizedAndroidCapture.usageClaimId: String?
         get() = if (owner.recordsUsage) {

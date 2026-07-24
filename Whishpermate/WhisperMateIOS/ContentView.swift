@@ -1311,7 +1311,12 @@ struct ContentView: View {
         guard inlineRecording.state == .idle else { return }
 
         DebugLog.info("keyboard bridge expired; shutting down dictation session", context: "KEYBOARD_DIAG")
-        shutdownKeyboardDictation(sessionID: activeKeyboardDictationSessionID)
+        guard let identity = activeKeyboardDictationIdentity else {
+            keyboardBridgeAliveUntil = nil
+            showKeyboardReturnScreen = false
+            return
+        }
+        shutdownKeyboardDictation(identity: identity)
     }
 
     private func keepKeyboardBridgeAlive() {

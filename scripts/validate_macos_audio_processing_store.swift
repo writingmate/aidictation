@@ -1454,6 +1454,62 @@ private func testLegacyHistoryDeletionNeverTrustsDecodedPaths() throws {
         "the exact trusted legacy child remained after accepted deletion"
     )
 
+    let historicalTimestamp = recordings.appendingPathComponent(
+        "recording_1721836800.123456.m4a"
+    )
+    try Data([0x02]).write(to: historicalTimestamp)
+    let removedHistoricalTimestamp = MacHistoryAudioDeletion.remove(
+        recordingID: recordingID,
+        candidateURL: historicalTimestamp,
+        applicationSupportDirectory: applicationSupport
+    )
+    try require(
+        removedHistoricalTimestamp == .removed,
+        "Delete/Clear refused the historical timestamp recording filename"
+    )
+    try require(
+        !FileManager.default.fileExists(atPath: historicalTimestamp.path),
+        "the historical timestamp recording remained after accepted deletion"
+    )
+
+    let malformedTimestamp = recordings.appendingPathComponent(
+        "recording_1721836800e0.m4a"
+    )
+    try Data("malformed sentinel".utf8).write(to: malformedTimestamp)
+    let refusedMalformedTimestamp = MacHistoryAudioDeletion.remove(
+        recordingID: recordingID,
+        candidateURL: malformedTimestamp,
+        applicationSupportDirectory: applicationSupport
+    )
+    try require(
+        refusedMalformedTimestamp == .refused,
+        "legacy deletion accepted a non-decimal timestamp filename"
+    )
+    let malformedTimestampContents = try Data(contentsOf: malformedTimestamp)
+    try require(
+        malformedTimestampContents == Data("malformed sentinel".utf8),
+        "legacy deletion changed a malformed direct-child sentinel"
+    )
+
+    let unicodeNumericTimestamp = recordings.appendingPathComponent(
+        "recording_١٧٢١٨٣٦٨٠٠.١٢٣٤٥٦.m4a"
+    )
+    try Data("unicode sentinel".utf8).write(to: unicodeNumericTimestamp)
+    let refusedUnicodeNumericTimestamp = MacHistoryAudioDeletion.remove(
+        recordingID: recordingID,
+        candidateURL: unicodeNumericTimestamp,
+        applicationSupportDirectory: applicationSupport
+    )
+    try require(
+        refusedUnicodeNumericTimestamp == .refused,
+        "legacy deletion accepted Unicode numerics instead of ASCII timestamp digits"
+    )
+    let unicodeTimestampContents = try Data(contentsOf: unicodeNumericTimestamp)
+    try require(
+        unicodeTimestampContents == Data("unicode sentinel".utf8),
+        "legacy deletion changed a Unicode-numeric direct-child sentinel"
+    )
+
     let outside = root.appendingPathComponent("outside", isDirectory: true)
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
     let outsideSentinel = outside.appendingPathComponent("sentinel.m4a")

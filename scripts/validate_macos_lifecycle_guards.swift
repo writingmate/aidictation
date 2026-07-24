@@ -46,6 +46,33 @@ private final class Counter: @unchecked Sendable {
     }
 }
 
+private final class SuspensionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var isWaiting: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return continuation != nil
+    }
+
+    func suspend() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func resume() {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume()
+    }
+}
+
 private func testStalledNativeExportDeadlineAndLateFence() async throws {
     let completion = CompletionBox()
     let cancellations = Counter()
@@ -106,6 +133,101 @@ private func testNativeCloseProofAndReplyOwnership() async throws {
     }
 }
 
+private func testTerminationPersistenceFailureSettlement() throws {
+    let failedPersistence = MacTerminationSettlement.evaluate(
+        nativeOwnershipReleased: true,
+        terminalStatePersisted: false
+    )
+    try require(
+        failedPersistence.shouldSettleToIdle,
+        "a storage failure left the UI owned after native closure"
+    )
+    try require(
+        !failedPersistence.shouldAllowTermination,
+        "Quit was accepted after terminal state persistence failed"
+    )
+    try require(
+        failedPersistence.warning == MacTerminationSettlement.storageWarning,
+        "a storage failure did not produce the plain recovery warning"
+    )
+
+    let unresolvedNativeWork = MacTerminationSettlement.evaluate(
+        nativeOwnershipReleased: false,
+        terminalStatePersisted: true
+    )
+    try require(
+        !unresolvedNativeWork.shouldSettleToIdle
+            && !unresolvedNativeWork.shouldAllowTermination,
+        "unresolved native work released Quit ownership"
+    )
+
+    let complete = MacTerminationSettlement.evaluate(
+        nativeOwnershipReleased: true,
+        terminalStatePersisted: true
+    )
+    try require(
+        complete.shouldSettleToIdle && complete.shouldAllowTermination,
+        "a fully durable native close did not allow Quit"
+    )
+}
+
+private func testQuitFencesSuspendedAttemptsBeforePersistence() async throws {
+    let pendingPreparationID = UUID()
+    let currentAttemptID = UUID()
+    let retryAttemptID = UUID()
+    let freshAttemptID = UUID()
+    let gate = SuspensionGate()
+    let fence = await MainActor.run { MacProcessingAttemptFence() }
+
+    let lateCallback = Task { @MainActor in
+        guard fence.allows(currentAttemptID) else { return false }
+        await gate.suspend()
+        // This is the post-await production check. A callback that was
+        // admitted before Quit must not mutate after the generation is fenced.
+        return fence.allows(currentAttemptID)
+    }
+
+    while !gate.isWaiting {
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    try await MainActor.run {
+        // Quit owns all admitted generations before native close or store
+        // persistence can suspend.
+        fence.abandon(Set([
+            pendingPreparationID,
+            currentAttemptID,
+            retryAttemptID,
+        ]))
+        let oneShotPersistenceFailure = MacTerminationSettlement.evaluate(
+            nativeOwnershipReleased: true,
+            terminalStatePersisted: false
+        )
+        try require(
+            oneShotPersistenceFailure.shouldSettleToIdle
+                && !oneShotPersistenceFailure.shouldAllowTermination,
+            "a one-shot terminal persistence failure did not refuse Quit and release the UI"
+        )
+        try require(
+            !fence.allows(pendingPreparationID)
+                && !fence.allows(currentAttemptID)
+                && !fence.allows(retryAttemptID),
+            "Quit did not fence every admitted processing generation"
+        )
+        try require(
+            fence.allows(freshAttemptID),
+            "an abandoned generation blocked a fresh recording attempt"
+        )
+    }
+
+    gate.resume()
+    let lateWasAllowed = await lateCallback.value
+    try require(
+        !lateWasAllowed,
+        "a suspended pre-Quit callback resumed with mutation ownership"
+    )
+}
+
 private func testProductionIntegrationContracts() throws {
     let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
     let appState = try String(contentsOf: root.appendingPathComponent(
@@ -161,6 +283,72 @@ private func testProductionIntegrationContracts() throws {
             && app.contains("terminationReplyGuard.resolve(token)"),
         "AppKit Quit does not use the one-reply termination guard"
     )
+    try require(
+        appState.contains("MacTerminationSettlement.evaluate(")
+            && appState.contains("guard settlement.shouldSettleToIdle")
+            && appState.contains("return settlement.shouldAllowTermination")
+            && appState.contains("guard recordTerminalPersisted else { continue }"),
+        "Quit persistence failures do not settle safely after native closure"
+    )
+    let terminationStart = appState.range(of: "func prepareForTermination(")!.lowerBound
+    let terminationEnd = appState.range(
+        of: "private func waitForTerminationOwnership(",
+        range: terminationStart..<appState.endIndex
+    )!.lowerBound
+    let terminationBody = appState[terminationStart..<terminationEnd]
+    let abandonIndex = terminationBody.range(
+        of: "processingAttemptFence.abandon(attemptsToAbandon)"
+    )!.lowerBound
+    let firstSuspensionIndex = terminationBody.range(of: "let closed = await")!.lowerBound
+    try require(
+        terminationBody.contains("Set(pendingPreparationStoreIDs.values)")
+            && terminationBody.contains("attemptsToAbandon.insert(recordingAttemptID)")
+            && terminationBody.contains(
+                "attemptsToAbandon.formUnion(retranscriptionAttemptIDs.values)"
+            )
+            && abandonIndex < firstSuspensionIndex,
+        "Quit does not fence pending, current, and retry generations before its first await"
+    )
+    let finalizationStart = appState.range(
+        of: "private func handleRecorderFinalizationTerminal("
+    )!.lowerBound
+    let finalizationEnd = appState.range(
+        of: "private func finishRecordingWithoutTranscription(",
+        range: finalizationStart..<appState.endIndex
+    )!.lowerBound
+    let finalizationBody = appState[finalizationStart..<finalizationEnd]
+    try require(
+        finalizationBody.components(separatedBy: "ownsProcessingAttempt(").count - 1 >= 10,
+        "recorder finalization does not recheck ownership after its suspension points"
+    )
+    try require(
+        appState.contains("private let attemptIsCurrent: @MainActor @Sendable () -> Bool")
+            && appState.components(
+                separatedBy: "try await requireCurrentAttempt()"
+            ).count - 1 >= 10,
+        "live and retry store callbacks are not fenced around their suspension points"
+    )
+    let settlementStart = appState.range(
+        of: "private func finishTerminationOwnership()"
+    )!.lowerBound
+    let settlementEnd = appState.range(
+        of: "// MARK: - Private Methods",
+        range: settlementStart..<appState.endIndex
+    )!.lowerBound
+    let settlementBody = appState[settlementStart..<settlementEnd]
+    let warningIndex = settlementBody.range(
+        of: "presentTerminationStorageWarning(warning)"
+    )!.lowerBound
+    let returnIndex = settlementBody.range(
+        of: "return settlement.shouldAllowTermination"
+    )!.lowerBound
+    try require(
+        warningIndex < returnIndex
+            && settlementBody.contains("let alert = NSAlert()")
+            && settlementBody.contains("alert.informativeText = warning")
+            && settlementBody.contains("alert.runModal()"),
+        "eventual Quit settlement does not render its storage warning"
+    )
 
     let successStart = appState.range(of: "private func commitTranscriptionSuccess(")!.lowerBound
     let failureStart = appState.range(
@@ -175,10 +363,12 @@ private func testProductionIntegrationContracts() throws {
         historyIndex < claimIndex && claimIndex < sinkIndex,
         "usage can be claimed or reported before durable History and terminal store state"
     )
+    let trustedLegacyDeleteCalls = appState.components(
+        separatedBy: "MacHistoryAudioDeletion.remove("
+    ).count - 1
     try require(
-        appState.contains("MacHistoryAudioDeletion.remove(")
-            && !successBody.isEmpty,
-        "decoded legacy History paths do not use the trusted deletion helper"
+        trustedLegacyDeleteCalls == 2 && !successBody.isEmpty,
+        "Delete and Clear do not both use the trusted legacy deletion helper"
     )
     try require(
         client.contains("MacBoundedNativeOperation<Void>")
@@ -194,6 +384,8 @@ private struct ValidateMacLifecycleGuards {
         do {
             try await testStalledNativeExportDeadlineAndLateFence()
             try await testNativeCloseProofAndReplyOwnership()
+            try testTerminationPersistenceFailureSettlement()
+            try await testQuitFencesSuspendedAttemptsBeforePersistence()
             try testProductionIntegrationContracts()
             print("PASS: macOS Quit, native deadline, usage, and path guards")
         } catch ValidationFailure.assertion(let message) {

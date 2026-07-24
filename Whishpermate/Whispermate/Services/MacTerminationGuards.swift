@@ -54,3 +54,59 @@ final class MacTerminationReplyGuard {
         return true
     }
 }
+
+/// Separates safe UI settlement from permission to terminate. Once every
+/// native writer is confirmed closed, recording controls must become usable
+/// again even when the terminal journal update failed. The current Quit is
+/// still refused so the storage warning remains visible and the recoverable
+/// source stays available.
+nonisolated struct MacTerminationSettlement: Equatable, Sendable {
+    static let storageWarning =
+        "Your recording was kept, but its status could not be saved. Please try again."
+
+    let shouldSettleToIdle: Bool
+    let shouldAllowTermination: Bool
+    let warning: String?
+
+    static func evaluate(
+        nativeOwnershipReleased: Bool,
+        terminalStatePersisted: Bool
+    ) -> MacTerminationSettlement {
+        guard nativeOwnershipReleased else {
+            return MacTerminationSettlement(
+                shouldSettleToIdle: false,
+                shouldAllowTermination: false,
+                warning: nil
+            )
+        }
+        guard terminalStatePersisted else {
+            return MacTerminationSettlement(
+                shouldSettleToIdle: true,
+                shouldAllowTermination: false,
+                warning: storageWarning
+            )
+        }
+        return MacTerminationSettlement(
+            shouldSettleToIdle: true,
+            shouldAllowTermination: true,
+            warning: nil
+        )
+    }
+}
+
+/// In-memory generation fence for callbacks that were already admitted before
+/// Quit began. Abandoning one attempt never blocks a fresh UUID, and the fence
+/// intentionally lives until process exit because native and transport work
+/// may ignore cancellation indefinitely.
+@MainActor
+final class MacProcessingAttemptFence {
+    private var abandonedAttemptIDs: Set<UUID> = []
+
+    func abandon(_ attemptIDs: Set<UUID>) {
+        abandonedAttemptIDs.formUnion(attemptIDs)
+    }
+
+    func allows(_ attemptID: UUID) -> Bool {
+        !abandonedAttemptIDs.contains(attemptID)
+    }
+}

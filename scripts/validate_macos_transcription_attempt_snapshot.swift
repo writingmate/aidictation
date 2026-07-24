@@ -56,7 +56,9 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         transcriptionAPIKey: settings.apiKey,
         customRealtimeEndpoint: URL(string: settings.realtimeEndpoint),
         customRealtimeModel: settings.realtimeModel,
-        llmPostProcessingEnabled: true,
+        // Custom-provider controls historically leave this hidden toggle off.
+        // A two-stage raw path must still run core cleanup with this snapshot.
+        llmPostProcessingEnabled: false,
         postProcessingProvider: .customLLM,
         llmEndpoint: settings.llmEndpoint,
         llmModel: settings.llmModel,
@@ -184,7 +186,26 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             )
         }
         precondition(source.contains("if let realtimeResult"))
+        precondition(source.contains("try await session.markRawResultReady(raw)"))
+        precondition(source.contains("try await session.beginCleanup()"))
         precondition(source.contains("rawText: raw,\n                        client: OpenAIClient(config: .init())"))
+        guard let cleanupStart = source.range(of: "    private func applyLLMPass("),
+              let cleanupEnd = source.range(
+                of: "    private func applyOutputModeFormatting(",
+                range: cleanupStart.upperBound..<source.endIndex
+              )
+        else {
+            preconditionFailure("Could not isolate two-stage cleanup")
+        }
+        let cleanupSource = String(source[cleanupStart.lowerBound..<cleanupEnd.lowerBound])
+        precondition(
+            !cleanupSource.contains("llmPostProcessingEnabled"),
+            "The hidden legacy toggle still bypasses core two-stage cleanup"
+        )
+        precondition(
+            cleanupSource.contains("rules: promptComponents"),
+            "Two-stage cleanup lost personal vocabulary, phrases, replacements, or rules"
+        )
         let cleanupFailureChecks = source.components(
             separatedBy: "managedCleanupFailed = !cleanup.completed"
         ).count - 1

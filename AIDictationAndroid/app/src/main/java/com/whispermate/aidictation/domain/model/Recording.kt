@@ -21,12 +21,16 @@ data class Recording(
     val errorMessage: String? = null,
     val sourceIntegrity: AudioSourceIntegrity = AudioSourceIntegrity.COMPLETE,
     val updatedAt: Long = timestamp,
-    val usageEligible: Boolean = false
+    val usageEligible: Boolean = false,
+    val retrySourceAvailable: Boolean = true
 ) {
     val isProcessing: Boolean get() = status.isActive
     val availableText: String get() = transcription.ifBlank { checkpointText }
     val canRetry: Boolean
-        get() = status.isRetryable && sourceIntegrity == AudioSourceIntegrity.COMPLETE && !audioFilePath.isNullOrBlank()
+        get() = status.isRetryable &&
+            sourceIntegrity == AudioSourceIntegrity.COMPLETE &&
+            retrySourceAvailable &&
+            !audioFilePath.isNullOrBlank()
 
     val formattedDate: String
         get() {

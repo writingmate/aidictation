@@ -347,6 +347,22 @@ class ProductionAudioPersistenceTest {
     }
 
     @Test
+    fun legacySourceRemainsPlayableWithoutOfferingAnImpossibleRetry() = runBlocking {
+        val legacyDirectory = java.io.File(context.filesDir, "recordings")
+        assertTrue(legacyDirectory.mkdir())
+        val source = java.io.File(legacyDirectory, "recording_1720000000001.m4a")
+            .apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val row = terminalRow("legacy-visible", source)
+        dao.insertRecording(row)
+
+        val visible = checkNotNull(repository.getRecordingById(row.id))
+        assertEquals(source.absolutePath, visible.audioFilePath)
+        assertFalse(visible.canRetry)
+        assertNull(repository.claimRetry(row.id, usageEligible = true))
+        assertTrue(source.exists())
+    }
+
+    @Test
     fun linkedOwnedSourceFailsClosedAndPreservesOutsideTargetAndDatabasePath() = runBlocking {
         val outsideDirectory = java.io.File(
             context.cacheDir,

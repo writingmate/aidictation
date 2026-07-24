@@ -60,7 +60,9 @@ internal fun writeFinalizedAudioMarker(
     ) { "The finalized audio is empty" }
     require(durationMs > 0L) { "The finalized audio has no duration" }
     val marker = finalizedAudioMarkerFile(source)
-    val temporary = File(marker.parentFile, "${marker.name}.${lease.attemptId}.tmp")
+    val markerDirectory = marker.parentFile
+        ?: throw IOException("The finalized-audio directory is unavailable")
+    val temporary = File(markerDirectory, "${marker.name}.${lease.attemptId}.tmp")
     val payload = listOf(
         FINALIZED_AUDIO_MARKER_VERSION,
         lease.recordingId,
@@ -83,12 +85,15 @@ internal fun writeFinalizedAudioMarker(
             while (bytes.hasRemaining()) output.write(bytes)
             output.force(true)
         }
-        Files.deleteIfExists(marker.toPath())
         Files.move(
             temporary.toPath(),
             marker.toPath(),
-            StandardCopyOption.ATOMIC_MOVE
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING
         )
+        FileChannel.open(markerDirectory.toPath(), StandardOpenOption.READ).use { directory ->
+            directory.force(true)
+        }
     } finally {
         runCatching { Files.deleteIfExists(temporary.toPath()) }
     }
@@ -486,8 +491,13 @@ class RecordingRepository @Inject constructor(
 
     private fun RecordingEntity.toVisibleDomain(): Recording {
         val recording = toDomain()
+        val visibleSource = managedAudioSources.visibleSource(id, audioFilePath)
+        val retrySourceAvailable = visibleSource != null &&
+            managedAudioSources.existingCurrentSource(id, visibleSource)
+                ?.takeIf { it.length() > 0L } != null
         return recording.copy(
-            audioFilePath = managedAudioSources.visibleSource(id, audioFilePath)
+            audioFilePath = visibleSource,
+            retrySourceAvailable = retrySourceAvailable
         )
     }
 

@@ -145,7 +145,7 @@ internal class ManagedAudioSourceFiles(context: Context) {
 
     private fun removeDirectEntry(path: Path): Boolean = runCatching {
         Files.deleteIfExists(path)
-        !Files.exists(path, LinkOption.NOFOLLOW_LINKS)
+        Files.notExists(path, LinkOption.NOFOLLOW_LINKS)
     }.getOrDefault(false)
 
     @Throws(IOException::class)

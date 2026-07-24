@@ -11,6 +11,12 @@ import CryptoKit
 /// state is persisted before it is published in memory or destructive cleanup
 /// begins.
 actor MacAudioProcessingStore {
+    /// Changes once per process launch. A partial created by this process may
+    /// not be decoded or promoted until AudioRecorder supplies an exact close
+    /// attestation for its writer. A partial from an earlier process is
+    /// quiescent by construction because process exit closed every descriptor.
+    nonisolated static let currentProcessID = UUID()
+
     enum Stage: String, Codable, CaseIterable, Sendable {
         case preparing
         case recording
@@ -40,6 +46,8 @@ actor MacAudioProcessingStore {
     struct Record: Codable, Equatable, Sendable {
         let recordingID: UUID
         var attemptID: UUID
+        var writerProcessID: UUID? = nil
+        var nativeCloseAttestedAttemptID: UUID? = nil
         var stage: Stage
         var source: SourceKind
         var revision: UInt64
@@ -82,22 +90,29 @@ actor MacAudioProcessingStore {
         case journalFileSync
         case journalRename
         case journalDirectorySync
+        case initialSourceFileSync
+        case initialSourceDirectorySync
         case sourceFileSync
         case sourceRename
         case sourceDirectorySync
+        case sourceRemoval
+        case sourceInspection
         case deepAudioValidation
     }
 
     struct TestHooks: Sendable {
         let before: @Sendable (TestOperation) throws -> Void
         let now: @Sendable () -> Date
+        let persistenceTimeout: TimeInterval
 
         init(
             before: @escaping @Sendable (TestOperation) throws -> Void = { _ in },
-            now: @escaping @Sendable () -> Date = { Date() }
+            now: @escaping @Sendable () -> Date = { Date() },
+            persistenceTimeout: TimeInterval = 5
         ) {
             self.before = before
             self.now = now
+            self.persistenceTimeout = max(0.05, persistenceTimeout)
         }
 
         static let none = TestHooks()
@@ -111,6 +126,12 @@ actor MacAudioProcessingStore {
         let expectedByteCount: Int64
         let expectedFrameCount: Int64
         let expectedSHA256: String
+        let nativeCloseAttestation: NativeWriterCloseAttestation?
+    }
+
+    struct NativeWriterCloseAttestation: Equatable, Sendable {
+        let attemptID: UUID
+        let processID: UUID
     }
 
     struct Lease: Equatable, Sendable {
@@ -152,6 +173,10 @@ actor MacAudioProcessingStore {
         case invalidAudio
         case sourceTooLarge
         case storageUnavailable
+        case persistenceBusy
+        case persistenceTimedOut
+        case writerStillOpen
+        case writerCloseUnknown
         case revisionExhausted
 
         var errorDescription: String? {
@@ -182,6 +207,14 @@ actor MacAudioProcessingStore {
                 return "This recording is too large to import safely. The original file was not changed."
             case .storageUnavailable:
                 return "The recording could not be saved. Your existing files were not changed."
+            case .persistenceBusy:
+                return "Saving is still busy. Please try again."
+            case .persistenceTimedOut:
+                return "Saving took too long. The available audio was kept."
+            case .writerStillOpen:
+                return "This recording is still finishing. Try again shortly."
+            case .writerCloseUnknown:
+                return "This recording can’t be retried safely until the app is reopened."
             case .revisionExhausted:
                 return "The recording history cannot accept more changes."
             }
@@ -196,8 +229,16 @@ actor MacAudioProcessingStore {
     private nonisolated let lockURL: URL
     private nonisolated let testHooks: TestHooks
     private nonisolated let transientRoot: MacTransientWorkspaceRoot?
+    private nonisolated let processID: UUID
+    private nonisolated let persistenceWorker = MacStorePersistenceWorker()
+    private nonisolated let cleanupWorker = MacStorePersistenceWorker(
+        label: "ai.writingmate.audio-processing-cleanup"
+    )
+    private nonisolated let inspectionWorker = MacStorePersistenceWorker(
+        label: "ai.writingmate.audio-processing-inspection"
+    )
 
-    private struct Journal: Codable, Equatable {
+    private struct Journal: Codable, Equatable, Sendable {
         static let currentSchemaVersion = 1
 
         var schemaVersion: Int
@@ -215,13 +256,26 @@ actor MacAudioProcessingStore {
 
     private var journal: Journal
     private var health: Health
+    private var persistenceOperationID: UUID?
     private struct ClosedAudioValidation {
         let attemptID: UUID
         let clearGeneration: UInt64
         let sourcePath: String
-        let modificationDate: Date
         let integrity: AudioIntegrity
         let fileIdentity: AudioFileIdentity
+    }
+    private struct ManagedSourceInspection: Sendable {
+        let source: SourceKind
+        let partialIdentity: AudioFileIdentity?
+        let finalIdentity: AudioFileIdentity?
+
+        func identity(for source: SourceKind) -> AudioFileIdentity? {
+            switch source {
+            case .partial: return partialIdentity
+            case .final: return finalIdentity
+            case .both, .missing: return nil
+            }
+        }
     }
     private struct DeepAudioVerification: Sendable {
         let integrity: AudioIntegrity
@@ -233,6 +287,7 @@ actor MacAudioProcessingStore {
     init(
         rootDirectory: URL,
         recoverInterruptedWork: Bool = true,
+        processID: UUID = MacAudioProcessingStore.currentProcessID,
         testHooks: TestHooks = .none
     ) {
         let storeDirectory = rootDirectory.appendingPathComponent("AudioProcessing", isDirectory: true)
@@ -249,6 +304,7 @@ actor MacAudioProcessingStore {
         self.journalURL = journalURL
         self.lockURL = lockURL
         self.testHooks = testHooks
+        self.processID = processID
 
         var loadedJournal = Journal.empty
         var loadedHealth = Health.healthy
@@ -269,7 +325,8 @@ actor MacAudioProcessingStore {
             try transientRoot.sweepAfterRestart()
             loadedTransientRoot = transientRoot
 
-            try Self.withExclusiveLock(at: lockURL) {
+            let persistenceDeadline = Date().addingTimeInterval(testHooks.persistenceTimeout)
+            try Self.withExclusiveLock(at: lockURL, deadline: persistenceDeadline) {
                 if FileManager.default.fileExists(atPath: journalURL.path) {
                     let data = try Data(contentsOf: journalURL)
                     loadedJournal = try Self.makeDecoder().decode(Journal.self, from: data)
@@ -291,7 +348,12 @@ actor MacAudioProcessingStore {
                     loadedJournal = reconciliation.journal
 
                     if reconciliation.changed {
-                        try Self.persist(loadedJournal, to: journalURL, testHooks: testHooks)
+                        try Self.persist(
+                            loadedJournal,
+                            to: journalURL,
+                            deadline: persistenceDeadline,
+                            testHooks: testHooks
+                        )
                     }
                 }
 
@@ -318,6 +380,44 @@ actor MacAudioProcessingStore {
         self.journal = loadedJournal
         self.health = loadedHealth
         self.transientRoot = loadedTransientRoot
+    }
+
+    /// Read-only fallback used when provider initialization itself exceeds its
+    /// deadline. It performs no filesystem work, so callers can always leave a
+    /// visible starting/processing state even if storage is unresponsive.
+    init(unavailableRootDirectory rootDirectory: URL) {
+        let storeDirectory = rootDirectory.appendingPathComponent(
+            "AudioProcessing",
+            isDirectory: true
+        )
+        self.rootDirectory = rootDirectory
+        incomingDirectory = storeDirectory.appendingPathComponent(
+            "Incoming",
+            isDirectory: true
+        )
+        recordingsDirectory = storeDirectory.appendingPathComponent(
+            "Recordings",
+            isDirectory: true
+        )
+        transientDirectory = storeDirectory.appendingPathComponent(
+            "Transient",
+            isDirectory: true
+        )
+        journalURL = storeDirectory.appendingPathComponent(
+            "journal.json",
+            isDirectory: false
+        )
+        lockURL = storeDirectory.appendingPathComponent(
+            ".journal.lock",
+            isDirectory: false
+        )
+        testHooks = .none
+        transientRoot = nil
+        processID = Self.currentProcessID
+        journal = .empty
+        health = .readOnly(
+            message: "Saved recordings need attention. No files were changed."
+        )
     }
 
     // MARK: - Read API
@@ -375,7 +475,7 @@ actor MacAudioProcessingStore {
 
     /// Persists the stable recording identity before creating the source file.
     /// The returned lease is the only owner allowed to advance this attempt.
-    func prepare(recordingID: UUID, attemptID: UUID, deadline: Date) throws -> Mutation {
+    func prepare(recordingID: UUID, attemptID: UUID, deadline: Date) async throws -> Mutation {
         try requireWritable()
         guard recordingID != attemptID else { throw StoreError.invalidIdentity }
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
@@ -388,6 +488,7 @@ actor MacAudioProcessingStore {
         let record = Record(
             recordingID: recordingID,
             attemptID: attemptID,
+            writerProcessID: processID,
             stage: .preparing,
             source: .partial,
             revision: revision,
@@ -405,25 +506,32 @@ actor MacAudioProcessingStore {
         proposed.records.append(record)
         let partialURL = partialURL(for: recordingID)
         let finalURL = finalURL(for: recordingID)
-        var creationFailure: StoreError?
-        try commit(proposed) {
+        let creationFailure = MacStoreErrorBox()
+        let sourceTestHooks = testHooks
+        try await commit(
+            proposed,
+            afterPersistWhileLocked: { persistenceDeadline in
             guard !FileManager.default.fileExists(atPath: partialURL.path),
                   !FileManager.default.fileExists(atPath: finalURL.path) else {
-                creationFailure = .sourceConflict
+                creationFailure.set(.sourceConflict)
                 return
             }
             do {
                 // The journal identity is already durable and the cross-instance
                 // lock remains held. Exclusive creation prevents truncating an
                 // unexpected source.
-                try Data().write(to: partialURL, options: .withoutOverwriting)
+                try Self.createDurableEmptySource(
+                    at: partialURL,
+                    deadline: persistenceDeadline,
+                    testHooks: sourceTestHooks
+                )
             } catch {
-                creationFailure = .storageUnavailable
+                creationFailure.set(.storageUnavailable)
             }
-        }
+        })
 
-        if let creationFailure {
-            _ = try? failCurrentRecord(
+        if let creationFailure = creationFailure.get() {
+            _ = try? await failCurrentRecord(
                 recordingID: recordingID,
                 message: creationFailure == .sourceConflict
                     ? "Saved audio already exists for this recording. No files were changed."
@@ -438,9 +546,9 @@ actor MacAudioProcessingStore {
         return mutation(for: stored)
     }
 
-    func markRecording(_ lease: Lease, captureDeadline: Date) throws -> Mutation {
+    func markRecording(_ lease: Lease, captureDeadline: Date) async throws -> Mutation {
         guard captureDeadline > testHooks.now() else { throw StoreError.invalidDeadline }
-        return try transition(
+        return try await transition(
             lease,
             from: .preparing,
             to: .recording,
@@ -475,9 +583,11 @@ actor MacAudioProcessingStore {
               sourcePath != finalURL.standardizedFileURL.path else {
             throw StoreError.sourceConflict
         }
-        let sourceSize = try sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard sourceSize > 0 else { throw StoreError.invalidAudio }
-        guard Int64(sourceSize) <= Self.maximumAdoptedAudioBytes else {
+        let sourceIdentity = try await inspectFileIdentity(
+            at: sourceURL,
+            deadline: deadline
+        )
+        guard sourceIdentity.byteCount <= Self.maximumAdoptedAudioBytes else {
             throw StoreError.sourceTooLarge
         }
         let sourceVerification = try await Self.deeplyVerifyClosedAudio(
@@ -511,22 +621,38 @@ actor MacAudioProcessingStore {
         proposed.revision = revision
         proposed.records.append(record)
 
-        var copyFailure: StoreError?
-        try commit(proposed) {
+        let copyFailure = MacStoreErrorBox()
+        let sourceTestHooks = testHooks
+        try await commit(
+            proposed,
+            afterPersistWhileLocked: { persistenceDeadline in
             guard !FileManager.default.fileExists(atPath: partialURL.path),
                   !FileManager.default.fileExists(atPath: finalURL.path) else {
-                copyFailure = .sourceConflict
+                copyFailure.set(.sourceConflict)
                 return
             }
             do {
                 try FileManager.default.copyItem(at: sourceURL, to: partialURL)
+                try Self.checkPersistenceDeadline(persistenceDeadline)
+                try Self.syncRegularFile(
+                    at: partialURL,
+                    operation: .sourceFileSync,
+                    deadline: persistenceDeadline,
+                    testHooks: sourceTestHooks
+                )
+                try Self.syncDirectory(
+                    partialURL.deletingLastPathComponent(),
+                    operation: .sourceDirectorySync,
+                    deadline: persistenceDeadline,
+                    testHooks: sourceTestHooks
+                )
             } catch {
-                copyFailure = .storageUnavailable
+                copyFailure.set(.storageUnavailable)
             }
-        }
+        })
 
-        if let copyFailure {
-            _ = try? failCurrentRecord(
+        if let copyFailure = copyFailure.get() {
+            _ = try? await failCurrentRecord(
                 recordingID: recordingID,
                 message: copyFailure == .sourceConflict
                     ? "Saved audio already exists for this recording. No files were changed."
@@ -540,13 +666,13 @@ actor MacAudioProcessingStore {
         }
         let stagedLease = mutation(for: staged).lease
         let managedProof = try await proveClosedAudio(stagedLease)
-        let checkpoint = try checkpointClosedAudio(stagedLease, proof: managedProof)
-        let ready = try finishFinalization(
+        let checkpoint = try await checkpointClosedAudio(stagedLease, proof: managedProof)
+        let ready = try await finishFinalization(
             checkpoint.lease,
             proof: managedProof
         )
         guard ready.record.audioIntegrity == sourceIntegrity else {
-            _ = try? fail(
+            _ = try? await fail(
                 ready.lease,
                 message: "The imported recording could not be verified. The original file was not changed."
             )
@@ -555,7 +681,7 @@ actor MacAudioProcessingStore {
         return ready
     }
 
-    func beginFinalization(_ lease: Lease, deadline: Date) throws -> Mutation {
+    func beginFinalization(_ lease: Lease, deadline: Date) async throws -> Mutation {
         let now = testHooks.now()
         guard deadline > now else { throw StoreError.invalidDeadline }
         try requireWritable()
@@ -567,7 +693,7 @@ actor MacAudioProcessingStore {
         guard now.timeIntervalSince(current.deadline) <= 5 else {
             throw StoreError.invalidDeadline
         }
-        return try transition(
+        return try await transition(
             lease,
             from: .recording,
             to: .finalizing,
@@ -579,10 +705,29 @@ actor MacAudioProcessingStore {
     /// Creates an immutable content proof after the recorder reports that this
     /// exact attempt closed its writer. This does not advance journal state.
     func proveClosedAudio(_ lease: Lease) async throws -> ClosedAudioProof {
+        let current = try currentRecord(for: lease)
+        try requireNativeWriterClosure(for: current, attestation: nil)
+        return try await proveClosedAudioAfterWriterClosure(
+            lease,
+            nativeCloseAttestation: nil
+        )
+    }
+
+    private func proveClosedAudioAfterWriterClosure(
+        _ lease: Lease,
+        nativeCloseAttestation: NativeWriterCloseAttestation?
+    ) async throws -> ClosedAudioProof {
         try requireWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .finalizing else { throw StoreError.invalidTransition }
-        let source = sourceKind(for: current.recordingID)
+        let inspection = try await inspectManagedSource(
+            recordingID: current.recordingID,
+            deadline: current.deadline
+        )
+        guard try currentRecord(for: lease) == current else {
+            throw StoreError.staleLease
+        }
+        let source = inspection.source
         let url: URL
         switch source {
         case .partial:
@@ -599,7 +744,28 @@ actor MacAudioProcessingStore {
             at: url,
             deadline: current.deadline
         )
-        return Self.closedProof(attemptID: current.attemptID, integrity: integrity)
+        return Self.closedProof(
+            attemptID: current.attemptID,
+            integrity: integrity,
+            nativeCloseAttestation: nativeCloseAttestation
+        )
+    }
+
+    /// Same-process capture must enter through this overload. The attestation
+    /// comes from the exact recorder proof only after its AVAudioFile is gone.
+    func proveClosedAudio(
+        _ lease: Lease,
+        nativeCloseAttestation: NativeWriterCloseAttestation
+    ) async throws -> ClosedAudioProof {
+        let current = try currentRecord(for: lease)
+        try requireNativeWriterClosure(
+            for: current,
+            attestation: nativeCloseAttestation
+        )
+        return try await proveClosedAudioAfterWriterClosure(
+            lease,
+            nativeCloseAttestation: nativeCloseAttestation
+        )
     }
 
     /// Persists the exact closed-container proof before the atomic source move.
@@ -608,17 +774,28 @@ actor MacAudioProcessingStore {
     func checkpointClosedAudio(
         _ lease: Lease,
         proof: ClosedAudioProof
-    ) throws -> Mutation {
+    ) async throws -> Mutation {
         try requireWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .finalizing else { throw StoreError.invalidTransition }
         guard proof.attemptID == lease.attemptID else { throw StoreError.staleLease }
+        try requireNativeWriterClosure(
+            for: current,
+            attestation: proof.nativeCloseAttestation
+        )
         guard proof.expectedByteCount > 0,
               proof.expectedFrameCount > 0,
               !proof.expectedSHA256.isEmpty else {
             throw StoreError.invalidAudio
         }
-        let source = sourceKind(for: current.recordingID)
+        let inspection = try await inspectManagedSource(
+            recordingID: current.recordingID,
+            deadline: current.deadline
+        )
+        guard try currentRecord(for: lease) == current else {
+            throw StoreError.staleLease
+        }
+        let source = inspection.source
         let url: URL
         switch source {
         case .partial: url = partialURL(for: current.recordingID)
@@ -626,14 +803,18 @@ actor MacAudioProcessingStore {
         case .both: throw StoreError.sourceConflict
         case .missing: throw StoreError.sourceMissing
         }
-        let integrity = try validatedClosedAudio(for: current, at: url)
+        let integrity = try validatedClosedAudio(
+            for: current,
+            at: url,
+            fileIdentity: inspection.identity(for: source)
+        )
         guard Self.matches(proof: proof, integrity: integrity) else {
             throw StoreError.invalidAudio
         }
         if current.audioIntegrity == integrity {
             return mutation(for: current)
         }
-        return try transition(
+        return try await transition(
             lease,
             from: .finalizing,
             to: .finalizing,
@@ -644,15 +825,19 @@ actor MacAudioProcessingStore {
     /// Atomically renames the completed partial source before journaling it as
     /// ready. If the process stops between those operations, restart recovery
     /// recognizes `finalizing + final file` and completes the journal step.
-    func finishFinalization(_ lease: Lease, proof: ClosedAudioProof) throws -> Mutation {
+    func finishFinalization(_ lease: Lease, proof: ClosedAudioProof) async throws -> Mutation {
         try requireWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .finalizing else { throw StoreError.invalidTransition }
         guard proof.attemptID == lease.attemptID else { throw StoreError.staleLease }
+        try requireNativeWriterClosure(
+            for: current,
+            attestation: proof.nativeCloseAttestation
+        )
         guard proof.expectedByteCount > 0,
               proof.expectedFrameCount > 0,
               !proof.expectedSHA256.isEmpty else {
-            _ = try? fail(
+            _ = try? await fail(
                 lease,
                 message: "The recording did not finish saving correctly. Your file was preserved."
             )
@@ -666,20 +851,28 @@ actor MacAudioProcessingStore {
 
         let partialURL = partialURL(for: current.recordingID)
         let finalURL = finalURL(for: current.recordingID)
-        let partialExists = FileManager.default.fileExists(atPath: partialURL.path)
-        let finalExists = FileManager.default.fileExists(atPath: finalURL.path)
-
-        if partialExists && finalExists {
-            throw StoreError.sourceConflict
+        let inspection = try await inspectManagedSource(
+            recordingID: current.recordingID,
+            deadline: current.deadline
+        )
+        guard try currentRecord(for: lease) == current else {
+            throw StoreError.staleLease
         }
-        if !partialExists && !finalExists {
-            throw StoreError.sourceMissing
+        let source: SourceKind
+        switch inspection.source {
+        case .partial: source = .partial
+        case .final: source = .final
+        case .both: throw StoreError.sourceConflict
+        case .missing: throw StoreError.sourceMissing
         }
-
-        let sourceURL = partialExists ? partialURL : finalURL
-        let validatedIntegrity = try validatedClosedAudio(for: current, at: sourceURL)
+        let sourceURL = source == .partial ? partialURL : finalURL
+        let validatedIntegrity = try validatedClosedAudio(
+            for: current,
+            at: sourceURL,
+            fileIdentity: inspection.identity(for: source)
+        )
         guard validatedIntegrity == checkpointedIntegrity else {
-            _ = try? fail(
+            _ = try? await fail(
                 lease,
                 message: "The recording did not finish saving completely. Your file was preserved."
             )
@@ -687,75 +880,89 @@ actor MacAudioProcessingStore {
         }
         guard testHooks.now() <= current.deadline else { throw StoreError.invalidDeadline }
 
-        if partialExists {
-            try Self.syncDirectory(
-                incomingDirectory,
-                operation: .sourceDirectorySync,
-                testHooks: testHooks
-            )
-            try Self.syncDirectory(
-                recordingsDirectory,
-                operation: .sourceDirectorySync,
-                testHooks: testHooks
-            )
-            do {
-                try testHooks.before(.sourceRename)
-                let renameResult = partialURL.path.withCString { source in
-                    finalURL.path.withCString { destination in
-                        Darwin.rename(source, destination)
-                    }
-                }
-                guard renameResult == 0 else { throw StoreError.storageUnavailable }
-                try Self.syncDirectory(
-                    incomingDirectory,
-                    operation: .sourceDirectorySync,
-                    testHooks: testHooks
-                )
-                try Self.syncDirectory(
-                    recordingsDirectory,
-                    operation: .sourceDirectorySync,
-                    testHooks: testHooks
-                )
-            } catch let error as StoreError {
-                throw error
-            } catch {
-                throw StoreError.storageUnavailable
-            }
-        } else {
-            try Self.syncDirectory(
-                recordingsDirectory,
-                operation: .sourceDirectorySync,
-                testHooks: testHooks
-            )
-        }
         guard let cached = closedAudioValidations[current.recordingID],
               cached.integrity == validatedIntegrity,
-              Self.matchesCachedSource(cached, at: finalURL) else {
-            _ = try? fail(
+              cached.sourcePath == sourceURL.standardizedFileURL.path,
+              cached.fileIdentity == inspection.identity(for: source) else {
+            _ = try? await fail(
                 lease,
                 message: "The recording changed while it was being saved. Your file was preserved."
             )
             throw StoreError.invalidAudio
         }
-
-        try cacheClosedAudio(
-            validatedIntegrity,
-            for: current,
-            at: finalURL
-        )
-        guard let finalizedValidation = closedAudioValidations[current.recordingID] else {
-            throw StoreError.invalidAudio
+        let expectedIdentity = cached.fileIdentity
+        let incomingDirectory = incomingDirectory
+        let recordingsDirectory = recordingsDirectory
+        let sourceTestHooks = testHooks
+        let revision = try nextRevision(after: journal.revision)
+        guard let index = index(of: current.recordingID) else {
+            throw StoreError.recordingNotFound
         }
+        var proposed = journal
+        proposed.revision = revision
+        proposed.records[index].stage = .readyForRecognition
+        proposed.records[index].source = .final
+        proposed.records[index].revision = revision
+        proposed.records[index].audioIntegrity = validatedIntegrity
+        proposed.records[index].audioFileIdentity = expectedIdentity
+        proposed.records[index].nativeCloseAttestedAttemptID = current.attemptID
+        proposed.records[index].failureMessage = nil
+        proposed.records[index].updatedAt = Date()
 
-        let ready = try transition(
-            lease,
-            from: .finalizing,
-            to: .readyForRecognition,
-            source: .final,
-            audioIntegrity: validatedIntegrity,
-            audioFileIdentity: finalizedValidation.fileIdentity
+        try await commit(
+            proposed,
+            beforePersistWhileLocked: { persistenceDeadline in
+                if source == .partial {
+                    try Self.syncDirectory(
+                        incomingDirectory,
+                        operation: .sourceDirectorySync,
+                        deadline: persistenceDeadline,
+                        testHooks: sourceTestHooks
+                    )
+                    try Self.syncDirectory(
+                        recordingsDirectory,
+                        operation: .sourceDirectorySync,
+                        deadline: persistenceDeadline,
+                        testHooks: sourceTestHooks
+                    )
+                    try Self.runHook(
+                        .sourceRename,
+                        deadline: persistenceDeadline,
+                        testHooks: sourceTestHooks
+                    )
+                    let renameResult = partialURL.path.withCString { source in
+                        finalURL.path.withCString { destination in
+                            Darwin.rename(source, destination)
+                        }
+                    }
+                    guard renameResult == 0 else { throw StoreError.storageUnavailable }
+                    try Self.checkPersistenceDeadline(persistenceDeadline)
+                    try Self.syncDirectory(
+                        incomingDirectory,
+                        operation: .sourceDirectorySync,
+                        deadline: persistenceDeadline,
+                        testHooks: sourceTestHooks
+                    )
+                }
+                try Self.syncDirectory(
+                    recordingsDirectory,
+                    operation: .sourceDirectorySync,
+                    deadline: persistenceDeadline,
+                    testHooks: sourceTestHooks
+                )
+                guard try Self.fileIdentity(at: finalURL) == expectedIdentity else {
+                    throw StoreError.invalidAudio
+                }
+            }
         )
-        return ready
+        closedAudioValidations[current.recordingID] = ClosedAudioValidation(
+            attemptID: current.attemptID,
+            clearGeneration: current.clearGeneration,
+            sourcePath: finalURL.standardizedFileURL.path,
+            integrity: validatedIntegrity,
+            fileIdentity: expectedIdentity
+        )
+        return mutation(for: proposed.records[index])
     }
 
     /// Starts a new, independently fenced recognition attempt against a
@@ -782,17 +989,25 @@ actor MacAudioProcessingStore {
         }
 
         let finalURL = finalURL(for: recordingID)
-        let partialExists = FileManager.default.fileExists(atPath: partialURL(for: recordingID).path)
-        let finalExists = FileManager.default.fileExists(atPath: finalURL.path)
-        guard finalExists else {
-            throw StoreError.sourceMissing
+        let inspection = try await inspectManagedSource(
+            recordingID: recordingID,
+            deadline: deadline
+        )
+        guard self.record(for: recordingID) == current else {
+            throw StoreError.staleLease
         }
-        guard !partialExists else { throw StoreError.sourceConflict }
+        switch inspection.source {
+        case .final: break
+        case .partial, .missing: throw StoreError.sourceMissing
+        case .both: throw StoreError.sourceConflict
+        }
 
         guard let expectedIntegrity = current.audioIntegrity else {
             throw StoreError.invalidAudio
         }
-        let actualIdentity = try Self.fileIdentity(at: finalURL)
+        guard let actualIdentity = inspection.finalIdentity else {
+            throw StoreError.invalidAudio
+        }
         let verifiedIdentity: AudioFileIdentity
         if let persistedIdentity = current.audioFileIdentity,
            persistedIdentity == actualIdentity,
@@ -800,7 +1015,8 @@ actor MacAudioProcessingStore {
             verifiedIdentity = persistedIdentity
         } else if let cached = closedAudioValidations[recordingID],
                   cached.integrity == expectedIntegrity,
-                  Self.matchesCachedSource(cached, at: finalURL) {
+                  cached.sourcePath == finalURL.standardizedFileURL.path,
+                  cached.fileIdentity == actualIdentity {
             verifiedIdentity = cached.fileIdentity
         } else {
             let verification = try await Self.deeplyVerifyClosedAudio(
@@ -817,13 +1033,18 @@ actor MacAudioProcessingStore {
 
         // Deep verification deliberately runs detached so its deadline can win.
         // Re-check all ownership after the suspension before publishing anything.
+        let refreshedInspection = try await inspectManagedSource(
+            recordingID: recordingID,
+            deadline: deadline
+        )
         guard let refreshedIndex = self.index(of: recordingID) else {
             throw StoreError.recordingNotFound
         }
         let refreshed = journal.records[refreshedIndex]
         guard refreshed == current,
               refreshedIndex == index,
-              sourceKind(for: recordingID) == .final else {
+              refreshedInspection.source == .final,
+              refreshedInspection.finalIdentity == verifiedIdentity else {
             throw StoreError.staleLease
         }
 
@@ -831,6 +1052,8 @@ actor MacAudioProcessingStore {
         var proposed = journal
         proposed.revision = revision
         proposed.records[refreshedIndex].attemptID = attemptID
+        proposed.records[refreshedIndex].writerProcessID = nil
+        proposed.records[refreshedIndex].nativeCloseAttestedAttemptID = nil
         proposed.records[refreshedIndex].stage = .recognizing
         proposed.records[refreshedIndex].source = .final
         proposed.records[refreshedIndex].revision = revision
@@ -843,13 +1066,20 @@ actor MacAudioProcessingStore {
         proposed.records[refreshedIndex].pendingUsageWordCount = nil
         proposed.records[refreshedIndex].usageWasClaimed = nil
         proposed.records[refreshedIndex].updatedAt = Date()
-        try commit(proposed)
+        try await commit(
+            proposed,
+            beforePersistWhileLocked: { _ in
+                guard try Self.fileIdentity(at: finalURL) == verifiedIdentity else {
+                    throw StoreError.invalidAudio
+                }
+            }
+        )
         return mutation(for: proposed.records[refreshedIndex])
     }
 
     /// Durably checkpoints complete raw recognition before optional cleanup.
     /// Cleanup may never replace or erase this value.
-    func checkpointRecognition(_ lease: Lease, partialText: String) throws -> Mutation {
+    func checkpointRecognition(_ lease: Lease, partialText: String) async throws -> Mutation {
         let normalized = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw StoreError.invalidTransition }
 
@@ -865,7 +1095,7 @@ actor MacAudioProcessingStore {
             }
         }
 
-        return try transition(
+        return try await transition(
             lease,
             from: .recognizing,
             to: .recognizing,
@@ -875,7 +1105,7 @@ actor MacAudioProcessingStore {
 
     /// Durably checkpoints complete raw recognition before optional cleanup.
     /// Cleanup may never replace or erase this value.
-    func markRawResultReady(_ lease: Lease, rawText: String) throws -> Mutation {
+    func markRawResultReady(_ lease: Lease, rawText: String) async throws -> Mutation {
         let normalized = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw StoreError.invalidTransition }
         let current = try currentRecord(for: lease)
@@ -885,7 +1115,7 @@ actor MacAudioProcessingStore {
                 throw StoreError.invalidTransition
             }
         }
-        return try transition(
+        return try await transition(
             lease,
             from: .recognizing,
             to: .rawResultReady,
@@ -893,19 +1123,19 @@ actor MacAudioProcessingStore {
         )
     }
 
-    func beginCleanup(_ lease: Lease) throws -> Mutation {
-        try transition(lease, from: .rawResultReady, to: .cleaning)
+    func beginCleanup(_ lease: Lease) async throws -> Mutation {
+        try await transition(lease, from: .rawResultReady, to: .cleaning)
     }
 
     /// Empty or whitespace-only cleanup output falls back to the complete raw
     /// transcript. A cleanup timeout/failure should call `useRawResult`.
-    func finishCleanup(_ lease: Lease, cleanedText: String?) throws -> Mutation {
+    func finishCleanup(_ lease: Lease, cleanedText: String?) async throws -> Mutation {
         let current = try currentRecord(for: lease)
         guard current.stage == .cleaning, let rawText = current.rawText else {
             throw StoreError.invalidTransition
         }
         if testHooks.now() > current.deadline {
-            return try useRawResult(
+            return try await useRawResult(
                 lease,
                 message: "Cleanup took too long. The complete raw transcript was kept."
             )
@@ -917,7 +1147,7 @@ actor MacAudioProcessingStore {
         } else {
             finalText = rawText
         }
-        return try transition(
+        return try await transition(
             lease,
             from: .cleaning,
             to: .resultReady,
@@ -925,13 +1155,13 @@ actor MacAudioProcessingStore {
         )
     }
 
-    func useRawResult(_ lease: Lease, message: String? = nil) throws -> Mutation {
+    func useRawResult(_ lease: Lease, message: String? = nil) async throws -> Mutation {
         let current = try currentRecord(for: lease)
         guard current.stage == .rawResultReady || current.stage == .cleaning,
               let rawText = current.rawText else {
             throw StoreError.invalidTransition
         }
-        return try transition(
+        return try await transition(
             lease,
             from: current.stage,
             to: .resultReady,
@@ -943,11 +1173,11 @@ actor MacAudioProcessingStore {
     func markSucceeded(
         _ lease: Lease,
         pendingUsageWordCount: Int? = nil
-    ) throws -> Mutation {
+    ) async throws -> Mutation {
         if let pendingUsageWordCount {
             guard pendingUsageWordCount > 0 else { throw StoreError.invalidTransition }
         }
-        return try transition(
+        return try await transition(
             lease,
             from: .resultReady,
             to: .succeeded,
@@ -962,7 +1192,7 @@ actor MacAudioProcessingStore {
     func claimPendingUsage(
         recordingID: UUID,
         expectedRevision: UInt64
-    ) throws -> Int? {
+    ) async throws -> Int? {
         try requireWritable()
         guard let index = index(of: recordingID) else {
             throw StoreError.recordingNotFound
@@ -984,31 +1214,31 @@ actor MacAudioProcessingStore {
         proposed.records[index].revision = revision
         proposed.records[index].usageWasClaimed = true
         proposed.records[index].updatedAt = Date()
-        try commit(proposed)
+        try await commit(proposed)
         return wordCount
     }
 
     /// Records a terminal failure while preserving every source file. This is
     /// also the correct operation for transport deadlines and cancellations.
-    func fail(_ lease: Lease, message: String) throws -> Mutation {
+    func fail(_ lease: Lease, message: String) async throws -> Mutation {
         try requireWritable()
         let current = try currentRecord(for: lease)
         if current.stage == .rawResultReady || current.stage == .cleaning {
-            return try useRawResult(lease, message: message)
+            return try await useRawResult(lease, message: message)
         }
         guard current.stage != .deleted, current.stage != .succeeded else {
             throw StoreError.invalidTransition
         }
-        return try transition(
+        return try await transition(
             lease,
             from: current.stage,
             to: .failed,
-            source: sourceKind(for: current.recordingID),
+            source: current.source,
             failureMessage: normalizedFailureMessage(message)
         )
     }
 
-    func timeOut(_ lease: Lease) throws -> Mutation {
+    func timeOut(_ lease: Lease) async throws -> Mutation {
         let current = try currentRecord(for: lease)
         let message: String
         switch current.stage {
@@ -1021,7 +1251,7 @@ actor MacAudioProcessingStore {
         case .succeeded, .deleted:
             throw StoreError.invalidTransition
         }
-        return try fail(
+        return try await fail(
             lease,
             message: message
         )
@@ -1034,7 +1264,8 @@ actor MacAudioProcessingStore {
         recordingID: UUID,
         expectedRevision: UInt64,
         expectedClearGeneration: UInt64,
-        deadline: Date
+        deadline: Date,
+        nativeCloseAttestation: NativeWriterCloseAttestation? = nil
     ) async throws -> ClosedAudioProof {
         try requireWritable()
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
@@ -1046,7 +1277,18 @@ actor MacAudioProcessingStore {
               journal.clearGeneration == expectedClearGeneration else {
             throw StoreError.staleLease
         }
-        guard sourceKind(for: recordingID) == .partial else {
+        try requireNativeWriterClosure(
+            for: current,
+            attestation: nativeCloseAttestation
+        )
+        let inspection = try await inspectManagedSource(
+            recordingID: recordingID,
+            deadline: deadline
+        )
+        guard self.record(for: recordingID) == current else {
+            throw StoreError.staleLease
+        }
+        guard inspection.source == .partial else {
             throw StoreError.invalidTransition
         }
         let integrity = try await verifyClosedAudioBeforeDeadline(
@@ -1057,19 +1299,19 @@ actor MacAudioProcessingStore {
         return Self.closedProof(attemptID: current.attemptID, integrity: integrity)
     }
 
-    func salvageFinalizedPartial(
+    /// Persists an exact writer-close/content checkpoint while the recording
+    /// remains failed. Delete/Clear or a replacement revision wins during the
+    /// detached validation and prevents this late reconciliation from reviving
+    /// the row.
+    func checkpointRecoverablePartial(
         recordingID: UUID,
-        salvageAttemptID: UUID,
         expectedRevision: UInt64,
         expectedClearGeneration: UInt64,
+        proof: ClosedAudioProof,
         deadline: Date,
-        proof: ClosedAudioProof
-    ) throws -> Mutation {
+        nativeCloseAttestation: NativeWriterCloseAttestation? = nil
+    ) async throws -> Mutation {
         try requireWritable()
-        guard salvageAttemptID != recordingID,
-              salvageAttemptID != proof.attemptID else {
-            throw StoreError.invalidIdentity
-        }
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
         let current = journal.records[index]
@@ -1081,12 +1323,93 @@ actor MacAudioProcessingStore {
               journal.clearGeneration == expectedClearGeneration else {
             throw StoreError.staleLease
         }
-        guard sourceKind(for: recordingID) == .partial else {
+        try requireNativeWriterClosure(
+            for: current,
+            attestation: nativeCloseAttestation
+        )
+        let sourceURL = partialURL(for: recordingID)
+        let inspection = try await inspectManagedSource(
+            recordingID: recordingID,
+            deadline: deadline
+        )
+        guard self.record(for: recordingID) == current else {
+            throw StoreError.staleLease
+        }
+        guard inspection.source == .partial else {
             throw StoreError.invalidTransition
         }
         let integrity = try validatedClosedAudio(
             for: current,
-            at: partialURL(for: recordingID)
+            at: sourceURL,
+            fileIdentity: inspection.partialIdentity
+        )
+        guard Self.matches(proof: proof, integrity: integrity),
+              let cached = closedAudioValidations[recordingID],
+              cached.attemptID == current.attemptID,
+              cached.clearGeneration == current.clearGeneration,
+              cached.integrity == integrity,
+              cached.sourcePath == sourceURL.standardizedFileURL.path,
+              cached.fileIdentity == inspection.partialIdentity else {
+            throw StoreError.invalidAudio
+        }
+
+        if current.nativeCloseAttestedAttemptID == current.attemptID,
+           current.audioIntegrity == integrity,
+           current.audioFileIdentity == cached.fileIdentity {
+            return mutation(for: current)
+        }
+
+        let revision = try nextRevision(after: journal.revision)
+        var proposed = journal
+        proposed.revision = revision
+        proposed.records[index].revision = revision
+        proposed.records[index].audioIntegrity = integrity
+        proposed.records[index].audioFileIdentity = cached.fileIdentity
+        proposed.records[index].nativeCloseAttestedAttemptID = current.attemptID
+        proposed.records[index].updatedAt = Date()
+        try await commit(proposed)
+        return mutation(for: proposed.records[index])
+    }
+
+    func salvageFinalizedPartial(
+        recordingID: UUID,
+        salvageAttemptID: UUID,
+        expectedRevision: UInt64,
+        expectedClearGeneration: UInt64,
+        deadline: Date,
+        proof: ClosedAudioProof
+    ) async throws -> Mutation {
+        try requireWritable()
+        guard salvageAttemptID != recordingID,
+              salvageAttemptID != proof.attemptID else {
+            throw StoreError.invalidIdentity
+        }
+        guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
+        guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
+        let current = journal.records[index]
+        guard current.stage != .deleted else { throw StoreError.recordingDeleted }
+        guard current.stage == .failed,
+              current.attemptID == proof.attemptID,
+              current.nativeCloseAttestedAttemptID == current.attemptID,
+              current.revision == expectedRevision,
+              current.clearGeneration == expectedClearGeneration,
+              journal.clearGeneration == expectedClearGeneration else {
+            throw StoreError.staleLease
+        }
+        let inspection = try await inspectManagedSource(
+            recordingID: recordingID,
+            deadline: deadline
+        )
+        guard self.record(for: recordingID) == current else {
+            throw StoreError.staleLease
+        }
+        guard inspection.source == .partial else {
+            throw StoreError.invalidTransition
+        }
+        let integrity = try validatedClosedAudio(
+            for: current,
+            at: partialURL(for: recordingID),
+            fileIdentity: inspection.partialIdentity
         )
         guard Self.matches(proof: proof, integrity: integrity) else {
             throw StoreError.invalidAudio
@@ -1097,26 +1420,34 @@ actor MacAudioProcessingStore {
         var proposed = journal
         proposed.revision = revision
         proposed.records[index].attemptID = salvageAttemptID
+        proposed.records[index].writerProcessID = nil
+        proposed.records[index].nativeCloseAttestedAttemptID = nil
         proposed.records[index].stage = .finalizing
         proposed.records[index].revision = revision
         proposed.records[index].deadline = deadline
         proposed.records[index].audioIntegrity = nil
+        proposed.records[index].audioFileIdentity = nil
         proposed.records[index].failureMessage = nil
         proposed.records[index].updatedAt = Date()
-        try commit(proposed)
+        try await commit(proposed)
 
         let lease = mutation(for: proposed.records[index]).lease
-        try cacheClosedAudio(
-            integrity,
-            for: proposed.records[index],
-            at: partialURL(for: recordingID)
+        guard let priorValidation = closedAudioValidations[recordingID] else {
+            throw StoreError.invalidAudio
+        }
+        closedAudioValidations[recordingID] = ClosedAudioValidation(
+            attemptID: salvageAttemptID,
+            clearGeneration: proposed.records[index].clearGeneration,
+            sourcePath: partialURL(for: recordingID).standardizedFileURL.path,
+            integrity: integrity,
+            fileIdentity: priorValidation.fileIdentity
         )
         let freshProof = Self.closedProof(
             attemptID: salvageAttemptID,
             integrity: integrity
         )
-        let checkpoint = try checkpointClosedAudio(lease, proof: freshProof)
-        return try finishFinalization(
+        let checkpoint = try await checkpointClosedAudio(lease, proof: freshProof)
+        return try await finishFinalization(
             checkpoint.lease,
             proof: freshProof
         )
@@ -1127,7 +1458,7 @@ actor MacAudioProcessingStore {
     /// Persists a tombstone before deleting either source path. This operation
     /// intentionally does not require the active lease: an explicit user delete
     /// must beat an in-flight callback.
-    func tombstone(recordingID: UUID) throws -> CleanupResult {
+    func tombstone(recordingID: UUID) async throws -> CleanupResult {
         try requireWritable()
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
 
@@ -1140,31 +1471,24 @@ actor MacAudioProcessingStore {
             proposed.records[index].clearGeneration = proposed.clearGeneration
             proposed.records[index].audioIntegrity = nil
             proposed.records[index].audioFileIdentity = nil
+            proposed.records[index].nativeCloseAttestedAttemptID = nil
             proposed.records[index].rawText = nil
             proposed.records[index].resultText = nil
             proposed.records[index].failureMessage = nil
             proposed.records[index].pendingUsageWordCount = nil
             proposed.records[index].usageWasClaimed = nil
             proposed.records[index].updatedAt = Date()
-            try commit(proposed)
+            try await commit(proposed)
         }
         closedAudioValidations.removeValue(forKey: recordingID)
-        transientRoot?.invalidate(recordingID: recordingID)
-
-        return CleanupResult(
-            failedURLs: Self.removeSources(
-                recordingID: recordingID,
-                incomingDirectory: incomingDirectory,
-                recordingsDirectory: recordingsDirectory
-            )
-        )
+        return await cleanupDeletedSources(recordingIDs: [recordingID])
     }
 
     /// Advances the persisted clear generation and tombstones every known
     /// record in one atomic journal write. Old leases are invalid before any
     /// source deletion starts; recordings created afterward use the new
     /// generation and remain valid.
-    func clearAll() throws -> CleanupResult {
+    func clearAll() async throws -> CleanupResult {
         try requireWritable()
         let newGeneration = try nextRevision(after: journal.clearGeneration)
         var proposed = journal
@@ -1178,6 +1502,7 @@ actor MacAudioProcessingStore {
             proposed.records[index].clearGeneration = newGeneration
             proposed.records[index].audioIntegrity = nil
             proposed.records[index].audioFileIdentity = nil
+            proposed.records[index].nativeCloseAttestedAttemptID = nil
             proposed.records[index].rawText = nil
             proposed.records[index].resultText = nil
             proposed.records[index].failureMessage = nil
@@ -1192,22 +1517,88 @@ actor MacAudioProcessingStore {
             proposed.revision = try nextRevision(after: proposed.revision)
         }
 
-        try commit(proposed)
+        try await commit(proposed)
         closedAudioValidations.removeAll()
-        transientRoot?.invalidateAll()
-
-        var failures: [URL] = []
-        for record in proposed.records {
-            failures.append(contentsOf: Self.removeSources(
-                recordingID: record.recordingID,
-                incomingDirectory: incomingDirectory,
-                recordingsDirectory: recordingsDirectory
-            ))
-        }
-        return CleanupResult(failedURLs: failures)
+        return await cleanupDeletedSources(
+            recordingIDs: proposed.records.map(\.recordingID)
+        )
     }
 
     // MARK: - Mutation helpers
+
+    /// Startup and a repeated Delete/Clear can retry cleanup without reopening
+    /// mutation authority. Every target is already durably tombstoned, so a
+    /// late unlink cannot affect a newer attempt.
+    func retryDeletedSourceCleanup() async -> CleanupResult {
+        guard case .healthy = health else {
+            return CleanupResult(
+                failedURLs: journal.records
+                    .filter { $0.stage == .deleted }
+                    .flatMap {
+                        Self.sourceURLs(
+                            recordingID: $0.recordingID,
+                            incomingDirectory: incomingDirectory,
+                            recordingsDirectory: recordingsDirectory
+                        )
+                    }
+            )
+        }
+        return await cleanupDeletedSources(
+            recordingIDs: journal.records
+                .filter { $0.stage == .deleted }
+                .map(\.recordingID)
+        )
+    }
+
+    private func cleanupDeletedSources(
+        recordingIDs: [UUID]
+    ) async -> CleanupResult {
+        guard !recordingIDs.isEmpty else { return CleanupResult(failedURLs: []) }
+        let incomingDirectory = incomingDirectory
+        let recordingsDirectory = recordingsDirectory
+        let transientRoot = transientRoot
+        let testHooks = testHooks
+        let worker = cleanupWorker
+        let deadline = Date().addingTimeInterval(testHooks.persistenceTimeout)
+        let allURLs = recordingIDs.flatMap {
+            Self.sourceURLs(
+                recordingID: $0,
+                incomingDirectory: incomingDirectory,
+                recordingsDirectory: recordingsDirectory
+            )
+        }
+        let failures = MacStoreURLArrayBox()
+
+        do {
+            try await Self.performBoundedPersistence(
+                deadline: deadline,
+                worker: worker
+            ) {
+                try Self.runHook(
+                    .sourceRemoval,
+                    deadline: deadline,
+                    testHooks: testHooks
+                )
+                var failedURLs: [URL] = []
+                for recordingID in recordingIDs {
+                    transientRoot?.invalidate(recordingID: recordingID)
+                    try Self.checkPersistenceDeadline(deadline)
+                    failedURLs.append(contentsOf: Self.removeSources(
+                        recordingID: recordingID,
+                        incomingDirectory: incomingDirectory,
+                        recordingsDirectory: recordingsDirectory
+                    ))
+                    try Self.checkPersistenceDeadline(deadline)
+                }
+                failures.set(failedURLs)
+            }
+            return CleanupResult(failedURLs: failures.get())
+        } catch {
+            // The tombstone is already durable. Report conservative failures
+            // and let late cleanup or the next launch retry these exact IDs.
+            return CleanupResult(failedURLs: allURLs)
+        }
+    }
 
     private func transition(
         _ lease: Lease,
@@ -1223,7 +1614,7 @@ actor MacAudioProcessingStore {
         permitsExpiredCurrentDeadline: Bool = false,
         pendingUsageWordCount: Int? = nil,
         resetsUsageClaim: Bool = false
-    ) throws -> Mutation {
+    ) async throws -> Mutation {
         try requireWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == expectedStage else { throw StoreError.invalidTransition }
@@ -1272,11 +1663,11 @@ actor MacAudioProcessingStore {
         }
         proposed.records[index].failureMessage = failureMessage
         proposed.records[index].updatedAt = Date()
-        try commit(proposed)
+        try await commit(proposed)
         return mutation(for: proposed.records[index])
     }
 
-    private func failCurrentRecord(recordingID: UUID, message: String) throws -> Mutation {
+    private func failCurrentRecord(recordingID: UUID, message: String) async throws -> Mutation {
         try requireWritable()
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
         guard journal.records[index].stage != .deleted else { throw StoreError.recordingDeleted }
@@ -1285,11 +1676,10 @@ actor MacAudioProcessingStore {
         var proposed = journal
         proposed.revision = revision
         proposed.records[index].stage = .failed
-        proposed.records[index].source = sourceKind(for: recordingID)
         proposed.records[index].revision = revision
         proposed.records[index].failureMessage = normalizedFailureMessage(message)
         proposed.records[index].updatedAt = Date()
-        try commit(proposed)
+        try await commit(proposed)
         return mutation(for: proposed.records[index])
     }
 
@@ -1325,6 +1715,7 @@ actor MacAudioProcessingStore {
 
     private func requireWritable() throws {
         guard case .healthy = health else { throw StoreError.readOnly }
+        guard persistenceOperationID == nil else { throw StoreError.persistenceBusy }
     }
 
     private func nextRevision(after revision: UInt64) throws -> UInt64 {
@@ -1335,51 +1726,128 @@ actor MacAudioProcessingStore {
 
     private func commit(
         _ proposed: Journal,
-        afterPersistWhileLocked: (() -> Void)? = nil
-    ) throws {
+        beforePersistWhileLocked: (@Sendable (Date) throws -> Void)? = nil,
+        afterPersistWhileLocked: (@Sendable (Date) -> Void)? = nil
+    ) async throws {
+        let operationID = UUID()
+        let base = journal
+        let persistenceDeadline = Date().addingTimeInterval(testHooks.persistenceTimeout)
+        let lockURL = lockURL
+        let journalURL = journalURL
+        let incomingDirectory = incomingDirectory
+        let recordingsDirectory = recordingsDirectory
+        let testHooks = testHooks
+        let worker = persistenceWorker
         do {
             try Self.validate(proposed)
-            try Self.withExclusiveLock(at: lockURL) {
-                let diskJournal = try Self.loadJournalForCAS(at: journalURL, base: journal)
-                try Self.validateManagedSources(
-                    diskJournal,
-                    incomingDirectory: incomingDirectory,
-                    recordingsDirectory: recordingsDirectory
-                )
-                guard Self.sameCASState(diskJournal, journal) else {
-                    throw StoreError.staleLease
-                }
-                try Self.persist(proposed, to: journalURL, testHooks: testHooks)
-                afterPersistWhileLocked?()
+            guard persistenceOperationID == nil else {
+                throw StoreError.persistenceBusy
             }
+            persistenceOperationID = operationID
+            try await Self.performBoundedPersistence(
+                deadline: persistenceDeadline,
+                worker: worker
+            ) {
+                try Self.withExclusiveLock(
+                    at: lockURL,
+                    deadline: persistenceDeadline
+                ) {
+                    let diskJournal = try Self.loadJournalForCAS(
+                        at: journalURL,
+                        base: base
+                    )
+                    try Self.validateManagedSources(
+                        diskJournal,
+                        incomingDirectory: incomingDirectory,
+                        recordingsDirectory: recordingsDirectory
+                    )
+                    guard Self.sameCASState(diskJournal, base) else {
+                        throw StoreError.staleLease
+                    }
+                    try beforePersistWhileLocked?(persistenceDeadline)
+                    try Self.checkPersistenceDeadline(persistenceDeadline)
+                    try Self.persist(
+                        proposed,
+                        to: journalURL,
+                        deadline: persistenceDeadline,
+                        testHooks: testHooks
+                    )
+                    afterPersistWhileLocked?(persistenceDeadline)
+                }
+            }
+            guard persistenceOperationID == operationID else {
+                health = .readOnly(
+                    message: "Saved recordings need attention. No files were changed."
+                )
+                throw StoreError.readOnly
+            }
+            persistenceOperationID = nil
             journal = proposed
         } catch let error as StoreError {
+            if persistenceOperationID == operationID {
+                persistenceOperationID = nil
+            }
+            if error == .persistenceTimedOut {
+                // A synchronous write/fsync/rename may still complete after the
+                // caller's deadline. Fail closed so no new in-process mutation
+                // can race that ambiguous late disk state. Restart recovery
+                // reloads the CAS state and terminalizes any active row.
+                health = .readOnly(
+                    message: "Saved recordings need attention. No files were changed."
+                )
+            }
             if error == .readOnly {
                 health = .readOnly(message: "Saved recordings need attention. No files were changed.")
             }
             throw error
+        } catch is CancellationError {
+            if persistenceOperationID == operationID {
+                persistenceOperationID = nil
+            }
+            health = .readOnly(
+                message: "Saved recordings need attention. No files were changed."
+            )
+            throw CancellationError()
         } catch {
+            if persistenceOperationID == operationID {
+                persistenceOperationID = nil
+            }
             throw StoreError.storageUnavailable
         }
     }
 
-    private func sourceKind(for recordingID: UUID) -> SourceKind {
-        Self.sourceKind(
-            recordingID: recordingID,
-            incomingDirectory: incomingDirectory,
-            recordingsDirectory: recordingsDirectory
-        )
+    private func requireNativeWriterClosure(
+        for record: Record,
+        attestation: NativeWriterCloseAttestation?
+    ) throws {
+        if record.nativeCloseAttestedAttemptID == record.attemptID {
+            return
+        }
+        guard record.writerProcessID == processID else {
+            // A different process identity means every writer from the capture
+            // process was closed by process exit.
+            return
+        }
+        guard let attestation else {
+            throw StoreError.writerCloseUnknown
+        }
+        guard attestation.attemptID == record.attemptID,
+              attestation.processID == processID else {
+            throw StoreError.staleLease
+        }
     }
 
     private func validatedClosedAudio(
         for record: Record,
-        at url: URL
+        at url: URL,
+        fileIdentity: AudioFileIdentity?
     ) throws -> AudioIntegrity {
         if let cached = closedAudioValidations[record.recordingID],
            cached.attemptID == record.attemptID,
            cached.clearGeneration == record.clearGeneration,
            cached.sourcePath == url.standardizedFileURL.path,
-           Self.matchesCachedSource(cached, at: url) {
+           cached.fileIdentity == fileIdentity,
+           cached.fileIdentity.byteCount == cached.integrity.byteCount {
             return cached.integrity
         }
         // All full decode/hash work must enter through the detached,
@@ -1396,8 +1864,20 @@ actor MacAudioProcessingStore {
         if let cached = closedAudioValidations[record.recordingID],
            cached.attemptID == record.attemptID,
            cached.clearGeneration == record.clearGeneration,
-           cached.sourcePath == url.standardizedFileURL.path,
-           Self.matchesCachedSource(cached, at: url) {
+           cached.sourcePath == url.standardizedFileURL.path {
+            let inspection = try await inspectManagedSource(
+                recordingID: record.recordingID,
+                deadline: deadline
+            )
+            let identity = url.standardizedFileURL.path
+                == partialURL(for: record.recordingID).standardizedFileURL.path
+                ? inspection.partialIdentity
+                : inspection.finalIdentity
+            try requireWritable()
+            guard self.record(for: record.recordingID) == record,
+                  identity == cached.fileIdentity else {
+                throw StoreError.staleLease
+            }
             return cached.integrity
         }
 
@@ -1406,49 +1886,106 @@ actor MacAudioProcessingStore {
             deadline: deadline,
             testHooks: testHooks
         )
+        let inspection = try await inspectManagedSource(
+            recordingID: record.recordingID,
+            deadline: deadline
+        )
+        let identity = url.standardizedFileURL.path
+            == partialURL(for: record.recordingID).standardizedFileURL.path
+            ? inspection.partialIdentity
+            : inspection.finalIdentity
         try requireWritable()
         guard let refreshed = self.record(for: record.recordingID),
               refreshed == record,
-              sourceKind(for: record.recordingID) != .missing,
-              (try? Self.fileIdentity(at: url)) == verification.fileIdentity else {
+              inspection.source != .missing,
+              identity == verification.fileIdentity else {
             throw StoreError.staleLease
         }
-        try cacheClosedAudio(verification.integrity, for: refreshed, at: url)
+        closedAudioValidations[record.recordingID] = ClosedAudioValidation(
+            attemptID: refreshed.attemptID,
+            clearGeneration: refreshed.clearGeneration,
+            sourcePath: url.standardizedFileURL.path,
+            integrity: verification.integrity,
+            fileIdentity: verification.fileIdentity
+        )
         return verification.integrity
     }
 
-    private func cacheClosedAudio(
-        _ integrity: AudioIntegrity,
-        for record: Record,
-        at url: URL
-    ) throws {
-        let values = try url.resourceValues(forKeys: [
-            .isRegularFileKey,
-            .fileSizeKey,
-            .contentModificationDateKey,
-        ])
-        guard values.isRegularFile == true,
-              values.fileSize == Int(integrity.byteCount),
-              let modificationDate = values.contentModificationDate else {
-            throw StoreError.invalidAudio
-        }
-        closedAudioValidations[record.recordingID] = ClosedAudioValidation(
-            attemptID: record.attemptID,
-            clearGeneration: record.clearGeneration,
-            sourcePath: url.standardizedFileURL.path,
-            modificationDate: modificationDate,
-            integrity: integrity,
-            fileIdentity: try Self.fileIdentity(at: url)
+    private func inspectManagedSource(
+        recordingID: UUID,
+        deadline: Date
+    ) async throws -> ManagedSourceInspection {
+        let incomingDirectory = incomingDirectory
+        let recordingsDirectory = recordingsDirectory
+        let worker = inspectionWorker
+        let testHooks = testHooks
+        let operationDeadline = min(
+            deadline,
+            Date().addingTimeInterval(testHooks.persistenceTimeout)
         )
+        let result = MacStoreValueBox<ManagedSourceInspection>()
+        try await Self.performBoundedPersistence(
+            deadline: operationDeadline,
+            worker: worker
+        ) {
+            try Self.runHook(
+                .sourceInspection,
+                deadline: operationDeadline,
+                testHooks: testHooks
+            )
+            let source = Self.sourceKind(
+                recordingID: recordingID,
+                incomingDirectory: incomingDirectory,
+                recordingsDirectory: recordingsDirectory
+            )
+            let partialURL = incomingDirectory.appendingPathComponent(
+                "\(recordingID.uuidString).partial.m4a"
+            )
+            let finalURL = recordingsDirectory.appendingPathComponent(
+                "\(recordingID.uuidString).m4a"
+            )
+            result.set(ManagedSourceInspection(
+                source: source,
+                partialIdentity: source == .partial || source == .both
+                    ? try? Self.fileIdentity(at: partialURL)
+                    : nil,
+                finalIdentity: source == .final || source == .both
+                    ? try? Self.fileIdentity(at: finalURL)
+                    : nil
+            ))
+        }
+        guard let inspection = result.get() else {
+            throw StoreError.storageUnavailable
+        }
+        return inspection
     }
 
-    private static func matchesCachedSource(
-        _ cached: ClosedAudioValidation,
-        at url: URL
-    ) -> Bool {
-        guard let identity = try? fileIdentity(at: url) else { return false }
-        return identity == cached.fileIdentity
-            && identity.byteCount == cached.integrity.byteCount
+    private func inspectFileIdentity(
+        at url: URL,
+        deadline: Date
+    ) async throws -> AudioFileIdentity {
+        let worker = inspectionWorker
+        let testHooks = testHooks
+        let operationDeadline = min(
+            deadline,
+            Date().addingTimeInterval(testHooks.persistenceTimeout)
+        )
+        let result = MacStoreValueBox<AudioFileIdentity>()
+        try await Self.performBoundedPersistence(
+            deadline: operationDeadline,
+            worker: worker
+        ) {
+            try Self.runHook(
+                .sourceInspection,
+                deadline: operationDeadline,
+                testHooks: testHooks
+            )
+            result.set(try Self.fileIdentity(at: url))
+        }
+        guard let identity = result.get() else {
+            throw StoreError.storageUnavailable
+        }
+        return identity
     }
 
     private func normalizedFailureMessage(_ message: String) -> String {
@@ -1508,8 +2045,10 @@ actor MacAudioProcessingStore {
     private static func persist(
         _ journal: Journal,
         to journalURL: URL,
+        deadline: Date,
         testHooks: TestHooks
     ) throws {
+        try checkPersistenceDeadline(deadline)
         let data = try makeEncoder().encode(journal)
         let directoryURL = journalURL.deletingLastPathComponent()
         let temporaryURL = directoryURL.appendingPathComponent(
@@ -1539,7 +2078,11 @@ actor MacAudioProcessingStore {
                 var pointer = baseAddress.assumingMemoryBound(to: UInt8.self)
                 var remaining = bytes.count
                 while remaining > 0 {
-                    try testHooks.before(.journalWrite)
+                    try runHook(
+                        .journalWrite,
+                        deadline: deadline,
+                        testHooks: testHooks
+                    )
                     let written = Darwin.write(descriptor, pointer, remaining)
                     if written < 0 {
                         if errno == EINTR { continue }
@@ -1548,11 +2091,13 @@ actor MacAudioProcessingStore {
                     guard written > 0 else { throw StoreError.storageUnavailable }
                     remaining -= written
                     pointer = pointer.advanced(by: written)
+                    try checkPersistenceDeadline(deadline)
                 }
             }
             try syncFileDescriptor(
                 descriptor,
                 operation: .journalFileSync,
+                deadline: deadline,
                 testHooks: testHooks
             )
             guard Darwin.close(descriptor) == 0 else {
@@ -1561,7 +2106,11 @@ actor MacAudioProcessingStore {
             }
             descriptor = -1
 
-            try testHooks.before(.journalRename)
+            try runHook(
+                .journalRename,
+                deadline: deadline,
+                testHooks: testHooks
+            )
             let renameResult = temporaryURL.path.withCString { source in
                 journalURL.path.withCString { destination in
                     Darwin.rename(source, destination)
@@ -1569,11 +2118,13 @@ actor MacAudioProcessingStore {
             }
             guard renameResult == 0 else { throw StoreError.storageUnavailable }
             renamed = true
+            try checkPersistenceDeadline(deadline)
 
             do {
                 try syncDirectory(
                     directoryURL,
                     operation: .journalDirectorySync,
+                    deadline: deadline,
                     testHooks: testHooks
                 )
             } catch {
@@ -1592,8 +2143,10 @@ actor MacAudioProcessingStore {
     private static func syncRegularFile(
         at url: URL,
         operation: TestOperation,
+        deadline: Date,
         testHooks: TestHooks
     ) throws {
+        try checkPersistenceDeadline(deadline)
         let descriptor = url.path.withCString {
             Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
         }
@@ -1608,6 +2161,7 @@ actor MacAudioProcessingStore {
         try syncFileDescriptor(
             descriptor,
             operation: operation,
+            deadline: deadline,
             testHooks: testHooks
         )
     }
@@ -1615,26 +2169,27 @@ actor MacAudioProcessingStore {
     private static func syncFileDescriptor(
         _ descriptor: Int32,
         operation: TestOperation,
+        deadline: Date,
         testHooks: TestHooks
     ) throws {
-        do {
-            try testHooks.before(operation)
-        } catch {
-            throw StoreError.storageUnavailable
-        }
+        try runHook(operation, deadline: deadline, testHooks: testHooks)
         if Darwin.fcntl(descriptor, F_FULLFSYNC) == 0 {
+            try checkPersistenceDeadline(deadline)
             return
         }
         guard Darwin.fsync(descriptor) == 0 else {
             throw StoreError.storageUnavailable
         }
+        try checkPersistenceDeadline(deadline)
     }
 
     private static func syncDirectory(
         _ directoryURL: URL,
         operation: TestOperation,
+        deadline: Date,
         testHooks: TestHooks
     ) throws {
+        try checkPersistenceDeadline(deadline)
         let descriptor = directoryURL.path.withCString {
             Darwin.open($0, O_RDONLY | O_CLOEXEC)
         }
@@ -1646,14 +2201,11 @@ actor MacAudioProcessingStore {
               (directoryStatus.st_mode & S_IFMT) == S_IFDIR else {
             throw StoreError.storageUnavailable
         }
-        do {
-            try testHooks.before(operation)
-        } catch {
-            throw StoreError.storageUnavailable
-        }
+        try runHook(operation, deadline: deadline, testHooks: testHooks)
         guard Darwin.fsync(descriptor) == 0 else {
             throw StoreError.storageUnavailable
         }
+        try checkPersistenceDeadline(deadline)
     }
 
     private static func fileIdentity(at url: URL) throws -> AudioFileIdentity {
@@ -1703,6 +2255,9 @@ actor MacAudioProcessingStore {
         return zip(left, right).allSatisfy { lhsRecord, rhsRecord in
             lhsRecord.recordingID == rhsRecord.recordingID
                 && lhsRecord.attemptID == rhsRecord.attemptID
+                && lhsRecord.writerProcessID == rhsRecord.writerProcessID
+                && lhsRecord.nativeCloseAttestedAttemptID
+                    == rhsRecord.nativeCloseAttestedAttemptID
                 && lhsRecord.stage == rhsRecord.stage
                 && lhsRecord.source == rhsRecord.source
                 && lhsRecord.revision == rhsRecord.revision
@@ -1719,16 +2274,112 @@ actor MacAudioProcessingStore {
         }
     }
 
-    private static func withExclusiveLock<T>(at lockURL: URL, body: () throws -> T) throws -> T {
+    private static func withExclusiveLock<T>(
+        at lockURL: URL,
+        deadline: Date,
+        body: () throws -> T
+    ) throws -> T {
         let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { throw StoreError.storageUnavailable }
         defer { Darwin.close(descriptor) }
 
-        guard flock(descriptor, LOCK_EX) == 0 else {
-            throw StoreError.storageUnavailable
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR {
+                throw StoreError.storageUnavailable
+            }
+            guard Date() < deadline else { throw StoreError.persistenceBusy }
+            usleep(10_000)
+        }
+        guard Date() < deadline else {
+            _ = flock(descriptor, LOCK_UN)
+            throw StoreError.persistenceBusy
         }
         defer { _ = flock(descriptor, LOCK_UN) }
         return try body()
+    }
+
+    private static func performBoundedPersistence(
+        deadline: Date,
+        worker: MacStorePersistenceWorker,
+        operation: @escaping @Sendable () throws -> Void
+    ) async throws {
+        let gate = MacAudioDeadlineGate<Void>()
+        let timeout = max(0, deadline.timeIntervalSinceNow + 0.05)
+        let maximumSeconds = Double(UInt64.max) / 1_000_000_000
+        let timeoutNanoseconds = UInt64(min(timeout, maximumSeconds) * 1_000_000_000)
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                gate.install(continuation)
+                worker.submit {
+                    do {
+                        try operation()
+                        gate.resolve(.success(()))
+                    } catch {
+                        gate.resolve(.failure(error))
+                    }
+                }
+                Task.detached(priority: .utility) {
+                    do {
+                        try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    } catch {
+                        return
+                    }
+                    gate.resolve(.failure(StoreError.persistenceTimedOut))
+                }
+            }
+        } onCancel: {
+            gate.resolve(.failure(CancellationError()))
+        }
+    }
+
+    private static func checkPersistenceDeadline(_ deadline: Date) throws {
+        guard Date() < deadline else { throw StoreError.persistenceTimedOut }
+    }
+
+    private static func runHook(
+        _ operation: TestOperation,
+        deadline: Date,
+        testHooks: TestHooks
+    ) throws {
+        try checkPersistenceDeadline(deadline)
+        do {
+            try testHooks.before(operation)
+        } catch let error as StoreError {
+            throw error
+        } catch {
+            throw StoreError.storageUnavailable
+        }
+        try checkPersistenceDeadline(deadline)
+    }
+
+    private static func createDurableEmptySource(
+        at url: URL,
+        deadline: Date,
+        testHooks: TestHooks
+    ) throws {
+        try checkPersistenceDeadline(deadline)
+        let descriptor = url.path.withCString {
+            Darwin.open(
+                $0,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+                S_IRUSR | S_IWUSR
+            )
+        }
+        guard descriptor >= 0 else { throw StoreError.storageUnavailable }
+        defer { _ = Darwin.close(descriptor) }
+        try syncFileDescriptor(
+            descriptor,
+            operation: .initialSourceFileSync,
+            deadline: deadline,
+            testHooks: testHooks
+        )
+        try syncDirectory(
+            url.deletingLastPathComponent(),
+            operation: .initialSourceDirectorySync,
+            deadline: deadline,
+            testHooks: testHooks
+        )
     }
 
     private static func validate(_ journal: Journal) throws {
@@ -1755,6 +2406,13 @@ actor MacAudioProcessingStore {
                       identity.byteCount == record.audioIntegrity?.byteCount,
                       identity.modificationNanoseconds >= 0,
                       identity.modificationNanoseconds < 1_000_000_000 else {
+                    throw StoreError.readOnly
+                }
+            }
+            if let attestedAttemptID = record.nativeCloseAttestedAttemptID {
+                guard attestedAttemptID == record.attemptID,
+                      record.audioIntegrity != nil,
+                      record.audioFileIdentity != nil else {
                     throw StoreError.readOnly
                 }
             }
@@ -2019,11 +2677,13 @@ actor MacAudioProcessingStore {
                         try syncRegularFile(
                             at: url,
                             operation: .sourceFileSync,
+                            deadline: deadline,
                             testHooks: testHooks
                         )
                         try syncDirectory(
                             url.deletingLastPathComponent(),
                             operation: .sourceDirectorySync,
+                            deadline: deadline,
                             testHooks: testHooks
                         )
                         let identity = try fileIdentity(at: url)
@@ -2131,13 +2791,15 @@ actor MacAudioProcessingStore {
 
     private static func closedProof(
         attemptID: UUID,
-        integrity: AudioIntegrity
+        integrity: AudioIntegrity,
+        nativeCloseAttestation: NativeWriterCloseAttestation? = nil
     ) -> ClosedAudioProof {
         ClosedAudioProof(
             attemptID: attemptID,
             expectedByteCount: integrity.byteCount,
             expectedFrameCount: integrity.frameCount,
-            expectedSHA256: integrity.sha256
+            expectedSHA256: integrity.sha256,
+            nativeCloseAttestation: nativeCloseAttestation
         )
     }
 
@@ -2155,10 +2817,11 @@ actor MacAudioProcessingStore {
         incomingDirectory: URL,
         recordingsDirectory: URL
     ) -> [URL] {
-        let urls = [
-            incomingDirectory.appendingPathComponent("\(recordingID.uuidString).partial.m4a"),
-            recordingsDirectory.appendingPathComponent("\(recordingID.uuidString).m4a")
-        ]
+        let urls = sourceURLs(
+            recordingID: recordingID,
+            incomingDirectory: incomingDirectory,
+            recordingsDirectory: recordingsDirectory
+        )
         var failures: [URL] = []
 
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
@@ -2169,6 +2832,17 @@ actor MacAudioProcessingStore {
             }
         }
         return failures
+    }
+
+    private static func sourceURLs(
+        recordingID: UUID,
+        incomingDirectory: URL,
+        recordingsDirectory: URL
+    ) -> [URL] {
+        [
+            incomingDirectory.appendingPathComponent("\(recordingID.uuidString).partial.m4a"),
+            recordingsDirectory.appendingPathComponent("\(recordingID.uuidString).m4a")
+        ]
     }
 }
 
@@ -2627,6 +3301,69 @@ private nonisolated enum MacDescriptorTree {
 
     private static func isDirectChildName(_ name: String) -> Bool {
         !name.isEmpty && name != "." && name != ".." && !name.contains("/")
+    }
+}
+
+private nonisolated final class MacStorePersistenceWorker: @unchecked Sendable {
+    private let queue: DispatchQueue
+
+    init(label: String = "ai.writingmate.audio-processing-persistence") {
+        queue = DispatchQueue(label: label, qos: .utility)
+    }
+
+    func submit(_ operation: @escaping @Sendable () -> Void) {
+        queue.async(execute: operation)
+    }
+}
+
+private nonisolated final class MacStoreURLArrayBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var urls: [URL] = []
+
+    func set(_ urls: [URL]) {
+        lock.lock()
+        self.urls = urls
+        lock.unlock()
+    }
+
+    func get() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return urls
+    }
+}
+
+private nonisolated final class MacStoreValueBox<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value?
+
+    func set(_ value: Value) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
+    }
+
+    func get() -> Value? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+private nonisolated final class MacStoreErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: MacAudioProcessingStore.StoreError?
+
+    func set(_ error: MacAudioProcessingStore.StoreError) {
+        lock.lock()
+        self.error = error
+        lock.unlock()
+    }
+
+    func get() -> MacAudioProcessingStore.StoreError? {
+        lock.lock()
+        defer { lock.unlock() }
+        return error
     }
 }
 

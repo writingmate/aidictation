@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import CryptoKit
+import Darwin
 
 private enum ValidationFailure: Error, CustomStringConvertible {
     case assertion(String)
@@ -35,11 +36,16 @@ private final class TestClock: @unchecked Sendable {
 
 private final class BlockingOperationHook: @unchecked Sendable {
     private let lock = NSLock()
+    private let operation: MacAudioProcessingStore.TestOperation
     private(set) var invocationCount = 0
     let release = DispatchSemaphore(value: 0)
 
+    init(operation: MacAudioProcessingStore.TestOperation = .deepAudioValidation) {
+        self.operation = operation
+    }
+
     func before(_ operation: MacAudioProcessingStore.TestOperation) throws {
-        guard operation == .deepAudioValidation else { return }
+        guard operation == self.operation else { return }
         lock.lock()
         invocationCount += 1
         lock.unlock()
@@ -157,7 +163,8 @@ private func closedProof(
         attemptID: attemptID,
         expectedByteCount: Int64(byteCount),
         expectedFrameCount: Int64(frameCount),
-        expectedSHA256: digest
+        expectedSHA256: digest,
+        nativeCloseAttestation: nil
     )
 }
 
@@ -171,9 +178,25 @@ private func finishValidatedAudio(
     in store: MacAudioProcessingStore,
     mutation: MacAudioProcessingStore.Mutation
 ) async throws -> MacAudioProcessingStore.Mutation {
-    let proof = try await store.proveClosedAudio(mutation.lease)
+    let proof = try await proveNativeClosedAudio(
+        in: store,
+        lease: mutation.lease
+    )
     let checkpoint = try await store.checkpointClosedAudio(mutation.lease, proof: proof)
     return try await store.finishFinalization(checkpoint.lease, proof: proof)
+}
+
+private func proveNativeClosedAudio(
+    in store: MacAudioProcessingStore,
+    lease: MacAudioProcessingStore.Lease
+) async throws -> MacAudioProcessingStore.ClosedAudioProof {
+    try await store.proveClosedAudio(
+        lease,
+        nativeCloseAttestation: .init(
+            attemptID: lease.attemptID,
+            processID: MacAudioProcessingStore.currentProcessID
+        )
+    )
 }
 
 private func beginRecognizing(
@@ -523,7 +546,10 @@ private func testRenameJournalCrashReconciliation() async throws {
     try writeValidAudio(to: first.partialURL(for: recordingID))
     mutation = try await first.markRecording(mutation.lease, captureDeadline: futureDeadline())
     mutation = try await first.beginFinalization(mutation.lease, deadline: futureDeadline())
-    let proof = try await first.proveClosedAudio(mutation.lease)
+    let proof = try await proveNativeClosedAudio(
+        in: first,
+        lease: mutation.lease
+    )
     _ = try await first.checkpointClosedAudio(mutation.lease, proof: proof)
 
     // This is the precise crash window in finishFinalization: the atomic move
@@ -643,7 +669,10 @@ private func testInvalidAudioNeverBecomesReady() async throws {
             deadline: futureDeadline()
         )
         if fixture == .truncatedContainer {
-            let proof = try await store.proveClosedAudio(mutation.lease)
+            let proof = try await proveNativeClosedAudio(
+                in: store,
+                lease: mutation.lease
+            )
             let size = try sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
             let handle = try FileHandle(forWritingTo: sourceURL)
             try handle.truncate(atOffset: UInt64(max(1, size / 2)))
@@ -653,7 +682,10 @@ private func testInvalidAudioNeverBecomesReady() async throws {
             }
         } else {
             try await requireStoreError(.invalidAudio, "\(fixture.rawValue) must not become ready") {
-                _ = try await store.proveClosedAudio(mutation.lease)
+                _ = try await proveNativeClosedAudio(
+                    in: store,
+                    lease: mutation.lease
+                )
             }
         }
         _ = try await store.fail(
@@ -680,7 +712,16 @@ private func testInvalidAudioNeverBecomesReady() async throws {
     try writeValidAudio(to: store.partialURL(for: recordingID))
     mutation = try await store.markRecording(mutation.lease, captureDeadline: futureDeadline())
     mutation = try await store.beginFinalization(mutation.lease, deadline: futureDeadline())
-    let actualProof = try await store.proveClosedAudio(mutation.lease)
+    try await requireStoreError(
+        .writerCloseUnknown,
+        "same-process finalization read audio without exact native close"
+    ) {
+        _ = try await store.proveClosedAudio(mutation.lease)
+    }
+    let actualProof = try await proveNativeClosedAudio(
+        in: store,
+        lease: mutation.lease
+    )
     try await requireStoreError(.staleLease, "another attempt cannot attest that the writer closed") {
         _ = try await store.checkpointClosedAudio(
             mutation.lease,
@@ -688,7 +729,8 @@ private func testInvalidAudioNeverBecomesReady() async throws {
                 attemptID: UUID(),
                 expectedByteCount: actualProof.expectedByteCount,
                 expectedFrameCount: actualProof.expectedFrameCount,
-                expectedSHA256: actualProof.expectedSHA256
+                expectedSHA256: actualProof.expectedSHA256,
+                nativeCloseAttestation: nil
             )
         )
     }
@@ -700,7 +742,11 @@ private func testInvalidAudioNeverBecomesReady() async throws {
 private func testLateCloseCanBeSalvagedSafely() async throws {
     let root = try temporaryRoot("late-close-salvage")
     defer { try? FileManager.default.removeItem(at: root) }
-    let first = MacAudioProcessingStore(rootDirectory: root)
+    let firstProcessID = UUID()
+    let first = MacAudioProcessingStore(
+        rootDirectory: root,
+        processID: firstProcessID
+    )
     let recordingID = UUID()
     var mutation = try await first.prepare(
         recordingID: recordingID,
@@ -717,7 +763,10 @@ private func testLateCloseCanBeSalvagedSafely() async throws {
     // Restart establishes that the detached writer can no longer mutate this
     // process's source. The failed row stays visible until explicit proof and a
     // fresh salvage lease promote it.
-    let restarted = MacAudioProcessingStore(rootDirectory: root)
+    let restarted = MacAudioProcessingStore(
+        rootDirectory: root,
+        processID: UUID()
+    )
     let recovered = try await onlyRecord(in: restarted)
     let proof = try await restarted.proveRecoverablePartial(
         recordingID: recordingID,
@@ -725,12 +774,19 @@ private func testLateCloseCanBeSalvagedSafely() async throws {
         expectedClearGeneration: recovered.clearGeneration,
         deadline: futureDeadline()
     )
+    let checkpoint = try await restarted.checkpointRecoverablePartial(
+        recordingID: recordingID,
+        expectedRevision: recovered.revision,
+        expectedClearGeneration: recovered.clearGeneration,
+        proof: proof,
+        deadline: futureDeadline()
+    )
     let salvageAttemptID = UUID()
     let ready = try await restarted.salvageFinalizedPartial(
         recordingID: recordingID,
         salvageAttemptID: salvageAttemptID,
-        expectedRevision: recovered.revision,
-        expectedClearGeneration: recovered.clearGeneration,
+        expectedRevision: checkpoint.record.revision,
+        expectedClearGeneration: checkpoint.record.clearGeneration,
         deadline: futureDeadline(),
         proof: proof
     )
@@ -744,6 +800,404 @@ private func testLateCloseCanBeSalvagedSafely() async throws {
         !FileManager.default.fileExists(atPath: restarted.partialURL(for: recordingID).path),
         "salvage should leave no ambiguous partial source"
     )
+}
+
+private func testSameProcessRetryRequiresExactNativeClose() async throws {
+    let root = try temporaryRoot("same-process-native-close")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let processID = UUID()
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        processID: processID
+    )
+    let recordingID = UUID()
+    let captureAttemptID = UUID()
+    var mutation = try await store.prepare(
+        recordingID: recordingID,
+        attemptID: captureAttemptID,
+        deadline: futureDeadline()
+    )
+    try writeValidAudio(to: store.partialURL(for: recordingID))
+    mutation = try await store.markRecording(
+        mutation.lease,
+        captureDeadline: futureDeadline()
+    )
+    mutation = try await store.beginFinalization(
+        mutation.lease,
+        deadline: futureDeadline()
+    )
+    let failed = try await store.timeOut(mutation.lease)
+
+    try await requireStoreError(
+        .writerCloseUnknown,
+        "same-process retry read a partial without native close"
+    ) {
+        _ = try await store.proveRecoverablePartial(
+            recordingID: recordingID,
+            expectedRevision: failed.record.revision,
+            expectedClearGeneration: failed.record.clearGeneration,
+            deadline: futureDeadline()
+        )
+    }
+    try require(
+        !FileManager.default.fileExists(atPath: store.finalURL(for: recordingID).path),
+        "retry-before-close promoted the partial source"
+    )
+
+    let attestation = MacAudioProcessingStore.NativeWriterCloseAttestation(
+        attemptID: captureAttemptID,
+        processID: processID
+    )
+    let proof = try await store.proveRecoverablePartial(
+        recordingID: recordingID,
+        expectedRevision: failed.record.revision,
+        expectedClearGeneration: failed.record.clearGeneration,
+        deadline: futureDeadline(),
+        nativeCloseAttestation: attestation
+    )
+    let checkpoint = try await store.checkpointRecoverablePartial(
+        recordingID: recordingID,
+        expectedRevision: failed.record.revision,
+        expectedClearGeneration: failed.record.clearGeneration,
+        proof: proof,
+        deadline: futureDeadline(),
+        nativeCloseAttestation: attestation
+    )
+    let ready = try await store.salvageFinalizedPartial(
+        recordingID: recordingID,
+        salvageAttemptID: UUID(),
+        expectedRevision: checkpoint.record.revision,
+        expectedClearGeneration: checkpoint.record.clearGeneration,
+        deadline: futureDeadline(),
+        proof: proof
+    )
+    try require(
+        ready.record.stage == .readyForRecognition,
+        "exact late native close did not make the same recording retryable"
+    )
+}
+
+private func testDeleteAndClearFenceLateCloseCheckpoint() async throws {
+    for clearsAll in [false, true] {
+        let root = try temporaryRoot(clearsAll ? "late-close-clear" : "late-close-delete")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let processID = UUID()
+        let store = MacAudioProcessingStore(
+            rootDirectory: root,
+            processID: processID
+        )
+        let recordingID = UUID()
+        let captureAttemptID = UUID()
+        var mutation = try await store.prepare(
+            recordingID: recordingID,
+            attemptID: captureAttemptID,
+            deadline: futureDeadline()
+        )
+        try writeValidAudio(to: store.partialURL(for: recordingID))
+        mutation = try await store.markRecording(
+            mutation.lease,
+            captureDeadline: futureDeadline()
+        )
+        mutation = try await store.beginFinalization(
+            mutation.lease,
+            deadline: futureDeadline()
+        )
+        let failed = try await store.timeOut(mutation.lease)
+        let attestation = MacAudioProcessingStore.NativeWriterCloseAttestation(
+            attemptID: captureAttemptID,
+            processID: processID
+        )
+        let proof = try await store.proveRecoverablePartial(
+            recordingID: recordingID,
+            expectedRevision: failed.record.revision,
+            expectedClearGeneration: failed.record.clearGeneration,
+            deadline: futureDeadline(),
+            nativeCloseAttestation: attestation
+        )
+
+        if clearsAll {
+            _ = try await store.clearAll()
+        } else {
+            _ = try await store.tombstone(recordingID: recordingID)
+        }
+        do {
+            _ = try await store.checkpointRecoverablePartial(
+                recordingID: recordingID,
+                expectedRevision: failed.record.revision,
+                expectedClearGeneration: failed.record.clearGeneration,
+                proof: proof,
+                deadline: futureDeadline(),
+                nativeCloseAttestation: attestation
+            )
+            throw ValidationFailure.assertion(
+                "late close checkpoint recreated a deleted recording"
+            )
+        } catch let error as MacAudioProcessingStore.StoreError {
+            try require(
+                error == .recordingDeleted || error == .staleLease,
+                "late close after Delete/Clear returned \(error)"
+            )
+        }
+        let deleted = await store.record(for: recordingID)
+        try require(deleted?.stage == .deleted, "Delete/Clear tombstone was not durable")
+        try require(
+            !FileManager.default.fileExists(atPath: store.finalURL(for: recordingID).path),
+            "late close promoted audio after Delete/Clear"
+        )
+    }
+}
+
+private func testHeldLockAndStalledPersistenceAreBounded() async throws {
+    let heldLockRoot = try temporaryRoot("held-journal-lock")
+    defer { try? FileManager.default.removeItem(at: heldLockRoot) }
+    let heldLockStore = MacAudioProcessingStore(
+        rootDirectory: heldLockRoot,
+        testHooks: .init(persistenceTimeout: 0.12)
+    )
+    let lockURL = heldLockStore.journalURL.deletingLastPathComponent()
+        .appendingPathComponent(".journal.lock")
+    let descriptor = Darwin.open(
+        lockURL.path,
+        O_CREAT | O_RDWR,
+        S_IRUSR | S_IWUSR
+    )
+    try require(descriptor >= 0, "validator could not open the macOS journal lock")
+    defer {
+        _ = flock(descriptor, LOCK_UN)
+        _ = Darwin.close(descriptor)
+    }
+    try require(
+        flock(descriptor, LOCK_EX) == 0,
+        "validator could not hold the macOS journal lock"
+    )
+    let restartStartedAt = Date()
+    let lockedRestart = MacAudioProcessingStore(
+        rootDirectory: heldLockRoot,
+        testHooks: .init(persistenceTimeout: 0.12)
+    )
+    try require(
+        Date().timeIntervalSince(restartStartedAt) < 0.75,
+        "journal initialization waited indefinitely for a held flock"
+    )
+    guard case .readOnly = await lockedRestart.view().health else {
+        throw ValidationFailure.assertion(
+            "initialization did not fail closed when its lock deadline expired"
+        )
+    }
+    let lockStartedAt = Date()
+    try await requireStoreError(
+        .persistenceBusy,
+        "held flock did not fail within its persistence deadline"
+    ) {
+        _ = try await heldLockStore.prepare(
+            recordingID: UUID(),
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+    }
+    try require(
+        Date().timeIntervalSince(lockStartedAt) < 0.75,
+        "held flock blocked the store past its bounded deadline"
+    )
+    guard case .healthy = await heldLockStore.view().health else {
+        throw ValidationFailure.assertion(
+            "a lock timeout with no disk mutation unnecessarily poisoned the store"
+        )
+    }
+    _ = flock(descriptor, LOCK_UN)
+
+    let stalledRoot = try temporaryRoot("stalled-journal-persistence")
+    defer { try? FileManager.default.removeItem(at: stalledRoot) }
+    let blocker = BlockingOperationHook(operation: .journalDirectorySync)
+    let stalledStore = MacAudioProcessingStore(
+        rootDirectory: stalledRoot,
+        testHooks: .init(
+            before: { operation in try blocker.before(operation) },
+            persistenceTimeout: 0.12
+        )
+    )
+    let stalledRecordingID = UUID()
+    let stallStartedAt = Date()
+    try await requireStoreError(
+        .persistenceTimedOut,
+        "stalled journal fsync did not return at its deadline"
+    ) {
+        _ = try await stalledStore.prepare(
+            recordingID: stalledRecordingID,
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+    }
+    try require(
+        Date().timeIntervalSince(stallStartedAt) < 0.75,
+        "stalled journal fsync kept the caller processing"
+    )
+    guard case .readOnly = await stalledStore.view().health else {
+        throw ValidationFailure.assertion(
+            "ambiguous late persistence did not quarantine stale in-memory CAS state"
+        )
+    }
+    try await requireStoreError(
+        .readOnly,
+        "a new attempt raced an ambiguous late journal commit"
+    ) {
+        _ = try await stalledStore.prepare(
+            recordingID: UUID(),
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+    }
+    try await requireStoreError(
+        .readOnly,
+        "Delete raced an ambiguous late journal commit"
+    ) {
+        _ = try await stalledStore.tombstone(recordingID: stalledRecordingID)
+    }
+    try await requireStoreError(
+        .readOnly,
+        "Clear raced an ambiguous late journal commit"
+    ) {
+        _ = try await stalledStore.clearAll()
+    }
+
+    blocker.release.signal()
+    try await Task.sleep(nanoseconds: 150_000_000)
+    let restarted = MacAudioProcessingStore(
+        rootDirectory: stalledRoot,
+        processID: UUID()
+    )
+    let recovered = await restarted.record(for: stalledRecordingID)
+    try require(
+        recovered?.stage == .failed,
+        "restart did not terminalize a late committed preparing row"
+    )
+}
+
+private func testTombstoneCleanupIsBounded() async throws {
+    let root = try temporaryRoot("bounded-tombstone-cleanup")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let blocker = BlockingOperationHook(operation: .sourceRemoval)
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        testHooks: .init(
+            before: { operation in try blocker.before(operation) },
+            persistenceTimeout: 0.12
+        )
+    )
+    let firstRecordingID = UUID()
+    _ = try await store.prepare(
+        recordingID: firstRecordingID,
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+
+    let deleteStartedAt = Date()
+    let deletion = try await store.tombstone(recordingID: firstRecordingID)
+    try require(
+        Date().timeIntervalSince(deleteStartedAt) < 0.75,
+        "Delete waited indefinitely for a stalled source unlink"
+    )
+    try require(
+        !deletion.completed,
+        "timed-out cleanup claimed every source was removed"
+    )
+    let deletedRecord = await store.record(for: firstRecordingID)
+    try require(
+        deletedRecord?.stage == .deleted,
+        "Delete cleanup timeout lost its durable tombstone"
+    )
+
+    // Cleanup has its own serial worker. A stuck unlink must not occupy the
+    // journal worker or prevent a newer, differently identified attempt.
+    let secondRecordingID = UUID()
+    _ = try await store.prepare(
+        recordingID: secondRecordingID,
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    let clearStartedAt = Date()
+    let clearing = try await store.clearAll()
+    try require(
+        Date().timeIntervalSince(clearStartedAt) < 0.75,
+        "Clear waited behind a previously stalled source cleanup"
+    )
+    try require(
+        !clearing.completed,
+        "queued cleanup timeout claimed every source was removed"
+    )
+    let clearedView = await store.view()
+    try require(
+        clearedView.records.allSatisfy { $0.stage == .deleted },
+        "Clear cleanup timeout reopened mutation ownership"
+    )
+
+    blocker.release.signal()
+    try await Task.sleep(nanoseconds: 100_000_000)
+    let restarted = MacAudioProcessingStore(rootDirectory: root)
+    let retried = await restarted.retryDeletedSourceCleanup()
+    try require(retried.completed, "restart could not retry tombstoned source cleanup")
+    try require(
+        !FileManager.default.fileExists(
+            atPath: restarted.partialURL(for: firstRecordingID).path
+        )
+            && !FileManager.default.fileExists(
+                atPath: restarted.partialURL(for: secondRecordingID).path
+            ),
+        "restart cleanup left tombstoned partial audio behind"
+    )
+}
+
+private func testSourceInspectionIsBounded() async throws {
+    let root = try temporaryRoot("bounded-source-inspection")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let blocker = BlockingOperationHook(operation: .sourceInspection)
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        testHooks: .init(
+            before: { operation in
+                if blocker.count == 0 {
+                    try blocker.before(operation)
+                }
+            },
+            persistenceTimeout: 0.12
+        )
+    )
+    let recordingID = UUID()
+    var mutation = try await store.prepare(
+        recordingID: recordingID,
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    try writeValidAudio(to: store.partialURL(for: recordingID))
+    mutation = try await store.markRecording(
+        mutation.lease,
+        captureDeadline: futureDeadline()
+    )
+    mutation = try await store.beginFinalization(
+        mutation.lease,
+        deadline: futureDeadline()
+    )
+
+    let startedAt = Date()
+    try await requireStoreError(
+        .persistenceTimedOut,
+        "a pre-commit source stat did not honor its deadline"
+    ) {
+        _ = try await proveNativeClosedAudio(in: store, lease: mutation.lease)
+    }
+    try require(
+        Date().timeIntervalSince(startedAt) < 0.75,
+        "a stalled source stat blocked the store actor"
+    )
+    guard case .healthy = await store.view().health else {
+        throw ValidationFailure.assertion(
+            "a read-only source inspection timeout poisoned journal mutation"
+        )
+    }
+
+    blocker.release.signal()
+    try await Task.sleep(nanoseconds: 100_000_000)
+    _ = try await proveNativeClosedAudio(in: store, lease: mutation.lease)
 }
 
 private func testStaleGenerationJournalFailsClosed() async throws {
@@ -1063,7 +1517,10 @@ private func testSourceDurabilityFailuresNeverBecomeReady() async throws {
         )
 
         do {
-            let proof = try await store.proveClosedAudio(mutation.lease)
+            let proof = try await proveNativeClosedAudio(
+                in: store,
+                lease: mutation.lease
+            )
             let checkpoint = try await store.checkpointClosedAudio(
                 mutation.lease,
                 proof: proof
@@ -1164,7 +1621,10 @@ private func makeInterruptedFinalSource(
         mutation.lease,
         deadline: futureDeadline()
     )
-    let proof = try await first.proveClosedAudio(mutation.lease)
+    let proof = try await proveNativeClosedAudio(
+        in: first,
+        lease: mutation.lease
+    )
     _ = try await first.checkpointClosedAudio(mutation.lease, proof: proof)
     try FileManager.default.moveItem(
         at: first.partialURL(for: recordingID),
@@ -1581,6 +2041,16 @@ private struct MacAudioProcessingStoreValidator {
             try await testInvalidAudioNeverBecomesReady()
             print("test: salvage")
             try await testLateCloseCanBeSalvagedSafely()
+            print("test: same-process native close")
+            try await testSameProcessRetryRequiresExactNativeClose()
+            print("test: late close Delete/Clear fence")
+            try await testDeleteAndClearFenceLateCloseCheckpoint()
+            print("test: bounded persistence")
+            try await testHeldLockAndStalledPersistenceAreBounded()
+            print("test: bounded tombstone cleanup")
+            try await testTombstoneCleanupIsBounded()
+            print("test: bounded source inspection")
+            try await testSourceInspectionIsBounded()
             print("test: stale generation")
             try await testStaleGenerationJournalFailsClosed()
             print("test: adoption/raw")

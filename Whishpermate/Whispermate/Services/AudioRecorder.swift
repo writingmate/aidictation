@@ -20,6 +20,12 @@ class AudioRecorder: NSObject, ObservableObject {
         case discard
     }
 
+    enum NativeCloseState: Equatable {
+        case pending
+        case confirmed(MacAudioProcessingStore.NativeWriterCloseAttestation)
+        case unknown
+    }
+
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount) // Frequency spectrum data
@@ -45,6 +51,8 @@ class AudioRecorder: NSObject, ObservableObject {
     private var activeCapture: MacCaptureSession?
     private var pendingFinalization: MacCaptureFinalization?
     private var nativeCloseProofs: [UUID: MacNativeRecorderCloseProof] = [:]
+    private var confirmedNativeCloseAttestations:
+        [UUID: MacAudioProcessingStore.NativeWriterCloseAttestation] = [:]
     private var nativeRecordingURLs: [UUID: URL] = [:]
     private var terminationCloseRequested = false
     private let realtimeHandlerLock = NSLock()
@@ -166,20 +174,12 @@ class AudioRecorder: NSObject, ObservableObject {
               pendingFinalization == nil,
               activeCapture == nil,
               !isRecording,
-              !terminationCloseRequested,
-              !nativeCloseProofs.values.contains(where: { !$0.isConfirmedClosed })
+              !terminationCloseRequested
         else {
             completion(.failed("Recording is already active."))
             return
         }
 
-        let retainedIDs = Set(
-            nativeCloseProofs
-                .filter { !$0.value.isConfirmedClosed }
-                .map(\.key)
-        )
-        nativeCloseProofs = nativeCloseProofs.filter { retainedIDs.contains($0.key) }
-        nativeRecordingURLs = nativeRecordingURLs.filter { retainedIDs.contains($0.key) }
         let deviceSnapshot = AudioDeviceManager.shared.makeCaptureSelectionSnapshot()
         let closeProof = MacNativeRecorderCloseProof()
         nativeCloseProofs[recordingID] = closeProof
@@ -272,9 +272,10 @@ class AudioRecorder: NSObject, ObservableObject {
     ) -> [UUID: MacNativeRecorderCloseProof] {
         precondition(Thread.isMainThread)
         terminationCloseRequested = true
+        let ownedRecordingIDs = recordingIDs.union(nativeCloseProofs.keys)
 
         if let preparation = pendingPreparation,
-           recordingIDs.contains(preparation.recordingID) {
+           ownedRecordingIDs.contains(preparation.recordingID) {
             _ = preparation.attempt.resolve(.cancelled)
             preparation.retireSession()
             pendingPreparation = nil
@@ -284,7 +285,7 @@ class AudioRecorder: NSObject, ObservableObject {
         }
 
         if let session = activeCapture,
-           recordingIDs.contains(session.recordingID) {
+           ownedRecordingIDs.contains(session.recordingID) {
             activeCapture = nil
             session.retire()
             resetFailedStart()
@@ -298,14 +299,65 @@ class AudioRecorder: NSObject, ObservableObject {
 
         // A finalization already owns cleanup on its serial queue. Its stable
         // proof remains in nativeCloseProofs until the caller observes closure.
-        return nativeCloseProofs.filter { recordingIDs.contains($0.key) }
+        return nativeCloseProofs.filter { ownedRecordingIDs.contains($0.key) }
     }
 
     func acknowledgeConfirmedClose(recordingID: UUID) {
         precondition(Thread.isMainThread)
         guard nativeCloseProofs[recordingID]?.isConfirmedClosed == true else { return }
+        confirmedNativeCloseAttestations[recordingID] = .init(
+            attemptID: recordingID,
+            processID: MacAudioProcessingStore.currentProcessID
+        )
         nativeCloseProofs.removeValue(forKey: recordingID)
         nativeRecordingURLs.removeValue(forKey: recordingID)
+    }
+
+    func nativeCloseState(recordingID: UUID) -> NativeCloseState {
+        precondition(Thread.isMainThread)
+        if let attestation = confirmedNativeCloseAttestations[recordingID] {
+            return .confirmed(attestation)
+        }
+        if let proof = nativeCloseProofs[recordingID] {
+            if proof.isConfirmedClosed {
+                let attestation = MacAudioProcessingStore.NativeWriterCloseAttestation(
+                    attemptID: recordingID,
+                    processID: MacAudioProcessingStore.currentProcessID
+                )
+                confirmedNativeCloseAttestations[recordingID] = attestation
+                return .confirmed(attestation)
+            }
+            return .pending
+        }
+        return .unknown
+    }
+
+    func observeNativeClose(
+        recordingID: UUID,
+        completion: @escaping @MainActor (
+            MacAudioProcessingStore.NativeWriterCloseAttestation
+        ) -> Void
+    ) {
+        precondition(Thread.isMainThread)
+        switch nativeCloseState(recordingID: recordingID) {
+        case .confirmed(let attestation):
+            completion(attestation)
+        case .pending:
+            guard let proof = nativeCloseProofs[recordingID] else { return }
+            proof.whenConfirmed { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let attestation = MacAudioProcessingStore.NativeWriterCloseAttestation(
+                        attemptID: recordingID,
+                        processID: MacAudioProcessingStore.currentProcessID
+                    )
+                    self.confirmedNativeCloseAttestations[recordingID] = attestation
+                    completion(attestation)
+                }
+            }
+        case .unknown:
+            break
+        }
     }
 
     @discardableResult
@@ -316,6 +368,10 @@ class AudioRecorder: NSObject, ObservableObject {
         terminationCloseRequested = false
         for recordingID in recordingIDs
             where nativeCloseProofs[recordingID]?.isConfirmedClosed == true {
+            confirmedNativeCloseAttestations[recordingID] = .init(
+                attemptID: recordingID,
+                processID: MacAudioProcessingStore.currentProcessID
+            )
             nativeCloseProofs.removeValue(forKey: recordingID)
             nativeRecordingURLs.removeValue(forKey: recordingID)
         }
@@ -420,46 +476,60 @@ class AudioRecorder: NSObject, ObservableObject {
         session: MacCaptureSession,
         preparation: MacCapturePreparation
     ) {
-        guard let write = session.beginWrite() else { return }
-        let audioFile = write.audioFile
-
-        do {
-            let bufferFormat = buffer.format
-            if bufferFormat.sampleRate != session.outputFormat.sampleRate
-                || bufferFormat.channelCount != session.outputFormat.channelCount,
-                let converter = AVAudioConverter(from: bufferFormat, to: session.outputFormat)
-            {
-                let ratio = session.outputFormat.sampleRate / bufferFormat.sampleRate
-                guard let convertedBuffer = AVAudioPCMBuffer(
-                    pcmFormat: session.outputFormat,
-                    frameCapacity: AVAudioFrameCount(max(1, ceil(Double(buffer.frameLength) * ratio)))
-                ) else {
-                    throw NSError(domain: "AudioRecorder", code: 1)
-                }
-
-                var conversionError: NSError?
-                var providedInput = false
-                converter.convert(to: convertedBuffer, error: &conversionError) { _, status in
-                    guard !providedInput else {
-                        status.pointee = .noDataNow
-                        return nil
+        // Keep every callback-local AVAudioFile reference inside this lexical
+        // scope. It must be released before finishWrite decrements activeWrites;
+        // cleanup is then free to nil the session's final reference and attest
+        // the actual container close.
+        guard let writeResult = autoreleasepool(invoking: {
+            () -> (lease: MacCaptureSession.WriteLease, error: Error?)? in
+            guard let write = session.beginWrite() else { return nil }
+            do {
+                let bufferFormat = buffer.format
+                if bufferFormat.sampleRate != session.outputFormat.sampleRate
+                    || bufferFormat.channelCount != session.outputFormat.channelCount,
+                    let converter = AVAudioConverter(
+                        from: bufferFormat,
+                        to: session.outputFormat
+                    )
+                {
+                    let ratio = session.outputFormat.sampleRate / bufferFormat.sampleRate
+                    guard let convertedBuffer = AVAudioPCMBuffer(
+                        pcmFormat: session.outputFormat,
+                        frameCapacity: AVAudioFrameCount(
+                            max(1, ceil(Double(buffer.frameLength) * ratio))
+                        )
+                    ) else {
+                        throw NSError(domain: "AudioRecorder", code: 1)
                     }
-                    providedInput = true
-                    status.pointee = .haveData
-                    return buffer
-                }
-                if let conversionError { throw conversionError }
-                try audioFile.write(from: convertedBuffer)
-            } else {
-                try audioFile.write(from: buffer)
-            }
 
-            if session.finishWrite(succeeded: true, lease: write.lease) == .becameReady {
-                signalPreparationReady(preparation, session: session)
+                    var conversionError: NSError?
+                    var providedInput = false
+                    converter.convert(
+                        to: convertedBuffer,
+                        error: &conversionError
+                    ) { _, status in
+                        guard !providedInput else {
+                            status.pointee = .noDataNow
+                            return nil
+                        }
+                        providedInput = true
+                        status.pointee = .haveData
+                        return buffer
+                    }
+                    if let conversionError { throw conversionError }
+                    try write.audioFile.write(from: convertedBuffer)
+                } else {
+                    try write.audioFile.write(from: buffer)
+                }
+                return (write.lease, nil)
+            } catch {
+                return (write.lease, error)
             }
-        } catch {
+        }) else { return }
+
+        if let writeError = writeResult.error {
             let failureMessage: String
-            switch write.lease {
+            switch writeResult.lease {
             case .preparation:
                 failureMessage = "The recording could not be saved. Please try again."
             case .active:
@@ -467,10 +537,13 @@ class AudioRecorder: NSObject, ObservableObject {
             }
             let outcome = session.finishWrite(
                 succeeded: false,
-                lease: write.lease,
+                lease: writeResult.lease,
                 failureMessage: failureMessage
             )
-            DebugLog.info("❌ Failed to write audio buffer: \(error)", context: "AudioRecorder LOG")
+            DebugLog.info(
+                "❌ Failed to write audio buffer: \(writeError)",
+                context: "AudioRecorder LOG"
+            )
 
             switch outcome {
             case .preparationFailed:
@@ -488,6 +561,13 @@ class AudioRecorder: NSObject, ObservableObject {
                 break
             }
             return
+        } else {
+            if session.finishWrite(
+                succeeded: true,
+                lease: writeResult.lease
+            ) == .becameReady {
+                signalPreparationReady(preparation, session: session)
+            }
         }
 
         guard session.isActive else { return }

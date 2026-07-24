@@ -3,6 +3,7 @@ import Foundation
 enum TranscriptionOutputMode {
     case dictation
     case notes
+    case meetings
 }
 
 struct TranscriptionOptions: Equatable {
@@ -68,6 +69,26 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         languageCode: settings.language,
         sttHintPrompt: "Before hint",
         cleanupPromptComponents: settings.prompt,
+        baseCleanupPromptComponents: settings.prompt,
+        contextRules: [
+            .init(
+                name: "Meetings",
+                appBundleIDs: ["com.current"],
+                titlePatterns: [],
+                instructions: "",
+                isEnabled: true,
+                diarization: true
+            ),
+            .init(
+                name: "Current formatting",
+                appBundleIDs: ["com.current"],
+                titlePatterns: [],
+                instructions: "Use current formatting",
+                isEnabled: true,
+                diarization: false
+            ),
+        ],
+        usesContextRules: true,
         appContext: "Before app",
         screenContext: "Before screen",
         vadEnabled: true,
@@ -109,6 +130,47 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(snapshot.vadThreshold == 0.31)
         precondition(snapshot.cleanupPromptComponents == ["Before vocabulary"])
         precondition(snapshot.applyReplacements(to: "BEFORE value") == "BeforeCanonical value")
+        let contextualSnapshot = snapshot.withContext(
+            appContext: "Captured app",
+            screenContext: "Captured screen"
+        )
+        precondition(contextualSnapshot.appContext == "Captured app")
+        precondition(contextualSnapshot.screenContext == "Captured screen")
+        precondition(contextualSnapshot.transcriptionEndpoint == snapshot.transcriptionEndpoint)
+        precondition(contextualSnapshot.transcriptionModel == snapshot.transcriptionModel)
+        precondition(contextualSnapshot.llmEndpoint == snapshot.llmEndpoint)
+        precondition(contextualSnapshot.cleanupPromptComponents == snapshot.cleanupPromptComponents)
+        precondition(
+            contextualSnapshot.applyReplacements(to: "BEFORE value")
+                == snapshot.applyReplacements(to: "BEFORE value"),
+            "Adding captured context changed frozen attempt settings"
+        )
+        let currentContextSnapshot = snapshot.withContext(
+            appContext: "Current app",
+            screenContext: "Current screen",
+            appBundleID: "com.current",
+            windowTitle: "Meeting"
+        )
+        guard case .meetings = currentContextSnapshot.outputMode else {
+            preconditionFailure("Frozen current-app rule did not select Meetings mode")
+        }
+        precondition(currentContextSnapshot.transcriptionOptions.diarization)
+        precondition(
+            currentContextSnapshot.cleanupPromptComponents
+                == ["Before vocabulary", "Use current formatting"],
+            "Frozen current-app formatting instructions were not applied exactly once"
+        )
+        let resolvedTwice = currentContextSnapshot.withContext(
+            appContext: "Current app",
+            screenContext: "Current screen",
+            appBundleID: "com.current",
+            windowTitle: "Meeting"
+        )
+        precondition(
+            resolvedTwice.cleanupPromptComponents
+                == currentContextSnapshot.cleanupPromptComponents,
+            "Resolving captured context twice duplicated frozen instructions"
+        )
         let literalDictation = "Keep (round) [square] {curly} <speaker> tagged text verbatim."
         precondition(
             snapshot.applyReplacements(to: literalDictation) == literalDictation,

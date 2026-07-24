@@ -4,6 +4,12 @@ internal import Combine
 import AVFoundation
 import WhisperMateShared
 
+private nonisolated struct MacCapturedAttemptContext: Sendable {
+    let description: String
+    let bundleID: String?
+    let windowTitle: String?
+}
+
 /// Central application state - single source of truth for app state
 /// Recording works completely independently of view lifecycle
 @MainActor
@@ -130,8 +136,20 @@ class AppState: ObservableObject {
         let shouldShowOverlayControls = showOverlayControls && !isCommandMode
         shouldKeepOverlayIdleVisibleAfterCurrentRecording = shouldShowOverlayControls
 
+        capturedAppContext = nil
+        capturedAppBundleId = nil
+        capturedWindowTitle = nil
+        capturedScreenContext = nil
         let recordingID = UUID()
         let attemptID = UUID()
+        let attemptContextTask = beginAttemptContextCapture()
+        let attemptSnapshot = makeTranscriptionAttemptSnapshot(
+            outputMode: .dictation,
+            transcriptionOptions: .default,
+            appContext: nil,
+            screenContext: nil,
+            usesContextRules: recordingMode != .command
+        )
 
         guard historyManager.registerActiveRecording(id: recordingID) else {
             errorMessage = "A recording is already being handled. Please try again."
@@ -142,7 +160,7 @@ class AppState: ObservableObject {
         recordingAttemptID = attemptID
         pendingPreparationStoreIDs[recordingID] = attemptID
         activeCaptureLease = nil
-        activeTranscriptionSnapshot = nil
+        activeTranscriptionSnapshot = attemptSnapshot
         recordingState = .starting
         isContinuousRecording = continuous
         shouldAutoPaste = true // Always auto-paste when hotkey is triggered
@@ -156,29 +174,7 @@ class AppState: ObservableObject {
         errorMessage = ""
         transcriptionText = ""
 
-        // Accessibility calls can block on an unresponsive foreground app. Capture
-        // context best-effort off-main and fence the late result to this attempt.
-        capturedAppContext = nil
-        capturedAppBundleId = nil
-        capturedWindowTitle = nil
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let context = AppContextHelper.getCurrentAppContext()
-            DispatchQueue.main.async { [weak self] in
-                guard let self,
-                      self.recordingAttemptID == attemptID,
-                      self.processingAttemptFence.allows(attemptID)
-                else { return }
-                self.capturedAppContext = context?.description
-                self.capturedAppBundleId = context?.bundleId
-                self.capturedWindowTitle = context?.windowTitle
-                if let context {
-                    DebugLog.info("Captured app context: \(context.description)", context: "AppState")
-                }
-            }
-        }
-
         // Capture screen context if enabled
-        capturedScreenContext = nil
         if screenCaptureManager.includeScreenContext {
             Task {
                 if let screenContext = await screenCaptureManager.captureAndExtractText() {
@@ -200,14 +196,40 @@ class AppState: ObservableObject {
             await self?.beginPreparedCapture(
                 recordingID: recordingID,
                 attemptID: attemptID,
+                attemptSnapshot: attemptSnapshot,
+                attemptContextTask: attemptContextTask,
                 shouldShowOverlayControls: shouldShowOverlayControls
             )
+        }
+    }
+
+    private func beginAttemptContextCapture() -> Task<MacCapturedAttemptContext?, Never> {
+        Task.detached(priority: .utility) {
+            let operation = MacBoundedNativeOperation<MacCapturedAttemptContext?>(
+                cancelNative: {}
+            )
+            return try? await operation.run(
+                timeoutNanoseconds: 1_000_000_000
+            ) { completion in
+                DispatchQueue.global(qos: .utility).async {
+                    let context = AppContextHelper.getCurrentAppContext()
+                    completion(.success(context.map {
+                        MacCapturedAttemptContext(
+                            description: $0.description,
+                            bundleID: $0.bundleId,
+                            windowTitle: $0.windowTitle
+                        )
+                    }))
+                }
+            }
         }
     }
 
     private func beginPreparedCapture(
         recordingID: UUID,
         attemptID: UUID,
+        attemptSnapshot: MacTranscriptionAttemptSnapshot,
+        attemptContextTask: Task<MacCapturedAttemptContext?, Never>,
         shouldShowOverlayControls: Bool
     ) async {
         defer { pendingPreparationStoreIDs.removeValue(forKey: recordingID) }
@@ -241,13 +263,35 @@ class AppState: ObservableObject {
                 }
                 return
             }
+            let attemptContext = await attemptContextTask.value
+            guard activeRecordingID == recordingID,
+                  recordingAttemptID == attemptID,
+                  recordingState == .starting,
+                  processingAttemptFence.allows(attemptID),
+                  !terminationBarrierActive else { return }
+            capturedAppContext = attemptContext?.description
+            capturedAppBundleId = attemptContext?.bundleID
+            capturedWindowTitle = attemptContext?.windowTitle
+            if let attemptContext {
+                DebugLog.info(
+                    "Captured app context: \(attemptContext.description)",
+                    context: "AppState"
+                )
+            }
+            let resolvedAttemptSnapshot = attemptSnapshot.withContext(
+                appContext: attemptContext?.description,
+                screenContext: capturedScreenContext,
+                appBundleID: attemptContext?.bundleID,
+                windowTitle: attemptContext?.windowTitle
+            )
+            activeTranscriptionSnapshot = resolvedAttemptSnapshot
 
             let provisional = Recording(
                 id: recordingID,
                 audioFileURL: store.partialURL(for: recordingID),
                 status: .processing,
-                outputMode: requestedOutputMode(),
-                transcriptionOptions: requestedTranscriptionOptions(),
+                outputMode: resolvedAttemptSnapshot.outputMode,
+                transcriptionOptions: resolvedAttemptSnapshot.transcriptionOptions,
                 sourceIntegrity: .unfinalized
             )
             guard historyManager.upsertRecording(provisional) else {
@@ -332,13 +376,14 @@ class AppState: ObservableObject {
                 activeCaptureLease = recording.lease
                 recordingState = .recording
                 recordingStartTime = Date()
-                let fixedRecording = historyManager.recording(id: recordingID)
-                let snapshot = makeTranscriptionAttemptSnapshot(
-                    outputMode: fixedRecording?.outputMode ?? requestedOutputMode(),
-                    transcriptionOptions: fixedRecording?.transcriptionOptions
-                        ?? requestedTranscriptionOptions(),
+                guard let frozenSnapshot = activeTranscriptionSnapshot else {
+                    throw MacAudioProcessingStore.StoreError.invalidTransition
+                }
+                let snapshot = frozenSnapshot.withContext(
                     appContext: capturedAppContext,
-                    screenContext: capturedScreenContext
+                    screenContext: capturedScreenContext,
+                    appBundleID: capturedAppBundleId,
+                    windowTitle: capturedWindowTitle
                 )
                 activeTranscriptionSnapshot = snapshot
                 scheduleCaptureDeadline(recordingID: recordingID, attemptID: attemptID)
@@ -644,6 +689,11 @@ class AppState: ObservableObject {
                     return
                 }
                 self.audioRecorder.stopRecording(disposition: .submitIfValid) { _ in }
+                self.scheduleLateNativeCloseReconciliation(
+                    store: store,
+                    recordingID: recordingID,
+                    attemptID: attemptID
+                )
                 _ = try? await store.fail(lease, message: error.localizedDescription)
                 guard self.ownsProcessingAttempt(
                     recordingID: recordingID,
@@ -653,6 +703,13 @@ class AppState: ObservableObject {
                     return
                 }
                 realtimeClient?.close()
+                _ = self.persistActiveRecording(
+                    recordingID: recordingID,
+                    audioURL: store.partialURL(for: recordingID),
+                    status: .failed,
+                    errorMessage: error.localizedDescription,
+                    sourceIntegrity: .unfinalized
+                )
                 self.finishRecordingWithoutTranscription(
                     recordingID: recordingID,
                     message: error.localizedDescription
@@ -679,6 +736,37 @@ class AppState: ObservableObject {
 
         switch terminal {
         case .finalized:
+            guard case .confirmed(let nativeCloseAttestation) =
+                audioRecorder.nativeCloseState(recordingID: attemptID)
+            else {
+                realtimeClient?.close()
+                let message =
+                    "Recording is still finishing. The available audio was kept for recovery."
+                if let lease = activeCaptureLease {
+                    _ = try? await store.fail(lease, message: message)
+                    guard ownsProcessingAttempt(
+                        recordingID: recordingID,
+                        attemptID: attemptID
+                    ) else { return }
+                }
+                _ = persistActiveRecording(
+                    recordingID: recordingID,
+                    audioURL: store.partialURL(for: recordingID),
+                    status: .failed,
+                    errorMessage: message,
+                    sourceIntegrity: .unfinalized
+                )
+                scheduleLateNativeCloseReconciliation(
+                    store: store,
+                    recordingID: recordingID,
+                    attemptID: attemptID
+                )
+                finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: message
+                )
+                return
+            }
             audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             guard let lease = activeCaptureLease else {
                 realtimeClient?.close()
@@ -692,7 +780,10 @@ class AppState: ObservableObject {
             do {
                 // AudioRecorder delivers `.finalized` only after the exact
                 // session has drained writes and released its AVAudioFile.
-                let proof = try await store.proveClosedAudio(lease)
+                let proof = try await store.proveClosedAudio(
+                    lease,
+                    nativeCloseAttestation: nativeCloseAttestation
+                )
                 guard ownsProcessingAttempt(
                     recordingID: recordingID,
                     attemptID: attemptID
@@ -826,6 +917,19 @@ class AppState: ObservableObject {
 
         case .timedOut(let recoverableURL):
             realtimeClient?.close()
+            scheduleLateNativeCloseReconciliation(
+                store: store,
+                recordingID: recordingID,
+                attemptID: attemptID
+            )
+            if disposition == .discard {
+                _ = historyManager.removeRecordingMetadata(id: recordingID)
+                finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: terminalMessage
+                )
+                return
+            }
             let displayedMessage = terminalMessage ?? (disposition == .discard
                 ? nil
                 : "Recording took too long to save. The audio was kept for recovery.")
@@ -857,6 +961,19 @@ class AppState: ObservableObject {
             // evidence that the writer was never closed.
             audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             realtimeClient?.close()
+            if disposition == .discard {
+                scheduleLateNativeCloseReconciliation(
+                    store: store,
+                    recordingID: recordingID,
+                    attemptID: attemptID
+                )
+                _ = historyManager.removeRecordingMetadata(id: recordingID)
+                finishRecordingWithoutTranscription(
+                    recordingID: recordingID,
+                    message: terminalMessage
+                )
+                return
+            }
             let displayedMessage = terminalMessage ?? message
             if let lease = activeCaptureLease {
                 _ = try? await store.fail(lease, message: displayedMessage)
@@ -885,6 +1002,58 @@ class AppState: ObservableObject {
                 ) else { return }
             }
             finishRecordingWithoutTranscription(recordingID: recordingID, message: message)
+        }
+    }
+
+    /// A native cleanup queue may outlive the UI finalization deadline. Observe
+    /// the exact capture proof without holding the UI, then checkpoint only if
+    /// the same failed partial still owns the same revision. Tombstone/Clear
+    /// therefore wins, and this path never recreates History metadata.
+    private func scheduleLateNativeCloseReconciliation(
+        store: MacAudioProcessingStore,
+        recordingID: UUID,
+        attemptID: UUID
+    ) {
+        audioRecorder.observeNativeClose(recordingID: attemptID) {
+            [weak self] attestation in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer {
+                    self.audioRecorder.acknowledgeConfirmedClose(
+                        recordingID: attemptID
+                    )
+                }
+                guard let record = await store.record(for: recordingID),
+                      record.stage == .failed,
+                      record.source == .partial,
+                      record.attemptID == attemptID,
+                      record.nativeCloseAttestedAttemptID != attemptID
+                else { return }
+                let deadline = Date().addingTimeInterval(
+                    TimeInterval(self.recordingFinalizationStoreDeadlineSeconds)
+                )
+                do {
+                    let proof = try await store.proveRecoverablePartial(
+                        recordingID: recordingID,
+                        expectedRevision: record.revision,
+                        expectedClearGeneration: record.clearGeneration,
+                        deadline: deadline,
+                        nativeCloseAttestation: attestation
+                    )
+                    _ = try await store.checkpointRecoverablePartial(
+                        recordingID: recordingID,
+                        expectedRevision: record.revision,
+                        expectedClearGeneration: record.clearGeneration,
+                        proof: proof,
+                        deadline: deadline,
+                        nativeCloseAttestation: attestation
+                    )
+                } catch {
+                    // Invalid/incomplete audio stays failed and non-promotable.
+                    // A stale lease means Delete, Clear, or another attempt won.
+                }
+            }
         }
     }
 
@@ -979,8 +1148,14 @@ class AppState: ObservableObject {
             retryCount: previous?.retryCount ?? 0,
             duration: finalizedRecordingDuration ?? previous?.duration,
             wordCount: wordCount,
-            outputMode: outputMode ?? requestedOutputMode(),
-            transcriptionOptions: transcriptionOptions ?? requestedTranscriptionOptions(),
+            outputMode: outputMode
+                ?? previous?.outputMode
+                ?? activeTranscriptionSnapshot?.outputMode
+                ?? requestedOutputMode(),
+            transcriptionOptions: transcriptionOptions
+                ?? previous?.transcriptionOptions
+                ?? activeTranscriptionSnapshot?.transcriptionOptions
+                ?? requestedTranscriptionOptions(),
             sourceIntegrity: sourceIntegrity,
             legacyAudioFilePath: previous?.legacyAudioFilePath
         )
@@ -1026,12 +1201,12 @@ class AppState: ObservableObject {
         retrying.retryCount += 1
         retrying.status = .retrying
         retrying.errorMessage = nil
-        _ = historyManager.upsertRecording(retrying)
         let snapshot = makeTranscriptionAttemptSnapshot(
             outputMode: retrying.outputMode,
             transcriptionOptions: retrying.transcriptionOptions,
             appContext: nil,
-            screenContext: nil
+            screenContext: nil,
+            usesContextRules: false
         )
 
         let task = Task { [weak self] in
@@ -1100,6 +1275,24 @@ class AppState: ObservableObject {
                 throw MacAudioProcessingStore.StoreError.recordingNotFound
             }
             if durableRecord.stage == .failed, durableRecord.source == .partial {
+                let nativeCloseAttestation:
+                    MacAudioProcessingStore.NativeWriterCloseAttestation?
+                if durableRecord.nativeCloseAttestedAttemptID == durableRecord.attemptID
+                    || durableRecord.writerProcessID
+                        != MacAudioProcessingStore.currentProcessID {
+                    nativeCloseAttestation = nil
+                } else {
+                    switch audioRecorder.nativeCloseState(
+                        recordingID: durableRecord.attemptID
+                    ) {
+                    case .confirmed(let attestation):
+                        nativeCloseAttestation = attestation
+                    case .pending:
+                        throw MacAudioProcessingStore.StoreError.writerStillOpen
+                    case .unknown:
+                        throw MacAudioProcessingStore.StoreError.writerCloseUnknown
+                    }
+                }
                 let salvageDeadline = Date().addingTimeInterval(
                     TimeInterval(recognitionTimeoutSeconds(for: recording.duration))
                 )
@@ -1107,13 +1300,28 @@ class AppState: ObservableObject {
                     recordingID: recording.id,
                     expectedRevision: durableRecord.revision,
                     expectedClearGeneration: durableRecord.clearGeneration,
-                    deadline: salvageDeadline
+                    deadline: salvageDeadline,
+                    nativeCloseAttestation: nativeCloseAttestation
                 )
                 guard isCurrentAttempt(
                     recordingID: recording.id,
                     attemptID: attemptID,
                     isLiveRecording: false
                 ) else { return }
+                let closeCheckpoint = try await store.checkpointRecoverablePartial(
+                    recordingID: recording.id,
+                    expectedRevision: durableRecord.revision,
+                    expectedClearGeneration: durableRecord.clearGeneration,
+                    proof: proof,
+                    deadline: salvageDeadline,
+                    nativeCloseAttestation: nativeCloseAttestation
+                )
+                guard isCurrentAttempt(
+                    recordingID: recording.id,
+                    attemptID: attemptID,
+                    isLiveRecording: false
+                ) else { return }
+                durableRecord = closeCheckpoint.record
                 let salvaged = try await store.salvageFinalizedPartial(
                     recordingID: recording.id,
                     salvageAttemptID: UUID(),
@@ -1485,6 +1693,7 @@ class AppState: ObservableObject {
         let nativeProofs = audioRecorder.beginTerminationClose(
             recordingIDs: terminationOwnedNativeIDs
         )
+        terminationOwnedNativeIDs.formUnion(nativeProofs.keys)
         let deadline = Date().addingTimeInterval(closeTimeout)
         let closed = await waitForTerminationOwnership(
             nativeProofs: nativeProofs,
@@ -1766,21 +1975,18 @@ class AppState: ObservableObject {
                     ) ?? false
                 }
             )
+            guard let snapshot = activeTranscriptionSnapshot else {
+                transientWorkspace.cleanup()
+                throw MacAudioProcessingStore.StoreError.invalidTransition
+            }
             let projected = historyManager.recording(id: recordingID) ?? Recording(
                 id: recordingID,
                 audioFileURL: store.finalURL(for: recordingID),
                 status: .processing,
-                outputMode: requestedOutputMode(),
-                transcriptionOptions: requestedTranscriptionOptions(),
+                outputMode: snapshot.outputMode,
+                transcriptionOptions: snapshot.transcriptionOptions,
                 sourceIntegrity: .complete
             )
-            let snapshot = activeTranscriptionSnapshot
-                ?? makeTranscriptionAttemptSnapshot(
-                    outputMode: projected.outputMode,
-                    transcriptionOptions: projected.transcriptionOptions,
-                    appContext: capturedAppContext,
-                    screenContext: capturedScreenContext
-                )
             let task = Task { [weak self] in
                 guard let self else { return }
                 await self.executeTranscriptionAttempt(
@@ -2436,11 +2642,22 @@ class AppState: ObservableObject {
         outputMode: TranscriptionOutputMode,
         transcriptionOptions: TranscriptionOptions,
         appContext: String?,
-        screenContext: String?
+        screenContext: String?,
+        usesContextRules: Bool
     ) -> MacTranscriptionAttemptSnapshot {
         let provider = transcriptionProviderManager.selectedProvider
         let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
         let cleanupComponents = buildTranscriptionPromptComponents()
+        let contextRules = contextRulesManager.rules.map { rule in
+            MacTranscriptionAttemptSnapshot.ContextRuleSnapshot(
+                name: rule.name,
+                appBundleIDs: rule.appBundleIds,
+                titlePatterns: rule.titlePatterns,
+                instructions: rule.instructions,
+                isEnabled: rule.isEnabled,
+                diarization: rule.transcriptionOptions.diarization
+            )
+        }
         let replacements = dictionaryManager.entries
             .filter { $0.isEnabled && $0.replacement != nil }
             .sorted { $0.trigger.count > $1.trigger.count }
@@ -2474,6 +2691,9 @@ class AppState: ObservableObject {
             languageCode: singleAPILanguageCode(),
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: cleanupComponents,
+            baseCleanupPromptComponents: cleanupComponents,
+            contextRules: contextRules,
+            usesContextRules: usesContextRules,
             appContext: appContext,
             screenContext: screenContext,
             vadEnabled: vadSettingsManager.vadEnabled,
@@ -2498,10 +2718,6 @@ class AppState: ObservableObject {
         if let instructions = shortcutManager.formattingInstructions {
             promptComponents.append(instructions)
         }
-        if let instructions = contextRulesManager.instructions(for: capturedAppBundleId, windowTitle: capturedWindowTitle) {
-            promptComponents.append(instructions)
-        }
-
         return promptComponents
     }
 

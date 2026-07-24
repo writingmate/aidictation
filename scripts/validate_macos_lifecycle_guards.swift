@@ -104,15 +104,31 @@ private func testStalledNativeExportDeadlineAndLateFence() async throws {
 
 private func testNativeCloseProofAndReplyOwnership() async throws {
     let proof = MacNativeRecorderCloseProof()
+    let observerCalls = Counter()
+    proof.whenConfirmed {
+        observerCalls.increment()
+    }
     let missed = await proof.waitUntilConfirmed(
         deadline: Date().addingTimeInterval(0.03)
     )
     try require(!missed, "an unconfirmed writer was accepted as closed")
     proof.confirmClosed()
+    proof.confirmClosed()
     let closed = await proof.waitUntilConfirmed(
         deadline: Date().addingTimeInterval(0.03)
     )
     try require(closed, "a confirmed writer close was not retained")
+    try require(
+        observerCalls.count == 1,
+        "late-close observers were not delivered exactly once"
+    )
+    proof.whenConfirmed {
+        observerCalls.increment()
+    }
+    try require(
+        observerCalls.count == 2,
+        "an observer registered after close did not receive retained proof"
+    )
 
     try await MainActor.run {
         let guardrail = MacTerminationReplyGuard()
@@ -242,6 +258,12 @@ private func testProductionIntegrationContracts() throws {
     let client = try String(contentsOf: root.appendingPathComponent(
         "Whishpermate/Whispermate/Services/OpenAIClient.swift"
     ), encoding: .utf8)
+    let store = try String(contentsOf: root.appendingPathComponent(
+        "Whishpermate/Whispermate/Services/MacAudioProcessingStore.swift"
+    ), encoding: .utf8)
+    let storeProvider = try String(contentsOf: root.appendingPathComponent(
+        "Whishpermate/Whispermate/Services/MacAudioProcessingStoreProvider.swift"
+    ), encoding: .utf8)
 
     try require(
         appState.contains("terminationOwnedStoreIDs.formUnion(pendingPreparationStoreIDs.keys)"),
@@ -266,7 +288,10 @@ private func testProductionIntegrationContracts() throws {
     )
     try require(
         recorder.contains("func beginTerminationClose(")
-            && recorder.contains("nativeCloseProofs.filter"),
+            && recorder.contains("nativeCloseProofs.filter")
+            && recorder.contains(
+                "let ownedRecordingIDs = recordingIDs.union(nativeCloseProofs.keys)"
+            ),
         "AudioRecorder does not retain native writer-close ownership"
     )
     let releaseIndex = recorder.range(of: "audioFile = nil")!.lowerBound
@@ -277,6 +302,47 @@ private func testProductionIntegrationContracts() throws {
     try require(
         releaseIndex < proofIndex,
         "native close is confirmed before the AVAudioFile writer is released"
+    )
+    let callbackStart = recorder.range(of: "private func processCaptureBuffer(")!.lowerBound
+    let callbackEnd = recorder.range(
+        of: "private func signalPreparationReady(",
+        range: callbackStart..<recorder.endIndex
+    )!.lowerBound
+    let callbackBody = recorder[callbackStart..<callbackEnd]
+    let autoreleaseIndex = callbackBody.range(of: "autoreleasepool(invoking:")!.lowerBound
+    let finishWriteIndex = callbackBody.range(of: "session.finishWrite(")!.lowerBound
+    try require(
+        autoreleaseIndex < finishWriteIndex,
+        "capture callback can attest close while a callback-local AVAudioFile still exists"
+    )
+    try require(
+        appState.contains("case .confirmed(let nativeCloseAttestation)")
+            && appState.contains("nativeCloseAttestation: nativeCloseAttestation")
+            && appState.contains("checkpointRecoverablePartial("),
+        "same-process promotion does not require exact native-close attestation"
+    )
+    try require(
+        appState.contains("terminationOwnedNativeIDs.formUnion(nativeProofs.keys)"),
+        "Quit can forget a writer that outlived its UI attempt"
+    )
+    try require(
+        store.contains("LOCK_EX | LOCK_NB")
+            && store.contains("persistenceOperationID")
+            && store.contains("if error == .persistenceTimedOut"),
+        "journal locking or ambiguous persistence is not bounded and quarantined"
+    )
+    try require(
+        storeProvider.contains("Task.sleep(nanoseconds: 5_500_000_000)")
+            && storeProvider.contains("unavailableStore"),
+        "initial journal startup can block UI ownership indefinitely"
+    )
+    let snapshotCaptureIndex = startRecordingBody.range(
+        of: "let attemptSnapshot = makeTranscriptionAttemptSnapshot("
+    )!.lowerBound
+    let firstTaskIndex = startRecordingBody.range(of: "Task {")!.lowerBound
+    try require(
+        snapshotCaptureIndex < firstTaskIndex,
+        "attempt settings are not frozen before the first persistence suspension"
     )
     try require(
         app.contains("applicationShouldTerminate")

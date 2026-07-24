@@ -6,6 +6,7 @@ import Foundation
 nonisolated final class MacNativeRecorderCloseProof: @unchecked Sendable {
     private let lock = NSLock()
     private var closed = false
+    private var closeObservers: [@Sendable () -> Void] = []
 
     var isConfirmedClosed: Bool {
         lock.lock()
@@ -15,7 +16,27 @@ nonisolated final class MacNativeRecorderCloseProof: @unchecked Sendable {
 
     func confirmClosed() {
         lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return
+        }
         closed = true
+        let observers = closeObservers
+        closeObservers.removeAll()
+        lock.unlock()
+        for observer in observers {
+            observer()
+        }
+    }
+
+    func whenConfirmed(_ observer: @escaping @Sendable () -> Void) {
+        lock.lock()
+        guard !closed else {
+            lock.unlock()
+            observer()
+            return
+        }
+        closeObservers.append(observer)
         lock.unlock()
     }
 

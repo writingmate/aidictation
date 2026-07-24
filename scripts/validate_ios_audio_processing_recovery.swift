@@ -312,16 +312,18 @@ private func testSeparateRecognitionAndCleanupStageDeadlines() async throws {
         "Recognition borrowed the cleanup stage budget"
     )
 
-    let cleanupStarted = Date()
+    let cleanupRunStarted = Date()
+    var cleanupStageStartedAt = Date.distantPast
     do {
         _ = try await MobileAudioStageDeadline.run(
-            recognitionSeconds: 0.05,
-            cleanupSeconds: 0.08
+            recognitionSeconds: 1.0,
+            cleanupSeconds: 0.15
         ) { cleanupDidStart in
-            try await Task.sleep(nanoseconds: 30_000_000)
+            try await Task.sleep(nanoseconds: 50_000_000)
+            cleanupStageStartedAt = Date()
             cleanupDidStart()
             return await withUnsafeContinuation { continuation in
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) {
                     continuation.resume(returning: "late cleanup")
                 }
             }
@@ -330,9 +332,17 @@ private func testSeparateRecognitionAndCleanupStageDeadlines() async throws {
     } catch let error as IOSAudioProcessingDeadlineError {
         try require(error == .timedOut, "Cleanup stage returned \(error)")
     }
-    let cleanupElapsed = Date().timeIntervalSince(cleanupStarted)
-    try require(cleanupElapsed >= 0.07, "Cleanup did not receive its separate stage budget")
-    try require(cleanupElapsed < 0.25, "Cleanup kept the processing surface alive past its budget")
+    let cleanupCompletedAt = Date()
+    try require(
+        cleanupStageStartedAt != .distantPast,
+        "Cleanup did not start before the recognition deadline"
+    )
+    let cleanupElapsed = cleanupCompletedAt.timeIntervalSince(cleanupStageStartedAt)
+    try require(cleanupElapsed >= 0.12, "Cleanup did not receive its separate stage budget")
+    try require(
+        cleanupCompletedAt.timeIntervalSince(cleanupRunStarted) < 0.6,
+        "Cleanup kept the processing surface alive past its budget"
+    )
 
     let root = try makeRoot("cleanup-stage-deadline")
     let store = MobileAudioProcessingStore(rootDirectory: root)

@@ -50,6 +50,8 @@ struct RecordingSheetView: View {
     private let minimumFinalizationDeadline: TimeInterval = 15
     private let maximumFinalizationDeadline: TimeInterval = 120
     private let maximumRecordingDuration: TimeInterval = 4 * 60 * 60
+    private let terminalCommitDeadline: TimeInterval = 3
+    private let cleanupDeadline: TimeInterval = 50
 
     enum SheetState {
         case idle
@@ -443,11 +445,16 @@ struct RecordingSheetView: View {
                     request: request
                 )
             } catch {
+                var terminalResult: MobileAudioProcessingStore.TerminalCommitResult?
                 if let allocatedLease,
                    (error is CancellationError
                         || error as? IOSAudioProcessingDeadlineError == .cancelled)
                 {
-                    try? await processingStore.markCancelled(allocatedLease)
+                    terminalResult = await processingStore.commitTerminalState(
+                        .cancelled(message: "Processing cancelled."),
+                        lease: allocatedLease,
+                        timeout: terminalCommitDeadline
+                    )
                 }
                 let stillOwnsSurface = pendingAttemptID == retryAttemptID
                 if pendingAttemptID == retryAttemptID {
@@ -463,7 +470,12 @@ struct RecordingSheetView: View {
                 activeTranscriptionOptions = nil
                 activeTranscriptionRequest = nil
                 sheetState = .viewing
-                errorMessage = error is CancellationError ? "Processing cancelled." : userMessage(for: error)
+                errorMessage = terminalDisplayMessage(
+                    for: terminalResult,
+                    fallback: error is CancellationError
+                        ? "Processing cancelled."
+                        : userMessage(for: error)
+                ) ?? ""
                 updateRecordingSurface(animated: true)
             }
         }
@@ -688,17 +700,14 @@ struct RecordingSheetView: View {
                 scheduleCaptureDeadline(for: prepared, deadlineAt: captureDeadline)
                 updateRecordingSurface(animated: true)
             } catch {
+                var terminalResult: MobileAudioProcessingStore.TerminalCommitResult?
                 if let lease {
                     _ = audioRecorderSlot.retire(ifCurrent: recorder)
-                    if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
-                        try? await processingStore.markCancelled(lease)
-                    } else {
-                        try? await processingStore.markFailed(
-                            lease,
-                            message: userMessage(for: error),
-                            integrity: .unfinalized
-                        )
-                    }
+                    terminalResult = await persistTerminalState(
+                        lease: lease,
+                        error: error,
+                        integrity: .unfinalized
+                    )
                     Task {
                         await recorder.abandonRecording(
                             attemptID: lease.attemptID,
@@ -720,7 +729,12 @@ struct RecordingSheetView: View {
                 guard activeAttempt?.attemptID == attemptID || activeAttempt == nil else { return }
                 activeAttempt = nil
                 activeAttemptTask = nil
-                resetRecordingState(message: error is CancellationError ? nil : userMessage(for: error))
+                resetRecordingState(
+                    message: terminalDisplayMessage(
+                        for: terminalResult,
+                        fallback: error is CancellationError ? "Processing cancelled." : userMessage(for: error)
+                    )
+                )
             }
         }
     }
@@ -834,20 +848,16 @@ struct RecordingSheetView: View {
                 if !recorderClosed {
                     _ = audioRecorderSlot.retire(ifCurrent: recorder)
                 }
-                if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
-                    try? await processingStore.markCancelled(activeAttempt)
-                } else {
-                    let integrity: MobileAudioProcessingStore.SourceIntegrity =
-                        recorderClosed
-                            || (error as? MobileAudioProcessingStore.StoreError) == .sourceIncomplete
-                        ? .knownIncomplete
-                        : .unfinalized
-                    try? await processingStore.markFailed(
-                        activeAttempt,
-                        message: userMessage(for: error),
-                        integrity: integrity
-                    )
-                }
+                let integrity: MobileAudioProcessingStore.SourceIntegrity =
+                    recorderClosed
+                        || (error as? MobileAudioProcessingStore.StoreError) == .sourceIncomplete
+                    ? .knownIncomplete
+                    : .unfinalized
+                let terminalResult = await persistTerminalState(
+                    lease: activeAttempt,
+                    error: error,
+                    integrity: integrity
+                )
                 Task {
                     await recorder.abandonRecording(
                         attemptID: activeAttempt.attemptID,
@@ -867,13 +877,19 @@ struct RecordingSheetView: View {
                         transcriptionOptions: transcriptionOptions,
                         fallbackMessage: error is CancellationError
                             ? "Processing cancelled."
-                            : userMessage(for: error)
+                            : userMessage(for: error),
+                        terminalResult: terminalResult
                     )
                     return
                 }
                 self.activeAttempt = nil
                 activeAttemptTask = nil
-                resetRecordingState(message: error is CancellationError ? nil : userMessage(for: error))
+                resetRecordingState(
+                    message: terminalDisplayMessage(
+                        for: terminalResult,
+                        fallback: error is CancellationError ? "Processing cancelled." : userMessage(for: error)
+                    )
+                )
             }
         }
     }
@@ -889,7 +905,11 @@ struct RecordingSheetView: View {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             let message = access.reason ?? "Log in to continue transcribing."
-            try? await processingStore.markFailed(lease, message: message, integrity: .complete)
+            let terminalResult = await processingStore.commitTerminalState(
+                .failed(message: message, integrity: .complete),
+                lease: lease,
+                timeout: terminalCommitDeadline
+            )
             guard activeAttempt == lease else { return }
             await showTerminalRecording(
                 lease: lease,
@@ -897,7 +917,8 @@ struct RecordingSheetView: View {
                 duration: duration,
                 outputMode: outputMode,
                 transcriptionOptions: transcriptionOptions,
-                fallbackMessage: message
+                fallbackMessage: message,
+                terminalResult: terminalResult
             )
             return
         }
@@ -915,9 +936,11 @@ struct RecordingSheetView: View {
             )
             let chunkWorkspace = try await processingStore.makeChunkWorkspace(for: lease)
             defer { chunkWorkspace.cleanupAll() }
-            let processedResult = try await IOSAudioProcessingDeadline.runOnMainActor(
-                seconds: deadline
-            ) {
+            let cleanupStageDeadline = cleanupDeadline
+            let processedResult = try await MobileAudioStageDeadline.run(
+                recognitionSeconds: deadline,
+                cleanupSeconds: cleanupStageDeadline
+            ) { cleanupDidStart in
                 try await SharedTranscriptionService.transcribe(
                     audioURL: recognitionURL,
                     request: request,
@@ -929,7 +952,11 @@ struct RecordingSheetView: View {
                         try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
                     },
                     onCleanupStarted: {
-                        try await self.processingStore.cleanupStarted(lease)
+                        try await self.processingStore.cleanupStarted(
+                            lease,
+                            deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
+                        )
+                        cleanupDidStart()
                     }
                 )
             }
@@ -937,11 +964,71 @@ struct RecordingSheetView: View {
                 throw CancellationError()
             }
 
-            let durableResult = try await processingStore.checkpointFinalText(
-                processedResult,
-                lease: lease
+            let successPersistenceDeadline = Date().addingTimeInterval(terminalCommitDeadline)
+            let terminalResult = await processingStore.commitTerminalState(
+                .succeeded(text: processedResult),
+                lease: lease,
+                timeout: terminalCommitDeadline
             )
+            guard activeAttempt == lease, !Task.isCancelled else { return }
+            guard case .committed(let successSnapshot) = terminalResult,
+                  successSnapshot.stage == .succeeded
+            else {
+                await showTerminalRecording(
+                    lease: lease,
+                    audioURL: audioURL,
+                    duration: duration,
+                    outputMode: outputMode,
+                    transcriptionOptions: transcriptionOptions,
+                    fallbackMessage: MobileAudioProcessingStore.terminalPersistenceWarning,
+                    terminalResult: terminalResult
+                )
+                return
+            }
 
+            let remainingPersistenceTime =
+                successPersistenceDeadline.timeIntervalSinceNow
+            guard remainingPersistenceTime > 0 else {
+                finishTerminalSurface(
+                    lease: lease,
+                    message: MobileAudioProcessingStore.terminalPersistenceWarning
+                )
+                return
+            }
+            let durableResult: String
+            do {
+                durableResult = try await IOSAudioProcessingDeadline.runOnMainActor(
+                    seconds: remainingPersistenceTime
+                ) {
+                    guard self.activeAttempt == lease, !Task.isCancelled else {
+                        throw CancellationError()
+                    }
+                    guard let storedText = try await self.processingStore.recognizedText(
+                        for: lease.recordingID
+                    ),
+                    !storedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    else { throw MobileAudioProcessingStore.StoreError.emptyResult }
+                    let recording = Recording(
+                        id: lease.recordingID,
+                        transcription: storedText,
+                        duration: duration,
+                        audioFileURL: audioURL,
+                        outputMode: outputMode,
+                        transcriptionOptions: transcriptionOptions
+                    )
+                    try await self.replaceHistoryRecording(recording)
+                    guard self.activeAttempt == lease, !Task.isCancelled else {
+                        throw CancellationError()
+                    }
+                    return storedText
+                }
+            } catch {
+                finishTerminalSurface(
+                    lease: lease,
+                    message: MobileAudioProcessingStore.terminalPersistenceWarning
+                )
+                return
+            }
             let recording = Recording(
                 id: lease.recordingID,
                 transcription: durableResult,
@@ -950,9 +1037,6 @@ struct RecordingSheetView: View {
                 outputMode: outputMode,
                 transcriptionOptions: transcriptionOptions
             )
-            try await processingStore.markSucceeded(lease)
-            guard activeAttempt == lease, !Task.isCancelled else { return }
-            try await replaceHistoryRecording(recording)
             // A successful retry must immediately remove the stale failure affordance.
             currentRecoverySnapshot = nil
 
@@ -975,15 +1059,12 @@ struct RecordingSheetView: View {
                 subscriptionManager: subscriptionManager
             )
         } catch {
-            if error is CancellationError || error as? IOSAudioProcessingDeadlineError == .cancelled {
-                try? await processingStore.markCancelled(lease)
-            } else {
-                try? await processingStore.markFailed(
-                    lease,
-                    message: userMessage(for: error),
-                    integrity: .complete
-                )
-            }
+            let terminalResult = await persistTerminalState(
+                lease: lease,
+                error: error,
+                integrity: .complete
+            )
+            guard !cancellationReconciliationStarted else { return }
             guard activeAttempt == lease else { return }
             await showTerminalRecording(
                 lease: lease,
@@ -993,7 +1074,8 @@ struct RecordingSheetView: View {
                 transcriptionOptions: transcriptionOptions,
                 fallbackMessage: error is CancellationError
                     ? "Processing cancelled."
-                    : userMessage(for: error)
+                    : userMessage(for: error),
+                terminalResult: terminalResult
             )
         }
     }
@@ -1004,34 +1086,58 @@ struct RecordingSheetView: View {
         duration: TimeInterval,
         outputMode: TranscriptionOutputMode,
         transcriptionOptions: TranscriptionOptions,
-        fallbackMessage: String
+        fallbackMessage: String,
+        terminalResult: MobileAudioProcessingStore.TerminalCommitResult
     ) async {
-        let snapshot = try? await processingStore.snapshot(recordingID: lease.recordingID)
-        let recoveredText = try? await processingStore.recognizedText(for: lease.recordingID)
-        let succeeded = snapshot?.stage == .succeeded
-        let message = snapshot?.userMessage ?? fallbackMessage
+        guard activeAttempt == lease else { return }
+        guard case .committed(let snapshot) = terminalResult else {
+            finishTerminalSurface(
+                lease: lease,
+                message: terminalDisplayMessage(for: terminalResult, fallback: fallbackMessage)
+            )
+            return
+        }
+
+        let recoveredText: String?
+        do {
+            recoveredText = try await IOSAudioProcessingDeadline.runOnMainActor(
+                seconds: terminalCommitDeadline
+            ) {
+                guard self.activeAttempt == lease, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+                let text = try await self.processingStore.recognizedText(for: lease.recordingID)
+                let recording = Recording(
+                    id: lease.recordingID,
+                    transcription: text ?? "",
+                    duration: snapshot.duration ?? duration,
+                    audioFileURL: snapshot.sourceURL,
+                    outputMode: outputMode,
+                    transcriptionOptions: transcriptionOptions
+                )
+                try await self.replaceHistoryRecording(recording)
+                guard self.activeAttempt == lease, !Task.isCancelled else {
+                    throw CancellationError()
+                }
+                return text
+            }
+        } catch {
+            finishTerminalSurface(
+                lease: lease,
+                message: MobileAudioProcessingStore.terminalPersistenceWarning
+            )
+            return
+        }
+        let succeeded = snapshot.stage == .succeeded
+        let message = snapshot.userMessage ?? fallbackMessage
         let recording = Recording(
             id: lease.recordingID,
             transcription: recoveredText ?? "",
-            duration: snapshot?.duration ?? duration,
-            audioFileURL: snapshot?.sourceURL ?? audioURL,
+            duration: snapshot.duration ?? duration,
+            audioFileURL: snapshot.sourceURL,
             outputMode: outputMode,
             transcriptionOptions: transcriptionOptions
         )
-        do {
-            try await replaceHistoryRecording(recording)
-        } catch {
-            transcription = recoveredText ?? ""
-            currentRecording = recording
-            currentRecoverySnapshot = snapshot
-            sheetState = .viewing
-            errorMessage = userMessage(for: error)
-            activeAttempt = nil
-            activeAttemptTask = nil
-            captureDeadlineTask = nil
-            updateRecordingSurface(animated: true)
-            return
-        }
         transcription = recoveredText ?? ""
         currentRecording = recording
         currentRecoverySnapshot = snapshot
@@ -1057,6 +1163,63 @@ struct RecordingSheetView: View {
 
     private func replaceHistoryRecording(_ recording: Recording) async throws {
         try await historyManager.upsertRecording(recording)
+    }
+
+    private func persistTerminalState(
+        lease: MobileAudioProcessingStore.Lease,
+        error: Error,
+        integrity: MobileAudioProcessingStore.SourceIntegrity
+    ) async -> MobileAudioProcessingStore.TerminalCommitResult {
+        let intent: MobileAudioProcessingStore.TerminalIntent
+        if error is CancellationError
+            || error as? IOSAudioProcessingDeadlineError == .cancelled
+        {
+            intent = .cancelled(message: "Processing cancelled.")
+        } else {
+            intent = .failed(message: userMessage(for: error), integrity: integrity)
+        }
+        return await processingStore.commitTerminalState(
+            intent,
+            lease: lease,
+            timeout: terminalCommitDeadline
+        )
+    }
+
+    private func terminalDisplayMessage(
+        for result: MobileAudioProcessingStore.TerminalCommitResult?,
+        fallback: String
+    ) -> String? {
+        guard let result else { return fallback }
+        switch result {
+        case .committed(let snapshot):
+            return snapshot.stage == .succeeded ? nil : (snapshot.userMessage ?? fallback)
+        case .persistenceUnavailable:
+            return MobileAudioProcessingStore.terminalPersistenceWarning
+        case .superseded:
+            return nil
+        @unknown default:
+            return MobileAudioProcessingStore.terminalPersistenceWarning
+        }
+    }
+
+    private func finishTerminalSurface(
+        lease: MobileAudioProcessingStore.Lease,
+        message: String?
+    ) {
+        guard activeAttempt == lease else { return }
+        recordingStartTime = nil
+        activeOutputMode = nil
+        activeTranscriptionOptions = nil
+        activeTranscriptionRequest = nil
+        activeAttempt = nil
+        activeAttemptTask = nil
+        captureDeadlineTask?.cancel()
+        captureDeadlineTask = nil
+        sheetState = currentRecording == nil ? .idle : .viewing
+        errorMessage = message ?? ""
+        recordingViewModel.audioLevel = 0
+        recordingViewModel.frequencyBands = Array(repeating: 0, count: 10)
+        updateRecordingSurface(animated: true)
     }
 
     private func transcriptionOptions(for outputMode: TranscriptionOutputMode, preset: ContextRule?) -> TranscriptionOptions {
@@ -1110,21 +1273,30 @@ struct RecordingSheetView: View {
         captureDeadlineTask?.cancel()
         let abandonedRecorder = audioRecorder
         _ = audioRecorderSlot.retire(ifCurrent: abandonedRecorder)
-        activeAttempt = nil
-        activeAttemptTask = nil
-        resetRecordingState(message: failure.error.localizedDescription)
-
-        Task {
-            try? await processingStore.markFailed(
-                lease,
-                message: failure.error.localizedDescription,
-                integrity: .knownIncomplete
+        activeAttemptTask = Task { @MainActor in
+            let terminalResult = await processingStore.commitTerminalState(
+                .failed(
+                    message: failure.error.localizedDescription,
+                    integrity: .knownIncomplete
+                ),
+                lease: lease,
+                timeout: terminalCommitDeadline
             )
-            await abandonedRecorder.abandonRecording(
-                attemptID: lease.attemptID,
-                deactivateAudioSession: false
+            Task {
+                await abandonedRecorder.abandonRecording(
+                    attemptID: lease.attemptID,
+                    deactivateAudioSession: false
+                )
+                try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
+            }
+            guard activeAttempt == lease else { return }
+            finishTerminalSurface(
+                lease: lease,
+                message: terminalDisplayMessage(
+                    for: terminalResult,
+                    fallback: failure.error.localizedDescription
+                )
             )
-            try? await processingStore.purgePayloadsIfDeleted(recordingID: lease.recordingID)
         }
     }
 
@@ -1163,16 +1335,12 @@ struct RecordingSheetView: View {
             ?? self.transcriptionOptions(for: outputMode, preset: selectedPreset)
         let fallbackDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
         _ = audioRecorderSlot.retire(ifCurrent: recorder)
-        self.activeAttempt = nil
-        activeAttemptTask = nil
-        resetRecordingState(message: nil)
-        if dismissAfterStart { dismiss() }
 
-        Task { @MainActor in
-            try? await processingStore.markCancelled(activeAttempt)
-            let snapshot = try? await processingStore.snapshot(recordingID: activeAttempt.recordingID)
-            let recoveredText = try? await processingStore.recognizedText(
-                for: activeAttempt.recordingID
+        activeAttemptTask = Task { @MainActor in
+            let terminalResult = await processingStore.commitTerminalState(
+                .cancelled(message: "Processing cancelled."),
+                lease: activeAttempt,
+                timeout: terminalCommitDeadline
             )
             Task {
                 await recorder.abandonRecording(
@@ -1183,30 +1351,37 @@ struct RecordingSheetView: View {
                     recordingID: activeAttempt.recordingID
                 )
             }
-            guard snapshot?.stage == .succeeded,
-                  let recoveredText,
-                  !recoveredText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return }
+            guard self.activeAttempt == activeAttempt else { return }
 
-            let recording = Recording(
-                id: activeAttempt.recordingID,
-                transcription: recoveredText,
-                duration: snapshot?.duration ?? fallbackDuration,
-                audioFileURL: snapshot?.sourceURL ?? activeAttempt.sourceURL,
-                outputMode: outputMode,
-                transcriptionOptions: snapshot?.transcriptionOptions ?? transcriptionOptions
-            )
-            do {
-                try await replaceHistoryRecording(recording)
-            } catch {
+            if case .committed(let snapshot) = terminalResult,
+               snapshot.stage == .succeeded
+            {
+                await showTerminalRecording(
+                    lease: activeAttempt,
+                    audioURL: snapshot.sourceURL,
+                    duration: snapshot.duration ?? fallbackDuration,
+                    outputMode: outputMode,
+                    transcriptionOptions: snapshot.transcriptionOptions ?? transcriptionOptions,
+                    fallbackMessage: "Processing cancelled.",
+                    terminalResult: terminalResult
+                )
+                if dismissAfterStart,
+                   errorMessage != MobileAudioProcessingStore.terminalPersistenceWarning
+                {
+                    dismiss()
+                }
                 return
             }
-            await MobileAudioUsageAccounting.flush(
-                recordingID: activeAttempt.recordingID,
-                historyManager: historyManager,
-                store: processingStore,
-                subscriptionManager: subscriptionManager
-            )
+
+            self.activeAttempt = nil
+            activeAttemptTask = nil
+            let persistenceWarning = terminalResult == .persistenceUnavailable
+                ? MobileAudioProcessingStore.terminalPersistenceWarning
+                : nil
+            resetRecordingState(message: persistenceWarning)
+            if dismissAfterStart, persistenceWarning == nil {
+                dismiss()
+            }
         }
     }
 

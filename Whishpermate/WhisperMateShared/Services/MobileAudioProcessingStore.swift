@@ -5,6 +5,177 @@ import Foundation
     import Darwin
 #endif
 
+/// A wall-clock watchdog for the combined mobile recognition/cleanup API.
+///
+/// Recognition and cleanup are one async call at the service boundary, but they are separate
+/// recovery stages. The cleanup timer is armed only after its durable store checkpoint succeeds,
+/// so recognition cannot borrow cleanup time and cleanup cannot keep the processing UI alive past
+/// its own budget. As with the other iOS deadlines, a late non-cooperative operation is cancelled
+/// and loses mutation authority through its exact attempt lease.
+public enum MobileAudioStageDeadline {
+    @MainActor
+    public static func run<Value: Sendable>(
+        recognitionSeconds: TimeInterval,
+        cleanupSeconds: TimeInterval,
+        operation: @escaping @MainActor (
+            _ cleanupDidStart: @escaping @Sendable () -> Void
+        ) async throws -> Value
+    ) async throws -> Value {
+        let recognitionNanoseconds = try nanoseconds(for: recognitionSeconds)
+        let cleanupNanoseconds = try nanoseconds(for: cleanupSeconds)
+        let resolver = MobileAudioStageDeadlineResolver<Value>()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                resolver.install(continuation)
+                resolver.startRecognition(nanoseconds: recognitionNanoseconds)
+                let operationTask = Task { @MainActor in
+                    do {
+                        let value = try await operation {
+                            resolver.armCleanup(nanoseconds: cleanupNanoseconds)
+                        }
+                        resolver.resolve(.success(value))
+                    } catch is CancellationError {
+                        resolver.resolve(.failure(IOSAudioProcessingDeadlineError.cancelled))
+                    } catch {
+                        resolver.resolve(.failure(error))
+                    }
+                }
+                resolver.installOperation(operationTask)
+            }
+        } onCancel: {
+            resolver.resolve(.failure(IOSAudioProcessingDeadlineError.cancelled))
+        }
+    }
+
+    private static func nanoseconds(for seconds: TimeInterval) throws -> UInt64 {
+        let maximumSeconds = Double(UInt64.max) / 1_000_000_000
+        guard seconds.isFinite, seconds > 0, seconds <= maximumSeconds else {
+            throw IOSAudioProcessingDeadlineError.timedOut
+        }
+        return UInt64(seconds * 1_000_000_000)
+    }
+}
+
+private final class MobileAudioStageDeadlineResolver<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var pendingResult: Result<Value, Error>?
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    private var timeoutGeneration: UInt64 = 0
+    private var resolved = false
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) {
+        lock.lock()
+        if let pendingResult {
+            self.pendingResult = nil
+            lock.unlock()
+            continuation.resume(with: pendingResult)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func startRecognition(nanoseconds: UInt64) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        let oldTimeout = armTimeoutLocked(nanoseconds: nanoseconds)
+        lock.unlock()
+        oldTimeout?.cancel()
+    }
+
+    func installOperation(_ operation: Task<Void, Never>) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            operation.cancel()
+            return
+        }
+        operationTask = operation
+        lock.unlock()
+    }
+
+    func armCleanup(nanoseconds: UInt64) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        let oldTimeout = armTimeoutLocked(nanoseconds: nanoseconds)
+        lock.unlock()
+        oldTimeout?.cancel()
+    }
+
+    func resolve(_ result: Result<Value, Error>) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        timeoutGeneration &+= 1
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingResult = result
+        }
+        let operationTask = operationTask
+        let timeoutTask = timeoutTask
+        self.operationTask = nil
+        self.timeoutTask = nil
+        lock.unlock()
+
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        continuation?.resume(with: result)
+    }
+
+    private func armTimeoutLocked(nanoseconds: UInt64) -> Task<Void, Never>? {
+        timeoutGeneration &+= 1
+        let generation = timeoutGeneration
+        let oldTimeout = timeoutTask
+        timeoutTask = Task.detached { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
+            self?.timeoutFired(generation: generation)
+        }
+        return oldTimeout
+    }
+
+    private func timeoutFired(generation: UInt64) {
+        lock.lock()
+        guard !resolved, generation == timeoutGeneration else {
+            lock.unlock()
+            return
+        }
+        resolved = true
+        timeoutGeneration &+= 1
+        let result: Result<Value, Error> = .failure(IOSAudioProcessingDeadlineError.timedOut)
+        let continuation = continuation
+        self.continuation = nil
+        if continuation == nil {
+            pendingResult = result
+        }
+        let operationTask = operationTask
+        let timeoutTask = timeoutTask
+        self.operationTask = nil
+        self.timeoutTask = nil
+        lock.unlock()
+
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        continuation?.resume(with: result)
+    }
+}
+
 /// Disk-backed, cross-instance compare-and-swap journal for iOS host recording work.
 /// The keyboard owns only its handoff journal; the containing app is the sole audio-store writer.
 public actor MobileAudioProcessingStore {
@@ -98,6 +269,26 @@ public actor MobileAudioProcessingStore {
         public let byteCount: Int64
         public let duration: TimeInterval
     }
+
+    public enum TerminalIntent: Equatable, Sendable {
+        case succeeded(text: String)
+        case failed(message: String, integrity: SourceIntegrity?)
+        case cancelled(message: String)
+    }
+
+    public enum TerminalCommitResult: Equatable, Sendable {
+        /// The exact attempt reached a durable terminal state. Cleanup fallback can make the
+        /// committed state `succeeded` when complete raw text had already been checkpointed.
+        case committed(Snapshot)
+        /// Delete, Clear, a retry, or another terminal owner won before this exact lease.
+        case superseded
+        /// The terminal write failed or exceeded its bounded persistence deadline. The caller
+        /// must release its UI while leaving the managed source/journal for launch recovery.
+        case persistenceUnavailable
+    }
+
+    public static let terminalPersistenceWarning =
+        "Processing stopped, but History could not be updated. Restart AI Dictation to recover your recording."
 
     /// A per-attempt, app-group-owned directory for derived upload leaves.
     ///
@@ -371,6 +562,7 @@ public actor MobileAudioProcessingStore {
     private let fileManager: FileManager
     private let beforeAttemptAllocation: @Sendable () -> Void
     private let beforeDeepSourceValidation: @Sendable () -> Void
+    private let beforeTerminalCommit: @Sendable (Lease) throws -> Void
     private let afterHistoryDeletionIntentPersisted: @Sendable () throws -> Void
     private var initializationFailed = false
 
@@ -387,6 +579,7 @@ public actor MobileAudioProcessingStore {
         fileManager: FileManager = .default,
         beforeAttemptAllocation: @escaping @Sendable () -> Void = {},
         beforeDeepSourceValidation: @escaping @Sendable () -> Void = {},
+        beforeTerminalCommit: @escaping @Sendable (Lease) throws -> Void = { _ in },
         afterHistoryDeletionIntentPersisted: @escaping @Sendable () throws -> Void = {}
     ) {
         self.rootDirectory = rootDirectory
@@ -402,6 +595,7 @@ public actor MobileAudioProcessingStore {
         self.fileManager = fileManager
         self.beforeAttemptAllocation = beforeAttemptAllocation
         self.beforeDeepSourceValidation = beforeDeepSourceValidation
+        self.beforeTerminalCommit = beforeTerminalCommit
         self.afterHistoryDeletionIntentPersisted = afterHistoryDeletionIntentPersisted
 
         do {
@@ -434,6 +628,7 @@ public actor MobileAudioProcessingStore {
         self.fileManager = fileManager
         beforeAttemptAllocation = {}
         beforeDeepSourceValidation = {}
+        beforeTerminalCommit = { _ in }
         afterHistoryDeletionIntentPersisted = {}
 
         do {
@@ -465,6 +660,7 @@ public actor MobileAudioProcessingStore {
         fileManager = .default
         beforeAttemptAllocation = {}
         beforeDeepSourceValidation = {}
+        beforeTerminalCommit = { _ in }
         afterHistoryDeletionIntentPersisted = {}
         initializationFailed = true
     }
@@ -883,8 +1079,8 @@ public actor MobileAudioProcessingStore {
         }
     }
 
-    public func cleanupStarted(_ lease: Lease) throws {
-        try mutate(lease, allowed: [.rawReady], next: .cleaning, deadlineAt: nil, retainDeadline: true)
+    public func cleanupStarted(_ lease: Lease, deadlineAt: Date) throws {
+        try mutate(lease, allowed: [.rawReady], next: .cleaning, deadlineAt: deadlineAt)
     }
 
     /// Commits cleaned output, or the durable raw transcript when cleanup is empty/unavailable.
@@ -949,45 +1145,70 @@ public actor MobileAudioProcessingStore {
         message: String,
         integrity: SourceIntegrity? = nil
     ) throws {
-        try withExclusiveLock {
-            var snapshot = try currentSnapshotLocked(for: lease, enforceDeadline: false)
-            try reconcileMovedFinalSourceLocked(&snapshot)
-            guard snapshot.stage != .deleted else { throw StoreError.staleAttempt }
-            if snapshot.stage.isTerminal, snapshot.stage != .failed { throw StoreError.invalidTransition }
-            if try resolveCompletedRecognitionLocked(
-                &snapshot,
-                message: "Cleanup was unavailable. The recognized text was kept."
-            ) {
-                return
-            }
-            snapshot.stage = .failed
-            if snapshot.sourceIntegrity != .complete {
-                snapshot.sourceIntegrity = integrity ?? snapshot.sourceIntegrity
-            }
-            snapshot.userMessage = message
-            snapshot.deadlineAt = nil
-            try advanceRevision(&snapshot)
-            try saveLocked(snapshot)
-        }
+        _ = try persistTerminalState(
+            .failed(message: message, integrity: integrity),
+            lease: lease
+        )
     }
 
     public func markCancelled(_ lease: Lease, message: String = "Recording cancelled.") throws {
-        try withExclusiveLock {
-            var snapshot = try currentSnapshotLocked(for: lease, enforceDeadline: false)
-            try reconcileMovedFinalSourceLocked(&snapshot)
-            if snapshot.stage == .cancelled { return }
-            guard !snapshot.stage.isTerminal else { throw StoreError.invalidTransition }
-            if try resolveCompletedRecognitionLocked(
-                &snapshot,
-                message: "Processing stopped after the recognized text was saved."
-            ) {
-                return
+        _ = try persistTerminalState(.cancelled(message: message), lease: lease)
+    }
+
+    /// Persists one exact attempt's terminal state under a bounded, cancellation-independent
+    /// deadline. A timed-out synchronous disk operation may finish later, so the store validates
+    /// the full lease again after the injected/stalled boundary. Delete, Clear, and retry therefore
+    /// remain authoritative over every late terminal completion.
+    public nonisolated func commitTerminalState(
+        _ intent: TerminalIntent,
+        lease: Lease,
+        timeout: TimeInterval = 3
+    ) async -> TerminalCommitResult {
+        let terminalTask = Task.detached(priority: .userInitiated) { [self] in
+            try await IOSAudioProcessingDeadline.run(seconds: timeout) {
+                try await self.persistTerminalState(intent, lease: lease)
             }
-            snapshot.stage = .cancelled
-            snapshot.userMessage = message
-            snapshot.deadlineAt = nil
-            try advanceRevision(&snapshot)
-            try saveLocked(snapshot)
+        }
+
+        do {
+            return .committed(try await terminalTask.value)
+        } catch let error as StoreError where error == .staleAttempt {
+            return .superseded
+        } catch let error as StoreError where error == .invalidTransition {
+            return await reconcileAlreadyTerminalState(lease: lease, timeout: timeout)
+        } catch {
+            DebugLog.warning(
+                "Could not durably finish recording \(lease.recordingID): \(error.localizedDescription)",
+                context: "MobileAudioProcessingStore"
+            )
+            return .persistenceUnavailable
+        }
+    }
+
+    private nonisolated func reconcileAlreadyTerminalState(
+        lease: Lease,
+        timeout: TimeInterval
+    ) async -> TerminalCommitResult {
+        let reconciliationTask = Task.detached(priority: .userInitiated) { [self] in
+            try await IOSAudioProcessingDeadline.run(seconds: timeout) {
+                try await self.snapshot(recordingID: lease.recordingID)
+            }
+        }
+        do {
+            guard let snapshot = try await reconciliationTask.value,
+                  snapshot.attemptID == lease.attemptID,
+                  snapshot.generation == lease.generation,
+                  snapshot.storeGeneration == lease.storeGeneration,
+                  snapshot.stage.isTerminal,
+                  snapshot.stage != .deleted
+            else { return .superseded }
+            return .committed(snapshot)
+        } catch {
+            DebugLog.warning(
+                "Could not reconcile terminal recording \(lease.recordingID): \(error.localizedDescription)",
+                context: "MobileAudioProcessingStore"
+            )
+            return .persistenceUnavailable
         }
     }
 
@@ -1386,6 +1607,95 @@ public actor MobileAudioProcessingStore {
             if !retainDeadline { snapshot.deadlineAt = deadlineAt }
             try advanceRevision(&snapshot)
             try saveLocked(snapshot)
+        }
+    }
+
+    private func persistTerminalState(
+        _ intent: TerminalIntent,
+        lease: Lease
+    ) throws -> Snapshot {
+        // Keep this hook outside the store lock. It models a blocked persistence boundary while
+        // allowing another process/store instance to durably accept Delete, Clear, or retry.
+        try beforeTerminalCommit(lease)
+
+        return try withExclusiveLock {
+            var snapshot = try currentSnapshotLocked(for: lease, enforceDeadline: false)
+            try reconcileMovedFinalSourceLocked(&snapshot)
+            guard snapshot.stage != .deleted else { throw StoreError.staleAttempt }
+
+            switch intent {
+            case .succeeded(let text):
+                if snapshot.stage == .succeeded {
+                    return snapshot
+                }
+                guard [
+                    .recognizing,
+                    .recognitionPartial,
+                    .rawReady,
+                    .cleaning,
+                    .resultReady,
+                ].contains(snapshot.stage)
+                else { throw StoreError.invalidTransition }
+
+                var resolved = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? ""
+                    : text
+                if resolved.isEmpty, let rawURL = snapshot.rawTranscriptURL {
+                    resolved = try readNonEmptyTextLocked(rawURL)
+                }
+                guard !resolved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw StoreError.emptyResult
+                }
+
+                let directory = attemptDirectory(recordingID: lease.recordingID)
+                if snapshot.rawTranscriptPath == nil {
+                    let rawURL = directory.appendingPathComponent("raw.txt")
+                    try durableWriteLocked(Data(resolved.utf8), to: rawURL)
+                    snapshot.rawTranscriptPath = rawURL.path
+                }
+                let resultURL = directory.appendingPathComponent("result.txt")
+                try durableWriteLocked(Data(resolved.utf8), to: resultURL)
+                snapshot.resultPath = resultURL.path
+                snapshot.stage = .succeeded
+                snapshot.sourceIntegrity = .complete
+                snapshot.usageAccountingWordCount = Self.wordCount(in: resolved)
+                snapshot.userMessage = nil
+
+            case .failed(let message, let integrity):
+                if snapshot.stage.isTerminal, snapshot.stage != .failed {
+                    throw StoreError.invalidTransition
+                }
+                if try resolveCompletedRecognitionLocked(
+                    &snapshot,
+                    message: "Cleanup was unavailable. The recognized text was kept."
+                ) {
+                    return snapshot
+                }
+                snapshot.stage = .failed
+                if snapshot.sourceIntegrity != .complete {
+                    snapshot.sourceIntegrity = integrity ?? snapshot.sourceIntegrity
+                }
+                snapshot.userMessage = message
+
+            case .cancelled(let message):
+                if snapshot.stage == .cancelled {
+                    return snapshot
+                }
+                guard !snapshot.stage.isTerminal else { throw StoreError.invalidTransition }
+                if try resolveCompletedRecognitionLocked(
+                    &snapshot,
+                    message: "Processing stopped after the recognized text was saved."
+                ) {
+                    return snapshot
+                }
+                snapshot.stage = .cancelled
+                snapshot.userMessage = message
+            }
+
+            snapshot.deadlineAt = nil
+            try advanceRevision(&snapshot)
+            try saveLocked(snapshot)
+            return snapshot
         }
     }
 

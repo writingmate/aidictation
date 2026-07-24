@@ -13,6 +13,7 @@ private enum ValidationFailure: Error, CustomStringConvertible {
 
 private struct InjectedDeletionCrash: Error, Sendable {}
 private struct InjectedHistoryCommitFailure: Error, Sendable {}
+private struct InjectedTerminalCommitFailure: Error, Sendable {}
 
 private final class LockedCounter: @unchecked Sendable {
     private let lock = NSLock()
@@ -63,8 +64,99 @@ private final class StalledNativeExport: @unchecked Sendable {
     }
 }
 
+private final class TerminalCommitStall: @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    func block(_: MobileAudioProcessingStore.Lease) {
+        entered.signal()
+        release.wait()
+    }
+
+    func waitUntilEntered() async {
+        await waitForSemaphore(entered)
+    }
+
+    func unblock() {
+        release.signal()
+    }
+}
+
+private final class HistoryCommitStall: @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    func block() {
+        entered.signal()
+        release.wait()
+    }
+
+    func waitUntilEntered() async {
+        await waitForSemaphore(entered)
+    }
+
+    func unblock() {
+        release.signal()
+    }
+}
+
+@MainActor
+private final class TerminalSurfaceHarness {
+    enum Surface: Equatable {
+        case recordingSheet
+        case keyboardHost
+    }
+
+    private(set) var activeLease: MobileAudioProcessingStore.Lease?
+    private(set) var isProcessing = true
+    private(set) var message: String?
+    private(set) var handoffTerminalPublications = 0
+    private let surface: Surface
+
+    init(surface: Surface, lease: MobileAudioProcessingStore.Lease) {
+        self.surface = surface
+        activeLease = lease
+    }
+
+    func settle(
+        store: MobileAudioProcessingStore,
+        intent: MobileAudioProcessingStore.TerminalIntent,
+        timeout: TimeInterval
+    ) async -> MobileAudioProcessingStore.TerminalCommitResult {
+        guard let lease = activeLease else { return .superseded }
+        let result = await store.commitTerminalState(intent, lease: lease, timeout: timeout)
+        guard activeLease == lease else { return result }
+
+        switch result {
+        case .committed(let snapshot):
+            message = snapshot.stage == .succeeded ? nil : snapshot.userMessage
+        case .persistenceUnavailable:
+            message = MobileAudioProcessingStore.terminalPersistenceWarning
+        case .superseded:
+            message = nil
+        }
+        if surface == .keyboardHost, result != .superseded {
+            handoffTerminalPublications += 1
+        }
+        activeLease = nil
+        isProcessing = false
+        return result
+    }
+}
+
 private func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     guard condition() else { throw ValidationFailure.failed(message) }
+}
+
+private func sourceSection(
+    _ source: String,
+    from startMarker: String,
+    to endMarker: String
+) -> String? {
+    guard let start = source.range(of: startMarker)?.lowerBound,
+          let end = source.range(of: endMarker, range: start ..< source.endIndex)?.lowerBound
+    else { return nil }
+    return String(source[start ..< end])
 }
 
 private func requireThrows(
@@ -195,6 +287,398 @@ private func testDeadlineReturnsWithoutWaitingForLateWork() async throws {
     } catch let error as IOSAudioProcessingDeadlineError {
         try require(error == .timedOut, "Infinite deadline did not fail closed")
     }
+}
+
+@MainActor
+private func testSeparateRecognitionAndCleanupStageDeadlines() async throws {
+    let recognitionStarted = Date()
+    do {
+        _ = try await MobileAudioStageDeadline.run(
+            recognitionSeconds: 0.05,
+            cleanupSeconds: 0.2
+        ) { _ in
+            await withUnsafeContinuation { continuation in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) {
+                    continuation.resume(returning: "late recognition")
+                }
+            }
+        } as String
+        throw ValidationFailure.failed("Recognition escaped its stage deadline")
+    } catch let error as IOSAudioProcessingDeadlineError {
+        try require(error == .timedOut, "Recognition stage returned \(error)")
+    }
+    try require(
+        Date().timeIntervalSince(recognitionStarted) < 0.25,
+        "Recognition borrowed the cleanup stage budget"
+    )
+
+    let cleanupStarted = Date()
+    do {
+        _ = try await MobileAudioStageDeadline.run(
+            recognitionSeconds: 0.05,
+            cleanupSeconds: 0.08
+        ) { cleanupDidStart in
+            try await Task.sleep(nanoseconds: 30_000_000)
+            cleanupDidStart()
+            return await withUnsafeContinuation { continuation in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) {
+                    continuation.resume(returning: "late cleanup")
+                }
+            }
+        } as String
+        throw ValidationFailure.failed("Cleanup escaped its stage deadline")
+    } catch let error as IOSAudioProcessingDeadlineError {
+        try require(error == .timedOut, "Cleanup stage returned \(error)")
+    }
+    let cleanupElapsed = Date().timeIntervalSince(cleanupStarted)
+    try require(cleanupElapsed >= 0.07, "Cleanup did not receive its separate stage budget")
+    try require(cleanupElapsed < 0.25, "Cleanup kept the processing surface alive past its budget")
+
+    let root = try makeRoot("cleanup-stage-deadline")
+    let store = MobileAudioProcessingStore(rootDirectory: root)
+    let (lease, _) = try await makeFinalizedAttempt(store: store)
+    _ = try await store.beginRecognition(
+        lease,
+        deadlineAt: Date().addingTimeInterval(5)
+    )
+    try await store.checkpointRawTranscript("durable raw", lease: lease)
+    let durableCleanupDeadline = Date().addingTimeInterval(20)
+    try await store.cleanupStarted(lease, deadlineAt: durableCleanupDeadline)
+    let cleaning = try await store.snapshot(recordingID: lease.recordingID)
+    try require(cleaning?.stage == .cleaning, "Cleanup stage was not durably persisted")
+    try require(
+        abs((cleaning?.deadlineAt?.timeIntervalSinceReferenceDate ?? 0)
+            - durableCleanupDeadline.timeIntervalSinceReferenceDate) < 0.05,
+        "Cleanup retained the recognition deadline instead of its own deadline"
+    )
+}
+
+@MainActor
+private func testRecordingSheetTerminalWriteFailureStallAndLateCompletion() async throws {
+    let failureRoot = try makeRoot("sheet-terminal-failure")
+    let failureStore = MobileAudioProcessingStore(
+        rootDirectory: failureRoot,
+        beforeTerminalCommit: { _ in throw InjectedTerminalCommitFailure() }
+    )
+    let failureLease = try await failureStore.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let failureSurface = TerminalSurfaceHarness(
+        surface: .recordingSheet,
+        lease: failureLease
+    )
+    let failureResult = await failureSurface.settle(
+        store: failureStore,
+        intent: .failed(message: "Capture failed.", integrity: .knownIncomplete),
+        timeout: 0.05
+    )
+    try require(failureResult == .persistenceUnavailable, "Sheet hid terminal write failure")
+    try require(!failureSurface.isProcessing, "Sheet stayed processing after terminal write failure")
+    try require(failureSurface.activeLease == nil, "Sheet retained in-memory attempt ownership")
+    try require(
+        failureSurface.message == MobileAudioProcessingStore.terminalPersistenceWarning,
+        "Sheet did not show the truthful storage warning"
+    )
+    let failureObserver = MobileAudioProcessingStore(rootDirectory: failureRoot)
+    let stillRecoverable = try await failureObserver.snapshot(recordingID: failureLease.recordingID)
+    try require(
+        stillRecoverable?.stage == .preparing,
+        "Failed terminal persistence destroyed the launch-recoverable authoritative state"
+    )
+    _ = try await failureObserver.normalizeInterruptedAttempts()
+    let recovered = try await failureObserver.snapshot(recordingID: failureLease.recordingID)
+    try require(recovered?.stage == .failed, "Launch recovery did not terminalize the sheet attempt")
+
+    let stallRoot = try makeRoot("sheet-terminal-stall-delete")
+    let stall = TerminalCommitStall()
+    let stallStore = MobileAudioProcessingStore(
+        rootDirectory: stallRoot,
+        beforeTerminalCommit: { lease in stall.block(lease) }
+    )
+    let stallLease = try await stallStore.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let stallSurface = TerminalSurfaceHarness(surface: .recordingSheet, lease: stallLease)
+    let settlement = Task { @MainActor in
+        await stallSurface.settle(
+            store: stallStore,
+            intent: .failed(message: "Capture failed.", integrity: .knownIncomplete),
+            timeout: 0.05
+        )
+    }
+    await stall.waitUntilEntered()
+    let stallResult = await settlement.value
+    try require(stallResult == .persistenceUnavailable, "Sheet terminal stall did not time out")
+    try require(!stallSurface.isProcessing, "Sheet spinner survived the terminal write deadline")
+
+    let deleteWinner = MobileAudioProcessingStore(rootDirectory: stallRoot)
+    try await deleteWinner.tombstone(recordingID: stallLease.recordingID)
+    stall.unblock()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    let afterLateCommit = try await deleteWinner.snapshot(recordingID: stallLease.recordingID)
+    try require(afterLateCommit?.stage == .deleted, "Late sheet terminal write overwrote Delete")
+}
+
+@MainActor
+private func testKeyboardTerminalWriteFailureStallAndLateCompletion() async throws {
+    let failureRoot = try makeRoot("keyboard-terminal-failure")
+    let failureStore = MobileAudioProcessingStore(
+        rootDirectory: failureRoot,
+        beforeTerminalCommit: { _ in throw InjectedTerminalCommitFailure() }
+    )
+    let failureLease = try await failureStore.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let failureSurface = TerminalSurfaceHarness(surface: .keyboardHost, lease: failureLease)
+    let failureResult = await failureSurface.settle(
+        store: failureStore,
+        intent: .failed(message: "Capture failed.", integrity: .knownIncomplete),
+        timeout: 0.05
+    )
+    try require(failureResult == .persistenceUnavailable, "Keyboard hid terminal write failure")
+    try require(!failureSurface.isProcessing, "Keyboard stayed processing after terminal write failure")
+    try require(
+        failureSurface.handoffTerminalPublications == 1,
+        "Keyboard did not publish its terminal handoff after the bounded failure"
+    )
+    try require(
+        failureSurface.message == MobileAudioProcessingStore.terminalPersistenceWarning,
+        "Keyboard handoff did not use the truthful storage warning"
+    )
+    let failureObserver = MobileAudioProcessingStore(rootDirectory: failureRoot)
+    let stillRecoverable = try await failureObserver.snapshot(recordingID: failureLease.recordingID)
+    try require(
+        stillRecoverable?.stage == .preparing,
+        "Keyboard terminal failure destroyed the launch-recoverable state"
+    )
+
+    let clearRoot = try makeRoot("keyboard-terminal-stall-clear")
+    let clearStall = TerminalCommitStall()
+    let clearStore = MobileAudioProcessingStore(
+        rootDirectory: clearRoot,
+        beforeTerminalCommit: { lease in clearStall.block(lease) }
+    )
+    let clearLease = try await clearStore.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let clearSurface = TerminalSurfaceHarness(surface: .keyboardHost, lease: clearLease)
+    let clearSettlement = Task { @MainActor in
+        await clearSurface.settle(
+            store: clearStore,
+            intent: .failed(message: "Capture failed.", integrity: .knownIncomplete),
+            timeout: 0.05
+        )
+    }
+    await clearStall.waitUntilEntered()
+    let clearResult = await clearSettlement.value
+    try require(clearResult == .persistenceUnavailable, "Keyboard terminal stall did not time out")
+    let clearWinner = MobileAudioProcessingStore(rootDirectory: clearRoot)
+    try await clearWinner.clearAll()
+    clearStall.unblock()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    let afterClear = try await clearWinner.snapshot(recordingID: clearLease.recordingID)
+    try require(afterClear?.stage == .deleted, "Late keyboard terminal write overwrote Clear")
+
+    let retryRoot = try makeRoot("keyboard-terminal-stall-retry")
+    let setupStore = MobileAudioProcessingStore(rootDirectory: retryRoot)
+    let (retryingLease, _) = try await makeFinalizedAttempt(store: setupStore)
+    _ = try await setupStore.beginRecognition(
+        retryingLease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let retryStall = TerminalCommitStall()
+    let stalledRetryStore = MobileAudioProcessingStore(
+        rootDirectory: retryRoot,
+        beforeTerminalCommit: { lease in retryStall.block(lease) }
+    )
+    let retrySurface = TerminalSurfaceHarness(surface: .keyboardHost, lease: retryingLease)
+    let retrySettlement = Task { @MainActor in
+        await retrySurface.settle(
+            store: stalledRetryStore,
+            intent: .failed(message: "Recognition failed.", integrity: .complete),
+            timeout: 0.05
+        )
+    }
+    await retryStall.waitUntilEntered()
+    _ = await retrySettlement.value
+    let retryWinner = MobileAudioProcessingStore(rootDirectory: retryRoot)
+    _ = try await retryWinner.normalizeInterruptedAttempts()
+    let replacementAttemptID = UUID()
+    let replacement = try await retryWinner.beginRetry(
+        recordingID: retryingLease.recordingID,
+        attemptID: replacementAttemptID,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    retryStall.unblock()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    let afterReplacement = try await retryWinner.snapshot(recordingID: retryingLease.recordingID)
+    try require(
+        afterReplacement?.attemptID == replacement.attemptID
+            && afterReplacement?.generation == replacement.generation
+            && afterReplacement?.stage == .readyForRecognition,
+        "Late keyboard terminal write overwrote the replacement attempt"
+    )
+}
+
+@MainActor
+private func testCancellationAndSuccessPersistenceDeadlines() async throws {
+    let cancellationRoot = try makeRoot("cancel-terminal-failure")
+    let cancellationStore = MobileAudioProcessingStore(
+        rootDirectory: cancellationRoot,
+        beforeTerminalCommit: { _ in throw InjectedTerminalCommitFailure() }
+    )
+    let cancellationLease = try await cancellationStore.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let cancellationSurface = TerminalSurfaceHarness(
+        surface: .keyboardHost,
+        lease: cancellationLease
+    )
+    let cancellationResult = await cancellationSurface.settle(
+        store: cancellationStore,
+        intent: .cancelled(message: "Processing cancelled."),
+        timeout: 0.05
+    )
+    try require(
+        cancellationResult == .persistenceUnavailable,
+        "Cancellation hid its terminal persistence failure"
+    )
+    try require(
+        !cancellationSurface.isProcessing
+            && cancellationSurface.message
+                == MobileAudioProcessingStore.terminalPersistenceWarning,
+        "Cancellation did not release processing with the truthful storage warning"
+    )
+
+    let successRoot = try makeRoot("success-terminal-commit")
+    let successStore = MobileAudioProcessingStore(rootDirectory: successRoot)
+    let (successLease, _) = try await makeFinalizedAttempt(store: successStore)
+    _ = try await successStore.beginRecognition(
+        successLease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try await successStore.checkpointRawTranscript("durable raw", lease: successLease)
+    try await successStore.cleanupStarted(
+        successLease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let successResult = await successStore.commitTerminalState(
+        .succeeded(text: "cleaned success"),
+        lease: successLease,
+        timeout: 0.2
+    )
+    guard case .committed(let successSnapshot) = successResult else {
+        throw ValidationFailure.failed("Bounded success terminal commit did not complete")
+    }
+    try require(
+        successSnapshot.stage == .succeeded,
+        "Success terminal commit did not atomically reach succeeded"
+    )
+    let committedSuccessText = try await successStore.recognizedText(
+        for: successLease.recordingID
+    )
+    try require(
+        committedSuccessText == "cleaned success",
+        "Success terminal commit did not durably preserve final text"
+    )
+
+    let stalledSuccessRoot = try makeRoot("success-terminal-stall-delete")
+    let successSetupStore = MobileAudioProcessingStore(rootDirectory: stalledSuccessRoot)
+    let (stalledSuccessLease, _) = try await makeFinalizedAttempt(store: successSetupStore)
+    _ = try await successSetupStore.beginRecognition(
+        stalledSuccessLease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try await successSetupStore.checkpointRawTranscript(
+        "durable before stall",
+        lease: stalledSuccessLease
+    )
+    let successStall = TerminalCommitStall()
+    let stalledSuccessStore = MobileAudioProcessingStore(
+        rootDirectory: stalledSuccessRoot,
+        beforeTerminalCommit: { lease in successStall.block(lease) }
+    )
+    let successStarted = Date()
+    let stalledSuccess = Task {
+        await stalledSuccessStore.commitTerminalState(
+            .succeeded(text: "late cleaned text"),
+            lease: stalledSuccessLease,
+            timeout: 0.05
+        )
+    }
+    await successStall.waitUntilEntered()
+    let stalledSuccessResult = await stalledSuccess.value
+    try require(
+        stalledSuccessResult == .persistenceUnavailable,
+        "Stalled success persistence did not return its bounded failure"
+    )
+    try require(
+        Date().timeIntervalSince(successStarted) < 0.25,
+        "Stalled success persistence kept the processing owner alive"
+    )
+    let successDeleteWinner = MobileAudioProcessingStore(rootDirectory: stalledSuccessRoot)
+    try await successDeleteWinner.tombstone(recordingID: stalledSuccessLease.recordingID)
+    successStall.unblock()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    let afterLateSuccess = try await successDeleteWinner.snapshot(
+        recordingID: stalledSuccessLease.recordingID
+    )
+    try require(
+        afterLateSuccess?.stage == .deleted,
+        "Late success persistence overwrote Delete"
+    )
+
+    let historyRoot = try makeRoot("success-history-stall-clear")
+    let historyStall = HistoryCommitStall()
+    let stalledHistory = HistoryManager(
+        rootDirectory: historyRoot,
+        beforeCommit: { historyStall.block() }
+    )
+    let historyRecording = Recording(
+        transcription: "durable terminal text",
+        duration: 1
+    )
+    let historyStarted = Date()
+    let historyPublication = Task { @MainActor in
+        do {
+            _ = try await IOSAudioProcessingDeadline.runOnMainActor(seconds: 0.05) {
+                try await stalledHistory.upsertRecording(historyRecording)
+            }
+            return false
+        } catch let error as IOSAudioProcessingDeadlineError {
+            return error == .timedOut
+        } catch {
+            return false
+        }
+    }
+    await historyStall.waitUntilEntered()
+    let historyTimedOut = await historyPublication.value
+    try require(
+        historyTimedOut,
+        "Stalled History publication did not return its bounded failure"
+    )
+    try require(
+        Date().timeIntervalSince(historyStarted) < 0.25,
+        "Stalled History publication kept the processing owner alive"
+    )
+    let clearWinner = HistoryManager(rootDirectory: historyRoot)
+    let clearTask = Task { @MainActor in
+        try await clearWinner.clearAll(recordingIDs: [historyRecording.id])
+    }
+    historyStall.unblock()
+    try await clearTask.value
+    try await Task.sleep(nanoseconds: 50_000_000)
+    let historyObserver = HistoryManager(rootDirectory: historyRoot)
+    try await historyObserver.reload()
+    try require(
+        !historyObserver.recordings.contains(where: { $0.id == historyRecording.id }),
+        "Late History success publication overwrote Clear"
+    )
 }
 
 private func testStalledNativeExportReturnsTerminalAndFencesLateCompletion() async throws {
@@ -696,7 +1180,7 @@ private func testDurabilityIntegrityRawRecoveryAndRetry() async throws {
     }
     try require(partialText == "first second", "Cumulative checkpoint duplicated text")
     try await store.checkpointRawTranscript("complete raw tail", lease: lease)
-    try await store.cleanupStarted(lease)
+    try await store.cleanupStarted(lease, deadlineAt: Date().addingTimeInterval(30))
 
     // Simulate termination during cleanup. Restart must resolve to raw and retain the final source.
     let restarted = MobileAudioProcessingStore(rootDirectory: root)
@@ -934,7 +1418,7 @@ private func testRetryAuthorityTransferCrashDoesNotAdoptPriorText() async throws
         "raw text from the previous generation",
         lease: originalLease
     )
-    try await store.cleanupStarted(originalLease)
+    try await store.cleanupStarted(originalLease, deadlineAt: Date().addingTimeInterval(30))
     _ = try await store.checkpointFinalText(
         "final text from the previous generation",
         lease: originalLease
@@ -1121,7 +1605,7 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
     let (lease, _) = try await makeFinalizedAttempt(store: store)
     _ = try await store.beginRecognition(lease, deadlineAt: Date().addingTimeInterval(30))
     try await store.checkpointRawTranscript("durable recognized text", lease: lease)
-    try await store.cleanupStarted(lease)
+    try await store.cleanupStarted(lease, deadlineAt: Date().addingTimeInterval(30))
     _ = try await store.checkpointFinalText("durable final text", lease: lease)
     try await store.markSucceeded(lease)
 
@@ -1151,20 +1635,26 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
         .deletingLastPathComponent()
         .appendingPathComponent("Whishpermate/WhisperMateIOS/ContentView.swift")
     let source = try String(contentsOf: sourceURL, encoding: .utf8)
-    guard let delivery = source.range(of: "KeyboardDictationHandoff.publishHostResult") else {
+    guard let successFlow = sourceSection(
+        source,
+        from: "private func transcribeAudio(",
+        to: "private func finishTerminalRecording("
+    ),
+    let delivery = successFlow.range(of: "KeyboardDictationHandoff.publishHostResult")
+    else {
         throw ValidationFailure.failed("iOS keyboard delivery path is missing")
     }
-    let beforeDelivery = source[..<delivery.lowerBound]
+    let beforeDelivery = successFlow[..<delivery.lowerBound]
     try require(
         beforeDelivery.range(
-            of: "try await processingStore.markSucceeded(lease)",
+            of: ".succeeded(text: processedResult)",
             options: .backwards
         ) != nil,
         "iOS keyboard delivery occurs before durable terminal success"
     )
     try require(
         beforeDelivery.range(
-            of: "try await replaceHistoryRecording(recording, in: historyManager)",
+            of: "replaceHistoryRecording(recording, in: historyManager)",
             options: .backwards
         ) != nil,
         "iOS keyboard delivery occurs before durable History publication"
@@ -1175,7 +1665,7 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
     let (rawLease, _) = try await makeFinalizedAttempt(store: rawStore)
     _ = try await rawStore.beginRecognition(rawLease, deadlineAt: Date().addingTimeInterval(30))
     try await rawStore.checkpointRawTranscript("raw survives cleanup failure", lease: rawLease)
-    try await rawStore.cleanupStarted(rawLease)
+    try await rawStore.cleanupStarted(rawLease, deadlineAt: Date().addingTimeInterval(30))
     try await rawStore.markFailed(
         rawLease,
         message: "Cleanup timed out",
@@ -1672,6 +2162,138 @@ private func testIOSCallerRecoveryContracts() throws {
         ),
         encoding: .utf8
     )
+    guard let sheetCaptureFailure = sourceSection(
+        sheet,
+        from: "private func handleCaptureFailure(",
+        to: "private func cancelActiveAttemptOnDisappear()"
+    ),
+    let sheetTerminalCommit = sheetCaptureFailure.range(of: "commitTerminalState("),
+    let sheetTerminalUI = sheetCaptureFailure.range(of: "finishTerminalSurface(")
+    else { throw ValidationFailure.failed("Sheet capture terminal settlement is missing") }
+    try require(
+        sheetTerminalCommit.lowerBound < sheetTerminalUI.lowerBound,
+        "Sheet releases terminal UI before the exact-attempt terminal commit"
+    )
+
+    guard let keyboardCaptureFailure = sourceSection(
+        content,
+        from: "private func handleCaptureFailure(",
+        to: "func dismissError()"
+    ),
+    let keyboardTerminalCommit = keyboardCaptureFailure.range(of: "commitTerminalState("),
+    let keyboardHandoff = keyboardCaptureFailure.range(of: "publishHostFailure("),
+    let keyboardOwnershipRelease = keyboardCaptureFailure.range(of: "activeAttempt = nil")
+    else { throw ValidationFailure.failed("Keyboard capture terminal settlement is missing") }
+    try require(
+        keyboardTerminalCommit.lowerBound < keyboardHandoff.lowerBound
+            && keyboardTerminalCommit.lowerBound < keyboardOwnershipRelease.lowerBound,
+        "Keyboard publishes terminal handoff or clears ownership before durable terminal commit"
+    )
+    try require(
+        !sheet.contains("try? await processingStore.markFailed")
+            && !content.contains("try? await processingStore.markFailed")
+            && !sheet.contains("try? await processingStore.markCancelled")
+            && !content.contains("try? await processingStore.markCancelled"),
+        "An iOS terminal path still suppresses its persistence error"
+    )
+    guard let sheetCancellation = sourceSection(
+        sheet,
+        from: "private func cancelAndReconcileActiveAttempt(",
+        to: "private func userMessage(for error: Error)"
+    ),
+    let sheetCancellationCommit = sheetCancellation.range(
+        of: "commitTerminalState("
+    ),
+    let sheetCancellationRelease = sheetCancellation.range(
+        of: "self.activeAttempt = nil",
+        range: sheetCancellationCommit.upperBound ..< sheetCancellation.endIndex
+    ),
+    let keyboardStop = sourceSection(
+        content,
+        from: "func stopListening()",
+        to: "func cancelAndReconcile("
+    ),
+    let keyboardStopCommit = keyboardStop.range(of: "commitTerminalState("),
+    let keyboardStopRelease = keyboardStop.range(
+        of: "self.activeAttempt = nil",
+        range: keyboardStopCommit.upperBound ..< keyboardStop.endIndex
+    ),
+    let keyboardCancellation = sourceSection(
+        content,
+        from: "func cancelAndReconcile(",
+        to: "private func startRecording("
+    ),
+    let keyboardCancellationCommit = keyboardCancellation.range(
+        of: "commitTerminalState("
+    ),
+    let keyboardCancellationRelease = keyboardCancellation.range(
+        of: "activeAttempt = nil",
+        range: keyboardCancellationCommit.upperBound ..< keyboardCancellation.endIndex
+    )
+    else { throw ValidationFailure.failed("Bounded iOS cancellation settlement is missing") }
+    try require(
+        sheetCancellationCommit.lowerBound < sheetCancellationRelease.lowerBound
+            && keyboardStopCommit.lowerBound < keyboardStopRelease.lowerBound
+            && keyboardCancellationCommit.lowerBound < keyboardCancellationRelease.lowerBound,
+        "An iOS cancellation path releases ownership before terminal persistence"
+    )
+
+    for (name, source) in [("sheet", sheet), ("keyboard host", content)] {
+        guard let successFlow = sourceSection(
+            source,
+            from: "private func transcribeAudio(",
+            to: source == sheet
+                ? "private func showTerminalRecording("
+                : "private func finishTerminalRecording("
+        )
+        else { throw ValidationFailure.failed("\(name) success settlement is missing") }
+        try require(
+            successFlow.contains(".succeeded(text: processedResult)")
+                && successFlow.contains("successPersistenceDeadline")
+                && successFlow.contains("IOSAudioProcessingDeadline.runOnMainActor(")
+                && successFlow.contains("replaceHistoryRecording("),
+            "\(name) success persistence is not bounded through History publication"
+        )
+    }
+
+    guard let sheetAllocation = sourceSection(
+        sheet,
+        from: "private func beginRecording()",
+        to: "private func scheduleCaptureDeadline("
+    ),
+    let keyboardAllocation = sourceSection(
+        content,
+        from: "private func beginRecording(",
+        to: "private func scheduleCaptureDeadline("
+    )
+    else { throw ValidationFailure.failed("Allocated-lease catch paths are missing") }
+    try require(
+        sheetAllocation.contains("terminalResult = await persistTerminalState(")
+            && keyboardAllocation.contains("terminalResult = await persistTerminalState("),
+        "An allocated iOS lease can reset its UI without bounded terminal persistence"
+    )
+
+    for (name, source) in [("sheet", sheet), ("keyboard host", content)] {
+        try require(
+            source.contains("MobileAudioStageDeadline.run(")
+                && source.contains("deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)")
+                && source.contains("cleanupDidStart()"),
+            "\(name) cleanup is not separately bounded and durably checkpointed"
+        )
+        guard let cleanupCheckpoint = source.range(
+            of: "deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)"
+        ),
+        let cleanupWatchdog = source.range(
+            of: "cleanupDidStart()",
+            range: cleanupCheckpoint.upperBound ..< source.endIndex
+        )
+        else { throw ValidationFailure.failed("\(name) cleanup watchdog ordering is missing") }
+        try require(
+            cleanupCheckpoint.lowerBound < cleanupWatchdog.lowerBound,
+            "\(name) arms cleanup UI time before the cleanup stage is durable"
+        )
+    }
+
     guard let appearStart = content.range(of: ".onAppear {")?.lowerBound,
           let appearEnd = content.range(of: ".onDisappear {", range: appearStart ..< content.endIndex)?.lowerBound
     else { throw ValidationFailure.failed("ContentView launch sequence is missing") }
@@ -1761,8 +2383,8 @@ private func testIOSCallerRecoveryContracts() throws {
     else { throw ValidationFailure.failed("Sheet cancellation reconciler is missing") }
     let cancellationReconciler = String(sheet[reconciliationStart ..< reconciliationEnd])
     try require(
-        cancellationReconciler.contains("snapshot?.stage == .succeeded")
-            && cancellationReconciler.contains("replaceHistoryRecording(recording)"),
+        cancellationReconciler.contains("snapshot.stage == .succeeded")
+            && cancellationReconciler.contains("await showTerminalRecording("),
         "Sheet cancellation hides a raw transcript that already completed"
     )
     try require(
@@ -1866,6 +2488,14 @@ private struct IOSAudioRecoveryValidator {
         do {
             print("testDeadlineReturnsWithoutWaitingForLateWork")
             try await testDeadlineReturnsWithoutWaitingForLateWork()
+            print("testSeparateRecognitionAndCleanupStageDeadlines")
+            try await testSeparateRecognitionAndCleanupStageDeadlines()
+            print("testRecordingSheetTerminalWriteFailureStallAndLateCompletion")
+            try await testRecordingSheetTerminalWriteFailureStallAndLateCompletion()
+            print("testKeyboardTerminalWriteFailureStallAndLateCompletion")
+            try await testKeyboardTerminalWriteFailureStallAndLateCompletion()
+            print("testCancellationAndSuccessPersistenceDeadlines")
+            try await testCancellationAndSuccessPersistenceDeadlines()
             print("testStalledNativeExportReturnsTerminalAndFencesLateCompletion")
             try await testStalledNativeExportReturnsTerminalAndFencesLateCompletion()
             print("testStickyCancellationBeforeNewAndRetryAllocationReturns")

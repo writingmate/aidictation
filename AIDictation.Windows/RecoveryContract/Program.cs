@@ -1390,6 +1390,29 @@ static class Contract
     {
         {
             var fixture = new CoordinatorFixture();
+            fixture.Pipeline.BlockCaptureSnapshot = true;
+            var startTask = Task.Run(
+                () => fixture.Coordinator.StartCaptureAsync(false, null));
+            True(
+                fixture.Pipeline.CaptureSnapshotEntered.Wait(TimeSpan.FromSeconds(1)),
+                "capture snapshot entered before the deterministic shutdown registration gap");
+
+            await fixture.Coordinator
+                .ShutdownAsync(TimeSpan.FromMilliseconds(120))
+                .WaitAsync(TimeSpan.FromSeconds(1));
+            fixture.Pipeline.ReleaseCaptureSnapshot();
+            var outcome = await startTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+            True(!outcome.Started,
+                "a start that began before shutdown cannot register after shutdown completed");
+            Equal(0, fixture.Recorder.StartCalls,
+                "post-shutdown registration fence prevents a late microphone open");
+            Equal("Idle", fixture.State.Current,
+                "the rejected late start leaves shutdown UI state idle");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
             fixture.Store.BlockBeginCapture = true;
             var startTask = fixture.Coordinator.StartCaptureAsync(false, null);
             await fixture.Store.BeginCaptureEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
@@ -2315,10 +2338,12 @@ static class Contract
 
     private sealed class FakePipeline : ITranscriptionPipeline
     {
+        public bool BlockCaptureSnapshot { get; set; }
         public bool BlockOnCheckpoint { get; set; }
         public bool BlockAfterRaw { get; set; }
         public bool BlockSynchronouslyBeforeTask { get; set; }
         public int AbandonCalls;
+        private readonly ManualResetEventSlim _captureSnapshotRelease = new();
         private readonly TaskCompletionSource<bool> _afterRawRelease =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ManualResetEventSlim _synchronousSetupRelease = new();
@@ -2326,13 +2351,21 @@ static class Contract
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> AbandonObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim CaptureSnapshotEntered { get; } = new();
         public ManualResetEventSlim SynchronousSetupEntered { get; } = new();
 
+        public void ReleaseCaptureSnapshot() => _captureSnapshotRelease.Set();
         public void ReleaseAfterRaw() => _afterRawRelease.TrySetResult(true);
         public void ReleaseSynchronousSetup() => _synchronousSetupRelease.Set();
 
-        public TranscriptionAttemptSnapshot CaptureAttemptSnapshot(string? providerOverride = null) =>
-            TranscriptionAttemptSnapshotFactory.Capture(
+        public TranscriptionAttemptSnapshot CaptureAttemptSnapshot(string? providerOverride = null)
+        {
+            if (BlockCaptureSnapshot)
+            {
+                CaptureSnapshotEntered.Set();
+                _captureSnapshotRelease.Wait();
+            }
+            return TranscriptionAttemptSnapshotFactory.Capture(
                 providerOverride ?? "local",
                 new[] { "en" },
                 new[] { "English" },
@@ -2341,6 +2374,7 @@ static class Contract
                 Array.Empty<TextReplacementSnapshot>(),
                 null,
                 cleanupEnabled: true);
+        }
 
         public async Task<TranscriptionResult> TranscribeAsync(
             string audioFilePath,

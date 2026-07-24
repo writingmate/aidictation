@@ -214,7 +214,13 @@ public sealed class AudioProcessingCoordinator
             return new CaptureStartOutcome(false, null, "Another recording is already active.");
 
         var pending = new PendingStart();
-        lock (_activeLock) _pendingStart = pending;
+        if (!TryRegisterPendingStart(pending))
+        {
+            _appState.Reset();
+            return IsShuttingDown()
+                ? new CaptureStartOutcome(false, null, "The app is closing.")
+                : new CaptureStartOutcome(false, null, "Another recording is already active.");
+        }
         using var linkedStartCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             pending.Cancellation.Token);
@@ -618,11 +624,11 @@ public sealed class AudioProcessingCoordinator
                 return TranscriptionResult.Failure("This recording does not have a complete saved audio file.");
 
             pending = new PendingStart();
-            lock (_activeLock)
+            if (!TryRegisterPendingStart(pending))
             {
-                if (_active != null || _pendingStart != null)
-                    return TranscriptionResult.Failure("Wait for the current audio processing to finish.");
-                _pendingStart = pending;
+                return IsShuttingDown()
+                    ? TranscriptionResult.Failure("The app is closing.")
+                    : TranscriptionResult.Failure("Wait for the current audio processing to finish.");
             }
             if (!_appState.StartRetrying())
                 return TranscriptionResult.Failure("Wait for the current audio processing to finish.");
@@ -1457,6 +1463,23 @@ public sealed class AudioProcessingCoordinator
     private bool IsShuttingDown()
     {
         lock (_shutdownLock) return _shutdownTask != null;
+    }
+
+    private bool TryRegisterPendingStart(PendingStart pending)
+    {
+        // Registration and the shutdown snapshot use the same lock order.
+        // Either shutdown observes this pending owner and cancels it, or the
+        // caller observes the already-created shutdown task and cannot start.
+        lock (_shutdownLock)
+        {
+            if (_shutdownTask != null) return false;
+            lock (_activeLock)
+            {
+                if (_active != null || _pendingStart != null) return false;
+                _pendingStart = pending;
+                return true;
+            }
+        }
     }
 
     private bool TrySetActiveForPending(PendingStart pending, ActiveAttempt active)

@@ -85,18 +85,30 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        // Do not install an ownership slot that has no setup task capable of
+        // completing SetupCompleted. Otherwise an already-cancelled start
+        // leaves a retired close placeholder that can only expire at shutdown.
+        cancellationToken.ThrowIfCancellationRequested();
         var session = new CaptureSession { Lease = lease, PartialSourcePath = partialSourcePath };
         if (!_closeRegistry.TryInstall(session))
             return RecorderStartResult.Failure("Another recording is already active.");
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var setupTask = Task.Run(() =>
+            Task setupTask;
+            try
             {
-                try { StartWasapiSession(session, selectedDeviceId); }
-                finally { session.SetupCompleted.TrySetResult(true); }
-            }, CancellationToken.None);
+                setupTask = Task.Run(() =>
+                {
+                    try { StartWasapiSession(session, selectedDeviceId); }
+                    finally { session.SetupCompleted.TrySetResult(true); }
+                }, CancellationToken.None);
+            }
+            catch
+            {
+                session.SetupCompleted.TrySetResult(true);
+                throw;
+            }
             try
             {
                 await setupTask.WaitAsync(FirstWriteDeadline, cancellationToken).ConfigureAwait(false);

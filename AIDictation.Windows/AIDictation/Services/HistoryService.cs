@@ -147,11 +147,20 @@ public sealed class HistoryService : IRecordingHistory
     public Task<bool> RemoveMetadataAfterTombstoneAsync(
         Guid id,
         CancellationToken cancellationToken = default) =>
+        RemoveMetadataAfterTombstonesAsync(new[] { id }, cancellationToken);
+
+    public Task<bool> RemoveMetadataAfterTombstonesAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        var tombstoned = ids.Distinct().ToArray();
+        return
         PersistMutationAsync(rows =>
         {
-            var removed = rows.RemoveAll(item => item.Id == id) > 0;
+            var removed = rows.RemoveAll(item => tombstoned.Contains(item.Id)) > 0;
             return removed ? Mutation.AcceptedChanged : Mutation.AcceptedUnchanged;
-        }, cancellationToken, () => _tombstoneFence.Commit(id));
+        }, cancellationToken, () => _tombstoneFence.Commit(tombstoned));
+    }
 
     public async Task<bool> ClearMetadataAfterTombstoneAsync(
         CancellationToken cancellationToken = default)

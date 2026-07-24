@@ -27,6 +27,10 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource<bool> WriterClosed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<bool> StoppedObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource<bool> StopClassified =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource<bool> SetupCompleted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public WasapiCapture? Capture;
@@ -34,6 +38,9 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         public EventHandler<WaveInEventArgs>? DataHandler;
         public EventHandler<StoppedEventArgs>? StoppedHandler;
         public Exception? WriteFailure;
+        public int KnownIncomplete;
+        public int CaptureStarted;
+        public int WriterFinalized;
         public AudioCaptureTerminalFence TerminalFence { get; } = new();
     }
 
@@ -41,6 +48,8 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
     private static readonly TimeSpan DefaultFinalizationDeadline = TimeSpan.FromSeconds(10);
     private readonly object _lifetimeLock = new();
     private readonly RetiredNativeCloseRegistry<CaptureSession> _closeRegistry = new();
+    private readonly Dictionary<Guid, (AudioAttemptLease Lease, RecorderFinalizationResult Proof)>
+        _terminalProofs = new();
     private bool _disposed;
 
     public static AudioRecorderService Instance { get; } = new();
@@ -143,7 +152,9 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
                 return RecorderStartResult.Failure(
                     session.WriteFailure == null
                         ? "Recording stopped before audio was ready."
-                        : "Audio could not be saved. Check available storage and try again.");
+                        : "Audio could not be saved. Check available storage and try again.",
+                    knownIncomplete: Volatile.Read(ref session.KnownIncomplete) != 0 ||
+                                     session.WriteFailure != null);
             }
 
             return RecorderStartResult.Ready();
@@ -157,7 +168,8 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         {
             await AbandonSessionAsync(session, ex.Message).ConfigureAwait(false);
             return RecorderStartResult.Failure(
-                "Unable to start the microphone. Check Windows microphone access and the selected input.");
+                "Unable to start the microphone. Check Windows microphone access and the selected input.",
+                knownIncomplete: true);
         }
     }
 
@@ -197,6 +209,7 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         }
         catch (Exception ex)
         {
+            LatchKnownIncomplete(session, ex);
             await AbandonSessionAsync(session, ex.Message).ConfigureAwait(false);
         }
 
@@ -230,14 +243,38 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         }
     }
 
-    public async Task AbortRecordingAsync(
+    public async Task<RecorderFinalizationResult?> AbortRecordingAsync(
         AudioAttemptLease lease,
         string reason,
+        TimeSpan? deadline = null,
         CancellationToken cancellationToken = default)
     {
-        var session = CurrentMatchingSession(lease);
-        if (session == null) return;
-        await AbandonSessionAsync(session, reason).WaitAsync(cancellationToken).ConfigureAwait(false);
+        var session = MatchingCurrentOrRetiredSession(lease);
+        if (session == null)
+            return TryGetTerminalProof(lease, out var completedProof)
+                ? completedProof
+                : null;
+        session.TerminalFence.MarkStopRequested();
+        if (session.TerminalFence.TryClaimTerminal())
+            _ = StartTrackedClose(session);
+        session.FirstWrite.TrySetCanceled();
+
+        if (SessionIsKnownIncomplete(session))
+        {
+            var knownIncomplete = GetOrCreateTerminalProof(session);
+            session.Finalized.TrySetResult(knownIncomplete);
+            return knownIncomplete;
+        }
+
+        var result = await AwaitFinalizedSourceProofAsync(
+                session,
+                matchesLease: true,
+                deadline,
+                reason,
+                cancellationToken)
+            .ConfigureAwait(false);
+        session.Finalized.TrySetResult(result);
+        return result;
     }
 
     public async Task<RecorderFinalizationResult?> ShutdownAsync(
@@ -248,35 +285,34 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         lock (_lifetimeLock) _disposed = true;
         var stopwatch = Stopwatch.StartNew();
         var snapshot = _closeRegistry.BeginShutdown();
-        var session = snapshot.Current?.Resource;
-        if (session != null)
+        var currentSession = snapshot.Current?.Resource;
+        if (currentSession != null)
         {
-            _ = session.TerminalFence.TryClaimTerminal();
-            session.FirstWrite.TrySetCanceled();
-            _ = StartTrackedClose(session, snapshot.Current);
+            currentSession.TerminalFence.MarkStopRequested();
+            _ = currentSession.TerminalFence.TryClaimTerminal();
+            currentSession.FirstWrite.TrySetCanceled();
+            _ = StartTrackedClose(currentSession, snapshot.Current);
         }
 
+        var session = activeLease == null
+            ? null
+            : snapshot.RetiredResources.FirstOrDefault(
+                retired => SessionMatchesLease(retired, activeLease));
         RecorderFinalizationResult? result = null;
-        if (session != null)
+        if (activeLease != null && session != null)
         {
-            var matchesLease = activeLease != null &&
-                               session.Lease.RecordingId == activeLease.RecordingId &&
-                               session.Lease.AttemptId == activeLease.AttemptId &&
-                               session.Lease.DeletionGeneration == activeLease.DeletionGeneration &&
-                               session.Lease.ClearGeneration == activeLease.ClearGeneration;
+            if (SessionIsKnownIncomplete(session))
+            {
+                result = GetOrCreateTerminalProof(session);
+                session.Finalized.TrySetResult(result);
+            }
+            else
             try
             {
                 await session.WriterClosed.Task
                     .WaitAsync(Remaining(deadline, stopwatch), cancellationToken)
                     .ConfigureAwait(false);
-                var validation = AudioContainerValidator.ValidateFinalizedWave(session.PartialSourcePath);
-                result = new RecorderFinalizationResult(
-                    matchesLease && session.WriteFailure == null && validation.IsValid,
-                    session.PartialSourcePath,
-                    matchesLease && session.WriteFailure == null && validation.IsValid
-                        ? null
-                        : validation.ErrorMessage ??
-                          "The recording did not finish closing before the app exited.");
+                result = GetOrCreateTerminalProof(session);
             }
             catch (TimeoutException)
             {
@@ -294,20 +330,32 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
                     "Recording finalization was cancelled while the app was exiting.",
                     TimedOut: true);
             }
-            session.Finalized.TrySetResult(result);
+            if (result != null) session.Finalized.TrySetResult(result);
+        }
+        else if (activeLease != null &&
+                 TryGetTerminalProof(activeLease, out var completedProof))
+        {
+            result = completedProof;
         }
 
-        try
+        var retiredWriterCloses = snapshot.RetiredResources
+            .Select(retired => retired.WriterClosed.Task)
+            .ToArray();
+        if (retiredWriterCloses.Length > 0)
         {
-            if (snapshot.CloseTasks.Count > 0)
+            try
             {
-                await Task.WhenAll(snapshot.CloseTasks)
+                await Task.WhenAll(retiredWriterCloses)
                     .WaitAsync(Remaining(deadline, stopwatch), cancellationToken)
                     .ConfigureAwait(false);
             }
+            catch (TimeoutException) { }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         }
-        catch (TimeoutException) { }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+
+        ObserveRetiredCloseTasks(
+            snapshot.CloseTasks,
+            deadline - stopwatch.Elapsed);
         return result;
     }
 
@@ -371,23 +419,19 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
             session.StoppedHandler = (_, args) => OnRecordingStopped(session, args);
             capture.DataAvailable += session.DataHandler;
             capture.RecordingStopped += session.StoppedHandler;
+            Volatile.Write(ref session.CaptureStarted, 1);
             capture.StartRecording();
             if (session.TerminalFence.IsTerminal || !IsCurrent(session))
             {
-                capture.DataAvailable -= session.DataHandler;
-                capture.RecordingStopped -= session.StoppedHandler;
-                try { capture.StopRecording(); } catch { }
-                lock (session.WriterLock)
-                {
-                    try { writer.Dispose(); } catch { }
-                    session.Writer = null;
-                }
-                try { capture.Dispose(); } catch { }
-                session.Capture = null;
+                // The terminal owner closes the published resources after
+                // setup completion. Keeping the stopped handler attached is
+                // required to classify the native close before positive proof.
+                return;
             }
         }
-        catch
+        catch (Exception ex)
         {
+            LatchKnownIncomplete(session, ex);
             if (capture != null)
             {
                 if (session.DataHandler != null) capture.DataAvailable -= session.DataHandler;
@@ -411,28 +455,45 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
             session.TerminalFence.IsTerminal || !IsCurrent(session))
             return;
 
+        float level;
         try
         {
             var format = session.Capture?.WaveFormat;
             if (format == null) throw new InvalidOperationException("The microphone format became unavailable.");
-            var (buffer, count, level) = ConvertCaptureBuffer(args.Buffer, args.BytesRecorded, format);
+            var converted = ConvertCaptureBuffer(args.Buffer, args.BytesRecorded, format);
+            level = converted.Level;
             lock (session.WriterLock)
             {
                 if (!session.TerminalFence.IsAcceptingFrames ||
                     session.TerminalFence.IsTerminal || !IsCurrent(session))
                     return;
-                session.Writer?.Write(buffer, 0, count);
-                if (!session.FirstWrite.Task.IsCompleted)
-                    session.Writer?.Flush();
+                try
+                {
+                    session.Writer?.Write(converted.Buffer, 0, converted.Count);
+                    if (!session.FirstWrite.Task.IsCompleted)
+                        session.Writer?.Flush();
+                }
+                catch (Exception ex)
+                {
+                    LatchKnownIncomplete(session, ex);
+                    throw;
+                }
             }
             session.FirstWrite.TrySetResult(true);
-            if (IsCurrent(session)) AudioLevelChanged?.Invoke(this, level);
         }
         catch (Exception ex)
         {
-            session.WriteFailure ??= ex;
+            LatchKnownIncomplete(session, ex);
             session.FirstWrite.TrySetException(ex);
             _ = HandleCaptureWriteFailureAsync(session, ex);
+            return;
+        }
+        if (!IsCurrent(session)) return;
+        try { AudioLevelChanged?.Invoke(this, level); }
+        catch
+        {
+            // UI observers do not own capture integrity. A dispatcher teardown
+            // must not classify a successfully written frame as corrupt audio.
         }
     }
 
@@ -452,26 +513,32 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
 
     private void OnRecordingStopped(CaptureSession session, StoppedEventArgs args)
     {
+        var unexpectedStop = !session.TerminalFence.StopWasRequested;
+        if (args.Exception != null || unexpectedStop)
+        {
+            LatchKnownIncomplete(
+                session,
+                args.Exception ??
+                new IOException("The microphone stopped before an intentional close."));
+        }
+        session.StoppedObserved.TrySetResult(true);
+        session.StopClassified.TrySetResult(true);
         _ = Task.Run(async () =>
         {
-            if (!session.TerminalFence.TryClaimTerminal()) return;
-            _ = StartTrackedClose(session);
+            var ownsTerminal = session.TerminalFence.TryClaimTerminal();
+            if (ownsTerminal) _ = StartTrackedClose(session);
             await session.WriterClosed.Task.ConfigureAwait(false);
-            var failure = session.WriteFailure ?? args.Exception;
-            session.Finalized.TrySetResult(new RecorderFinalizationResult(
-                failure == null,
-                session.PartialSourcePath,
-                failure == null
-                    ? null
-                    : "The recording could not be finalized. The recoverable source was kept."));
-            if (failure != null) session.FirstWrite.TrySetException(failure);
-            if (!session.TerminalFence.StopWasRequested)
+            var proof = GetOrCreateTerminalProof(session);
+            session.Finalized.TrySetResult(proof);
+            if (session.WriteFailure != null)
+                session.FirstWrite.TrySetException(session.WriteFailure);
+            if (unexpectedStop || args.Exception != null)
             {
                 CaptureTerminatedUnexpectedly?.Invoke(this, new RecorderCaptureFailedEventArgs(
                     session.Lease,
-                    failure == null
-                        ? "The microphone stopped unexpectedly. The recoverable source was kept."
-                        : "The microphone or storage stopped during recording. The recoverable source was kept."));
+                    proof.KnownIncomplete
+                        ? "The microphone or storage stopped during recording. The recoverable source was kept."
+                        : "The microphone stopped unexpectedly. The recoverable source was kept."));
             }
         });
     }
@@ -488,7 +555,10 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
             false,
             session.PartialSourcePath,
             message,
-            timedOut));
+            timedOut,
+            KnownIncomplete: !timedOut &&
+                             (Volatile.Read(ref session.KnownIncomplete) != 0 ||
+                              session.WriteFailure != null)));
         await Task.CompletedTask;
         return wonTerminal;
     }
@@ -505,42 +575,65 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         {
             try
             {
-                DisposeSessionResourcesCore(session);
+                await CloseSessionResourcesAsync(session).ConfigureAwait(false);
                 await session.SetupCompleted.Task.ConfigureAwait(false);
                 // A setup that observed retirement disposes its locals itself.
                 // Run once more in case it published a resource immediately
                 // before observing the terminal fence.
-                DisposeSessionResourcesCore(session);
+                await CloseSessionResourcesAsync(session).ConfigureAwait(false);
             }
             finally
             {
-                session.WriterClosed.TrySetResult(session.WriteFailure == null);
+                SignalWriterClosed(session);
                 _closeRegistry.Complete(session);
             }
         });
         return registration.Completion;
     }
 
-    private static void DisposeSessionResourcesCore(CaptureSession session)
+    private async Task CloseSessionResourcesAsync(CaptureSession session)
     {
         var capture = session.Capture;
         if (capture != null)
         {
             if (session.DataHandler != null) capture.DataAvailable -= session.DataHandler;
-            if (session.StoppedHandler != null) capture.RecordingStopped -= session.StoppedHandler;
+            if (Volatile.Read(ref session.CaptureStarted) != 0 &&
+                !session.StoppedObserved.Task.IsCompleted &&
+                !SessionIsKnownIncomplete(session))
+            {
+                try
+                {
+                    capture.StopRecording();
+                }
+                catch (Exception ex)
+                {
+                    LatchKnownIncomplete(session, ex);
+                }
+                if (!SessionIsKnownIncomplete(session))
+                    await session.StopClassified.Task.ConfigureAwait(false);
+            }
+            if (session.StoppedHandler != null)
+                capture.RecordingStopped -= session.StoppedHandler;
         }
         var hadWriter = false;
         lock (session.WriterLock)
         {
             hadWriter = session.Writer != null;
             try { session.Writer?.Dispose(); }
-            catch (Exception ex) { session.WriteFailure ??= ex; }
+            catch (Exception ex)
+            {
+                LatchKnownIncomplete(session, ex);
+            }
             session.Writer = null;
         }
+        if (hadWriter) Volatile.Write(ref session.WriterFinalized, 1);
         // A durable WAV header no longer depends on potentially wedged native
         // capture disposal. Signal it before disposing the WASAPI generation.
-        if (hadWriter || session.SetupCompleted.Task.IsCompleted)
-            session.WriterClosed.TrySetResult(session.WriteFailure == null);
+        if (SessionIsKnownIncomplete(session) ||
+            (session.SetupCompleted.Task.IsCompleted &&
+             (Volatile.Read(ref session.WriterFinalized) != 0 ||
+              Volatile.Read(ref session.CaptureStarted) == 0)))
+            SignalWriterClosed(session);
         if (capture != null)
         {
             try { capture.Dispose(); } catch { }
@@ -548,16 +641,185 @@ public sealed class AudioRecorderService : IAudioRecorderService, IDisposable
         }
     }
 
-    private CaptureSession? CurrentMatchingSession(AudioAttemptLease lease)
+    private void SignalWriterClosed(CaptureSession session)
     {
-        var session = _closeRegistry.Current;
-        return session != null && session.Lease.RecordingId == lease.RecordingId &&
-               session.Lease.AttemptId == lease.AttemptId &&
-               session.Lease.DeletionGeneration == lease.DeletionGeneration &&
-               session.Lease.ClearGeneration == lease.ClearGeneration
+        var proof = GetOrCreateTerminalProof(session);
+        session.WriterClosed.TrySetResult(proof.IsFinalized);
+    }
+
+    private RecorderFinalizationResult GetOrCreateTerminalProof(CaptureSession session)
+    {
+        lock (_lifetimeLock)
+        {
+            if (_terminalProofs.TryGetValue(session.Lease.RecordingId, out var cached) &&
+                LeaseIdentityMatches(cached.Lease, session.Lease))
+            {
+                if (cached.Proof.KnownIncomplete || !SessionIsKnownIncomplete(session))
+                    return cached.Proof;
+                var upgraded = KnownIncompleteProof(session);
+                _terminalProofs[session.Lease.RecordingId] = (session.Lease, upgraded);
+                return upgraded;
+            }
+        }
+
+        var validation = AudioContainerValidator.ValidateFinalizedWave(session.PartialSourcePath);
+        var knownIncomplete = SessionIsKnownIncomplete(session) || !validation.IsValid;
+        var proof = new RecorderFinalizationResult(
+            !knownIncomplete,
+            session.PartialSourcePath,
+            knownIncomplete
+                ? validation.ErrorMessage ??
+                  "The recording did not close as a complete audio file."
+                : null,
+            TimedOut: false,
+            KnownIncomplete: knownIncomplete);
+        lock (_lifetimeLock)
+        {
+            if (_terminalProofs.TryGetValue(session.Lease.RecordingId, out var cached) &&
+                LeaseIdentityMatches(cached.Lease, session.Lease) &&
+                cached.Proof.KnownIncomplete)
+                return cached.Proof;
+            if (SessionIsKnownIncomplete(session))
+                proof = KnownIncompleteProof(session);
+            _terminalProofs[session.Lease.RecordingId] = (session.Lease, proof);
+        }
+        return proof;
+    }
+
+    private void LatchKnownIncomplete(CaptureSession session, Exception error)
+    {
+        lock (_lifetimeLock)
+        {
+            Volatile.Write(ref session.KnownIncomplete, 1);
+            session.WriteFailure ??= error;
+            session.StopClassified.TrySetResult(true);
+            if (_terminalProofs.TryGetValue(session.Lease.RecordingId, out var cached) &&
+                LeaseIdentityMatches(cached.Lease, session.Lease) &&
+                !cached.Proof.KnownIncomplete)
+            {
+                _terminalProofs[session.Lease.RecordingId] =
+                    (session.Lease, KnownIncompleteProof(session));
+            }
+        }
+    }
+
+    private static bool SessionIsKnownIncomplete(CaptureSession session) =>
+        Volatile.Read(ref session.KnownIncomplete) != 0 ||
+        session.WriteFailure != null;
+
+    private static RecorderFinalizationResult KnownIncompleteProof(CaptureSession session) =>
+        new(
+            false,
+            session.PartialSourcePath,
+            session.WriteFailure?.Message ??
+            "The recording did not close as a complete audio file.",
+            TimedOut: false,
+            KnownIncomplete: true);
+
+    private bool TryGetTerminalProof(
+        AudioAttemptLease lease,
+        out RecorderFinalizationResult? proof)
+    {
+        lock (_lifetimeLock)
+        {
+            if (_terminalProofs.TryGetValue(lease.RecordingId, out var cached) &&
+                LeaseIdentityMatches(cached.Lease, lease))
+            {
+                proof = cached.Proof;
+                return true;
+            }
+        }
+        proof = null;
+        return false;
+    }
+
+    private static bool LeaseIdentityMatches(
+        AudioAttemptLease first,
+        AudioAttemptLease second) =>
+        first.RecordingId == second.RecordingId &&
+        first.AttemptId == second.AttemptId &&
+        first.DeletionGeneration == second.DeletionGeneration &&
+        first.ClearGeneration == second.ClearGeneration;
+
+    private static bool SessionMatchesLease(
+        CaptureSession session,
+        AudioAttemptLease lease) =>
+        LeaseIdentityMatches(session.Lease, lease);
+
+    private async Task<RecorderFinalizationResult> AwaitFinalizedSourceProofAsync(
+        CaptureSession session,
+        bool matchesLease,
+        TimeSpan? deadline,
+        string failureMessage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (deadline.HasValue)
+            {
+                await session.WriterClosed.Task
+                    .WaitAsync(deadline.Value, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await session.WriterClosed.Task
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            var proof = GetOrCreateTerminalProof(session);
+            return matchesLease
+                ? proof
+                : new RecorderFinalizationResult(
+                    false,
+                    session.PartialSourcePath,
+                    failureMessage,
+                    KnownIncomplete: true);
+        }
+        catch (TimeoutException)
+        {
+            return new RecorderFinalizationResult(
+                false,
+                session.PartialSourcePath,
+                failureMessage,
+                TimedOut: true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new RecorderFinalizationResult(
+                false,
+                session.PartialSourcePath,
+                failureMessage,
+                TimedOut: true);
+        }
+    }
+
+    private static void ObserveRetiredCloseTasks(
+        IReadOnlyList<Task> closeTasks,
+        TimeSpan remaining)
+    {
+        if (closeTasks.Count == 0 || remaining <= TimeSpan.Zero) return;
+        var observer = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.WhenAll(closeTasks)
+                    .WaitAsync(remaining, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException) { }
+        });
+        ObserveLateTask(observer);
+    }
+
+    private CaptureSession? CurrentMatchingSession(AudioAttemptLease lease) =>
+        _closeRegistry.Current is { } session && SessionMatchesLease(session, lease)
             ? session
             : null;
-    }
+
+    private CaptureSession? MatchingCurrentOrRetiredSession(AudioAttemptLease lease) =>
+        _closeRegistry.FindCurrentOrRetired(
+            session => SessionMatchesLease(session, lease));
 
     private bool IsCurrent(CaptureSession session) => _closeRegistry.IsCurrent(session);
 

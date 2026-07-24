@@ -19,6 +19,7 @@
     <Compile Include="..\AIDictation\Services\AudioProcessingCoordinator.cs" Link="AudioProcessingCoordinator.cs" />
     <Compile Include="..\AIDictation\Services\AudioProcessingStore.cs" Link="AudioProcessingStore.cs" />
     <Compile Include="..\AIDictation\Services\AudioTranscriptionResponseParser.cs" Link="AudioTranscriptionResponseParser.cs" />
+    <Compile Include="..\AIDictation\Services\BoundedHttpContentReader.cs" Link="BoundedHttpContentReader.cs" />
     <Compile Include="..\AIDictation\Services\LanguagePostProcessService.cs" Link="LanguagePostProcessService.cs" />
     <Compile Include="..\AIDictation\Services\ResettableResourceGeneration.cs" Link="ResettableResourceGeneration.cs" />
     <Compile Include="..\AIDictation\Services\TranscriptionCleanupPrompt.cs" Link="TranscriptionCleanupPrompt.cs" />

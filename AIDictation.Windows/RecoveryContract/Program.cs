@@ -17,6 +17,8 @@ static class Contract
         await VerifyNativeCloseRegistryAsync();
         VerifyManagedWorkspaceCleanup();
         await VerifyDurableStoreAsync();
+        await VerifyFinalizedAdoptionRecoveryAsync();
+        await VerifyDeferredDeletedCleanupAsync();
         await VerifyCleanupFallbacksAsync();
         await VerifyBlockedExporterAsync();
         VerifyTerminalResetFence();
@@ -322,6 +324,43 @@ static class Contract
                 malformed.MediaType));
         Equal(1, malformedCalls,
             "fully received malformed 200 is parsed once and never retried as transport");
+
+        var oversizedDeclaredCalls = 0;
+        await ThrowsAsync<InvalidAudioResponseException>(() => NoWaitPolicy().ExecuteAsync(
+            _ =>
+            {
+                oversizedDeclaredCalls++;
+                var content = new ByteArrayContent(
+                    new byte[BoundedHttpContentReader.MaxResponseBytes + 1]);
+                content.Headers.ContentLength =
+                    BoundedHttpContentReader.MaxResponseBytes + 1;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = content
+                });
+            },
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None));
+        Equal(1, oversizedDeclaredCalls,
+            "oversized successful transcription Content-Length fails permanently without replay");
+
+        var oversizedChunkedCalls = 0;
+        await ThrowsAsync<InvalidAudioResponseException>(() => NoWaitPolicy().ExecuteAsync(
+            _ =>
+            {
+                oversizedChunkedCalls++;
+                var content = new StreamContent(new RepeatingReadStream(
+                    BoundedHttpContentReader.MaxResponseBytes + 1));
+                content.Headers.ContentLength = null;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = content
+                });
+            },
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None));
+        Equal(1, oversizedChunkedCalls,
+            "oversized chunked transcription is capped while streaming and never replayed");
 
         var cancellationCalls = 0;
         using var cancellation = new CancellationTokenSource();
@@ -690,17 +729,54 @@ static class Contract
             WriteWave(finalizedBeforeCrash.Entry!.PartialSourcePath, 2_048);
             var finalizedReady = await store.CaptureBecameReadyAsync(finalizedBeforeCrash.Lease!);
             var finalizedStage = await store.BeginFinalizationAsync(finalizedReady.Lease!);
+            var legacyFinalizationJournalPath = Path.Combine(root, "journal.json");
+            var legacyFinalizationJournal = JsonNode.Parse(
+                await File.ReadAllTextAsync(legacyFinalizationJournalPath))!.AsObject();
+            var legacyFinalizationEntry = legacyFinalizationJournal["Entries"]!.AsObject()
+                .Single(pair => Guid.Parse(pair.Key) == finalizedBeforeCrash.Entry.RecordingId)
+                .Value!.AsObject();
+            legacyFinalizationEntry["FinalizationStarted"] = true;
+            _ = legacyFinalizationEntry.Remove("FinalizationProven");
+            await File.WriteAllTextAsync(
+                legacyFinalizationJournalPath,
+                legacyFinalizationJournal.ToJsonString());
             var recoveredFinalization = (await new AudioProcessingStore(root, () => now.AddMinutes(1), legacyRoot)
                     .RecoverOnLaunchAsync())
                 .Single(item => item.RecordingId == finalizedBeforeCrash.Entry.RecordingId);
             Equal(AudioProcessingStage.Failed, recoveredFinalization.Stage,
-                "interrupted finalization returns as a terminal retryable row");
-            Equal(AudioSourceIntegrity.Complete, recoveredFinalization.SourceIntegrity,
-                "a closed finalizing WAVE is promoted on startup");
-            True(File.Exists(recoveredFinalization.FinalSourcePath),
-                "startup preserves the promoted complete source");
-            True(!File.Exists(recoveredFinalization.PartialSourcePath),
-                "startup promotion leaves one managed source");
+                "interrupted finalization returns as a terminal preserved row");
+            Equal(AudioSourceIntegrity.Unfinalized, recoveredFinalization.SourceIntegrity,
+                "close intent without positive recorder proof is never promoted");
+            True(File.Exists(recoveredFinalization.PartialSourcePath),
+                "startup preserves an unproven partial source without submitting it");
+            True(!File.Exists(recoveredFinalization.FinalSourcePath),
+                "startup does not manufacture completion from a structurally valid prefix");
+
+            var legacyMovedBeforeJournal = await store.BeginCaptureAsync(cloud);
+            WriteWave(legacyMovedBeforeJournal.Entry!.PartialSourcePath, 2_048);
+            var legacyMovedReady = await store.CaptureBecameReadyAsync(
+                legacyMovedBeforeJournal.Lease!);
+            _ = await store.BeginFinalizationAsync(legacyMovedReady.Lease!);
+            File.Move(
+                legacyMovedBeforeJournal.Entry.PartialSourcePath,
+                legacyMovedBeforeJournal.Entry.FinalSourcePath);
+            var legacyMovedJournal = JsonNode.Parse(
+                await File.ReadAllTextAsync(legacyFinalizationJournalPath))!.AsObject();
+            var legacyMovedEntry = legacyMovedJournal["Entries"]!.AsObject()
+                .Single(pair => Guid.Parse(pair.Key) == legacyMovedBeforeJournal.Entry.RecordingId)
+                .Value!.AsObject();
+            legacyMovedEntry["FinalizationStarted"] = true;
+            _ = legacyMovedEntry.Remove("FinalizationProven");
+            await File.WriteAllTextAsync(
+                legacyFinalizationJournalPath,
+                legacyMovedJournal.ToJsonString());
+            var recoveredLegacyMoved = (await new AudioProcessingStore(
+                    root,
+                    () => now.AddMinutes(1),
+                    legacyRoot).RecoverOnLaunchAsync())
+                .Single(item => item.RecordingId == legacyMovedBeforeJournal.Entry.RecordingId);
+            Equal(AudioSourceIntegrity.Complete, recoveredLegacyMoved.SourceIntegrity,
+                "an old journal still recovers a valid source already atomically moved to final");
 
             var closedAfterTerminal = await store.BeginCaptureAsync(cloud);
             var closedAfterTerminalReady = await store.CaptureBecameReadyAsync(closedAfterTerminal.Lease!);
@@ -720,16 +796,30 @@ static class Contract
                 .Single(item => item.RecordingId == closedAfterTerminal.Entry!.RecordingId);
             Equal(AudioProcessingStage.Failed, recoveredTerminalClose.Stage,
                 "late native close keeps the already-terminal failure state");
-            Equal(AudioSourceIntegrity.Complete, recoveredTerminalClose.SourceIntegrity,
-                "launch revalidates and promotes a complete partial that closed after terminal timeout");
-            True(File.Exists(recoveredTerminalClose.FinalSourcePath) &&
-                 !File.Exists(recoveredTerminalClose.PartialSourcePath),
-                "late-closed terminal source is promoted without deleting its only valid copy");
+            Equal(AudioSourceIntegrity.Unfinalized, recoveredTerminalClose.SourceIntegrity,
+                "launch never promotes a late close without authoritative recorder proof");
+            True(File.Exists(recoveredTerminalClose.PartialSourcePath) &&
+                 !File.Exists(recoveredTerminalClose.FinalSourcePath),
+                "late-closed but unproven source remains preserved and non-promotable");
+            var rejectedUnprovenRetry = await store.BeginRecognitionAsync(
+                closedAfterTerminal.Entry!.RecordingId,
+                cloud);
+            True(!rejectedUnprovenRetry.Applied,
+                "an unproven late close cannot be submitted for recognition");
+            var latePositive = await store.AdoptFinalizedCaptureAsync(
+                terminalBeforeClose.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    recoveredTerminalClose.PartialSourcePath,
+                    null));
+            True(latePositive.Applied &&
+                 latePositive.Entry?.SourceIntegrity == AudioSourceIntegrity.Complete,
+                "an exact late positive recorder proof makes the terminal source retryable");
             var recoveredTerminalRetry = await store.BeginRecognitionAsync(
                 closedAfterTerminal.Entry!.RecordingId,
                 cloud);
             True(recoveredTerminalRetry.Applied,
-                "terminal failure with a revalidated final source is retryable without restart loops");
+                "a terminal failure becomes retryable only after positive proof is persisted");
             _ = await store.FailAsync(
                 recoveredTerminalRetry.Lease!,
                 "test cleanup",
@@ -742,7 +832,12 @@ static class Contract
             True(ready.Applied, "first-write readiness advances journal");
             var finalizing = await store.BeginFinalizationAsync(ready.Lease!);
             True(finalizing.Applied, "finalization has durable stage");
-            var accepted = await store.AcceptFinalizedSourceAsync(finalizing.Lease!);
+            var accepted = await store.AdoptFinalizedCaptureAsync(
+                finalizing.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    finalizing.Entry!.PartialSourcePath,
+                    null));
             Equal(AudioProcessingStage.ReadyForRecognition, accepted.Entry!.Stage,
                 "closed non-empty WAVE is accepted before recognition");
             True(File.Exists(accepted.Entry.FinalSourcePath), "final source is atomically promoted");
@@ -752,7 +847,12 @@ static class Contract
             WriteWave(latePromotion.Entry!.PartialSourcePath, 2_048);
             var lateReady = await store.CaptureBecameReadyAsync(latePromotion.Lease!);
             var lateFinalizing = await store.BeginFinalizationAsync(lateReady.Lease!);
-            var lateAccepted = await store.AcceptFinalizedSourceAsync(lateFinalizing.Lease!);
+            var lateAccepted = await store.AdoptFinalizedCaptureAsync(
+                lateFinalizing.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    lateFinalizing.Entry!.PartialSourcePath,
+                    null));
             var lateAbandoned = await store.AbandonAttemptAsync(
                 lateFinalizing.Lease!,
                 false,
@@ -820,7 +920,12 @@ static class Contract
             WriteWave(corruptActive.Entry!.PartialSourcePath, 2_048);
             var corruptReady = await store.CaptureBecameReadyAsync(corruptActive.Lease!);
             var corruptFinalizing = await store.BeginFinalizationAsync(corruptReady.Lease!);
-            var corruptAccepted = await store.AcceptFinalizedSourceAsync(corruptFinalizing.Lease!);
+            var corruptAccepted = await store.AdoptFinalizedCaptureAsync(
+                corruptFinalizing.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    corruptFinalizing.Entry!.PartialSourcePath,
+                    null));
             _ = await store.BeginRecognitionAsync(corruptActive.Entry.RecordingId, cloud);
             using (var corruptFinal = new FileStream(
                        corruptAccepted.Entry!.FinalSourcePath,
@@ -856,7 +961,7 @@ static class Contract
             var staleAfterClear = await store.FailAsync(staleClearLease, "late", AudioSourceIntegrity.KnownIncomplete);
             True(!staleAfterClear.Applied, "global clear generation fences every late callback");
 
-            var legacyPath = Path.Combine(legacyRoot, "recording_1.wav");
+            var legacyPath = Path.Combine(legacyRoot, "recording_20260724_104512.wav");
             WriteWave(legacyPath, 2_048);
             var legacyId = Guid.NewGuid();
             var imported = await store.ImportLegacyFinalizedSourceAsync(
@@ -864,7 +969,8 @@ static class Contract
                 legacyPath,
                 "legacy transcript",
                 Snapshot("cloud", "legacy"));
-            True(imported.Applied && imported.Entry != null, "legacy recording is migrated into managed storage");
+            True(imported.Applied && imported.Entry != null,
+                "shipped recording_yyyyMMdd_HHmmss.wav source migrates into managed storage");
             Equal(AudioProcessingStage.Succeeded, imported.Entry!.Stage, "legacy transcript remains successful");
             True(imported.Entry.UsageAccounting == null,
                 "pre-recovery legacy successes are never retroactively billable");
@@ -874,6 +980,18 @@ static class Contract
             True(await store.AcceptLegacySourceOwnershipAsync(legacyId),
                 "legacy deletion is accepted only after the History repoint commits");
             True(!File.Exists(legacyPath), "accepted app-owned legacy source is deleted exactly once");
+
+            var malformedLegacyPath = Path.Combine(legacyRoot, "recording_20260724-104512.wav");
+            WriteWave(malformedLegacyPath, 2_048);
+            var malformedLegacy = await store.ImportLegacyFinalizedSourceAsync(
+                Guid.NewGuid(),
+                malformedLegacyPath,
+                "must not import",
+                Snapshot("cloud", "legacy"));
+            True(!malformedLegacy.Applied,
+                "legacy migration accepts only exact shipped filename shapes");
+            True(File.Exists(malformedLegacyPath),
+                "a rejected legacy filename is preserved and never deleted");
 
             var recoveryLegacyPath = Path.Combine(legacyRoot, "recording_2.wav");
             WriteWave(recoveryLegacyPath, 2_048);
@@ -895,6 +1013,9 @@ static class Contract
                 "failed managed-copy revalidation preserves the only valid legacy source");
             True((await store.TombstoneAsync(recoveryLegacyId)).Applied,
                 "explicit delete can still tombstone a row whose managed copy is corrupt");
+            await WaitUntilAsync(
+                () => !File.Exists(recoveryLegacyPath),
+                TimeSpan.FromSeconds(1));
             True(!File.Exists(recoveryLegacyPath),
                 "explicit delete removes the tracked legacy source after its tombstone commits");
 
@@ -940,6 +1061,9 @@ static class Contract
             True(tombstoneLegacy.Applied, "second owned legacy source is imported");
             True((await store.TombstoneAsync(tombstoneLegacyId)).Applied,
                 "tombstone durably wins over an owned legacy source");
+            await WaitUntilAsync(
+                () => !File.Exists(tombstoneLegacyPath),
+                TimeSpan.FromSeconds(1));
             True(!File.Exists(tombstoneLegacyPath), "tombstone deletes the tracked legacy source");
 
             var clearLegacyPath = Path.Combine(legacyRoot, "recording_5.wav");
@@ -951,6 +1075,9 @@ static class Contract
                 Snapshot("cloud", "legacy"));
             True(clearLegacy.Applied, "owned legacy source exists before Clear");
             True((await store.ClearAsync()).Applied, "Clear commits before deleting tracked sources");
+            await WaitUntilAsync(
+                () => !File.Exists(clearLegacyPath),
+                TimeSpan.FromSeconds(1));
             True(!File.Exists(clearLegacyPath), "Clear deletes the tracked legacy source");
 
             var pathOwned = await store.BeginCaptureAsync(cloud);
@@ -1076,7 +1203,12 @@ static class Contract
                 var leafReady = await leafStore.CaptureBecameReadyAsync(leafCapture.Lease!);
                 var leafFinalizing = await leafStore.BeginFinalizationAsync(leafReady.Lease!);
                 await ThrowsAsync<AudioStoreException>(() =>
-                    leafStore.AcceptFinalizedSourceAsync(leafFinalizing.Lease!));
+                    leafStore.AdoptFinalizedCaptureAsync(
+                        leafFinalizing.Lease!,
+                        new RecorderFinalizationResult(
+                            true,
+                            leafFinalizing.Entry!.PartialSourcePath,
+                            null)));
                 True(AudioContainerValidator.ValidateFinalizedWave(leafOutside).IsValid,
                     "linked source leaf is rejected without moving or truncating its outside target");
             }
@@ -1117,6 +1249,342 @@ static class Contract
         finally
         {
             try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static async Task VerifyFinalizedAdoptionRecoveryAsync()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation-windows-adoption-{Guid.NewGuid():N}");
+        var moveFailureRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation-windows-adoption-move-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new AudioProcessingStore(root);
+            var snapshot = Snapshot("local", "shutdown adoption");
+
+            var preparing = await store.BeginCaptureAsync(snapshot);
+            WriteWave(preparing.Entry!.PartialSourcePath, 2_048);
+            var preparingProof = new RecorderFinalizationResult(
+                true,
+                preparing.Entry.PartialSourcePath,
+                null);
+            var adoptedPreparing = await store.AdoptFinalizedCaptureAsync(
+                preparing.Lease!,
+                preparingProof);
+            True(adoptedPreparing.Applied,
+                "shutdown adoption accepts a fully validated owned Preparing capture");
+            Equal(AudioProcessingStage.ReadyForRecognition, adoptedPreparing.Entry!.Stage,
+                "Preparing adoption reaches the retryable recognition boundary");
+            Equal(AudioSourceIntegrity.Complete, adoptedPreparing.Entry.SourceIntegrity,
+                "Preparing adoption records complete source integrity");
+            True(File.Exists(adoptedPreparing.Entry.FinalSourcePath) &&
+                 !File.Exists(adoptedPreparing.Entry.PartialSourcePath),
+                "Preparing adoption atomically promotes the closed WAVE");
+            var preparingTerminal = await store.AbandonAttemptAsync(
+                adoptedPreparing.Lease!,
+                true,
+                "app closed",
+                AudioSourceIntegrity.Complete);
+            Equal(AudioSourceIntegrity.Complete, preparingTerminal.Entry!.SourceIntegrity,
+                "shutdown terminalization keeps an adopted source retryable");
+            var lateNegative = await store.RecordCaptureKnownIncompleteAsync(
+                preparingTerminal.Lease!,
+                "late native stop exception");
+            True(lateNegative.Applied &&
+                 lateNegative.Entry?.SourceIntegrity == AudioSourceIntegrity.KnownIncomplete &&
+                 lateNegative.Entry.FinalizationProven == false,
+                "an exact late negative proof downgrades an already-terminal adopted source");
+
+            var contradictory = await store.BeginCaptureAsync(snapshot);
+            WriteWave(contradictory.Entry!.PartialSourcePath, 2_048);
+            var contradictoryProof = await store.AdoptFinalizedCaptureAsync(
+                contradictory.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    contradictory.Entry.PartialSourcePath,
+                    null,
+                    TimedOut: true,
+                    KnownIncomplete: true));
+            True(!contradictoryProof.Applied &&
+                 contradictoryProof.Entry?.FinalizationProven == false,
+                "a contradictory timeout/negative record can never authorize promotion");
+            _ = await store.AbandonAttemptAsync(
+                contradictory.Lease!,
+                false,
+                "contradictory proof rejected",
+                AudioSourceIntegrity.KnownIncomplete);
+
+            var stale = await store.BeginCaptureAsync(snapshot);
+            WriteWave(stale.Entry!.PartialSourcePath, 2_048);
+            var ready = await store.CaptureBecameReadyAsync(stale.Lease!);
+            True(ready.Applied && ready.Lease!.Revision > stale.Lease!.Revision,
+                "ready commit advances the lease before the stale-caller regression");
+            var staleProof = new RecorderFinalizationResult(
+                true,
+                stale.Entry.PartialSourcePath,
+                null);
+            var adoptedStale = await store.AdoptFinalizedCaptureAsync(
+                stale.Lease!,
+                staleProof);
+            True(adoptedStale.Applied,
+                "shutdown adoption accepts a stale revision only for the same owned attempt");
+            Equal(AudioSourceIntegrity.Complete, adoptedStale.Entry!.SourceIntegrity,
+                "stale Recording lease adoption still requires a fully valid WAVE");
+            var newerAttempt = await store.BeginRecognitionAsync(
+                stale.Entry.RecordingId,
+                snapshot);
+            True(newerAttempt.Applied && newerAttempt.Lease != null,
+                "stale-negative fence fixture starts a newer recognition attempt");
+            var staleNegative = await store.RecordCaptureKnownIncompleteAsync(
+                stale.Lease!,
+                "old capture callback");
+            True(!staleNegative.Applied &&
+                 staleNegative.Entry?.SourceIntegrity == AudioSourceIntegrity.Complete,
+                "a new AttemptId fences an old capture's late negative callback");
+            _ = await store.FailAsync(
+                newerAttempt.Lease!,
+                "finish stale-negative fence fixture",
+                AudioSourceIntegrity.Complete);
+            var deleted = await store.TombstoneAsync(stale.Entry.RecordingId);
+            True(deleted.Applied,
+                "delete fence fixture commits its tombstone");
+            var deletedNegative = await store.RecordCaptureKnownIncompleteAsync(
+                stale.Lease!,
+                "callback after Delete");
+            True(!deletedNegative.Applied &&
+                 deletedNegative.Entry?.Stage == AudioProcessingStage.Deleted,
+                "Delete durably fences an old capture's late negative callback");
+
+            var beforeClear = await store.BeginCaptureAsync(snapshot);
+            WriteWave(beforeClear.Entry!.PartialSourcePath, 2_048);
+            var beforeClearAdopted = await store.AdoptFinalizedCaptureAsync(
+                beforeClear.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    beforeClear.Entry.PartialSourcePath,
+                    null));
+            _ = await store.AbandonAttemptAsync(
+                beforeClearAdopted.Lease!,
+                true,
+                "terminal before Clear",
+                AudioSourceIntegrity.Complete);
+            var cleared = await store.ClearAsync();
+            True(cleared.Applied,
+                "Clear fence fixture commits its generation");
+            var clearedNegative = await store.RecordCaptureKnownIncompleteAsync(
+                beforeClear.Lease!,
+                "callback after Clear");
+            True(!clearedNegative.Applied &&
+                 clearedNegative.Entry?.Stage == AudioProcessingStage.Deleted,
+                "Clear generation durably fences an old capture's late negative callback");
+
+            var moveFailingStore = new AudioProcessingStore(
+                moveFailureRoot,
+                moveManagedSource: (_, _) => throw new IOException("injected move lock"));
+            var moveCapture = await moveFailingStore.BeginCaptureAsync(snapshot);
+            WriteWave(moveCapture.Entry!.PartialSourcePath, 2_048);
+            await ThrowsAsync<AudioStoreException>(() =>
+                moveFailingStore.AdoptFinalizedCaptureAsync(
+                    moveCapture.Lease!,
+                    new RecorderFinalizationResult(
+                        true,
+                        moveCapture.Entry.PartialSourcePath,
+                        null)));
+            var marked = await moveFailingStore.GetAsync(moveCapture.Entry.RecordingId);
+            True(marked?.FinalizationProven == true &&
+                 marked.Stage == AudioProcessingStage.Finalizing,
+                "adoption persists finalization proof before a fallible source move");
+            True(File.Exists(moveCapture.Entry.PartialSourcePath),
+                "failed adoption move preserves the complete partial source");
+
+            var moveRecovered = (await new AudioProcessingStore(moveFailureRoot)
+                    .RecoverOnLaunchAsync())
+                .Single(entry => entry.RecordingId == moveCapture.Entry.RecordingId);
+            Equal(AudioProcessingStage.Failed, moveRecovered.Stage,
+                "launch terminalizes a move-interrupted adoption");
+            Equal(AudioSourceIntegrity.Complete, moveRecovered.SourceIntegrity,
+                "launch promotes a move-interrupted valid WAVE as retryable");
+            True(File.Exists(moveRecovered.FinalSourcePath),
+                "launch completes the previously interrupted same-volume promotion");
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); } catch { }
+            try
+            {
+                if (Directory.Exists(moveFailureRoot))
+                    Directory.Delete(moveFailureRoot, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    private static async Task VerifyDeferredDeletedCleanupAsync()
+    {
+        static async Task<AudioProcessingEntry> CreateTerminalWithCompleteSourceAsync(
+            AudioProcessingStore store,
+            string context)
+        {
+            var capture = await store.BeginCaptureAsync(Snapshot("local", context));
+            WriteWave(capture.Entry!.PartialSourcePath, 2_048);
+            var ready = await store.CaptureBecameReadyAsync(capture.Lease!);
+            var finalizing = await store.BeginFinalizationAsync(ready.Lease!);
+            var accepted = await store.AdoptFinalizedCaptureAsync(
+                finalizing.Lease!,
+                new RecorderFinalizationResult(
+                    true,
+                    finalizing.Entry!.PartialSourcePath,
+                    null));
+            var failed = await store.FailAsync(
+                accepted.Lease!,
+                "terminal fixture",
+                AudioSourceIntegrity.Complete);
+            return failed.Entry!;
+        }
+
+        var deleteRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation-windows-delete-debt-{Guid.NewGuid():N}");
+        var clearRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation-windows-clear-debt-{Guid.NewGuid():N}");
+        var hangingDeleteRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation-windows-delete-hang-{Guid.NewGuid():N}");
+        var hangingClearRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"aidictation-windows-clear-hang-{Guid.NewGuid():N}");
+        try
+        {
+            var deleteStore = new AudioProcessingStore(
+                deleteRoot,
+                deleteManagedSource: _ => throw new IOException("injected locked source"));
+            var deleteEntry = await CreateTerminalWithCompleteSourceAsync(
+                deleteStore,
+                "delete cleanup debt");
+            var deleted = await deleteStore.TombstoneAsync(deleteEntry.RecordingId);
+            True(deleted.Applied,
+                "Delete remains successful after its durable tombstone when file cleanup is locked");
+            Equal(AudioProcessingStage.Deleted,
+                (await deleteStore.GetAsync(deleteEntry.RecordingId))!.Stage,
+                "locked physical cleanup cannot resurrect a durable Delete");
+            True(File.Exists(deleteEntry.FinalSourcePath),
+                "locked Delete source remains as retryable cleanup debt");
+
+            var stillLocked = new AudioProcessingStore(
+                deleteRoot,
+                deleteManagedSource: _ => throw new IOException("still locked"));
+            var firstRecovery = await stillLocked.RecoverOnLaunchAsync();
+            Equal(AudioProcessingStage.Deleted,
+                firstRecovery.Single(entry => entry.RecordingId == deleteEntry.RecordingId).Stage,
+                "launch returns Deleted rows even while physical cleanup remains locked");
+            True(File.Exists(deleteEntry.FinalSourcePath),
+                "failed launch cleanup preserves the source for another safe retry");
+
+            var deleteRecovered = await new AudioProcessingStore(deleteRoot)
+                .RecoverOnLaunchAsync();
+            Equal(AudioProcessingStage.Deleted,
+                deleteRecovered.Single(entry => entry.RecordingId == deleteEntry.RecordingId).Stage,
+                "a later launch keeps the durable tombstone authoritative");
+            await WaitUntilAsync(
+                () => !File.Exists(deleteEntry.FinalSourcePath),
+                TimeSpan.FromSeconds(1));
+            True(!File.Exists(deleteEntry.FinalSourcePath),
+                "a later launch retries and completes deferred Delete cleanup");
+
+            var clearStore = new AudioProcessingStore(
+                clearRoot,
+                deleteManagedSource: _ => throw new IOException("injected clear lock"));
+            var clearEntry = await CreateTerminalWithCompleteSourceAsync(
+                clearStore,
+                "clear cleanup debt");
+            var cleared = await clearStore.ClearAsync();
+            True(cleared.Applied,
+                "Clear remains successful after durable deletion when physical cleanup is locked");
+            Equal(AudioProcessingStage.Deleted,
+                (await clearStore.GetAsync(clearEntry.RecordingId))!.Stage,
+                "locked Clear cleanup cannot restore a cleared row");
+            True(File.Exists(clearEntry.FinalSourcePath),
+                "locked Clear source remains as cleanup debt");
+
+            var clearRecovered = await new AudioProcessingStore(clearRoot)
+                .RecoverOnLaunchAsync();
+            Equal(AudioProcessingStage.Deleted,
+                clearRecovered.Single(entry => entry.RecordingId == clearEntry.RecordingId).Stage,
+                "launch preserves Clear's durable Deleted state");
+            await WaitUntilAsync(
+                () => !File.Exists(clearEntry.FinalSourcePath),
+                TimeSpan.FromSeconds(1));
+            True(!File.Exists(clearEntry.FinalSourcePath),
+                "launch retries and completes deferred Clear cleanup");
+
+            using var deleteEntered = new ManualResetEventSlim();
+            using var deleteRelease = new ManualResetEventSlim();
+            var hangingDeleteStore = new AudioProcessingStore(
+                hangingDeleteRoot,
+                deleteManagedSource: path =>
+                {
+                    deleteEntered.Set();
+                    deleteRelease.Wait();
+                    File.Delete(path);
+                });
+            var hangingDeleteEntry = await CreateTerminalWithCompleteSourceAsync(
+                hangingDeleteStore,
+                "blocking Delete cleanup");
+            var hangingDelete = await hangingDeleteStore
+                .TombstoneAsync(hangingDeleteEntry.RecordingId)
+                .WaitAsync(TimeSpan.FromMilliseconds(250));
+            True(hangingDelete.Applied,
+                "Delete returns its durable result without waiting for a stuck physical delete");
+            True(deleteEntered.Wait(TimeSpan.FromSeconds(1)),
+                "detached Delete cleanup reaches the injected blocked file operation");
+            Equal(AudioProcessingStage.Deleted,
+                (await hangingDeleteStore.GetAsync(hangingDeleteEntry.RecordingId))!.Stage,
+                "a stuck cleanup cannot delay or undo the durable Delete state");
+            deleteRelease.Set();
+            await WaitUntilAsync(
+                () => !File.Exists(hangingDeleteEntry.FinalSourcePath),
+                TimeSpan.FromSeconds(1));
+
+            using var clearEntered = new ManualResetEventSlim();
+            using var clearRelease = new ManualResetEventSlim();
+            var hangingClearStore = new AudioProcessingStore(
+                hangingClearRoot,
+                deleteManagedSource: path =>
+                {
+                    clearEntered.Set();
+                    clearRelease.Wait();
+                    File.Delete(path);
+                });
+            var hangingClearEntry = await CreateTerminalWithCompleteSourceAsync(
+                hangingClearStore,
+                "blocking Clear cleanup");
+            var hangingClear = await hangingClearStore
+                .ClearAsync()
+                .WaitAsync(TimeSpan.FromMilliseconds(250));
+            True(hangingClear.Applied &&
+                 hangingClear.AffectedRecordingIds?.SequenceEqual(
+                     new[] { hangingClearEntry.RecordingId }) == true,
+                "Clear returns exact committed IDs without waiting for stuck file cleanup");
+            True(clearEntered.Wait(TimeSpan.FromSeconds(1)),
+                "detached Clear cleanup reaches the injected blocked file operation");
+            Equal(AudioProcessingStage.Deleted,
+                (await hangingClearStore.GetAsync(hangingClearEntry.RecordingId))!.Stage,
+                "a stuck cleanup cannot delay or undo Clear's durable state");
+            clearRelease.Set();
+            await WaitUntilAsync(
+                () => !File.Exists(hangingClearEntry.FinalSourcePath),
+                TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            try { if (Directory.Exists(deleteRoot)) Directory.Delete(deleteRoot, recursive: true); } catch { }
+            try { if (Directory.Exists(clearRoot)) Directory.Delete(clearRoot, recursive: true); } catch { }
+            try { if (Directory.Exists(hangingDeleteRoot)) Directory.Delete(hangingDeleteRoot, recursive: true); } catch { }
+            try { if (Directory.Exists(hangingClearRoot)) Directory.Delete(hangingClearRoot, recursive: true); } catch { }
         }
     }
 
@@ -1167,6 +1635,39 @@ static class Contract
                 await CleanupService(client, TimeSpan.FromSeconds(1))
                     .PostProcessAsync("raw transcript", new[] { "English" }, snapshot),
                 $"cleanup falls back to raw text for HTTP {(int)status}");
+        }
+
+        using (var client = new HttpClient(new DelegateHandler((_, _) =>
+               Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+               {
+                   Content = new BlockingContent()
+               }))))
+        {
+            var started = DateTime.UtcNow;
+            Equal("raw transcript",
+                await CleanupService(client, TimeSpan.FromMinutes(1))
+                    .PostProcessAsync("raw transcript", new[] { "English" }, snapshot),
+                "cleanup 500 keeps the complete raw transcript");
+            True(DateTime.UtcNow - started < TimeSpan.FromMilliseconds(500),
+                "cleanup classifies non-200 headers without draining a stalled body");
+        }
+
+        using (var client = new HttpClient(new DelegateHandler((_, _) =>
+               {
+                   var content = new ByteArrayContent(
+                       new byte[BoundedHttpContentReader.MaxResponseBytes + 1]);
+                   content.Headers.ContentLength =
+                       BoundedHttpContentReader.MaxResponseBytes + 1;
+                   return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                   {
+                       Content = content
+                   });
+               })))
+        {
+            Equal("raw transcript",
+                await CleanupService(client, TimeSpan.FromSeconds(1))
+                    .PostProcessAsync("raw transcript", new[] { "English" }, snapshot),
+                "oversized cleanup completion keeps the complete raw transcript");
         }
 
         foreach (var response in new[]
@@ -1390,6 +1891,101 @@ static class Contract
     {
         {
             var fixture = new CoordinatorFixture();
+            fixture.State.StartPreparingPublished = () =>
+                fixture.Coordinator
+                    .CancelAsync("reentrant start cancellation")
+                    .GetAwaiter()
+                    .GetResult();
+
+            var outcome = await fixture.Coordinator.StartCaptureAsync(false, null);
+            True(!outcome.Started,
+                "synchronous StartPreparing callback cancellation prevents capture ownership");
+            Equal(0, fixture.Recorder.StartCalls,
+                "reentrant cancellation cannot open a hidden microphone");
+            Equal("Idle", fixture.State.Current,
+                "reentrant cancellation leaves the UI idle");
+            True(!fixture.Coordinator.HasActiveAttempt,
+                "reentrant cancellation leaves no pending or active attempt");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.State.RejectRecordingBecameReady = true;
+            var outcome = await fixture.Coordinator.StartCaptureAsync(false, null);
+            True(!outcome.Started,
+                "recording-ready publication refusal rejects startup");
+            await fixture.Recorder.AbortObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            True(!fixture.Coordinator.HasActiveAttempt,
+                "recording-ready publication refusal releases its owner");
+            Equal("Error", fixture.State.Current,
+                "recording-ready publication refusal produces a recoverable error");
+            await WaitUntilAsync(
+                () => fixture.Store.LastStage is AudioProcessingStage.Cancelled or
+                    AudioProcessingStage.Failed,
+                TimeSpan.FromSeconds(1));
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.State.RecordingReadyPublished = () =>
+                fixture.Coordinator
+                    .CancelAsync("reentrant ready cancellation")
+                    .GetAwaiter()
+                    .GetResult();
+            var outcome = await fixture.Coordinator.StartCaptureAsync(false, null);
+            True(!outcome.Started,
+                "synchronous recording-ready cancellation cannot report Started");
+            Equal("Idle", fixture.State.Current,
+                "recording-ready reentrant cancellation remains idle");
+            True(!fixture.Coordinator.HasActiveAttempt,
+                "recording-ready reentrant cancellation clears ownership");
+            await fixture.Recorder.AbortObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            var retryPath = Path.Combine(
+                Path.GetTempPath(),
+                $"retry-shutdown-{Guid.NewGuid():N}.wav");
+            await File.WriteAllBytesAsync(retryPath, new byte[] { 1 });
+            try
+            {
+                var retryId = Guid.NewGuid();
+                fixture.Store.SeedTerminal(retryId);
+                await fixture.History.UpsertAsync(new AIDictation.Models.Recording
+                {
+                    Id = retryId,
+                    AudioFilePath = retryPath,
+                    Status = AIDictation.Models.TranscriptionStatus.Failed,
+                    SourceIntegrity = AIDictation.Models.RecordingSourceIntegrity.Complete,
+                    Revision = 1
+                });
+                fixture.State.BlockStartRetrying = true;
+                var retryTask = Task.Run(
+                    () => fixture.Coordinator.RetryAsync(retryId, "local"));
+                True(fixture.State.StartRetryingEntered.Wait(TimeSpan.FromSeconds(1)),
+                    "retry UI transition entered the deterministic shutdown gap");
+                var shutdownTask = Task.Run(
+                    () => fixture.Coordinator.ShutdownAsync(TimeSpan.FromSeconds(1)));
+                await Task.Delay(20);
+                True(!shutdownTask.IsCompleted,
+                    "shutdown serializes with retry UI ownership publication");
+                fixture.State.ReleaseStartRetrying();
+                _ = await retryTask.WaitAsync(TimeSpan.FromSeconds(1));
+                await shutdownTask.WaitAsync(TimeSpan.FromSeconds(1));
+                Equal("Idle", fixture.State.Current,
+                    "shutdown cannot leave a late retry Processing state");
+                True(!fixture.Coordinator.HasActiveAttempt,
+                    "retry-shutdown race leaves no foreground owner");
+            }
+            finally
+            {
+                try { File.Delete(retryPath); } catch { }
+            }
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
             fixture.Pipeline.BlockCaptureSnapshot = true;
             var startTask = Task.Run(
                 () => fixture.Coordinator.StartCaptureAsync(false, null));
@@ -1435,6 +2031,134 @@ static class Contract
                 "late startup journal row is terminalized and tombstoned in-session");
             True(!fixture.Coordinator.HasActiveAttempt,
                 "cancelled pending startup leaves no foreground attempt owner");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.Store.BlockCaptureBecameReady = true;
+            var startTask = fixture.Coordinator.StartCaptureAsync(false, null);
+            await fixture.Store.CaptureBecameReadyEntered.Task
+                .WaitAsync(TimeSpan.FromSeconds(1));
+            var recordingId = fixture.Store.RecordingId;
+
+            await fixture.Coordinator
+                .ShutdownAsync(TimeSpan.FromSeconds(1))
+                .WaitAsync(TimeSpan.FromSeconds(1));
+            var recovered = fixture.History.Get(recordingId);
+            True(recovered != null,
+                "shutdown projects a capture closed before its ready commit into History");
+            Equal(AIDictation.Models.RecordingSourceIntegrity.Complete,
+                recovered!.SourceIntegrity,
+                "shutdown adopts a valid Preparing source as complete");
+            Equal(AIDictation.Models.TranscriptionStatus.Cancelled,
+                recovered.Status,
+                "shutdown terminalizes the adopted capture for retry");
+            True(fixture.Store.FinalizationProven,
+                "shutdown persists positive proof before promoting a closed source");
+            fixture.Store.ReleaseCaptureBecameReady();
+            True(!(await startTask.WaitAsync(TimeSpan.FromSeconds(1))).Started,
+                "late ready commit cannot revive the shutdown-owned capture");
+            Equal("Idle", fixture.State.Current,
+                "shutdown-ready race leaves the UI idle");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
+                "active-cancel fixture starts after its first durable buffer");
+            var recordingId = fixture.Store.RecordingId;
+            var captureLease = fixture.Store.CurrentLease!;
+            await fixture.Coordinator.CancelAsync("user cancelled active capture");
+            Equal("Idle", fixture.State.Current,
+                "active capture Cancel releases the UI immediately");
+            True(!fixture.Coordinator.HasActiveAttempt,
+                "active capture Cancel releases foreground ownership immediately");
+            await fixture.Recorder.AbortObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(
+                () => fixture.History.Get(recordingId)?.SourceIntegrity ==
+                    AIDictation.Models.RecordingSourceIntegrity.Complete,
+                TimeSpan.FromSeconds(1));
+            Equal(AIDictation.Models.TranscriptionStatus.Cancelled,
+                fixture.History.Get(recordingId)!.Status,
+                "a fully closed cancelled capture remains retryable in History");
+            True(fixture.Store.FinalizationProven,
+                "active capture Cancel promotes only after recorder-confirmed proof");
+            fixture.Recorder.RaiseUnexpected(
+                captureLease,
+                "late native stop exception");
+            await WaitUntilAsync(
+                () => fixture.History.Get(recordingId)?.SourceIntegrity ==
+                    AIDictation.Models.RecordingSourceIntegrity.KnownIncomplete,
+                TimeSpan.FromSeconds(1));
+            Equal(AudioSourceIntegrity.KnownIncomplete,
+                (await fixture.Store.GetAsync(recordingId))!.SourceIntegrity,
+                "a delayed native stop exception monotonically downgrades the exact terminal capture");
+            True(!fixture.Store.FinalizationProven,
+                "late negative proof removes all launch-promotion authority");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.Recorder.BlockAbortProof = true;
+            fixture.Recorder.ShutdownWaitsForAbortProof = true;
+            True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
+                "late-close fixture starts capture");
+            var recordingId = fixture.Store.RecordingId;
+            await fixture.Coordinator.CancelAsync("cancel before writer close");
+            await fixture.Recorder.AbortObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(
+                () => fixture.Store.LastStage == AudioProcessingStage.Cancelled,
+                TimeSpan.FromSeconds(1));
+            Equal("Idle", fixture.State.Current,
+                "late writer close never retains foreground UI");
+            var shutdownTask = fixture.Coordinator
+                .ShutdownAsync(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(
+                () => fixture.Store.LastStage == AudioProcessingStage.Cancelled,
+                TimeSpan.FromSeconds(1));
+            True(!fixture.Store.FinalizationProven,
+                "proof timeout preserves audio without authorizing promotion");
+            Equal(AIDictation.Models.RecordingSourceIntegrity.Unfinalized,
+                fixture.History.Get(recordingId)!.SourceIntegrity,
+                "proof timeout never claims completeness prematurely");
+
+            await Task.Delay(20);
+            True(!shutdownTask.IsCompleted,
+                "immediate shutdown waits a retired writer close, not native Dispose");
+            fixture.Recorder.ReleaseAbortProof();
+            await shutdownTask.WaitAsync(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(
+                () => fixture.History.Get(recordingId)?.SourceIntegrity ==
+                    AIDictation.Models.RecordingSourceIntegrity.Complete,
+                TimeSpan.FromSeconds(1));
+            Equal(AudioSourceIntegrity.Complete,
+                (await fixture.Store.GetAsync(recordingId))!.SourceIntegrity,
+                "late valid writer proof reconciles after bounded Cancel");
+            True(fixture.Store.FinalizationProven,
+                "late positive proof durably authorizes source promotion");
+            Equal("Idle", fixture.State.Current,
+                "Cancel followed by immediate shutdown finishes idle");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.Recorder.BlockAbortProof = true;
+            True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
+                "known-incomplete fixture starts capture");
+            var recordingId = fixture.Store.RecordingId;
+            fixture.Recorder.RaiseUnexpected(
+                fixture.Store.CurrentLease!,
+                "injected capture write failure");
+            await fixture.Recorder.AbortObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(
+                () => fixture.Store.LastStage == AudioProcessingStage.Failed,
+                TimeSpan.FromSeconds(1));
+            True(!fixture.Store.FinalizationProven,
+                "known-incomplete crash window remains non-promotable");
+            Equal(AIDictation.Models.RecordingSourceIntegrity.KnownIncomplete,
+                fixture.History.Get(recordingId)!.SourceIntegrity,
+                "known-incomplete capture remains nonretryable");
+            fixture.Recorder.ReleaseAbortProof();
         }
 
         {
@@ -1492,6 +2216,58 @@ static class Contract
             Equal("Result", fixture.State.Current,
                 "optional cleanup timeout ends in Result rather than Failed");
             fixture.Pipeline.ReleaseAfterRaw();
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.Pipeline.BlockAfterRaw = true;
+            True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
+                "cancel-during-cleanup fixture starts capture");
+            var recordingId = fixture.Store.RecordingId;
+            var stopTask = fixture.Coordinator.StopAndTranscribeAsync(TimeSpan.FromSeconds(5));
+            await fixture.Pipeline.AfterRawEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await fixture.Coordinator.CancelAsync("cancel optional cleanup");
+            Equal("Idle", fixture.State.Current,
+                "cancel during optional cleanup releases UI immediately");
+            await WaitUntilAsync(
+                () => fixture.History.Get(recordingId)?.Status ==
+                    AIDictation.Models.TranscriptionStatus.Success,
+                TimeSpan.FromSeconds(1));
+            Equal("complete raw transcript",
+                fixture.History.Get(recordingId)!.Transcription,
+                "cancel during optional cleanup preserves durable raw as final");
+            await WaitUntilAsync(() => fixture.Usage.Calls == 1, TimeSpan.FromSeconds(1));
+            True(fixture.Usage.ReportedAfterTerminalRelease,
+                "raw fallback usage is reported only after terminal release");
+            fixture.Pipeline.ReleaseAfterRaw();
+            True(!(await stopTask.WaitAsync(TimeSpan.FromSeconds(1))).IsSuccess,
+                "cancelled cleanup cannot deliver a late cleaned result");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.Pipeline.BlockAfterRaw = true;
+            True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
+                "shutdown-during-cleanup fixture starts capture");
+            var recordingId = fixture.Store.RecordingId;
+            var stopTask = fixture.Coordinator.StopAndTranscribeAsync(TimeSpan.FromSeconds(5));
+            await fixture.Pipeline.AfterRawEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await fixture.Coordinator
+                .ShutdownAsync(TimeSpan.FromSeconds(1))
+                .WaitAsync(TimeSpan.FromSeconds(1));
+            Equal(AIDictation.Models.TranscriptionStatus.Success,
+                fixture.History.Get(recordingId)!.Status,
+                "shutdown during optional cleanup keeps durable raw successful");
+            Equal("complete raw transcript",
+                fixture.History.Get(recordingId)!.Transcription,
+                "shutdown never downgrades complete raw recognition");
+            Equal(0, fixture.Usage.Calls,
+                "shutdown does not report usage before the next exact History recovery");
+            await fixture.Coordinator.RecoverOnLaunchAsync();
+            Equal(1, fixture.Usage.Calls,
+                "launch claims pending raw-fallback usage exactly once after History");
+            fixture.Pipeline.ReleaseAfterRaw();
+            _ = await stopTask.WaitAsync(TimeSpan.FromSeconds(1));
         }
 
         {
@@ -1768,6 +2544,81 @@ static class Contract
 
         {
             var fixture = new CoordinatorFixture();
+            var visibleId = Guid.NewGuid();
+            var storeOnlyId = Guid.NewGuid();
+            var postClearId = Guid.NewGuid();
+            fixture.Store.SeedTerminal(visibleId);
+            fixture.Store.AdditionalClearAffectedIds = new[] { storeOnlyId };
+            await fixture.History.UpsertAsync(new AIDictation.Models.Recording
+            {
+                Id = visibleId,
+                Transcription = "visible before exact-set clear",
+                Status = AIDictation.Models.TranscriptionStatus.Success,
+                SourceIntegrity = AIDictation.Models.RecordingSourceIntegrity.Complete,
+                Revision = 1
+            });
+            fixture.History.BlockUpsert = true;
+            var hiddenLateUpsert = fixture.History.UpsertAsync(new AIDictation.Models.Recording
+            {
+                Id = storeOnlyId,
+                Transcription = "late hidden store row",
+                Status = AIDictation.Models.TranscriptionStatus.Cancelled,
+                SourceIntegrity = AIDictation.Models.RecordingSourceIntegrity.Complete,
+                Revision = 2
+            });
+            await fixture.History.BlockedUpsertEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            var cleared = await fixture.Coordinator.ClearAsync();
+            True(cleared.Cleared,
+                "Clear atomically fences the exact union of Store and History ids");
+            Equal(1, fixture.History.BatchTombstoneCalls,
+                "Clear commits one atomic History tombstone batch");
+            True(fixture.History.LastBatchTombstoneIds.Contains(visibleId) &&
+                 fixture.History.LastBatchTombstoneIds.Contains(storeOnlyId),
+                "Clear batch includes a Store-only id absent from the pre-Clear History snapshot");
+
+            fixture.History.ReleaseUpsert();
+            True(!await hiddenLateUpsert.WaitAsync(TimeSpan.FromSeconds(1)),
+                "late publication of a Store-only cleared id is rejected");
+            True(fixture.History.Get(storeOnlyId) == null,
+                "Store-only cleared metadata cannot reappear");
+            True(await fixture.History.UpsertAsync(new AIDictation.Models.Recording
+            {
+                Id = postClearId,
+                Transcription = "created after exact-set clear",
+                Status = AIDictation.Models.TranscriptionStatus.Success,
+                SourceIntegrity = AIDictation.Models.RecordingSourceIntegrity.Complete,
+                Revision = 1
+            }),
+                "post-Clear ids remain publishable");
+            True(fixture.History.Get(postClearId) != null,
+                "exact-set Clear never removes a post-Clear row");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
+            fixture.Store.BlockClaimUsage = true;
+            True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
+                "usage-stall fixture starts capture");
+            var stopTask = fixture.Coordinator.StopAndTranscribeAsync(TimeSpan.FromSeconds(5));
+            await fixture.Store.ClaimUsageEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Equal("Result", fixture.State.Current,
+                "durable terminal text reaches Result before usage accounting finishes");
+            True(!fixture.Coordinator.HasActiveAttempt,
+                "stalled usage accounting cannot retain foreground processing ownership");
+            var result = await stopTask.WaitAsync(TimeSpan.FromSeconds(1));
+            True(result.IsSuccess,
+                "bounded usage-accounting timeout cannot undo a durable successful transcript");
+            Equal(0, fixture.Usage.Calls,
+                "usage is not reported before its durable claim commits");
+            fixture.Store.ReleaseClaimUsage();
+            await WaitUntilAsync(() => fixture.Usage.Calls == 1, TimeSpan.FromSeconds(1));
+            Equal(1, fixture.Usage.Calls,
+                "late durable usage claim reconciles exactly once outside processing ownership");
+        }
+
+        {
+            var fixture = new CoordinatorFixture();
             fixture.Recorder.StopDelay = TimeSpan.FromMilliseconds(75);
             True((await fixture.Coordinator.StartCaptureAsync(false, null)).Started,
                 "maximum-duration fixture starts capture");
@@ -1943,7 +2794,7 @@ static class Contract
                     TimeSpan.FromMilliseconds(250)),
                 Usage);
             Usage.IsTerminalAndReleased = () =>
-                State.Current == "Result" && !Coordinator.HasActiveAttempt;
+                State.Current is "Result" or "Idle" && !Coordinator.HasActiveAttempt;
             Store.RecorderShutdownStarted = () => Recorder.ShutdownCalls > 0;
         }
     }
@@ -1952,10 +2803,12 @@ static class Contract
     {
         private readonly object _lock = new();
         private readonly TaskCompletionSource<bool> _beginCaptureRelease = NewSignal();
+        private readonly TaskCompletionSource<bool> _captureBecameReadyRelease = NewSignal();
         private readonly TaskCompletionSource<bool> _beginRecognitionRelease = NewSignal();
         private readonly TaskCompletionSource<bool> _beginFinalizationRelease = NewSignal();
         private readonly TaskCompletionSource<bool> _checkpointRelease = NewSignal();
         private readonly TaskCompletionSource<bool> _completeRelease = NewSignal();
+        private readonly TaskCompletionSource<bool> _claimUsageRelease = NewSignal();
         private readonly TaskCompletionSource<bool> _tombstoneRelease = NewSignal();
         private readonly TaskCompletionSource<bool> _clearRelease = NewSignal();
         private Guid _recordingId;
@@ -1964,10 +2817,12 @@ static class Contract
         private AudioProcessingEntry? _entry;
 
         public bool BlockBeginCapture { get; set; }
+        public bool BlockCaptureBecameReady { get; set; }
         public bool BlockBeginRecognition { get; set; }
         public bool BlockBeginFinalization { get; set; }
         public bool BlockCheckpoint { get; set; }
         public bool BlockComplete { get; set; }
+        public bool BlockClaimUsage { get; set; }
         public bool BlockTombstone { get; set; }
         public bool BlockClear { get; set; }
         public bool ThrowOnAbandon { get; set; }
@@ -1976,17 +2831,38 @@ static class Contract
         public bool StoreTouchedBeforeRecorderShutdown { get; private set; }
         public int ClaimUsageCalls;
         public int GetCalls;
+        public IReadOnlyCollection<Guid> AdditionalClearAffectedIds { get; set; } =
+            Array.Empty<Guid>();
         public TaskCompletionSource<bool> BeginCaptureEntered { get; } = NewSignal();
+        public TaskCompletionSource<bool> CaptureBecameReadyEntered { get; } = NewSignal();
         public TaskCompletionSource<bool> BeginRecognitionEntered { get; } = NewSignal();
         public TaskCompletionSource<bool> BeginFinalizationEntered { get; } = NewSignal();
         public TaskCompletionSource<bool> CheckpointEntered { get; } = NewSignal();
         public TaskCompletionSource<bool> CompleteEntered { get; } = NewSignal();
+        public TaskCompletionSource<bool> ClaimUsageEntered { get; } = NewSignal();
         public TaskCompletionSource<bool> TombstoneEntered { get; } = NewSignal();
         public TaskCompletionSource<bool> ClearEntered { get; } = NewSignal();
         public bool PersistenceHealthy => true;
         public Guid RecordingId
         {
             get { lock (_lock) return _recordingId; }
+        }
+        public AudioAttemptLease? CurrentLease
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _entry?.AttemptId is Guid attemptId
+                        ? new AudioAttemptLease(
+                            _entry.RecordingId,
+                            attemptId,
+                            _entry.DeletionGeneration,
+                            _entry.ClearGeneration,
+                            _entry.Revision)
+                        : null;
+                }
+            }
         }
         public AudioProcessingStage? LastStage
         {
@@ -1996,12 +2872,18 @@ static class Contract
         {
             get { lock (_lock) return _entry?.UsageAccounting; }
         }
+        public bool FinalizationProven
+        {
+            get { lock (_lock) return _entry?.FinalizationProven == true; }
+        }
 
         public void ReleaseBeginCapture() => _beginCaptureRelease.TrySetResult(true);
+        public void ReleaseCaptureBecameReady() => _captureBecameReadyRelease.TrySetResult(true);
         public void ReleaseBeginRecognition() => _beginRecognitionRelease.TrySetResult(true);
         public void ReleaseBeginFinalization() => _beginFinalizationRelease.TrySetResult(true);
         public void ReleaseCheckpoint() => _checkpointRelease.TrySetResult(true);
         public void ReleaseComplete() => _completeRelease.TrySetResult(true);
+        public void ReleaseClaimUsage() => _claimUsageRelease.TrySetResult(true);
         public void ReleaseTombstone() => _tombstoneRelease.TrySetResult(true);
         public void ReleaseClear() => _clearRelease.TrySetResult(true);
 
@@ -2048,10 +2930,80 @@ static class Contract
             }
         }
 
-        public Task<AudioStoreMutation> CaptureBecameReadyAsync(
+        public async Task<AudioStoreMutation> CaptureBecameReadyAsync(
             AudioAttemptLease lease,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(Transition(AudioProcessingStage.Recording, integrity: AudioSourceIntegrity.Unfinalized));
+            CancellationToken cancellationToken = default)
+        {
+            CaptureBecameReadyEntered.TrySetResult(true);
+            if (BlockCaptureBecameReady)
+                await _captureBecameReadyRelease.Task.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return Transition(
+                AudioProcessingStage.Recording,
+                integrity: AudioSourceIntegrity.Unfinalized);
+        }
+
+        public Task<AudioStoreMutation> AdoptFinalizedCaptureAsync(
+            AudioAttemptLease lease,
+            RecorderFinalizationResult proof,
+            CancellationToken cancellationToken = default)
+        {
+            lock (_lock)
+            {
+                if (_entry == null ||
+                    _entry.RecordingId != lease.RecordingId ||
+                    _entry.AttemptId != lease.AttemptId ||
+                    _entry.DeletionGeneration != lease.DeletionGeneration ||
+                    _entry.ClearGeneration != lease.ClearGeneration ||
+                    _entry.Stage == AudioProcessingStage.Deleted ||
+                    !proof.IsFinalized)
+                {
+                    return Task.FromResult(new AudioStoreMutation(
+                        false,
+                        null,
+                        _entry,
+                        "Attempt is stale"));
+                }
+                var stage = _entry.Stage is AudioProcessingStage.Cancelled or AudioProcessingStage.Failed
+                    ? _entry.Stage
+                    : AudioProcessingStage.ReadyForRecognition;
+                var adopted = Transition(
+                    stage,
+                    integrity: AudioSourceIntegrity.Complete);
+                adopted.Entry!.FinalizationProven = true;
+                return Task.FromResult(adopted);
+            }
+        }
+
+        public Task<AudioStoreMutation> RecordCaptureKnownIncompleteAsync(
+            AudioAttemptLease lease,
+            string message,
+            CancellationToken cancellationToken = default)
+        {
+            lock (_lock)
+            {
+                if (_entry == null ||
+                    _entry.RecordingId != lease.RecordingId ||
+                    _entry.AttemptId != lease.AttemptId ||
+                    _entry.DeletionGeneration != lease.DeletionGeneration ||
+                    _entry.ClearGeneration != lease.ClearGeneration ||
+                    _entry.Stage == AudioProcessingStage.Deleted)
+                {
+                    return Task.FromResult(new AudioStoreMutation(
+                        false,
+                        null,
+                        _entry,
+                        "Attempt is stale"));
+                }
+                var stage = _entry.Stage is AudioProcessingStage.Cancelled or AudioProcessingStage.Failed
+                    ? _entry.Stage
+                    : AudioProcessingStage.Failed;
+                var result = Transition(stage, integrity: AudioSourceIntegrity.KnownIncomplete);
+                result.Entry!.FinalizationProven = false;
+                result.Entry.ErrorMessage = message;
+                return Task.FromResult(result);
+            }
+        }
 
         public async Task<AudioStoreMutation> BeginFinalizationAsync(
             AudioAttemptLease lease,
@@ -2063,13 +3015,6 @@ static class Contract
             if (BlockBeginFinalization) await _beginFinalizationRelease.Task.ConfigureAwait(false);
             return Transition(AudioProcessingStage.Finalizing, integrity: AudioSourceIntegrity.Unfinalized);
         }
-
-        public Task<AudioStoreMutation> AcceptFinalizedSourceAsync(
-            AudioAttemptLease lease,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(Transition(
-                AudioProcessingStage.ReadyForRecognition,
-                integrity: AudioSourceIntegrity.Complete));
 
         public async Task<AudioStoreMutation> BeginRecognitionAsync(
             Guid recordingId,
@@ -2127,21 +3072,23 @@ static class Contract
             return result;
         }
 
-        public Task<AudioUsageClaim?> ClaimUsageAsync(
+        public async Task<AudioUsageClaim?> ClaimUsageAsync(
             Guid recordingId,
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref ClaimUsageCalls);
+            ClaimUsageEntered.TrySetResult(true);
+            if (BlockClaimUsage)
+                await _claimUsageRelease.Task.ConfigureAwait(false);
             lock (_lock)
             {
                 if (_entry?.RecordingId != recordingId ||
                     _entry.Stage != AudioProcessingStage.Succeeded ||
                     _entry.UsageAccounting != UsageAccountingState.Pending ||
                     string.IsNullOrWhiteSpace(_entry.FinalText))
-                    return Task.FromResult<AudioUsageClaim?>(null);
+                    return null;
                 _entry.UsageAccounting = UsageAccountingState.Claimed;
-                return Task.FromResult<AudioUsageClaim?>(
-                    new AudioUsageClaim(recordingId, _entry.FinalText));
+                return new AudioUsageClaim(recordingId, _entry.FinalText);
             }
         }
 
@@ -2151,6 +3098,8 @@ static class Contract
             AudioSourceIntegrity? integrity = null,
             CancellationToken cancellationToken = default)
         {
+            var rawFallback = TryPromoteRawFallback();
+            if (rawFallback != null) return Task.FromResult(rawFallback);
             var result = Transition(AudioProcessingStage.Failed, integrity: integrity ?? AudioSourceIntegrity.Complete);
             result.Entry!.ErrorMessage = message;
             return Task.FromResult(result);
@@ -2159,8 +3108,18 @@ static class Contract
         public Task<AudioStoreMutation> CancelAsync(
             AudioAttemptLease lease,
             string message,
-            CancellationToken cancellationToken = default) =>
-            AbandonAttemptAsync(lease, true, message, AudioSourceIntegrity.Complete, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            var rawFallback = TryPromoteRawFallback();
+            return rawFallback != null
+                ? Task.FromResult(rawFallback)
+                : AbandonAttemptAsync(
+                    lease,
+                    true,
+                    message,
+                    AudioSourceIntegrity.Complete,
+                    cancellationToken);
+        }
 
         public Task<AudioStoreMutation> AbandonAttemptAsync(
             AudioAttemptLease lease,
@@ -2170,11 +3129,30 @@ static class Contract
             CancellationToken cancellationToken = default)
         {
             if (ThrowOnAbandon) throw new AudioStoreException("contract store is corrupt");
+            var rawFallback = TryPromoteRawFallback();
+            if (rawFallback != null) return Task.FromResult(rawFallback);
             var result = Transition(
                 cancelled ? AudioProcessingStage.Cancelled : AudioProcessingStage.Failed,
                 integrity: integrity);
             result.Entry!.ErrorMessage = message;
             return Task.FromResult(result);
+        }
+
+        private AudioStoreMutation? TryPromoteRawFallback()
+        {
+            lock (_lock)
+            {
+                if (_entry?.Stage != AudioProcessingStage.ResultReady ||
+                    string.IsNullOrWhiteSpace(_entry.RawText))
+                    return null;
+                var rawFallback = Transition(
+                    AudioProcessingStage.Succeeded,
+                    integrity: AudioSourceIntegrity.Complete);
+                rawFallback.Entry!.FinalText = rawFallback.Entry.RawText;
+                rawFallback.Entry.ErrorMessage = null;
+                rawFallback.Entry.UsageAccounting ??= UsageAccountingState.Pending;
+                return rawFallback;
+            }
         }
 
         public async Task<AudioStoreMutation> TombstoneAsync(
@@ -2190,11 +3168,23 @@ static class Contract
         {
             ClearEntered.TrySetResult(true);
             if (BlockClear) await _clearRelease.Task.ConfigureAwait(false);
+            Guid[] affected;
             lock (_lock)
             {
+                var current = _entry == null
+                    ? Array.Empty<Guid>()
+                    : new[] { _entry.RecordingId };
+                affected = current
+                    .Concat(AdditionalClearAffectedIds)
+                    .Distinct()
+                    .ToArray();
                 if (_entry != null) _entry.Stage = AudioProcessingStage.Deleted;
             }
-            return new AudioStoreMutation(true, null, null);
+            return new AudioStoreMutation(
+                true,
+                null,
+                null,
+                AffectedRecordingIds: affected);
         }
 
         public Task<IReadOnlyList<AudioProcessingEntry>> RecoverOnLaunchAsync(
@@ -2257,7 +3247,11 @@ static class Contract
                     FinalText = _entry?.FinalText,
                     RawText = _entry?.RawText,
                     CheckpointText = _entry?.CheckpointText,
-                    UsageAccounting = _entry?.UsageAccounting
+                    UsageAccounting = _entry?.UsageAccounting,
+                    ErrorMessage = _entry?.ErrorMessage,
+                    FinalizationProven = _entry?.FinalizationProven ?? false,
+                    DeletionGeneration = _entry?.DeletionGeneration ?? 0,
+                    ClearGeneration = _entry?.ClearGeneration ?? 0
                 };
                 return new AudioStoreMutation(true, lease, _entry);
             }
@@ -2273,11 +3267,16 @@ static class Contract
         public int StartCalls;
         public int AbortCalls;
         public TimeSpan StopDelay { get; set; }
+        public bool BlockAbortProof { get; set; }
+        public bool AbortIsFinalized { get; set; } = true;
         public bool BlockShutdown { get; set; }
+        public bool ShutdownWaitsForAbortProof { get; set; }
         public int ShutdownCalls;
         public TaskCompletionSource<bool> ShutdownEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _shutdownRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _abortProofRelease =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> AbortObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2307,14 +3306,20 @@ static class Contract
             return new RecorderFinalizationResult(true, "contract.partial.wav", null);
         }
 
-        public Task AbortRecordingAsync(
+        public async Task<RecorderFinalizationResult?> AbortRecordingAsync(
             AudioAttemptLease lease,
             string reason,
+            TimeSpan? deadline = null,
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref AbortCalls);
             AbortObserved.TrySetResult(true);
-            return Task.CompletedTask;
+            if (BlockAbortProof)
+                await _abortProofRelease.Task.ConfigureAwait(false);
+            return new RecorderFinalizationResult(
+                AbortIsFinalized,
+                "contract.partial.wav",
+                AbortIsFinalized ? null : reason);
         }
 
         public async Task<RecorderFinalizationResult?> ShutdownAsync(
@@ -2325,12 +3330,15 @@ static class Contract
             Interlocked.Increment(ref ShutdownCalls);
             ShutdownEntered.TrySetResult(true);
             if (BlockShutdown) await _shutdownRelease.Task.ConfigureAwait(false);
+            if (ShutdownWaitsForAbortProof && Volatile.Read(ref AbortCalls) > 0)
+                await _abortProofRelease.Task.ConfigureAwait(false);
             return activeLease == null
                 ? null
                 : new RecorderFinalizationResult(true, "contract.partial.wav", null);
         }
 
         public void ReleaseShutdown() => _shutdownRelease.TrySetResult(true);
+        public void ReleaseAbortProof() => _abortProofRelease.TrySetResult(true);
 
         public void RaiseUnexpected(AudioAttemptLease lease, string message) =>
             _captureTerminated?.Invoke(this, new RecorderCaptureFailedEventArgs(lease, message));
@@ -2428,6 +3436,9 @@ static class Contract
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> BlockedUpsertFinished { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int BatchTombstoneCalls;
+        public IReadOnlyCollection<Guid> LastBatchTombstoneIds { get; private set; } =
+            Array.Empty<Guid>();
         public bool PersistenceHealthy => true;
 
         public void ReleaseUpsert() => _upsertRelease.TrySetResult(true);
@@ -2485,8 +3496,20 @@ static class Contract
             Guid id,
             CancellationToken cancellationToken = default)
         {
-            lock (_lock) _rows.Remove(id);
-            _tombstoneFence.Commit(id);
+            return RemoveMetadataAfterTombstonesAsync(new[] { id }, cancellationToken);
+        }
+
+        public Task<bool> RemoveMetadataAfterTombstonesAsync(
+            IReadOnlyCollection<Guid> ids,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref BatchTombstoneCalls);
+            LastBatchTombstoneIds = ids.ToArray();
+            lock (_lock)
+            {
+                foreach (var id in ids) _rows.Remove(id);
+            }
+            _tombstoneFence.Commit(ids);
             return Task.FromResult(true);
         }
 
@@ -2539,14 +3562,49 @@ static class Contract
     private sealed class FakeAppState : IAudioAppState
     {
         private readonly object _lock = new();
+        private readonly ManualResetEventSlim _startPreparingRelease = new();
+        private readonly ManualResetEventSlim _startRetryingRelease = new();
         private string _current = "Idle";
+        public bool BlockStartPreparing { get; set; }
+        public bool BlockStartRetrying { get; set; }
+        public bool RejectRecordingBecameReady { get; set; }
+        public Action? StartPreparingPublished { get; set; }
+        public Action? RecordingReadyPublished { get; set; }
+        public ManualResetEventSlim StartPreparingEntered { get; } = new();
+        public ManualResetEventSlim StartRetryingEntered { get; } = new();
         public string Current { get { lock (_lock) return _current; } }
         private bool Move(string state) { lock (_lock) _current = state; return true; }
-        public bool StartPreparing(bool isCommandMode = false) => Move("Preparing");
-        public bool RecordingBecameReady() => Move("Recording");
+        public void ReleaseStartPreparing() => _startPreparingRelease.Set();
+        public void ReleaseStartRetrying() => _startRetryingRelease.Set();
+        public bool StartPreparing(bool isCommandMode = false)
+        {
+            if (BlockStartPreparing)
+            {
+                StartPreparingEntered.Set();
+                _startPreparingRelease.Wait();
+            }
+            var moved = Move("Preparing");
+            StartPreparingPublished?.Invoke();
+            return moved;
+        }
+        public bool RecordingBecameReady()
+        {
+            if (RejectRecordingBecameReady) return false;
+            var moved = Move("Recording");
+            RecordingReadyPublished?.Invoke();
+            return moved;
+        }
         public bool StartFinalizing() => Move("Finalizing");
         public bool StartProcessing() => Move("Processing");
-        public bool StartRetrying() => Move("Retrying");
+        public bool StartRetrying()
+        {
+            if (BlockStartRetrying)
+            {
+                StartRetryingEntered.Set();
+                _startRetryingRelease.Wait();
+            }
+            return Move("Retrying");
+        }
         public bool SetResult(string text) => Move("Result");
         public bool SetError(string message) => Move("Error");
         public void Reset() => Move("Idle");
@@ -2568,6 +3626,52 @@ static class Contract
         public bool Disposed { get; private set; }
         public DisposableResource(int generation) => Generation = generation;
         public void Dispose() => Disposed = true;
+    }
+
+    private sealed class RepeatingReadStream : Stream
+    {
+        private long _remaining;
+
+        public RepeatingReadStream(long length) => _remaining = length;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = (int)Math.Min(count, _remaining);
+            if (read == 0) return 0;
+            Array.Fill(buffer, (byte)'a', offset, read);
+            _remaining -= read;
+            return read;
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = (int)Math.Min(buffer.Length, _remaining);
+            if (read == 0) return ValueTask.FromResult(0);
+            buffer.Span[..read].Fill((byte)'a');
+            _remaining -= read;
+            return ValueTask.FromResult(read);
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
     }
 
     private sealed class DisconnectingContent : HttpContent

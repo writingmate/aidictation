@@ -112,18 +112,22 @@ public sealed class AudioHttpRecoveryPolicy
 
                 // Only a complete 200 body is a transcription result. A timeout
                 // or disconnect while draining it is transient for this leaf.
-                var bodyTask = Task.Run(
-                    () => response.Content.ReadAsStringAsync(deadline.Token),
-                    CancellationToken.None);
                 string body;
                 try
                 {
-                    body = await bodyTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+                    body = await BoundedHttpContentReader.ReadAsStringAsync(
+                            response.Content,
+                            deadline.Token)
+                        .ConfigureAwait(false);
                 }
-                catch
+                catch (InvalidHttpResponseBodyException ex)
                 {
-                    ObserveLateTask(bodyTask);
-                    throw;
+                    // A complete 200 with an oversized or undecodable body is a
+                    // malformed response, not a transport failure. Never replay
+                    // the upload automatically.
+                    throw new InvalidAudioResponseException(
+                        "The transcription service returned an invalid response. The recording was kept.",
+                        ex);
                 }
                 return new AudioHttpResponse(status, mediaType, body, attempt);
             }
@@ -212,15 +216,6 @@ public sealed class AudioHttpRecoveryPolicy
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
-    private static void ObserveLateTask(Task task)
-    {
-        _ = task.ContinueWith(
-            completed => _ = completed.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
 

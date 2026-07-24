@@ -26,4 +26,5 @@ grep -Fq 'extensible.ToStandardWaveFormat()' "$RECORDER_SOURCE"
 
 HISTORY_SOURCE="$WINDOWS_DIR/AIDictation/Services/HistoryService.cs"
 grep -Fq '_tombstoneFence.CanPublish(recording.Id)' "$HISTORY_SOURCE"
-grep -Fq '_tombstoneFence.Commit(id)' "$HISTORY_SOURCE"
+grep -Fq 'RemoveMetadataAfterTombstonesAsync(' "$HISTORY_SOURCE"
+grep -Fq '_tombstoneFence.Commit(tombstoned)' "$HISTORY_SOURCE"

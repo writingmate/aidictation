@@ -144,20 +144,27 @@ public sealed class LanguagePostProcessService
 
             using (response)
             {
-                var bodyTask = Task.Run(
-                    () => response.Content.ReadAsStringAsync(deadline.Token),
-                    CancellationToken.None);
-                string responseBody;
-                try
+                deadline.Token.ThrowIfCancellationRequested();
+                // Cleanup is optional once raw recognition is durable. Classify
+                // every non-200 from headers and never wait for its diagnostic
+                // body, which may be unbounded or never finish.
+                if (response.StatusCode != HttpStatusCode.OK)
                 {
-                    responseBody = await bodyTask.WaitAsync(deadline.Token).ConfigureAwait(false);
+                    Debug.WriteLine(
+                        $"[LanguagePostProcess] Cleanup failed ({(int)response.StatusCode}), returning raw text");
+                    return rawText;
                 }
-                catch
-                {
-                    ObserveLateTask(bodyTask);
-                    throw;
-                }
-                if (!CleanupCompletionPolicy.TryAccept(response.StatusCode, responseBody, out var corrected))
+
+                var responseBody = await BoundedHttpContentReader.ReadAsStringAsync(
+                        response.Content,
+                        deadline.Token)
+                    .ConfigureAwait(false);
+                var accepted = CleanupCompletionPolicy.TryAccept(
+                    response.StatusCode,
+                    responseBody,
+                    out var corrected);
+                deadline.Token.ThrowIfCancellationRequested();
+                if (!accepted)
                 {
                     Debug.WriteLine($"[LanguagePostProcess] Incomplete cleanup response ({(int)response.StatusCode}), returning raw text");
                     return rawText;
@@ -207,12 +214,4 @@ public sealed class LanguagePostProcessService
             TaskScheduler.Default);
     }
 
-    private static void ObserveLateTask(Task task)
-    {
-        _ = task.ContinueWith(
-            completed => _ = completed.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
 }

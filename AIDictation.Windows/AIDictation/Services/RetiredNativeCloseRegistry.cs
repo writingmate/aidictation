@@ -14,7 +14,8 @@ public sealed record NativeCloseRegistration<T>(
 
 public sealed record NativeShutdownSnapshot<T>(
     NativeCloseRegistration<T>? Current,
-    IReadOnlyList<Task> CloseTasks)
+    IReadOnlyList<Task> CloseTasks,
+    IReadOnlyList<T> RetiredResources)
     where T : class;
 
 /// <summary>
@@ -55,6 +56,15 @@ public sealed class RetiredNativeCloseRegistry<T> where T : class
     public T? Current
     {
         get { lock (_gate) return _current; }
+    }
+
+    public T? FindCurrentOrRetired(Predicate<T> predicate)
+    {
+        lock (_gate)
+        {
+            if (_current != null && predicate(_current)) return _current;
+            return _retired.Keys.FirstOrDefault(item => predicate(item));
+        }
     }
 
     public bool IsCurrent(T resource)
@@ -104,13 +114,19 @@ public sealed class RetiredNativeCloseRegistry<T> where T : class
             }
             return new NativeShutdownSnapshot<T>(
                 current,
-                _retired.Values.Select(item => item.Task).ToArray());
+                _retired.Values.Select(item => item.Task).ToArray(),
+                _retired.Keys.ToArray());
         }
     }
 
     public IReadOnlyList<Task> SnapshotCloseTasks()
     {
         lock (_gate) return _retired.Values.Select(item => item.Task).ToArray();
+    }
+
+    public IReadOnlyList<T> SnapshotRetiredResources()
+    {
+        lock (_gate) return _retired.Keys.ToArray();
     }
 
     public void Complete(T resource)

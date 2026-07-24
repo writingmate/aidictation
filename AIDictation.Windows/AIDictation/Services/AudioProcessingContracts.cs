@@ -6,17 +6,24 @@ using AIDictation.Models;
 
 namespace AIDictation.Services;
 
-public sealed record RecorderStartResult(bool IsReady, string? ErrorMessage)
+public sealed record RecorderStartResult(
+    bool IsReady,
+    string? ErrorMessage,
+    bool KnownIncomplete = false)
 {
     public static RecorderStartResult Ready() => new(true, null);
-    public static RecorderStartResult Failure(string message) => new(false, message);
+    public static RecorderStartResult Failure(
+        string message,
+        bool knownIncomplete = false) =>
+        new(false, message, knownIncomplete);
 }
 
 public sealed record RecorderFinalizationResult(
     bool IsFinalized,
     string PartialSourcePath,
     string? ErrorMessage,
-    bool TimedOut = false);
+    bool TimedOut = false,
+    bool KnownIncomplete = false);
 
 public sealed class RecorderCaptureFailedEventArgs : EventArgs
 {
@@ -66,8 +73,13 @@ public interface IAudioProcessingStore
     Task<AudioStoreMutation> BeginFinalizationAsync(
         AudioAttemptLease lease,
         CancellationToken cancellationToken = default);
-    Task<AudioStoreMutation> AcceptFinalizedSourceAsync(
+    Task<AudioStoreMutation> AdoptFinalizedCaptureAsync(
         AudioAttemptLease lease,
+        RecorderFinalizationResult proof,
+        CancellationToken cancellationToken = default);
+    Task<AudioStoreMutation> RecordCaptureKnownIncompleteAsync(
+        AudioAttemptLease lease,
+        string message,
         CancellationToken cancellationToken = default);
     Task<AudioStoreMutation> BeginRecognitionAsync(
         Guid recordingId,
@@ -136,9 +148,10 @@ public interface IAudioRecorderService
         AudioAttemptLease lease,
         TimeSpan? deadline = null,
         CancellationToken cancellationToken = default);
-    Task AbortRecordingAsync(
+    Task<RecorderFinalizationResult?> AbortRecordingAsync(
         AudioAttemptLease lease,
         string reason,
+        TimeSpan? deadline = null,
         CancellationToken cancellationToken = default);
     Task<RecorderFinalizationResult?> ShutdownAsync(
         AudioAttemptLease? activeLease,
@@ -171,6 +184,9 @@ public interface IRecordingHistory
         CancellationToken cancellationToken = default);
     Task<bool> RemoveMetadataAfterTombstoneAsync(
         Guid id,
+        CancellationToken cancellationToken = default);
+    Task<bool> RemoveMetadataAfterTombstonesAsync(
+        IReadOnlyCollection<Guid> ids,
         CancellationToken cancellationToken = default);
     Task<bool> ClearMetadataAfterTombstoneAsync(
         CancellationToken cancellationToken = default);

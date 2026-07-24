@@ -24,10 +24,12 @@ public sealed class AudioRecorderService : IAudioRecorderService
         TimeSpan? deadline = null,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new RecorderFinalizationResult(false, string.Empty, "contract singleton is not used"));
-    public Task AbortRecordingAsync(
+    public Task<RecorderFinalizationResult?> AbortRecordingAsync(
         AudioAttemptLease lease,
         string reason,
-        CancellationToken cancellationToken = default) => Task.CompletedTask;
+        TimeSpan? deadline = null,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<RecorderFinalizationResult?>(null);
     public Task<RecorderFinalizationResult?> ShutdownAsync(
         AudioAttemptLease? activeLease,
         TimeSpan deadline,
@@ -62,6 +64,10 @@ public sealed class HistoryService : IRecordingHistory
     public Task<bool> UpsertAsync(Recording recording, CancellationToken cancellationToken = default) =>
         Task.FromResult(true);
     public Task<bool> RemoveMetadataAfterTombstoneAsync(Guid id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(true);
+    public Task<bool> RemoveMetadataAfterTombstonesAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default) =>
         Task.FromResult(true);
     public Task<bool> ClearMetadataAfterTombstoneAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(true);

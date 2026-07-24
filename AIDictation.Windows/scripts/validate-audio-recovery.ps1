@@ -23,6 +23,7 @@ if (-not $recorderSource.Contains('format is WaveFormatExtensible extensible') -
 
 $historySource = Get-Content -Raw (Join-Path $windowsDir "AIDictation\Services\HistoryService.cs")
 if (-not $historySource.Contains('_tombstoneFence.CanPublish(recording.Id)') -or
-    -not $historySource.Contains('_tombstoneFence.Commit(id)')) {
+    -not $historySource.Contains('RemoveMetadataAfterTombstonesAsync(') -or
+    -not $historySource.Contains('_tombstoneFence.Commit(tombstoned)')) {
     throw "History must fence late publications after durable Delete/Clear removal."
 }

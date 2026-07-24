@@ -832,6 +832,206 @@ private func testPayloadBeforeManifestRecovery() async throws {
     try require(recoveredPartial == "recoverable partial", "Partial checkpoint text was not readable after restart")
 }
 
+private func testRawCheckpointTerminalBoundaryRecovery() async throws {
+    let runtimeRoot = try makeRoot("raw-terminal-boundary-runtime")
+    let runtimeStore = MobileAudioProcessingStore(rootDirectory: runtimeRoot)
+    let (runtimeLease, _) = try await makeFinalizedAttempt(store: runtimeStore)
+    _ = try await runtimeStore.beginRecognition(
+        runtimeLease,
+        deadlineAt: Date().addingTimeInterval(0.05)
+    )
+    let runtimeRawURL = runtimeLease.sourceURL
+        .deletingLastPathComponent()
+        .appendingPathComponent("raw.txt")
+    try Data("complete raw at the deadline".utf8).write(
+        to: runtimeRawURL,
+        options: .atomic
+    )
+    try await Task.sleep(nanoseconds: 120_000_000)
+    try await runtimeStore.markFailed(
+        runtimeLease,
+        message: "Recognition deadline elapsed.",
+        integrity: .complete
+    )
+    let runtimeSnapshot = try await runtimeStore.snapshot(
+        recordingID: runtimeLease.recordingID
+    )
+    try require(
+        runtimeSnapshot?.stage == .succeeded,
+        "A complete raw payload was downgraded after its manifest deadline crossed"
+    )
+    let runtimeRecoveredText = try await runtimeStore.recognizedText(
+        for: runtimeLease.recordingID
+    )
+    try require(
+        runtimeRecoveredText == "complete raw at the deadline",
+        "Complete raw text became unreachable after terminalization"
+    )
+
+    let retryLease = try await runtimeStore.beginRetry(
+        recordingID: runtimeLease.recordingID,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let retryRecoveredText = try await runtimeStore.recognizedText(
+        for: retryLease.recordingID
+    )
+    try require(
+        retryRecoveredText == "complete raw at the deadline",
+        "Retry discarded the recovered complete raw checkpoint"
+    )
+
+    let restartRoot = try makeRoot("raw-terminal-boundary-restart")
+    let restartStore = MobileAudioProcessingStore(rootDirectory: restartRoot)
+    let (restartLease, _) = try await makeFinalizedAttempt(store: restartStore)
+    _ = try await restartStore.beginRecognition(
+        restartLease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let restartDirectory = restartLease.sourceURL.deletingLastPathComponent()
+    try Data("complete raw before terminal crash".utf8).write(
+        to: restartDirectory.appendingPathComponent("raw.txt"),
+        options: .atomic
+    )
+    let restartManifestURL = restartDirectory.appendingPathComponent("attempt.json")
+    var restartManifest = try requireDictionary(
+        JSONSerialization.jsonObject(with: Data(contentsOf: restartManifestURL))
+    )
+    restartManifest["stage"] = MobileAudioProcessingStore.Stage.failed.rawValue
+    restartManifest.removeValue(forKey: "deadlineAt")
+    restartManifest["userMessage"] = "Process stopped at the checkpoint boundary."
+    try JSONSerialization.data(withJSONObject: restartManifest).write(
+        to: restartManifestURL,
+        options: .atomic
+    )
+
+    let restartedStore = MobileAudioProcessingStore(rootDirectory: restartRoot)
+    _ = try await restartedStore.normalizeInterruptedAttempts()
+    let restartedSnapshot = try await restartedStore.snapshot(
+        recordingID: restartLease.recordingID
+    )
+    try require(
+        restartedSnapshot?.stage == .succeeded,
+        "Restart skipped a complete orphan raw payload behind a terminal manifest"
+    )
+    let restartRecoveredText = try await restartedStore.recognizedText(
+        for: restartLease.recordingID
+    )
+    try require(
+        restartRecoveredText == "complete raw before terminal crash",
+        "Restart failed to publish the terminal-boundary raw checkpoint"
+    )
+}
+
+private func testRetryAuthorityTransferCrashDoesNotAdoptPriorText() async throws {
+    let root = try makeRoot("retry-authority-transfer")
+    let store = MobileAudioProcessingStore(rootDirectory: root)
+    let (originalLease, _) = try await makeFinalizedAttempt(store: store)
+    _ = try await store.beginRecognition(
+        originalLease,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try await store.checkpointRawTranscript(
+        "raw text from the previous generation",
+        lease: originalLease
+    )
+    try await store.cleanupStarted(originalLease)
+    _ = try await store.checkpointFinalText(
+        "final text from the previous generation",
+        lease: originalLease
+    )
+    try await store.markSucceeded(originalLease)
+
+    let originalSnapshot = try await store.snapshot(recordingID: originalLease.recordingID)
+    guard let originalSnapshot else {
+        throw ValidationFailure.failed("Missing original retry snapshot")
+    }
+    let directory = originalLease.sourceURL.deletingLastPathComponent()
+    let previousResultURL = directory.appendingPathComponent("previous-result.txt")
+    try Data("final text from the previous generation".utf8).write(
+        to: previousResultURL,
+        options: .atomic
+    )
+
+    // Recreate the old crash window: the retry manifest became authoritative, but the previous
+    // generation's canonical raw/result leaves were not removed before process death.
+    let manifestURL = directory.appendingPathComponent("attempt.json")
+    var manifest = try requireDictionary(
+        JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL))
+    )
+    let interruptedRetryAttemptID = UUID()
+    manifest["attemptID"] = interruptedRetryAttemptID.uuidString
+    manifest["generation"] = NSNumber(value: originalSnapshot.generation + 1)
+    manifest["revision"] = NSNumber(value: originalSnapshot.revision + 1)
+    manifest["stage"] = MobileAudioProcessingStore.Stage.readyForRecognition.rawValue
+    manifest.removeValue(forKey: "partialTranscriptPath")
+    manifest.removeValue(forKey: "rawTranscriptPath")
+    manifest.removeValue(forKey: "resultPath")
+    manifest["previousResultPath"] = previousResultURL.path
+    manifest.removeValue(forKey: "deadlineAt")
+    manifest.removeValue(forKey: "userMessage")
+    var sourceProof = try requireDictionary(manifest["sourceProof"] as Any)
+    sourceProof["attemptID"] = interruptedRetryAttemptID.uuidString
+    sourceProof["generation"] = NSNumber(value: originalSnapshot.generation + 1)
+    manifest["sourceProof"] = sourceProof
+    try JSONSerialization.data(withJSONObject: manifest).write(
+        to: manifestURL,
+        options: .atomic
+    )
+
+    let restarted = MobileAudioProcessingStore(rootDirectory: root)
+    _ = try await restarted.normalizeInterruptedAttempts()
+    let normalized = try await restarted.snapshot(recordingID: originalLease.recordingID)
+    try require(
+        normalized?.stage == .failed,
+        "An interrupted retry adopted the previous generation's text as a new success"
+    )
+    try require(
+        !FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("raw.txt").path
+        ) && !FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("result.txt").path
+        ),
+        "Restart retained ambiguous previous-generation recognition leaves"
+    )
+    let preservedPreviousText = try await restarted.recognizedText(
+        for: originalLease.recordingID
+    )
+    try require(
+        preservedPreviousText == "final text from the previous generation",
+        "Retry crash recovery lost the previous recoverable text"
+    )
+
+    let secondRestart = MobileAudioProcessingStore(rootDirectory: root)
+    _ = try await secondRestart.normalizeInterruptedAttempts()
+    let stillTerminal = try await secondRestart.snapshot(
+        recordingID: originalLease.recordingID
+    )
+    try require(
+        stillTerminal?.stage == .failed,
+        "A later restart promoted stale previous-generation text"
+    )
+
+    let resumedRetry = try await secondRestart.beginRetry(
+        recordingID: originalLease.recordingID,
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    let resumedSnapshot = try await secondRestart.snapshot(
+        recordingID: originalLease.recordingID
+    )
+    try require(
+        resumedSnapshot?.stage == .readyForRecognition
+            && resumedSnapshot?.attemptID == resumedRetry.attemptID,
+        "Retry did not transfer authority to exactly one fresh attempt"
+    )
+    let resumedFallback = try await secondRestart.recognizedText(
+        for: originalLease.recordingID
+    )
+    try require(
+        resumedFallback == "final text from the previous generation",
+        "Fresh retry lost its generation-safe previous-result fallback"
+    )
+}
+
 private func testDurableWriteFailureDoesNotAdvanceManifest() async throws {
     let root = try makeRoot("write-failure")
     let store = MobileAudioProcessingStore(rootDirectory: root)
@@ -1686,6 +1886,10 @@ private struct IOSAudioRecoveryValidator {
             try await testFullDecodeRejectsTruncation()
             print("testPayloadBeforeManifestRecovery")
             try await testPayloadBeforeManifestRecovery()
+            print("testRawCheckpointTerminalBoundaryRecovery")
+            try await testRawCheckpointTerminalBoundaryRecovery()
+            print("testRetryAuthorityTransferCrashDoesNotAdoptPriorText")
+            try await testRetryAuthorityTransferCrashDoesNotAdoptPriorText()
             print("testDurableWriteFailureDoesNotAdvanceManifest")
             try await testDurableWriteFailureDoesNotAdvanceManifest()
             print("testPathEscapeQuarantinesWithoutDeletingOutsideFile")

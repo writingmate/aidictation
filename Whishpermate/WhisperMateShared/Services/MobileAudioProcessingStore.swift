@@ -537,12 +537,16 @@ public actor MobileAudioProcessingStore {
             guard !historyDeletionIDs(metadata).contains(recordingID) else {
                 throw StoreError.invalidTransition
             }
-            let old = try loadSnapshotLocked(recordingID: recordingID)
+            var old = try loadSnapshotLocked(recordingID: recordingID)
             guard old.stage.isTerminal, old.stage != .deleted,
                   old.sourceIntegrity == .complete,
                   old.storeGeneration == metadata.generation,
                   fileManager.fileExists(atPath: old.sourcePath)
             else { throw StoreError.invalidTransition }
+            _ = try resolveCompletedRecognitionLocked(
+                &old,
+                message: "Recognition completed before the previous attempt stopped."
+            )
             guard old.generation < UInt64.max, old.revision < UInt64.max else {
                 throw StoreError.counterExhausted
             }
@@ -552,8 +556,31 @@ public actor MobileAudioProcessingStore {
                 .appendingPathComponent("previous-result.txt")
             let previousResultData = try preservedResultDataLocked(old)
             if let previousResultData {
+                guard old.revision < UInt64.max - 1 else {
+                    throw StoreError.counterExhausted
+                }
                 try durableWriteLocked(previousResultData, to: previousResultURL)
+
+                // First move the old terminal attempt's recovery authority to the stable
+                // previous-result checkpoint. Only after that manifest is durable may the old
+                // raw/result leaves be removed and a new generation become authoritative.
+                old.stage = .failed
+                old.partialTranscriptPath = nil
+                old.rawTranscriptPath = nil
+                old.resultPath = nil
+                old.previousResultPath = previousResultURL.path
+                old.deadlineAt = nil
+                old.userMessage = "Retry preparation was interrupted. The previous text was kept."
+                if old.usageAccountingState == .inFlight {
+                    old.usageAccountingState = .acknowledged
+                    old.usageAccountingAttemptID = nil
+                    old.usageAccountingDeadlineAt = nil
+                }
+                try advanceRevision(&old)
+                try saveLocked(old)
             }
+            try removeRetryTransientPayloadsLocked(recordingID: recordingID)
+
             let nextGeneration = old.generation + 1
             let nextRevision = old.revision + 1
             let updatedAt = Date()
@@ -601,7 +628,6 @@ public actor MobileAudioProcessingStore {
                 updatedAt: updatedAt
             )
             try saveLocked(replacement)
-            try removeRetryTransientPayloadsLocked(recordingID: recordingID)
             return lease(for: replacement)
         }
     }
@@ -831,7 +857,9 @@ public actor MobileAudioProcessingStore {
             snapshot.stage = .recognitionPartial
             snapshot.partialTranscriptPath = url.path
             try advanceRevision(&snapshot)
-            try saveLocked(snapshot)
+            // The lease and deadline were validated before the payload write began. Once that
+            // durable write succeeds, crossing the deadline during fsync must not orphan it.
+            try saveLocked(snapshot, requireFutureActiveDeadline: false)
         }
     }
 
@@ -849,7 +877,9 @@ public actor MobileAudioProcessingStore {
             snapshot.stage = .rawReady
             snapshot.rawTranscriptPath = rawURL.path
             try advanceRevision(&snapshot)
-            try saveLocked(snapshot)
+            // Complete raw recognition that entered before the deadline is authoritative even if
+            // its fsync finishes just after the deadline. The timeout path will terminalize it.
+            try saveLocked(snapshot, requireFutureActiveDeadline: false)
         }
     }
 
@@ -1087,6 +1117,15 @@ public actor MobileAudioProcessingStore {
                     continue
                 }
                 guard !snapshot.stage.isTerminal else {
+                    if [.failed, .cancelled].contains(snapshot.stage),
+                       try resolveCompletedRecognitionLocked(
+                           &snapshot,
+                           message: "Recognition completed before the interrupted attempt stopped."
+                       )
+                    {
+                        normalized.append(snapshot)
+                        continue
+                    }
                     if [.succeeded, .deleted].contains(snapshot.stage),
                        snapshot.usageAccountingState == .inFlight
                     {
@@ -1206,6 +1245,14 @@ public actor MobileAudioProcessingStore {
                         snapshot.partialTranscriptPath = partialTextURL.path
                         snapshot.stage = .recognitionPartial
                     }
+                }
+
+                if snapshot.stage == .readyForRecognition {
+                    // A retry manifest produced by an older build could have become authoritative
+                    // before that build removed the prior generation's raw/result leaves. This
+                    // stage has not started recognition, so those unreferenced leaves are
+                    // necessarily stale and must not be adopted after terminalization.
+                    try removeRetryTransientPayloadsLocked(recordingID: snapshot.recordingID)
                 }
 
                 switch snapshot.stage {
@@ -1637,12 +1684,15 @@ public actor MobileAudioProcessingStore {
         )
     }
 
-    private func saveLocked(_ snapshot: Snapshot) throws {
+    private func saveLocked(
+        _ snapshot: Snapshot,
+        requireFutureActiveDeadline: Bool = true
+    ) throws {
         do {
             try validateSnapshotLayoutLocked(
                 snapshot,
                 expectedRecordingID: snapshot.recordingID,
-                requireFutureActiveDeadline: true
+                requireFutureActiveDeadline: requireFutureActiveDeadline
             )
             let data = try JSONEncoder().encode(snapshot)
             try durableWriteLocked(data, to: manifestURL(recordingID: snapshot.recordingID))
@@ -2139,21 +2189,58 @@ public actor MobileAudioProcessingStore {
         _ snapshot: inout Snapshot,
         message: String
     ) throws -> Bool {
+        guard snapshot.sourceIntegrity == .complete,
+              [
+                  .recognizing,
+                  .recognitionPartial,
+                  .rawReady,
+                  .cleaning,
+                  .resultReady,
+                  .failed,
+                  .cancelled,
+              ].contains(snapshot.stage)
+        else { return false }
+
         let directory = attemptDirectory(recordingID: snapshot.recordingID)
+        let rawURL = directory.appendingPathComponent("raw.txt")
+        let resultURL = directory.appendingPathComponent("result.txt")
+
+        let rawText: String?
+        if let referencedRawURL = snapshot.rawTranscriptURL {
+            rawText = try readNonEmptyTextLocked(referencedRawURL)
+        } else {
+            rawText = try readNonEmptyTextIfPresentLocked(rawURL)
+        }
+
+        let resultText: String?
+        if let referencedResultURL = snapshot.resultURL {
+            resultText = try readNonEmptyTextLocked(referencedResultURL)
+        } else {
+            resultText = try readNonEmptyTextIfPresentLocked(resultURL)
+        }
+
+        guard rawText != nil || resultText != nil else { return false }
+
+        let durableRaw: String
+        if let rawText {
+            durableRaw = rawText
+            snapshot.rawTranscriptPath = rawURL.path
+        } else if let resultText {
+            durableRaw = resultText
+            try durableWriteLocked(Data(resultText.utf8), to: rawURL)
+            snapshot.rawTranscriptPath = rawURL.path
+        } else {
+            throw StoreError.sourceConflict
+        }
+
         let completedText: String
-        switch snapshot.stage {
-        case .rawReady, .cleaning:
-            guard let rawURL = snapshot.rawTranscriptURL else { throw StoreError.sourceConflict }
-            let raw = try readNonEmptyTextLocked(rawURL)
-            completedText = raw
-            let resultURL = directory.appendingPathComponent("result.txt")
-            try durableWriteLocked(Data(raw.utf8), to: resultURL)
+        if let resultText {
+            completedText = resultText
             snapshot.resultPath = resultURL.path
-        case .resultReady:
-            guard let resultURL = snapshot.resultURL else { throw StoreError.sourceConflict }
-            completedText = try readNonEmptyTextLocked(resultURL)
-        default:
-            return false
+        } else {
+            completedText = durableRaw
+            try durableWriteLocked(Data(durableRaw.utf8), to: resultURL)
+            snapshot.resultPath = resultURL.path
         }
 
         snapshot.stage = .succeeded

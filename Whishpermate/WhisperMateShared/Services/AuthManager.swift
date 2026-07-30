@@ -62,6 +62,10 @@ public class AuthManager: ObservableObject {
         static let userAuthChangedNotification = "UserAuthenticationChanged"
     }
 
+    private enum Keys {
+        static let cachedUserProfile = "cachedUserProfile"
+    }
+
     // MARK: - Published Properties
 
     @Published public var currentUser: User?
@@ -470,6 +474,7 @@ public class AuthManager: ObservableObject {
         do {
             let user = try await supabase.fetchUser()
             DebugLog.info("User fetched: \(user.email), tier: \(user.subscriptionTier), words: \(user.totalWordsUsed)", context: "AuthManager")
+            cacheUserProfile(user)
             await MainActor.run {
                 self.objectWillChange.send()
                 self.currentUser = user
@@ -482,8 +487,18 @@ public class AuthManager: ObservableObject {
             return .profileLoaded
         } catch {
             DebugLog.warning("Failed to fetch authenticated profile", context: "AuthManager")
+            let cachedUser = currentUser == nil ? loadCachedUserProfile() : nil
             await MainActor.run {
-                self.error = "We could not load your account. Please try again."
+                if let cachedUser {
+                    // Keep the last known profile so subscription status (e.g. lifetime)
+                    // survives a backend outage instead of degrading to signed-out gating.
+                    DebugLog.warning("Using cached profile for \(cachedUser.email) after fetch failure", context: "AuthManager")
+                    self.currentUser = cachedUser
+                } else {
+                    // Only surface a failure when nothing was recovered. The message
+                    // stays support-safe rather than echoing the underlying error.
+                    self.error = "We could not load your account. Please try again."
+                }
                 self.isLoading = false
             }
             return .profileRequestRejected
@@ -551,10 +566,31 @@ public class AuthManager: ObservableObject {
         }
     }
 
+    // MARK: - Profile Cache
+
+    private func cacheUserProfile(_ user: User) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(user) else { return }
+        AppDefaults.shared.set(data, forKey: Keys.cachedUserProfile)
+    }
+
+    private func loadCachedUserProfile() -> User? {
+        guard let data = AppDefaults.shared.data(forKey: Keys.cachedUserProfile) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(User.self, from: data)
+    }
+
+    private func clearCachedUserProfile() {
+        AppDefaults.shared.removeObject(forKey: Keys.cachedUserProfile)
+    }
+
     public func logout() async {
         DebugLog.info("Logging out...", context: "AuthManager")
         do {
             try await supabase.client?.auth.signOut()
+            clearCachedUserProfile()
             await MainActor.run {
                 self.currentUser = nil
                 self.isAuthenticated = false

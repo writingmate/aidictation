@@ -155,6 +155,14 @@ public class SubscriptionManager: ObservableObject {
         }
 
         if authManager.isAuthenticated {
+            guard authManager.currentUser != nil else {
+                // Profile fetch failed (e.g. backend outage). Never block dictation on a
+                // missing profile — fall back to local tracking like an anonymous user.
+                let result = checkLocalWordLimit()
+                DebugLog.warning("checkCanTranscribe: authenticated but profile unavailable, falling back to local tracking (canTranscribe=\(result.canTranscribe))", context: "SubscriptionManager")
+                return result
+            }
+
             // Use server-side tracking for authenticated users
             let result = authManager.checkCanTranscribe()
             DebugLog.info("checkCanTranscribe (auth): canTranscribe=\(result.canTranscribe), reason=\(result.reason ?? "nil")", context: "SubscriptionManager")
@@ -172,6 +180,12 @@ public class SubscriptionManager: ObservableObject {
     @discardableResult
     public func recordWords(_ count: Int) async -> Bool {
         if authManager.isAuthenticated {
+            guard authManager.currentUser != nil else {
+                // Profile unavailable — keep counting locally so usage isn't lost.
+                addLocalWords(count)
+                return true
+            }
+
             do {
                 _ = try await authManager.updateWordCount(wordsToAdd: count)
                 await MainActor.run {

@@ -1,6 +1,6 @@
 # Web Authentication Implementation Guide
 
-This document describes how to implement the web-based authentication page at `https://voicesinmyhead.co/auth` that redirects back to the WhisperMate macOS app.
+This document describes the web-based authentication page at `https://aidictation.com/auth` that redirects back to the AI Dictation macOS app.
 
 ## Overview
 
@@ -42,7 +42,7 @@ WhisperMate uses **Implicit Flow** for web-based authentication where:
 
 Your web page receives:
 ```
-https://voicesinmyhead.co/auth?redirect_to=whispermate://auth-callback
+https://aidictation.com/auth?redirect_to=whispermate://auth-callback
 ```
 
 Extract the `redirect_to` parameter:
@@ -57,7 +57,7 @@ const redirectTo = params.get('redirect_to') || 'whispermate://auth-callback';
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
-  'https://rfhdborvqhqzwsgbgzmz.supabase.co',
+  'https://aidictation.com',
   'YOUR_SUPABASE_ANON_KEY'
 )
 ```
@@ -150,7 +150,7 @@ function redirectToApp(session) {
   <script>
     // Initialize Supabase
     const supabase = supabase.createClient(
-      'https://rfhdborvqhqzwsgbgzmz.supabase.co',
+      'https://aidictation.com',
       'YOUR_SUPABASE_ANON_KEY'
     )
 
@@ -282,7 +282,7 @@ The implicit flow passes tokens in URL fragments. This is acceptable for desktop
 ### Test Sign Up Flow
 ```bash
 # Open in browser:
-open "https://voicesinmyhead.co/auth?redirect_to=whispermate://auth-callback"
+open "https://aidictation.com/auth?redirect_to=whispermate://auth-callback"
 
 # Expected:
 # 1. Form appears

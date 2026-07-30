@@ -19,7 +19,7 @@ public static class BuildConfig
         public const string TranscriptionModel = "groq/whisper-large-v3-turbo";
         public const string PostProcessingEndpoint = "https://writingmate.ai/api/openai/v1/chat/completions";
         public const string PostProcessingModel = "openai/gpt-oss-20b";
-        public const string AuthWebUrl = "https://voicesinmyhead.co/auth";
+        public const string AuthWebUrl = "https://aidictation.com/auth";
     }
 
     // MARK: - Private Properties

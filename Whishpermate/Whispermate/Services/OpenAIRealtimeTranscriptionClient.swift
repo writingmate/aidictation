@@ -221,8 +221,7 @@ final class OpenAIRealtimeTranscriptionClient {
     private var accumulatedTranscript = ""
     private var finalTranscript: String?
     private var failedMessage: String?
-    private var finishContinuation: CheckedContinuation<String?, Never>?
-    private var finishTimeoutTask: Task<Void, Never>?
+    private lazy var finishGate = RealtimeTranscriptionFinishGate(queue: sendQueue)
     private var didRequestFinish = false
     private var audioChunkCount = 0
     private var audioByteCount = 0
@@ -282,6 +281,8 @@ final class OpenAIRealtimeTranscriptionClient {
     func start() {
         sendQueue.async { [weak self] in
             guard let self else { return }
+            self.requireSendQueue()
+            self.finishGate.resolve(with: nil)
             self.isClosed = false
             self.audioChunkCount = 0
             self.audioByteCount = 0
@@ -346,45 +347,43 @@ final class OpenAIRealtimeTranscriptionClient {
     }
 
     func finish(timeout: TimeInterval = 1.5) async -> String? {
-        DebugLog.info(
-            "Realtime finish requested timeout=\(timeout)s accumulatedLength=\(accumulatedTranscript.count) finalLength=\(finalTranscript?.count ?? 0) failed=\(failedMessage != nil)",
-            context: "OpenAIRealtime"
-        )
-        if failedMessage != nil {
-            return nil
-        }
-
         return await withCheckedContinuation { continuation in
-            if uncommittedAudioByteCount == 0,
-               pendingCommitAcknowledgements == 0,
-               pendingCompletionItemIDs.isEmpty,
-               let finalTranscript
-            {
-                continuation.resume(returning: finalTranscript)
-                return
-            }
-            if failedMessage != nil {
-                continuation.resume(returning: nil)
-                return
-            }
-
-            finishContinuation = continuation
-            let currentTranscript = accumulatedTranscript.isEmpty ? nil : accumulatedTranscript
-            DebugLog.info(
-                "Realtime commit queued chunks=\(audioChunkCount) bytes=\(audioByteCount) currentLength=\(currentTranscript?.count ?? 0)",
-                context: "OpenAIRealtime"
-            )
-            didRequestFinish = true
-            finishTimeoutTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            sendQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                self.requireSendQueue()
                 DebugLog.info(
-                    "Realtime finish timeout elapsed finalLength=\(self?.finalTranscript?.count ?? 0) accumulatedLength=\(self?.accumulatedTranscript.count ?? 0)",
+                    "Realtime finish requested timeout=\(timeout)s accumulatedLength=\(self.accumulatedTranscript.count) finalLength=\(self.finalTranscript?.count ?? 0) failed=\(self.failedMessage != nil)",
                     context: "OpenAIRealtime"
                 )
-                self?.resumeFinishIfNeeded(with: self?.finalTranscript ?? currentTranscript)
-            }
-            sendQueue.async { [weak self] in
-                guard let self else { return }
+                guard self.failedMessage == nil else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                if self.isTransportDrained, let finalTranscript = self.finalTranscript {
+                    self.abandonTransportOnQueue()
+                    continuation.resume(returning: finalTranscript)
+                    return
+                }
+
+                self.didRequestFinish = true
+                self.finishGate.begin(
+                    timeout: timeout,
+                    continuation: continuation
+                ) { [weak self] in
+                    guard let self else { return }
+                    DebugLog.info(
+                        "Realtime finish timeout elapsed; discarding unproven stream finalLength=\(self.finalTranscript?.count ?? 0) accumulatedLength=\(self.accumulatedTranscript.count)",
+                        context: "OpenAIRealtime"
+                    )
+                    self.abandonTransportOnQueue()
+                }
+                DebugLog.info(
+                    "Realtime commit queued chunks=\(self.audioChunkCount) bytes=\(self.audioByteCount) currentLength=\(self.accumulatedTranscript.count)",
+                    context: "OpenAIRealtime"
+                )
                 self.commitAudioBuffer(reason: "finish")
                 self.resumeFinishIfReady()
             }
@@ -392,21 +391,18 @@ final class OpenAIRealtimeTranscriptionClient {
     }
 
     func close() {
-        finishTimeoutTask?.cancel()
-        finishTimeoutTask = nil
-        resumeFinishIfNeeded(with: finalTranscript ?? (accumulatedTranscript.isEmpty ? nil : accumulatedTranscript))
         sendQueue.async { [weak self] in
             guard let self else { return }
-            self.isClosed = true
-            self.pendingEvents.removeAll()
-            self.task?.cancel(with: .normalClosure, reason: nil)
-            self.task = nil
+            self.requireSendQueue()
+            self.abandonTransportOnQueue()
+            self.finishGate.resolve(with: nil)
         }
     }
 
     private func openSocket(authorization: WritingmateRealtimeClientSecretProvider.Authorization) {
         sendQueue.async { [weak self] in
             guard let self, self.task == nil, !self.isClosed else { return }
+            self.requireSendQueue()
 
             var request = URLRequest(url: authorization.webSocketURL)
             request.setValue("Bearer \(authorization.token)", forHTTPHeaderField: "Authorization")
@@ -482,23 +478,8 @@ final class OpenAIRealtimeTranscriptionClient {
         sendEventOnQueue(["type": "input_audio_buffer.commit"])
     }
 
-    private func sendEvent(_ event: [String: Any]) {
-        sendQueue.async { [weak self] in
-            guard let self else { return }
-            guard !self.isClosed else { return }
-            if self.task == nil {
-                DebugLog.info(
-                    "Realtime event queued before socket type=\((event["type"] as? String) ?? "unknown") pending=\(self.pendingEvents.count + 1)",
-                    context: "OpenAIRealtime"
-                )
-                self.pendingEvents.append(event)
-                return
-            }
-            self.sendEventOnQueue(event)
-        }
-    }
-
     private func sendEventOnQueue(_ event: [String: Any]) {
+        requireSendQueue()
         guard let task else {
             pendingEvents.append(event)
             return
@@ -506,9 +487,8 @@ final class OpenAIRealtimeTranscriptionClient {
         guard let data = try? JSONSerialization.data(withJSONObject: event),
               let message = String(data: data, encoding: .utf8)
         else {
-            DebugLog.warning(
-                "Realtime event serialization failed type=\((event["type"] as? String) ?? "unknown")",
-                context: "OpenAIRealtime"
+            failOnQueue(
+                "Realtime event serialization failed for \((event["type"] as? String) ?? "unknown")"
             )
             return
         }
@@ -517,31 +497,34 @@ final class OpenAIRealtimeTranscriptionClient {
         if eventType != "input_audio_buffer.append" {
             DebugLog.info("Realtime send event type=\(eventType)", context: "OpenAIRealtime")
         }
-        let onError = onError
-        task.send(.string(message)) { error in
-            if let error {
-                Task { @MainActor in
-                    onError("OpenAI Realtime send failed: \(error.localizedDescription)")
+        task.send(.string(message)) { [weak self] error in
+            guard let self, let error else { return }
+            self.fail("OpenAI Realtime send failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func receiveNextMessage() {
+        requireSendQueue()
+        task?.receive { [weak self] result in
+            guard let self else { return }
+            self.sendQueue.async { [weak self] in
+                guard let self, !self.isClosed else { return }
+                self.requireSendQueue()
+                switch result {
+                case .success(let message):
+                    self.handle(message)
+                    self.receiveNextMessage()
+                case .failure(let error):
+                    self.failOnQueue(
+                        "OpenAI Realtime receive failed: \(error.localizedDescription)"
+                    )
                 }
             }
         }
     }
 
-    private func receiveNextMessage() {
-        task?.receive { [weak self] result in
-            guard let self else { return }
-
-            switch result {
-            case .success(let message):
-                self.handle(message)
-                self.receiveNextMessage()
-            case .failure(let error):
-                self.fail("OpenAI Realtime receive failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
     private func handle(_ message: URLSessionWebSocketTask.Message) {
+        requireSendQueue()
         let data: Data?
         switch message {
         case .string(let text):
@@ -565,21 +548,20 @@ final class OpenAIRealtimeTranscriptionClient {
                 pendingCommitAcknowledgements -= 1
             }
 
-            if let itemID = payload["item_id"] as? String {
-                trackItem(itemID)
-                if !completedItemIDs.contains(itemID) {
-                    pendingCompletionItemIDs.insert(itemID)
-                }
-                DebugLog.info(
-                    "Realtime buffer committed itemIDPresent=true pendingAcks=\(pendingCommitAcknowledgements) pendingItems=\(pendingCompletionItemIDs.count)",
-                    context: "OpenAIRealtime"
-                )
-            } else {
-                DebugLog.info(
-                    "Realtime buffer committed itemIDPresent=false pendingAcks=\(pendingCommitAcknowledgements)",
-                    context: "OpenAIRealtime"
-                )
+            guard let itemID = payload["item_id"] as? String,
+                  !itemID.isEmpty
+            else {
+                failOnQueue("Realtime commit acknowledgement was missing its item ID")
+                return
             }
+            trackItem(itemID)
+            if !completedItemIDs.contains(itemID) {
+                pendingCompletionItemIDs.insert(itemID)
+            }
+            DebugLog.info(
+                "Realtime buffer committed itemIDPresent=true pendingAcks=\(pendingCommitAcknowledgements) pendingItems=\(pendingCompletionItemIDs.count)",
+                context: "OpenAIRealtime"
+            )
             resumeFinishIfReady()
         case "conversation.item.input_audio_transcription.delta":
             guard let delta = payload["delta"] as? String, !delta.isEmpty else { return }
@@ -617,7 +599,7 @@ final class OpenAIRealtimeTranscriptionClient {
             let code = (error?["code"] as? String) ?? "unknown"
             let message = (error?["message"] as? String) ?? "OpenAI Realtime error"
             DebugLog.warning("Realtime error event code=\(code) message=\(message)", context: "OpenAIRealtime")
-            fail(message)
+            failOnQueue(message)
         case "session.created", "session.updated":
             DebugLog.info("Realtime event received type=\(type)", context: "OpenAIRealtime")
         default:
@@ -673,30 +655,51 @@ final class OpenAIRealtimeTranscriptionClient {
     }
 
     private func fail(_ message: String) {
+        sendQueue.async { [weak self] in
+            self?.failOnQueue(message)
+        }
+    }
+
+    private func failOnQueue(_ message: String) {
+        requireSendQueue()
+        guard !isClosed else { return }
         if failedMessage != nil {
             return
         }
         failedMessage = message
         DebugLog.warning("Realtime failed message=\(message)", context: "OpenAIRealtime")
-        resumeFinishIfNeeded(with: nil)
+        abandonTransportOnQueue()
+        finishGate.resolve(with: nil)
         Task { @MainActor in
             onError(message)
         }
     }
 
-    private func resumeFinishIfReady() {
-        guard didRequestFinish else { return }
-        guard uncommittedAudioByteCount == 0 else { return }
-        guard pendingCommitAcknowledgements == 0 else { return }
-        guard pendingCompletionItemIDs.isEmpty else { return }
-        resumeFinishIfNeeded(with: finalTranscript ?? (accumulatedTranscript.isEmpty ? nil : accumulatedTranscript))
+    private var isTransportDrained: Bool {
+        uncommittedAudioByteCount == 0
+            && pendingCommitAcknowledgements == 0
+            && pendingCompletionItemIDs.isEmpty
+            && trackedItemIDs.isSubset(of: completedItemIDs)
     }
 
-    private func resumeFinishIfNeeded(with transcript: String?) {
-        guard let continuation = finishContinuation else { return }
-        finishContinuation = nil
-        finishTimeoutTask?.cancel()
-        finishTimeoutTask = nil
-        continuation.resume(returning: transcript)
+    private func resumeFinishIfReady() {
+        requireSendQueue()
+        guard didRequestFinish else { return }
+        guard isTransportDrained else { return }
+        let completedTranscript = finalTranscript
+        abandonTransportOnQueue()
+        finishGate.resolve(with: completedTranscript)
+    }
+
+    private func abandonTransportOnQueue() {
+        requireSendQueue()
+        isClosed = true
+        pendingEvents.removeAll()
+        task?.cancel(with: .normalClosure, reason: nil)
+        task = nil
+    }
+
+    private func requireSendQueue() {
+        dispatchPrecondition(condition: .onQueue(sendQueue))
     }
 }

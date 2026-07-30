@@ -64,6 +64,13 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -o "$work_dir/validate-macos-snapshot"
 "$work_dir/validate-macos-snapshot"
 
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
+  Whishpermate/Whispermate/Services/RealtimeTranscriptionFinishGate.swift \
+  scripts/validate_macos_realtime_finalization.swift \
+  -o "$work_dir/validate-macos-realtime-finalization"
+"$work_dir/validate-macos-realtime-finalization"
+
 swiftc -parse-as-library -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/WhisperMateShared.swift \
   Whishpermate/WhisperMateShared/Models/TranscriptionOutputMode.swift \

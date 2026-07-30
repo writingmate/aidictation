@@ -2054,7 +2054,12 @@ class AppState: ObservableObject {
                 let finishTimeout = snapshot.provider == .custom ? 6.0 : 2.0
                 let result = await realtimeClient?.finish(timeout: finishTimeout)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                realtimeResult = (result?.isEmpty == false) ? result : nil
+                if result?.isEmpty == false {
+                    realtimeResult = result
+                } else {
+                    realtimeClient?.close()
+                    realtimeResult = nil
+                }
             } else {
                 realtimeResult = nil
             }
@@ -2091,12 +2096,11 @@ class AppState: ObservableObject {
                     }
                 }
                 if let realtimeResult {
-                    let raw = snapshot.applyReplacements(to: realtimeResult)
-                    try await session.checkpoint(raw)
-                    try await session.markRawResultReady(raw)
+                    try await session.checkpoint(realtimeResult)
+                    try await session.markRawResultReady(realtimeResult)
                     try await session.beginCleanup()
                     return try await self.applyLLMPassWithFallback(
-                        rawText: raw,
+                        rawText: realtimeResult,
                         client: OpenAIClient(config: .init()),
                         snapshot: snapshot
                     )
@@ -2658,18 +2662,6 @@ class AppState: ObservableObject {
                 diarization: rule.transcriptionOptions.diarization
             )
         }
-        let replacements = dictionaryManager.entries
-            .filter { $0.isEnabled && $0.replacement != nil }
-            .sorted { $0.trigger.count > $1.trigger.count }
-            .compactMap { entry in
-                entry.replacement.map {
-                    MacTranscriptionAttemptSnapshot.Replacement(
-                        trigger: entry.trigger,
-                        replacement: $0
-                    )
-                }
-            }
-
         return MacTranscriptionAttemptSnapshot(
             outputMode: outputMode,
             transcriptionOptions: transcriptionOptions,
@@ -2698,8 +2690,7 @@ class AppState: ObservableObject {
             screenContext: screenContext,
             vadEnabled: vadSettingsManager.vadEnabled,
             vadThreshold: vadSettingsManager.sensitivityThreshold,
-            networkWasConnected: NetworkMonitor.shared.isConnected,
-            replacements: replacements
+            networkWasConnected: NetworkMonitor.shared.isConnected
         )
     }
 
@@ -2829,7 +2820,7 @@ class AppState: ObservableObject {
 
             DebugLog.info("Using on-device Parakeet transcription", context: "AppState")
 
-            var text: String
+            let text: String
             if transcriptionOptions.diarization {
                 text = try await withTimeout(seconds: diarizationTimeoutSeconds) {
                     try await ParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
@@ -2837,7 +2828,6 @@ class AppState: ObservableObject {
             } else {
                 text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
             }
-            text = snapshot.applyReplacements(to: text)
             let durableRaw = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !durableRaw.isEmpty else {
                 throw NSError(

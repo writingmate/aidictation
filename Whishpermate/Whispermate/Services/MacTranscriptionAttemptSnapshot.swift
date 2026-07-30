@@ -6,11 +6,6 @@ import WhisperMateShared
 /// Every mutable preference needed by recognition and cleanup, captured before
 /// an attempt begins. Running attempts never consult the live manager objects.
 nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
-    struct Replacement: Sendable {
-        let trigger: String
-        let replacement: String
-    }
-
     struct ContextRuleSnapshot: Sendable {
         let name: String
         let appBundleIDs: [String]
@@ -98,7 +93,6 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
     let vadEnabled: Bool
     let vadThreshold: Float
     let networkWasConnected: Bool
-    let replacements: [Replacement]
 
     func withContext(
         appContext: String?,
@@ -159,18 +153,7 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
             screenContext: screenContext,
             vadEnabled: vadEnabled,
             vadThreshold: vadThreshold,
-            networkWasConnected: networkWasConnected,
-            replacements: replacements
+            networkWasConnected: networkWasConnected
         )
-    }
-
-    func applyReplacements(to text: String) -> String {
-        replacements.reduce(text) { result, replacement in
-            result.replacingOccurrences(
-                of: replacement.trigger,
-                with: replacement.replacement,
-                options: .caseInsensitive
-            )
-        }
     }
 }

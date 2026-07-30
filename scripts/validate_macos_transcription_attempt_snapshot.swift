@@ -42,7 +42,6 @@ private struct MutableAttemptSettings {
     var language = "en"
     var vadThreshold: Float = 0.31
     var prompt = ["Before vocabulary"]
-    var replacement = "BeforeCanonical"
 }
 
 private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAttemptSnapshot {
@@ -93,8 +92,7 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         screenContext: "Before screen",
         vadEnabled: true,
         vadThreshold: settings.vadThreshold,
-        networkWasConnected: true,
-        replacements: [.init(trigger: "before", replacement: settings.replacement)]
+        networkWasConnected: true
     )
 }
 
@@ -116,7 +114,6 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         settings.language = "fr"
         settings.vadThreshold = 0.99
         settings.prompt.append("After rule")
-        settings.replacement = "AfterCanonical"
 
         precondition(snapshot.transcriptionEndpoint == "https://before.example/transcribe")
         precondition(snapshot.transcriptionModel == "before-model")
@@ -129,7 +126,6 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(snapshot.languageCode == "en")
         precondition(snapshot.vadThreshold == 0.31)
         precondition(snapshot.cleanupPromptComponents == ["Before vocabulary"])
-        precondition(snapshot.applyReplacements(to: "BEFORE value") == "BeforeCanonical value")
         let contextualSnapshot = snapshot.withContext(
             appContext: "Captured app",
             screenContext: "Captured screen"
@@ -140,11 +136,6 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(contextualSnapshot.transcriptionModel == snapshot.transcriptionModel)
         precondition(contextualSnapshot.llmEndpoint == snapshot.llmEndpoint)
         precondition(contextualSnapshot.cleanupPromptComponents == snapshot.cleanupPromptComponents)
-        precondition(
-            contextualSnapshot.applyReplacements(to: "BEFORE value")
-                == snapshot.applyReplacements(to: "BEFORE value"),
-            "Adding captured context changed frozen attempt settings"
-        )
         let currentContextSnapshot = snapshot.withContext(
             appContext: "Current app",
             screenContext: "Current screen",
@@ -171,12 +162,6 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
                 == currentContextSnapshot.cleanupPromptComponents,
             "Resolving captured context twice duplicated frozen instructions"
         )
-        let literalDictation = "Keep (round) [square] {curly} <speaker> tagged text verbatim."
-        precondition(
-            snapshot.applyReplacements(to: literalDictation) == literalDictation,
-            "Durable raw text lost literal dictated delimiters or tags"
-        )
-
         let appStatePath = "Whishpermate/Whispermate/Services/AppState.swift"
         let source = try String(contentsOfFile: appStatePath, encoding: .utf8)
         guard let start = source.range(of: "    private func performTranscription("),
@@ -248,9 +233,19 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             )
         }
         precondition(source.contains("if let realtimeResult"))
-        precondition(source.contains("try await session.markRawResultReady(raw)"))
+        precondition(source.contains("try await session.checkpoint(realtimeResult)"))
+        precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))
-        precondition(source.contains("rawText: raw,\n                        client: OpenAIClient(config: .init())"))
+        precondition(source.contains(
+            "rawText: realtimeResult,\n                        client: OpenAIClient(config: .init())"
+        ))
+        precondition(
+            !source.contains("applyReplacements(to:"),
+            "Recognizer text is being transformed before the durable raw checkpoint"
+        )
+        precondition(source.contains(
+            "let durableRaw = text.trimmingCharacters(in: .whitespacesAndNewlines)"
+        ))
         guard let cleanupStart = source.range(of: "    private func applyLLMPass("),
               let cleanupEnd = source.range(
                 of: "    private func applyOutputModeFormatting(",

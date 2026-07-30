@@ -104,9 +104,20 @@ jobs:
         env:
           SECRETS_PLIST: ${{ secrets.SECRETS_PLIST }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           test -n "$SENTRY_DSN"
+          test -n "$AUTH_WEB_URL"
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_ANON_KEY"
           echo "$SECRETS_PLIST" | base64 --decode > Whishpermate/Whispermate/Secrets.plist
+          for key in AUTH_WEB_URL SUPABASE_URL SUPABASE_ANON_KEY; do
+            /usr/libexec/PlistBuddy -c "Delete :$key" Whishpermate/Whispermate/Secrets.plist 2>/dev/null || true
+            value=$(printenv "$key")
+            /usr/libexec/PlistBuddy -c "Add :$key string $value" Whishpermate/Whispermate/Secrets.plist
+          done
           /usr/libexec/PlistBuddy -c "Delete :SentryDSN" Whishpermate/Whispermate/Secrets.plist 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :SentryDSN string $SENTRY_DSN" Whishpermate/Whispermate/Secrets.plist
           /usr/libexec/PlistBuddy -c "Print :SentryDSN" Whishpermate/Whispermate/Secrets.plist >/dev/null

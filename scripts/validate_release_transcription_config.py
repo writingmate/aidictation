@@ -24,6 +24,7 @@ from urllib import error, parse, request
 
 
 EXPECTED_WRITINGMATE_MODEL = "groq/whisper-large-v3-turbo"
+RELEASE_VALIDATOR_USER_AGENT = "AIDictation-Release-Validator/1.0"
 STALE_TRANSCRIPTION_MODELS = {
     "gpt-4o-transcribe",
     "gpt-4o-mini-transcribe",
@@ -124,7 +125,11 @@ def http_json(url: str, headers: dict[str, str], payload: dict[str, Any]) -> Any
     req = request.Request(
         url,
         data=data,
-        headers={**headers, "Content-Type": "application/json"},
+        headers={
+            **headers,
+            "Content-Type": "application/json",
+            "User-Agent": RELEASE_VALIDATOR_USER_AGENT,
+        },
         method="POST",
     )
     try:
@@ -136,7 +141,11 @@ def http_json(url: str, headers: dict[str, str], payload: dict[str, Any]) -> Any
 
 
 def http_get_json(url: str, headers: dict[str, str]) -> Any:
-    req = request.Request(url, headers=headers, method="GET")
+    req = request.Request(
+        url,
+        headers={**headers, "User-Agent": RELEASE_VALIDATOR_USER_AGENT},
+        method="GET",
+    )
     try:
         with request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -157,6 +166,7 @@ def transcribe(endpoint: str, api_key: str, model: str, audio: Path, label: str)
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": RELEASE_VALIDATOR_USER_AGENT,
     }
     req = request.Request(endpoint, data=body, headers=headers, method="POST")
     try:

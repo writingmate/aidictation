@@ -347,9 +347,9 @@ serve(async (req) => {
 
 ---
 
-## 4. Supabase Auth Configuration
+## 4. Cloudflare Auth Configuration
 
-In Supabase Dashboard → Authentication → URL Configuration:
+The production auth service is hosted at `https://aidictation.com/auth/v1`.
 
 **Site URL:**
 ```
@@ -381,12 +381,12 @@ whispermate://payment/cancel
 
 ### Set up Webhook:
 1. Stripe Dashboard → Developers → Webhooks
-2. Add endpoint: `https://YOUR_PROJECT.supabase.co/functions/v1/stripe-webhook`
+2. Add endpoint: `https://aidictation.com/functions/v1/stripe-webhook`
 3. Select events:
    - `checkout.session.completed`
    - `customer.subscription.updated`
    - `customer.subscription.deleted`
-4. Copy webhook signing secret → Add to Supabase Edge Function secrets
+4. Copy the webhook signing secret into the Cloudflare production secrets
 
 ---
 
@@ -394,7 +394,7 @@ whispermate://payment/cancel
 
 ### Base URL:
 ```
-https://YOUR_PROJECT.supabase.co
+https://aidictation.com
 ```
 
 ### Endpoints:
@@ -503,8 +503,8 @@ Response (Limit Reached - 403):
 
 Once complete, please provide:
 
-1. **Supabase Project URL**: `https://xxxxx.supabase.co`
-2. **Supabase Anon Key**: `eyJhbG...` (public key, safe for client)
+1. **Cloud service URL**: `https://aidictation.com`
+2. **Public client key**: the configured public key (safe for the client)
 3. **Stripe Payment Link**: `https://buy.stripe.com/xxxxx`
 
 These will be added to the Mac app's `Secrets.plist`.

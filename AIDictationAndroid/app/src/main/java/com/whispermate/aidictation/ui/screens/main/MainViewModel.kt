@@ -480,22 +480,6 @@ class MainViewModel @Inject constructor(
         subscriptionRepository.openUpgrade()
     }
 
-    fun shareReferralInvite() {
-        viewModelScope.launch {
-            subscriptionRepository.shareReferralInvite().onFailure { error ->
-                _error.value = error.message ?: "Could not share invite"
-            }
-        }
-    }
-
-    fun redeemReferralCode(code: String) {
-        viewModelScope.launch {
-            subscriptionRepository.redeemReferralCode(code).onFailure { error ->
-                _error.value = error.message ?: "Could not apply invite code"
-            }
-        }
-    }
-
     fun signOut() {
         viewModelScope.launch {
             subscriptionRepository.signOut()

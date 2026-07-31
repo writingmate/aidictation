@@ -104,43 +104,44 @@ fun RecordingDetailScreen(
                         )
                     }
                 },
-                actions = {
-                    if (recording?.audioFilePath != null && File(recording.audioFilePath).exists()) {
-                        IconButton(
-                            onClick = {
-                                if (isPlaying) {
-                                    mediaPlayer?.pause()
-                                    isPlaying = false
-                                } else {
-                                    if (mediaPlayer == null) {
-                                        mediaPlayer = MediaPlayer().apply {
-                                            setDataSource(recording.audioFilePath)
-                                            prepare()
-                                            setOnCompletionListener { isPlaying = false }
-                                        }
-                                    }
-                                    mediaPlayer?.start()
-                                    isPlaying = true
-                                }
-                            }
-                        ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = stringResource(R.string.play)
-                            )
-                        }
-                    }
-                },
                 scrollBehavior = scrollBehavior
             )
         },
         bottomBar = {
             if (recording != null) {
-                // Material 3 keeps secondary actions as icon buttons in the bottom
-                // app bar and promotes the primary one to the attached FAB, so each
-                // keeps a full touch target instead of sharing one cramped row.
+                // Every action for this recording lives here: Material 3 keeps
+                // secondary actions as icon buttons in the bottom app bar and
+                // promotes the primary one to the attached FAB. The container
+                // matches the app's other surfaces — the default surfaceContainer
+                // reads as a separate material against them.
                 BottomAppBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
                     actions = {
+                        if (recording.audioFilePath != null && File(recording.audioFilePath).exists()) {
+                            IconButton(
+                                onClick = {
+                                    if (isPlaying) {
+                                        mediaPlayer?.pause()
+                                        isPlaying = false
+                                    } else {
+                                        if (mediaPlayer == null) {
+                                            mediaPlayer = MediaPlayer().apply {
+                                                setDataSource(recording.audioFilePath)
+                                                prepare()
+                                                setOnCompletionListener { isPlaying = false }
+                                            }
+                                        }
+                                        mediaPlayer?.start()
+                                        isPlaying = true
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = stringResource(R.string.play)
+                                )
+                            }
+                        }
                         if (recording.canRetry) {
                             IconButton(onClick = { viewModel.retryRecording(recording) }) {
                                 Icon(

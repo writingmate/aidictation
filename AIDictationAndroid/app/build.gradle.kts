@@ -21,6 +21,10 @@ val localProperties = Properties().apply {
 
 val emptyConfigSentinel = "__AIDICTATION_EMPTY__"
 
+// Origin serving both the sign-in page and the auth/profile API.
+val AUTH_BACKEND_HOST = "aidictation.com"
+val AUTH_BACKEND_ORIGIN = "https://$AUTH_BACKEND_HOST"
+
 fun configValue(name: String, defaultValue: String = ""): String {
     val candidates = listOf(
         providers.gradleProperty(name).orNull,
@@ -63,13 +67,32 @@ fun normalizedTranscriptionModel(value: String): String {
 }
 
 fun normalizedAuthWebUrl(value: String): String {
-    val trimmed = value.trim().ifBlank { "https://aidictation.com/auth" }
+    val trimmed = value.trim().ifBlank { AUTH_BACKEND_ORIGIN + "/auth" }
     val uri = runCatching { URI(trimmed) }.getOrNull() ?: return trimmed
     val isLegacyAuthPage = uri.host?.lowercase() in setOf(
         "voicesinmyhead.co",
         "www.voicesinmyhead.co"
     ) && uri.path?.trimEnd('/') == "/auth"
-    return if (isLegacyAuthPage) "https://aidictation.com/auth" else trimmed
+    return if (isLegacyAuthPage) AUTH_BACKEND_ORIGIN + "/auth" else trimmed
+}
+
+// The sign-in page and the auth API are the same origin. AUTH_WEB_URL is
+// rewritten to it above, so the API base has to default to it as well —
+// otherwise a build with no SUPABASE_URL collects a session from one backend
+// and sends it to another, which rejects it and drops the user to signed-out.
+fun normalizedAuthApiUrl(value: String, authWebUrl: String): String {
+    val trimmed = value.trim().ifBlank { AUTH_BACKEND_ORIGIN }
+    val apiHost = runCatching { URI(trimmed).host?.lowercase() }.getOrNull()
+    val authHost = runCatching { URI(authWebUrl).host?.lowercase() }.getOrNull()
+    if (apiHost != null && authHost != null && apiHost != authHost &&
+        (apiHost == AUTH_BACKEND_HOST || authHost == AUTH_BACKEND_HOST)
+    ) {
+        throw org.gradle.api.GradleException(
+            "AUTH_WEB_URL host ($authHost) and SUPABASE_URL host ($apiHost) point at " +
+                "different backends; sessions minted by one are rejected by the other."
+        )
+    }
+    return trimmed
 }
 
 fun productionPaymentLink(value: String): String {
@@ -114,6 +137,16 @@ val stripePaymentLinkAnnual = productionPaymentLink(configValue("STRIPE_PAYMENT_
 val stripePaymentLinkLifetime = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_LIFETIME"))
 val transcriptionModel = normalizedTranscriptionModel(configValue("TRANSCRIPTION_MODEL"))
 val authWebUrl = normalizedAuthWebUrl(configValue("AUTH_WEB_URL"))
+val authApiUrl = normalizedAuthApiUrl(configValue("SUPABASE_URL"), authWebUrl)
+// The Cloudflare backend authenticates from the bearer token alone and ignores
+// this header, but the client treats a blank value as "auth not configured".
+val authApiKey = configValue("SUPABASE_ANON_KEY").ifBlank {
+    if (runCatching { URI(authApiUrl).host?.lowercase() }.getOrNull() == AUTH_BACKEND_HOST) {
+        "public-anon-key"
+    } else {
+        ""
+    }
+}
 
 android {
     namespace = "com.whispermate.aidictation"
@@ -158,8 +191,8 @@ android {
         // Auth, usage, and purchase links. Android uses the same web auth and
         // Stripe checkout flow as the macOS app; empty values leave those entry
         // points disabled in local builds.
-        buildConfigField("String", "SUPABASE_URL", buildConfigString(configValue("SUPABASE_URL")))
-        buildConfigField("String", "SUPABASE_ANON_KEY", buildConfigString(configValue("SUPABASE_ANON_KEY")))
+        buildConfigField("String", "SUPABASE_URL", buildConfigString(authApiUrl))
+        buildConfigField("String", "SUPABASE_ANON_KEY", buildConfigString(authApiKey))
         buildConfigField("String", "AUTH_WEB_URL", buildConfigString(authWebUrl))
         buildConfigField("String", "STRIPE_PAYMENT_LINK", buildConfigString(stripePaymentLink))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))

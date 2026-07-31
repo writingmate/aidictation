@@ -73,6 +73,7 @@
     <string name="undo">Undo</string>
     <string name="play">Play</string>
     <string name="back">Back</string>
+    <string name="retry">Retry</string>
 
     <!-- Settings -->
     <string name="settings_languages">Languages</string>

@@ -87,6 +87,9 @@ fun RecordingDetailScreen(
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        // One surface from the app bar through to the action bar; the status
+        // cards are the only thing that should read as a separate layer.
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             MediumTopAppBar(
                 title = {
@@ -224,7 +227,7 @@ fun RecordingDetailScreen(
                 }
             }
 
-            TranscriptionCard(
+            Transcription(
                 recording = recording,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -256,30 +259,24 @@ private fun DurationLabel(duration: String) {
     }
 }
 
+/** The transcription is the whole point of the screen, so it reads as the page
+ *  itself rather than a card: there is no collection here for a card to separate
+ *  one item from, and an empty one just frames whitespace. */
 @Composable
-private fun TranscriptionCard(recording: Recording, modifier: Modifier = Modifier) {
+private fun Transcription(recording: Recording, modifier: Modifier = Modifier) {
     val text = recording.availableText
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    SelectionContainer(
+        modifier = modifier.verticalScroll(rememberScrollState())
     ) {
-        SelectionContainer(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(ScreenGutter)
-        ) {
-            Text(
-                text = text.ifBlank { stringResource(R.string.transcription_unavailable) },
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (text.isBlank()) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                }
-            )
-        }
+        Text(
+            text = text.ifBlank { stringResource(R.string.transcription_unavailable) },
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (text.isBlank()) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        )
     }
 }
 

@@ -74,6 +74,7 @@
     <string name="play">Play</string>
     <string name="back">Back</string>
     <string name="retry">Retry</string>
+    <string name="transcription_unavailable">Audio saved — retry transcription</string>
 
     <!-- Settings -->
     <string name="settings_languages">Languages</string>

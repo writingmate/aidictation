@@ -27,8 +27,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,9 +37,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MediumTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -55,11 +53,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.domain.model.Recording
 import java.io.File
+
+private val ScreenGutter = 16.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,7 +77,7 @@ fun RecordingDetailScreen(
 
     var isPlaying by remember { mutableStateOf(false) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     DisposableEffect(Unit) {
         onDispose {
@@ -87,8 +88,14 @@ fun RecordingDetailScreen(
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text(recording?.formattedDate ?: "") },
+            MediumTopAppBar(
+                title = {
+                    Text(
+                        text = recording?.formattedDate.orEmpty(),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
@@ -109,9 +116,7 @@ fun RecordingDetailScreen(
                                         mediaPlayer = MediaPlayer().apply {
                                             setDataSource(recording.audioFilePath)
                                             prepare()
-                                            setOnCompletionListener {
-                                                isPlaying = false
-                                            }
+                                            setOnCompletionListener { isPlaying = false }
                                         }
                                     }
                                     mediaPlayer?.start()
@@ -131,8 +136,8 @@ fun RecordingDetailScreen(
         },
         bottomBar = {
             if (recording != null) {
-                // Material 3 puts secondary actions in the bottom app bar and
-                // promotes the primary one to the attached FAB, so each action
+                // Material 3 keeps secondary actions as icon buttons in the bottom
+                // app bar and promotes the primary one to the attached FAB, so each
                 // keeps a full touch target instead of sharing one cramped row.
                 BottomAppBar(
                     actions = {
@@ -164,8 +169,8 @@ fun RecordingDetailScreen(
                                     copyToClipboard(context, recording.availableText)
                                     onNavigateBack()
                                 },
-                                // The theme's primaryContainer is near-white, so the
-                                // default bottom-bar FAB colour vanishes into the bar.
+                                // This theme maps primaryContainer to near-white, so
+                                // the default bottom-bar FAB colour would disappear.
                                 containerColor = MaterialTheme.colorScheme.primary,
                                 contentColor = MaterialTheme.colorScheme.onPrimary,
                                 elevation = FloatingActionButtonDefaults.bottomAppBarFabElevation()
@@ -201,69 +206,100 @@ fun RecordingDetailScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = ScreenGutter)
         ) {
-            RecordingMetadata(recording)
+            recording.formattedDuration?.let { duration ->
+                DurationLabel(duration)
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             if (recording.isProcessing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
+                ProcessingCard(recording.checkpointText)
+                Spacer(modifier = Modifier.height(12.dp))
+            } else {
+                recording.errorMessage?.let { message ->
+                    ErrorCard(message)
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
             }
 
-            recording.errorMessage?.takeIf { !recording.isProcessing }?.let { message ->
-                ErrorCard(message)
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            SelectionContainer(
+            TranscriptionCard(
+                recording = recording,
                 modifier = Modifier
+                    .fillMaxWidth()
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(
-                    text = transcriptionText(recording),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (recording.availableText.isBlank()) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    }
-                )
-            }
+            )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(ScreenGutter))
         }
     }
 }
 
-private fun transcriptionText(recording: Recording): String = when {
-    recording.isProcessing -> recording.checkpointText.ifBlank { "Processing recording…" }
-    recording.transcription.isNotBlank() -> recording.transcription
-    recording.checkpointText.isNotBlank() -> recording.checkpointText
-    else -> "Audio saved — retry transcription"
+@Composable
+private fun DurationLabel(duration: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Schedule,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp)
+        )
+        Text(
+            text = duration,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 @Composable
-private fun RecordingMetadata(recording: Recording) {
-    val duration = recording.formattedDuration ?: return
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+private fun TranscriptionCard(recording: Recording, modifier: Modifier = Modifier) {
+    val text = recording.availableText
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        AssistChip(
-            onClick = {},
-            enabled = false,
-            label = { Text(duration) },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Schedule,
-                    contentDescription = null,
-                    modifier = Modifier.size(AssistChipDefaults.IconSize)
-                )
-            }
-        )
+        SelectionContainer(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(ScreenGutter)
+        ) {
+            Text(
+                text = text.ifBlank { stringResource(R.string.transcription_unavailable) },
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (text.isBlank()) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                }
+            )
+        }
     }
-    Spacer(modifier = Modifier.height(16.dp))
+}
+
+@Composable
+private fun ProcessingCard(checkpointText: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    ) {
+        Column(modifier = Modifier.padding(ScreenGutter)) {
+            Text(
+                text = checkpointText.ifBlank { stringResource(R.string.processing) },
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+    }
 }
 
 @Composable
@@ -276,7 +312,7 @@ private fun ErrorCard(message: String) {
         )
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(ScreenGutter),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

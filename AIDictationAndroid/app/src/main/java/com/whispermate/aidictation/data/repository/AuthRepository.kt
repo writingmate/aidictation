@@ -95,16 +95,19 @@ class AuthRepository @Inject constructor(
     }
 
     fun openUpgrade(context: Context) {
+        // Signing in comes first and needs no payment link. Checking the link
+        // before the session made the "Sign in to upgrade" entry point dead for
+        // signed-out users whenever no production Stripe link was configured.
+        val user = _authState.value.user
+        if (user == null) {
+            openLogin(context)
+            return
+        }
+
         val link = preferredPaymentLink()
         if (link.isBlank()) {
             _authState.value = _authState.value.copy(error = "Purchase link is not configured")
             Toast.makeText(context, "Purchase link is not configured", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val user = _authState.value.user
-        if (user == null) {
-            openLogin(context)
             return
         }
 
@@ -219,39 +222,6 @@ class AuthRepository @Inject constructor(
         }.getOrElse { error ->
             Log.w(TAG, "Failed to update word count", error)
             user
-        }
-    }
-
-    suspend fun ensureReferralCode(): Result<UserProfile> = withContext(Dispatchers.IO) {
-        val token = securePrefs.getString(SecureKeys.ACCESS_TOKEN, null)
-            ?: return@withContext Result.failure(Exception("Sign in to create an invite link."))
-
-        callProfileRpc("ensure_referral_code", JSONObject(), token)
-    }
-
-    suspend fun redeemReferralCode(code: String): Result<UserProfile> = withContext(Dispatchers.IO) {
-        val token = securePrefs.getString(SecureKeys.ACCESS_TOKEN, null)
-            ?: return@withContext Result.failure(Exception("Sign in to apply an invite code."))
-        val cleanedCode = code.trim()
-        if (cleanedCode.isBlank()) {
-            return@withContext Result.failure(Exception("Enter an invite code."))
-        }
-
-        callProfileRpc("redeem_referral_code", JSONObject().put("code", cleanedCode), token)
-    }
-
-    private fun callProfileRpc(functionName: String, payload: JSONObject, accessToken: String): Result<UserProfile> = runCatching {
-        val request = Request.Builder()
-            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/$functionName")
-            .addSupabaseHeaders(accessToken)
-            .post(payload.toString().toRequestBody(jsonMediaType))
-            .build()
-
-        okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Request failed: ${response.code}")
-            val updated = parseProfile(response.body?.string().orEmpty(), _authState.value.user?.email.orEmpty())
-            _authState.value = _authState.value.copy(user = updated)
-            updated
         }
     }
 

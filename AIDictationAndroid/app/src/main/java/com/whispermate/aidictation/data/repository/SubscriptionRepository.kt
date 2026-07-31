@@ -184,41 +184,5 @@ class SubscriptionRepository @Inject constructor(
         authRepository.signOut()
     }
 
-    suspend fun shareReferralInvite(): Result<Unit> {
-        val user = authRepository.authState.value.user
-        if (user == null) {
-            openLogin()
-            return Result.success(Unit)
-        }
-
-        return authRepository.ensureReferralCode().map { updated ->
-            val code = updated.referralCode ?: error("Your invite link is not ready yet.")
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, referralInviteText(code))
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            val chooser = Intent.createChooser(shareIntent, "Share invite").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(chooser)
-        }
-    }
-
-    suspend fun redeemReferralCode(code: String): Result<Unit> {
-        if (authRepository.authState.value.user == null) {
-            openLogin()
-            return Result.success(Unit)
-        }
-
-        return authRepository.redeemReferralCode(code).map { }
-    }
-
-    private fun referralInviteText(code: String): String {
-        val baseUrl = BuildConfig.AUTH_WEB_URL.ifBlank { "https://aidictation.app" }
-        val separator = if (baseUrl.contains("?")) "&" else "?"
-        val inviteUrl = "$baseUrl${separator}ref=$code"
-        return "Try AI Dictation with my invite link. We both get ${REFERRAL_BONUS_WORDS} extra words: $inviteUrl"
-    }
 
 }

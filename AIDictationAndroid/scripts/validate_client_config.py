@@ -56,6 +56,27 @@ def validate_https_url(name: str, value: str) -> None:
         raise ClientConfigurationError(f"{name} must be a complete HTTPS URL.")
 
 
+AUTH_BACKEND_HOST = "aidictation.com"
+
+
+def validate_auth_backend_agreement(auth_web_url: str, api_url: str) -> None:
+    """Reject a build whose sign-in page and API belong to different backends.
+
+    AUTH_WEB_URL issues the session and SUPABASE_URL has to validate it. When
+    they drift apart the app sends a token one backend signed to another, which
+    rejects it, and sign-in silently lands the user back on signed-out.
+    """
+    auth_host = (urlparse(auth_web_url).hostname or "").lower()
+    api_host = (urlparse(api_url).hostname or "").lower()
+    # The legacy split (a standalone auth page in front of Supabase) is gone:
+    # aidictation.com now serves both the sign-in page and the auth API.
+    if AUTH_BACKEND_HOST in (auth_host, api_host) and auth_host != api_host:
+        raise ClientConfigurationError(
+            f"AUTH_WEB_URL host ({auth_host}) and SUPABASE_URL host ({api_host}) point at "
+            "different backends; sessions minted by one are rejected by the other."
+        )
+
+
 def validate_public_supabase_key(url: str, key: str) -> None:
     if key.startswith("sb_secret_"):
         raise ClientConfigurationError("SUPABASE_ANON_KEY contains a server secret key.")
@@ -104,6 +125,7 @@ def validate_client_configuration(
 
     if auth_count == len(AUTH_CONFIG_NAMES):
         validate_public_supabase_key(values["SUPABASE_URL"], values["SUPABASE_ANON_KEY"])
+        validate_auth_backend_agreement(values["AUTH_WEB_URL"], values["SUPABASE_URL"])
 
 
 def main() -> int:

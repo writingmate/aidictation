@@ -99,6 +99,14 @@ public class SupabaseManager {
         return client
     }
 
+    /// Foundation upper-cases `uuidString`, but user ids are stored lower-cased.
+    /// Postgres compared UUIDs case-insensitively; the backend stores them as
+    /// text, so send the canonical form rather than relying on the server to
+    /// normalise it.
+    private func profileFilterID(_ id: UUID) -> String {
+        id.uuidString.lowercased()
+    }
+
     // MARK: - User Management
 
     public func fetchUser() async throws -> User {
@@ -110,7 +118,7 @@ public class SupabaseManager {
         let response: [User] = try await client
             .from("profiles")
             .select()
-            .eq("user_id", value: session.user.id.uuidString)
+            .eq("user_id", value: profileFilterID(session.user.id))
             .execute()
             .value
 
@@ -144,7 +152,7 @@ public class SupabaseManager {
         let response: [User] = try await client
             .from("profiles")
             .update(updatePayload)
-            .eq("user_id", value: currentUser.userId.uuidString)
+            .eq("user_id", value: profileFilterID(currentUser.userId))
             .select()
             .execute()
             .value
@@ -186,7 +194,7 @@ public class SupabaseManager {
         let response: [User] = try await client
             .from("profiles")
             .update(resetPayload)
-            .eq("user_id", value: currentUser.userId.uuidString)
+            .eq("user_id", value: profileFilterID(currentUser.userId))
             .select()
             .execute()
             .value

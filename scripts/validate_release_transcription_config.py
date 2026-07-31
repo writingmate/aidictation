@@ -71,6 +71,28 @@ def validate_model(endpoint: str, model: str) -> None:
         )
 
 
+def validate_auth_backend_agreement(config: dict[str, Any], supabase_url: str) -> None:
+    """Reject a build whose sign-in page and API belong to different backends.
+
+    AUTH_WEB_URL issues the session; SUPABASE_URL has to validate it. When they
+    drift apart the app collects a token one backend signed and sends it to
+    another, which rejects it — sign-in silently returns the user to signed-out.
+    """
+    auth_web_url = required_string(config, "AUTH_WEB_URL")
+    auth_host = parse.urlparse(auth_web_url).netloc.lower()
+    api_host = parse.urlparse(supabase_url).netloc.lower()
+    if not auth_host or not api_host:
+        fail(f"AUTH_WEB_URL and SUPABASE_URL must be absolute URLs, got {auth_web_url!r} and {supabase_url!r}")
+    # The legacy split (a standalone auth page in front of Supabase) is gone:
+    # aidictation.com now serves both the sign-in page and the auth API.
+    if "aidictation.com" in (auth_host, api_host) and auth_host != api_host:
+        fail(
+            f"AUTH_WEB_URL host ({auth_host}) and SUPABASE_URL host ({api_host}) "
+            "point at different backends; sessions minted by one will be rejected by the other"
+        )
+    print(f"auth backend ok: auth_host={auth_host}, api_host={api_host}")
+
+
 def generate_speech_sample(output: Path) -> None:
     if not shutil.which("say"):
         fail("macOS 'say' command is required for release transcription validation")
@@ -199,6 +221,7 @@ def validate_authenticated_user(config: dict[str, Any], endpoint: str, api_key: 
 
     supabase_url = required_string(config, "SUPABASE_URL").rstrip("/")
     anon_key = required_string(config, "SUPABASE_ANON_KEY")
+    validate_auth_backend_agreement(config, supabase_url)
     token_url = f"{supabase_url}/auth/v1/token?grant_type=password"
     token = http_json(
         token_url,
@@ -211,10 +234,14 @@ def validate_authenticated_user(config: dict[str, Any], endpoint: str, api_key: 
     if not access_token or not user_id:
         fail("Supabase test login did not return an access token and user id")
 
+    # Query the way the shipped app does. Foundation's UUID.uuidString is
+    # upper-cased, so filtering with the server's lower-cased id would pass here
+    # while every real macOS/iOS client got an empty result and fell back to the
+    # free tier.
     query = parse.urlencode(
         {
             "select": "user_id,email,monthly_word_count,subscription_status",
-            "user_id": f"eq.{user_id}",
+            "user_id": f"eq.{user_id.upper()}",
         }
     )
     profile_url = f"{supabase_url}/rest/v1/profiles?{query}"
@@ -226,7 +253,10 @@ def validate_authenticated_user(config: dict[str, Any], endpoint: str, api_key: 
         },
     )
     if not isinstance(profiles, list) or not profiles:
-        fail("authenticated release test user has no profile row")
+        fail(
+            "authenticated release test user has no profile row for the "
+            "upper-cased user id the Apple clients send"
+        )
 
     profile = profiles[0]
     monthly_count = int(profile.get("monthly_word_count") or 0)

@@ -101,8 +101,6 @@ fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
-    onShareInvite: () -> Unit,
-    onRedeemInvite: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -111,7 +109,6 @@ fun SettingsScreen(
     var showAccessibilityDisclosureDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
     var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
-    var referralCodeInput by remember { mutableStateOf("") }
     var showTranscriptionModeScreen by remember { mutableStateOf(false) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
@@ -148,13 +145,6 @@ fun SettingsScreen(
     ) {
         AccountSettingsSection(
             usageStatus = usageStatus,
-            referralCodeInput = referralCodeInput,
-            onReferralCodeChange = { referralCodeInput = it },
-            onShareInvite = onShareInvite,
-            onRedeemInvite = {
-                onRedeemInvite(referralCodeInput)
-                referralCodeInput = ""
-            },
             onSignIn = onSignIn,
             onSignOut = onSignOut,
             onUpgrade = onUpgrade
@@ -441,10 +431,6 @@ fun SettingsScreen(
 @Composable
 private fun AccountSettingsSection(
     usageStatus: UsageStatus,
-    referralCodeInput: String,
-    onReferralCodeChange: (String) -> Unit,
-    onShareInvite: () -> Unit,
-    onRedeemInvite: () -> Unit,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit
@@ -497,13 +483,6 @@ private fun AccountSettingsSection(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
 
-        ReferralInviteItem(
-            usageStatus = usageStatus,
-            referralCodeInput = referralCodeInput,
-            onReferralCodeChange = onReferralCodeChange,
-            onShareInvite = onShareInvite,
-            onRedeemInvite = onRedeemInvite
-        )
 
         if (usageStatus.isAuthenticated) {
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -777,7 +756,9 @@ private fun AccountIdentityItem(
                 text = email,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
+                // An address is one unbreakable token; wrapping it mid-string
+                // reads as broken, so keep it on a single ellipsised line.
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
@@ -820,80 +801,6 @@ private fun UsageSummary(usageStatus: UsageStatus) {
                 progress = { usageStatus.percentage.coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth()
             )
-        }
-    }
-}
-
-@Composable
-private fun ReferralInviteItem(
-    usageStatus: UsageStatus,
-    referralCodeInput: String,
-    onReferralCodeChange: (String) -> Unit,
-    onShareInvite: () -> Unit,
-    onRedeemInvite: () -> Unit
-) {
-    Column(
-        modifier = Modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Default.AccountCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.referral_title),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = if (usageStatus.referralBonusWords > 0) {
-                        stringResource(R.string.referral_earned, usageStatus.referralBonusWords)
-                    } else {
-                        stringResource(R.string.referral_description)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        if (usageStatus.isAuthenticated) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onShareInvite,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(stringResource(R.string.referral_share))
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = referralCodeInput,
-                    onValueChange = onReferralCodeChange,
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.referral_code_hint)) }
-                )
-                Button(
-                    onClick = onRedeemInvite,
-                    enabled = referralCodeInput.isNotBlank()
-                ) {
-                    Text(stringResource(R.string.referral_apply))
-                }
-            }
         }
     }
 }

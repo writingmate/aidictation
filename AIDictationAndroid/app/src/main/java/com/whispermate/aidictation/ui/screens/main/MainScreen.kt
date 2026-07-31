@@ -22,13 +22,11 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -188,7 +186,6 @@ fun MainScreen(
                 onDelete = { viewModel.deleteRecording(it) },
                 onCopy = { copyToClipboard(context, it.availableText) },
                 onSelect = { onNavigateToRecordingDetail(it.id) },
-                onRetry = { viewModel.retryRecording(it) },
                 routeChangesEnabled = routeChangesEnabled,
                 modifier = Modifier.padding(paddingValues)
             )
@@ -210,8 +207,6 @@ fun MainScreen(
                 onSignIn = { viewModel.openLogin() },
                 onSignOut = { viewModel.signOut() },
                 onUpgrade = { viewModel.openUpgrade() },
-                onShareInvite = { viewModel.shareReferralInvite() },
-                onRedeemInvite = { viewModel.redeemReferralCode(it) },
                 modifier = Modifier.padding(paddingValues)
             )
         }
@@ -234,7 +229,6 @@ private fun HistoryTab(
     onDelete: (Recording) -> Unit,
     onCopy: (Recording) -> Unit,
     onSelect: (Recording) -> Unit,
-    onRetry: (Recording) -> Unit,
     routeChangesEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -323,7 +317,6 @@ private fun HistoryTab(
                     RecordingItem(
                         recording = recording,
                         onClick = { onSelect(recording) },
-                        onRetry = { onRetry(recording) },
                         routeChangesEnabled = routeChangesEnabled
                     )
                 }
@@ -336,7 +329,6 @@ private fun HistoryTab(
 private fun RecordingItem(
     recording: Recording,
     onClick: () -> Unit,
-    onRetry: () -> Unit,
     routeChangesEnabled: Boolean
 ) {
     Card(
@@ -375,15 +367,6 @@ private fun RecordingItem(
                         text = duration,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            if (recording.canRetry) {
-                IconButton(onClick = onRetry) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Retry transcription",
-                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }

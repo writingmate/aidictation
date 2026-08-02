@@ -14,7 +14,9 @@ The scheduled `voice to text Windows` video requires live Windows footage. The c
 
 Current first-party GitHub captures, the claim-checked script, Remotion composition, emotive narration, 60-second master, upload cut, metadata, provenance ledger, thumbnail, poster, and upload checklist are complete. Generated narration and media are kept untracked.
 
-The first upload (`jV31ppJ4jP4`) exposed a credential mismatch during the required verification step: it landed on `Writingmate: Your All-in-One AI Platform` instead of the configured `Artem Vysotsky` channel. It was immediately changed to private and was never public. The finished cut now waits for a separate OAuth token authenticated to channel ID `UCRCOQWtK3JhtR2l2votWazA`; only then may it be uploaded as unlisted for review. It must never be made public automatically.
+The correct-channel review upload is live as unlisted video [`JfofYcSijTk`](https://youtu.be/JfofYcSijTk) on `Artem Vysotsky` (`UCRCOQWtK3JhtR2l2votWazA`). The watch page verifies the title, channel, unlisted state, runtime, hashtags, and description. YouTube Studio verifies the custom thumbnail, all ten tags, Science & Technology category, AI-use disclosure, disabled subscriber notifications, and a completed copyright check with no issues. The website and repository URLs are present in the description; YouTube says they will remain non-clickable until the channel completes its one-time verification. The video must remain unlisted until the product owner reviews and explicitly approves this exact upload.
+
+The earlier upload (`jV31ppJ4jP4`) exposed an OAuth credential mismatch: it landed on `Writingmate: Your All-in-One AI Platform`. It was immediately changed to private and was never public. The waiting OAuth uploader and callback proxy were stopped after the correct Studio upload to prevent a duplicate.
 
 ## Files
 

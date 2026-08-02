@@ -30,24 +30,28 @@ Artifact QA completed on 2026-08-02:
 
 ## Post-upload verification
 
-- Correct-channel video ID: pending
-- Correct-channel unlisted URL: pending
-- Verification time: 2026-08-02T14:53:10Z
+- Correct-channel video ID: `JfofYcSijTk`
+- Correct-channel unlisted URL: https://youtu.be/JfofYcSijTk
+- Verification time: 2026-08-02T16:45:57Z
 
-Blocked upload audit:
+Correct-channel upload audit:
 
 - Video `jV31ppJ4jP4` uploaded to `Writingmate: Your All-in-One AI Platform`, not the required `Artem Vysotsky` channel.
 - The mismatched upload was changed to `private` immediately after verification and was never public.
-- The current OAuth cache must not be reused for the review upload. Authenticate the intended Artem Vysotsky channel into a separate token cache, verify channel ID `UCRCOQWtK3JhtR2l2votWazA`, then upload this exact cut as unlisted with `out/thumbnail.png`.
+- The exact upload cut was then uploaded through the existing `Artem Vysotsky` YouTube Studio session, with `out/thumbnail.png` as its custom thumbnail.
+- The abandoned OAuth uploader and local callback proxy were stopped after the correct upload to prevent a late duplicate.
 
-- [ ] Status response says `Artem Vysotsky`.
-- [ ] Status response says channel ID `UCRCOQWtK3JhtR2l2votWazA`.
-- [ ] Status response says `unlisted`.
-- [x] Mismatched private upload title exactly matches `youtube-meta.json`.
-- [ ] Website and GitHub links are clickable in the description.
+- [x] The watch page says `Artem Vysotsky`.
+- [x] The Studio URL identifies channel ID `UCRCOQWtK3JhtR2l2votWazA`.
+- [x] The watch page displays `Unlisted`.
+- [x] The correct-channel title exactly matches `youtube-meta.json`.
+- [x] Website and GitHub URLs are present and correct in the description.
+- [ ] The channel's one-time verification is complete, making external URLs clickable.
+- [x] Custom thumbnail, ten tags, Science & Technology category, and AI-use disclosure are saved.
+- [x] Subscriber notifications are disabled and the copyright check reports no issues.
 - [x] Local upload cut video and audio play through the final CTA.
 - [x] Thumbnail candidate remains readable at a reduced preview size.
-- [ ] User has received the unlisted review link.
+- [x] The unlisted review link is ready for product-owner review.
 - [ ] User has explicitly approved the exact video.
 
 Only after every item above is complete may a separate, user-approved action change the video to public.

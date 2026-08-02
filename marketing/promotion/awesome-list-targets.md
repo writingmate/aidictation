@@ -50,7 +50,7 @@ offline on every platform.
 | [awesome-windows-foss](https://github.com/fithisux/awesome-windows-foss) | `Multimedia` | Submitted one Windows entry: [PR #6](https://github.com/fithisux/awesome-windows-foss/pull/6); ready, clean, and mergeable |
 | [abordage/awesome-mac](https://github.com/abordage/awesome-mac) | `Audio & Video > Utilities` | Submitted one schema-valid YAML entry: [PR #15](https://github.com/abordage/awesome-mac/pull/15); locally validated and mergeable, with the repository workflow awaiting maintainer approval to run |
 | [AndrewSB/awesome-macOS](https://github.com/AndrewSB/awesome-macOS) | `Apps` | Submitted one app entry: [PR #27](https://github.com/AndrewSB/awesome-macOS/pull/27); ready, clean, and mergeable |
-| [xyNNN/awesome-mac](https://github.com/xyNNN/awesome-mac) | `Productivity` | Submitted one claim-safe entry: [PR #39](https://github.com/xyNNN/awesome-mac/pull/39); ready, clean, and mergeable |
+| [xyNNN/awesome-mac](https://github.com/xyNNN/awesome-mac) | `Productivity` | Merged and live: [PR #39](https://github.com/xyNNN/awesome-mac/pull/39); the default-branch Productivity section now links directly to the canonical website |
 | [awesome-productivity-tools](https://github.com/ProductivityDirectory/awesome-productivity-tools) | `AI Tools` | Earlier owner submission refreshed to remove stale pricing and platform claims: [PR #52](https://github.com/ProductivityDirectory/awesome-productivity-tools/pull/52); ready, clean, and mergeable |
 | [awesome-foss-ios-apps](https://github.com/ivon852/awesome-foss-ios-apps) | `輸入法` | Submitted one Traditional Chinese input-method row with App Store and source links: [PR #1](https://github.com/ivon852/awesome-foss-ios-apps/pull/1); ready, clean, and mergeable |
 | [Awesome-Android-Open-Source-Projects](https://github.com/binaryshrey/Awesome-Android-Open-Source-Projects) | `Productivity` | Submitted one project entry and the required contributor line: [PR #74](https://github.com/binaryshrey/Awesome-Android-Open-Source-Projects/pull/74); ready, clean, and mergeable |
@@ -67,6 +67,13 @@ offline on every platform.
 | --- | --- | --- |
 | [awesome-openai-whisper](https://github.com/ancs21/awesome-openai-whisper) | `Applications` | Submitted one open-source cross-platform voice-to-text entry: [PR #21](https://github.com/ancs21/awesome-openai-whisper/pull/21); ready, clean, and mergeable |
 | [awesome-foss-alternatives](https://github.com/sfermigier/awesome-foss-alternatives) | `Productivity > Voice Dictation` | Submitted a focused voice-dictation category and one factual alternative entry: [PR #48](https://github.com/sfermigier/awesome-foss-alternatives/pull/48); ready, clean, and mergeable |
+
+## Fifth Wave
+
+| List | Placement | Notes |
+| --- | --- | --- |
+| [YSGStudyHards/Awesome-Tools](https://github.com/YSGStudyHards/Awesome-Tools) | `AI实用效率工具` | Submitted one Chinese productivity row with the canonical website and source: [PR #70](https://github.com/YSGStudyHards/Awesome-Tools/pull/70); draft, clean, and mergeable |
+| [pingan8787/awesome-ai-tools](https://github.com/pingan8787/awesome-ai-tools) | `Text & Speech` | Submitted one factual voice-to-text entry with the canonical website and source: [PR #201](https://github.com/pingan8787/awesome-ai-tools/pull/201); draft, clean, and mergeable, with GitGuardian passing |
 
 ## Catalog issue submissions
 
@@ -161,7 +168,8 @@ submit that entry manually.
 - [AndrewSB/awesome-macOS PR #27](https://github.com/AndrewSB/awesome-macOS/pull/27):
   one app entry submitted on August 2, 2026.
 - [xyNNN/awesome-mac PR #39](https://github.com/xyNNN/awesome-mac/pull/39):
-  one Productivity entry submitted on August 2, 2026.
+  merged on August 2, 2026; the live default-branch Productivity entry links
+  directly to `https://aidictation.com/` and uses claim-safe offline wording.
 - [awesome-productivity-tools PR #52](https://github.com/ProductivityDirectory/awesome-productivity-tools/pull/52):
   earlier owner submission refreshed with current cross-platform, open-source
   wording on August 2, 2026.
@@ -194,10 +202,16 @@ submit that entry manually.
 - [awesome-foss-alternatives PR #48](https://github.com/sfermigier/awesome-foss-alternatives/pull/48):
   one focused Voice Dictation category and factual open-source alternative entry
   submitted on August 2, 2026.
+- [YSGStudyHards/Awesome-Tools PR #70](https://github.com/YSGStudyHards/Awesome-Tools/pull/70):
+  one Chinese AI productivity row with the canonical website and source submitted
+  as a draft on August 2, 2026.
+- [pingan8787/awesome-ai-tools PR #201](https://github.com/pingan8787/awesome-ai-tools/pull/201):
+  one Text & Speech entry with the canonical website and source submitted as a
+  draft on August 2, 2026; GitGuardian passes.
 
-All thirty-two current pull requests were re-audited on August 2, 2026. They
-remain open and mergeable, with no actionable human review feedback. Twenty-five
-have a clean merge state, five first-time workflows still await maintainer
-approval to run, and two pull requests still require maintainer
-branch-protection review. Every pull request discloses the project affiliation
-and AI assistance.
+All thirty-four tracked pull requests were re-audited on August 2, 2026. One is
+merged and live; thirty-three remain open and mergeable, with no actionable
+human review feedback. Twenty-six open pull requests have a clean merge state,
+five first-time workflows still await maintainer approval to run, and two still
+require maintainer branch-protection review. Every pull request discloses the
+project affiliation and AI assistance.

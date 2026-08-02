@@ -6,15 +6,16 @@ Copy source: [`submission-pack.md`](submission-pack.md)
 
 Machine-readable companion: [`directory-submissions.csv`](directory-submissions.csv)
 
-LibHunt and freshcode.club now have verified live AI Dictation pages. SaaSHub
-ownership is verified and its unsupported copy and old repository URL were
-replaced. LocalAlternative, Open Source Startups, NeuronFeed, Fossies, and
-ListAi.cc accepted editorial-review submissions. The OpenAPK issue, Obtainium
-PR #1570, Open Source Observer PR #1140, OSSDrop PR #3, and Does It ARM issue
-#1083 are open for maintainer review. WinGet PR #411291 adds the current official
-Windows release; Microsoft's full validation pipeline and the CLA check passed,
-so maintainer review and merge are the remaining gates. None of those pending
-submissions is counted as a live listing yet. Internet Intro acknowledged a
+LibHunt, freshcode.club, and Software Heritage now have verified live AI
+Dictation records. SaaSHub ownership is verified and its unsupported copy and
+old repository URL were replaced. LocalAlternative, Open Source Startups,
+NeuronFeed, Fossies, and ListAi.cc accepted editorial-review submissions. The
+OpenAPK issue, Obtainium PR #1570, Open Source Observer PR #1140, OSSDrop PR #3,
+Does It ARM issue #1083, European Alternatives PR #49, and opensource.builders
+issue #571 are open for maintainer review. WinGet PR #411291 adds the current
+official Windows release; Microsoft's full validation pipeline and the CLA check
+passed, so maintainer review and merge are the remaining gates. None of those
+pending submissions is counted as a live listing yet. Internet Intro acknowledged a
 submission made before its anti-campaigning rule was confirmed, so that receipt
 is recorded as a rule mismatch and expected editorial rejection rather than a
 campaign win. The free Launching Next and FOSShub forms remain prepared in
@@ -84,6 +85,7 @@ Presence and link evidence are separate:
 | SaaSHub | Software alternatives directory | LIVE—MAINTAIN | https://www.saashub.com/ai-dictation | https://www.saashub.com/manage/ai-dictation/edit | Ownership was verified August 2. The public page now uses claim-safe cross-platform copy, and the managed GitHub URL points to `writingmate/aidictation`; monitor the remaining catalog-approval state. | Verified badge and corrected public copy are live. The official website anchor explicitly uses `rel=nofollow`; the managed source URL is not public yet. |
 | LibHunt | Open-source project catalog | LIVE—MAINTAIN | https://www.libhunt.com/r/aidictation | https://www.libhunt.com/repo/submit | Automatically approved August 2 with the canonical website, source, docs, speech-to-text topics, and the corrected `MIT License` label. The moderated correction is live and the page now renders the proper OSI-approved status. | Public listing, website link, source link, and license status verified. The inspected website and source anchors had no restrictive relation attribute; this is not a ranking guarantee. |
 | freshcode.club | FLOSS release catalog | LIVE—MAINTAIN | https://freshcode.club/projects/aidictation | https://freshcode.club/submit | Published August 2 with newly authored CC-BY-SA-compatible copy, the canonical homepage, MITL license, platform tags, and the public source URL in the description. | Public listing and direct homepage link verified. The inspected homepage anchor had no restrictive relation attribute; this is not a ranking guarantee. |
+| Software Heritage | Source-code archive | LIVE—MAINTAIN | https://archive.softwareheritage.org/browse/origin/?origin_url=https%3A%2F%2Fgithub.com%2Fwritingmate%2Faidictation.git | https://archive.softwareheritage.org/api/1/origin/save/2408415/ | Save Code Now request #2408415 completed with a full visit. Preserve the snapshot identifier and recheck after material repository changes. | Public origin, archive visit, branches, releases, code tree, and direct GitHub origin link verified. The inspected origin anchor had no restrictive relation attribute; this is not a ranking guarantee. |
 | eudk/awesome-ai-tools | Community awesome list | LIVE—UPDATE | https://github.com/eudk/awesome-ai-tools | https://github.com/eudk/awesome-ai-tools/pull/490 | Cross-platform maintenance update submitted August 2, 2026. Track PR #490; do not add a duplicate. | Direct website link is visible in GitHub Markdown; no dofollow assertion. |
 
 ## Wave 1: free editorial and self-serve targets
@@ -144,6 +146,8 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 37 | ListAi.cc | AI directory | SUBMITTED—REVIEW | https://listai.cc/submit | The free first-party endpoint accepted the claim-safe Productivity submission with `HTTP 200` and `{"success":true}` after exact duplicate searches returned no listing. Wait for human review, then inspect the published copy and link. | No AI Dictation page exists yet; current published examples use direct product links, but AI Dictation link attributes cannot be verified before publication. |
 | 38 | OSSDrop | Open-source project catalog | SUBMITTED—REVIEW | https://github.com/OSSDrop/OSSDrop/pull/3 | PR #3 adds exactly one MIT-licensed Productivity entry with the canonical website and repository. JSON, uniqueness, description-length, and diff checks passed; track maintainer review. | The PR is open and mergeable, but no generated catalog page or outbound link is claimed before merge and publication. |
 | 39 | Does It ARM | Apple-silicon compatibility catalog | SUBMITTED—REVIEW | https://github.com/ThatGuySam/doesitarm/issues/1083 | Issue #1083 requests a native Apple-silicon listing based on the stable `0.0.97` universal binary, Developer ID signature, stapled notarization, and Gatekeeper acceptance. Track maintainer review. | The issue is open, but no published compatibility page or outbound-link attribute is claimed. |
+| 40 | European Alternatives | Free/open-source alternatives catalog | SUBMITTED—REVIEW | https://github.com/BEKO2210/european-alternatives.eu-free-open-source/pull/49 | PR #49 adds a bilingual AI Dictation record and slug registration in the AI & ML category. The local production build generated 1,324 pages; track maintainer review. | The PR is open and mergeable, but no published catalog page or outbound link is claimed before merge and deployment. |
+| 41 | opensource.builders | Open-source alternatives catalog | SUBMITTED—REVIEW | https://github.com/junaid33/opensource.builders/issues/571 | Issue #571 proposes AI Dictation as an open-source Superwhisper alternative with explicit platform and offline/cloud limits. Track maintainer review without inventing a similarity score. | The issue is open, but no published alternative page or outbound-link attribute is claimed before editorial acceptance. |
 
 ## Current submission receipts
 
@@ -312,6 +316,36 @@ is pending; no published page or link attribute is claimed.
 - Limit: the request claims native Apple-silicon architecture only, not a
   performance benchmark. The issue is open; no live compatibility page or
   backlink is claimed before editorial acceptance.
+
+### Software Heritage — archived August 2, 2026
+
+- Save request: https://archive.softwareheritage.org/api/1/origin/save/2408415/
+- Public origin: https://archive.softwareheritage.org/browse/origin/?origin_url=https%3A%2F%2Fgithub.com%2Fwritingmate%2Faidictation.git
+- Result: request #2408415 succeeded with a full visit at
+  `2026-08-02T21:34:08.182000+00:00`.
+- Snapshot: `swh:1:snp:c9a0ee33b7f2289d60b9a59e9cb262aacec4f7b4`.
+- Verification: the public browse page renders the repository, archive visit,
+  125 branches, 63 releases, and code tree. Its direct GitHub origin anchor had
+  no `nofollow`, `sponsored`, or `ugc` relation at the dated check; this is not
+  a ranking guarantee.
+
+### European Alternatives — PR submitted August 2, 2026
+
+- Submission: https://github.com/BEKO2210/european-alternatives.eu-free-open-source/pull/49
+- Scope: one bilingual AI & ML record plus the required slug registry update,
+  with the canonical website and source repository.
+- Validation: the local production build passed and generated 1,324 pages. The
+  PR is open and mergeable; no published listing is claimed before merge and
+  deployment.
+
+### opensource.builders — issue submitted August 2, 2026
+
+- Submission: https://github.com/junaid33/opensource.builders/issues/571
+- Scope: a structured open-source Superwhisper-alternative request with the
+  canonical website, source, MIT license, and explicit self-hosting and
+  offline/cloud limitations.
+- Limit: no similarity score was fabricated. The issue is open with no human
+  feedback; no published alternative page or backlink is claimed.
 
 ### FOSShub — prepared, not submitted
 

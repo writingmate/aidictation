@@ -14,6 +14,9 @@ on:
       - 'scripts/validate_macos_recording_recovery.swift'
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
+      - 'scripts/validate_macos_url_handler_registration.sh'
+      - 'scripts/verify_macos_url_handler.swift'
+      - 'scripts/verify_macos_release_auth.sh'
       - 'scripts/validate_parakeet_runtime_recovery.swift'
       - 'scripts/validate_transcription_prompt_routing.py'
       - 'scripts/validate_transcription_cleanup_prompt.swift'
@@ -35,6 +38,9 @@ on:
       - 'scripts/validate_macos_recording_recovery.swift'
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
+      - 'scripts/validate_macos_url_handler_registration.sh'
+      - 'scripts/verify_macos_url_handler.swift'
+      - 'scripts/verify_macos_release_auth.sh'
       - 'scripts/validate_parakeet_runtime_recovery.swift'
       - 'scripts/validate_transcription_prompt_routing.py'
       - 'scripts/validate_transcription_cleanup_prompt.swift'
@@ -70,6 +76,9 @@ jobs:
             echo "Recovery contracts checked out $actual_sha instead of event commit $GITHUB_SHA." >&2
             exit 1
           fi
+
+      - name: Validate macOS callback registration
+        run: bash scripts/validate_macos_url_handler_registration.sh
 
       - name: Run deterministic recovery matrix
         run: bash scripts/validate_apple_audio_recovery.sh

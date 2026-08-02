@@ -184,6 +184,9 @@ jobs:
             -o /tmp/validate_macos_history_row_refresh
           /tmp/validate_macos_history_row_refresh
 
+      - name: Validate macOS callback registration
+        run: bash scripts/validate_macos_url_handler_registration.sh
+
       - name: Resolve Swift package dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
@@ -302,6 +305,23 @@ jobs:
             echo "Packaged app is $packaged_version ($packaged_build), expected $VERSION ($BUILD)." >&2
             exit 1
           fi
+          python3 - "$INFO_PLIST" <<'PYEOF'
+          import plistlib
+          import sys
+
+          with open(sys.argv[1], "rb") as plist_file:
+              info = plistlib.load(plist_file)
+          schemes = [
+              scheme
+              for url_type in info.get("CFBundleURLTypes", [])
+              for scheme in url_type.get("CFBundleURLSchemes", [])
+          ]
+          if schemes != ["aidictation"]:
+              raise SystemExit(
+                  "exported release app does not declare exactly the aidictation callback scheme"
+              )
+          print("verified exact exported aidictation callback scheme")
+          PYEOF
           scripts/validate_macos_universal_app.sh "$APP"
           python3 scripts/validate_release_transcription_config.py \
             --secrets "$APP/Contents/Resources/Secrets.plist" \

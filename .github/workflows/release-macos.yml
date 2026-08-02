@@ -61,6 +61,7 @@ jobs:
   release:
     needs: provenance
     runs-on: macos-26
+    environment: release
     permissions:
       contents: write
 

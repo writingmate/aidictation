@@ -213,7 +213,14 @@ def transcribe(endpoint: str, api_key: str, model: str, audio: Path, label: str)
     return text
 
 
-def validate_authenticated_user(config: dict[str, Any], endpoint: str, api_key: str, model: str, audio: Path) -> None:
+def validate_authenticated_user(
+    config: dict[str, Any],
+    endpoint: str,
+    api_key: str,
+    model: str,
+    audio: Path,
+    require_lifetime: bool,
+) -> None:
     email = os.environ.get("AIDICTATION_RELEASE_TEST_EMAIL", "").strip()
     password = os.environ.get("AIDICTATION_RELEASE_TEST_PASSWORD", "").strip()
     if not email or not password:
@@ -234,14 +241,13 @@ def validate_authenticated_user(config: dict[str, Any], endpoint: str, api_key: 
     if not access_token or not user_id:
         fail("Supabase test login did not return an access token and user id")
 
-    # Query the way the shipped app does. Foundation's UUID.uuidString is
-    # upper-cased, so filtering with the server's lower-cased id would pass here
-    # while every real macOS/iOS client got an empty result and fell back to the
-    # free tier.
+    # Query the way the corrected Apple clients do. Foundation's UUID.uuidString
+    # is upper-cased, while the account backend stores ids as lower-case text.
+    # The release client canonicalizes the value before querying.
     query = parse.urlencode(
         {
             "select": "user_id,email,monthly_word_count,subscription_status",
-            "user_id": f"eq.{user_id.upper()}",
+            "user_id": f"eq.{user_id.lower()}",
         }
     )
     profile_url = f"{supabase_url}/rest/v1/profiles?{query}"
@@ -253,14 +259,16 @@ def validate_authenticated_user(config: dict[str, Any], endpoint: str, api_key: 
         },
     )
     if not isinstance(profiles, list) or not profiles:
-        fail(
-            "authenticated release test user has no profile row for the "
-            "upper-cased user id the Apple clients send"
-        )
+        fail("authenticated release test user has no profile row for the canonical lower-case user id")
 
     profile = profiles[0]
     monthly_count = int(profile.get("monthly_word_count") or 0)
     subscription_status = str(profile.get("subscription_status") or "free")
+    if require_lifetime and subscription_status != "lifetime":
+        fail(
+            "authenticated release test user must have lifetime access for the "
+            f"release entitlement gate, got {subscription_status!r}"
+        )
     if subscription_status not in {"pro", "lifetime"} and monthly_count >= 10_000:
         fail("authenticated release test user is at or above the free word limit")
 
@@ -273,7 +281,10 @@ def main() -> None:
     parser.add_argument("--secrets", required=True, type=Path)
     parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--require-auth", action="store_true")
+    parser.add_argument("--require-lifetime", action="store_true")
     args = parser.parse_args()
+    if args.require_lifetime and not args.require_auth:
+        fail("--require-lifetime requires --require-auth")
 
     config = load_plist(args.secrets)
     endpoint = required_string(config, "CustomTranscriptionEndpoint")
@@ -295,7 +306,14 @@ def main() -> None:
         generate_speech_sample(audio)
         transcribe(endpoint, api_key, model, audio, "non-auth cloud")
         if args.require_auth:
-            validate_authenticated_user(config, endpoint, api_key, model, audio)
+            validate_authenticated_user(
+                config,
+                endpoint,
+                api_key,
+                model,
+                audio,
+                require_lifetime=args.require_lifetime,
+            )
 
 
 if __name__ == "__main__":

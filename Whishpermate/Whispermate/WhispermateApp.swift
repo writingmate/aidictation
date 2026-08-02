@@ -77,6 +77,53 @@ private enum MainSettingsWindowOpenState {
     }
 }
 
+/// Emits a sanitized account-state snapshot only when the release workflow
+/// explicitly enables it. This lets the hosted gate observe the signed app
+/// after Launch Services delivers the real browser callback without exposing
+/// account identifiers or auth tokens.
+private final class ReleaseAuthVerificationReporter {
+    static let shared = ReleaseAuthVerificationReporter()
+
+    private var outputURL: URL?
+
+    private init() {}
+
+    func startIfRequested() {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["AIDICTATION_RELEASE_AUTH_SMOKE"] == "1",
+              let outputPath = environment["AIDICTATION_RELEASE_AUTH_RESULT"],
+              !outputPath.isEmpty
+        else {
+            return
+        }
+
+        outputURL = URL(fileURLWithPath: outputPath)
+    }
+
+    func report(_ authManager: AuthManager) {
+        guard let outputURL else { return }
+
+        let user = authManager.currentUser
+        let payload: [String: Any] = [
+            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            "authenticated": authManager.isAuthenticated,
+            "profile_loaded": user != nil,
+            "subscription_status": user?.subscriptionStatus ?? "missing",
+            "subscription_tier": user?.subscriptionTier.rawValue ?? "missing",
+            "has_reached_limit": user?.hasReachedLimit ?? true,
+            "words_remaining_unlimited": user?.effectiveWordLimit == Int.max,
+            "auth_error_present": authManager.error != nil,
+        ]
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            try data.write(to: outputURL, options: .atomic)
+        } catch {
+            DebugLog.error("Could not write the release authentication result", context: "ReleaseVerification")
+        }
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusBarManager = StatusBarManager()
     var mainWindow: NSWindow?
@@ -90,6 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let terminationReplyGuard = MacTerminationReplyGuard()
 
     func applicationDidFinishLaunching(_: Notification) {
+        ReleaseAuthVerificationReporter.shared.startIfRequested()
         SentryTelemetry.start()
         DockIconManager.shared.applySavedPreference()
         statusBarManager.setupMenuBar()
@@ -211,6 +259,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DebugLog.info("Processing auth callback...", context: "AppDelegate")
             Task {
                 await authManager.handleAuthCallback(url: url)
+                await MainActor.run {
+                    ReleaseAuthVerificationReporter.shared.report(authManager)
+                }
             }
         }
         // Handle payment success callback

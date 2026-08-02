@@ -259,7 +259,8 @@ jobs:
           scripts/validate_macos_universal_app.sh "$APP"
           python3 scripts/validate_release_transcription_config.py \
             --secrets "$APP/Contents/Resources/Secrets.plist" \
-            --require-auth
+            --require-auth \
+            --require-lifetime
           swiftc \
             Whishpermate/Whispermate/Services/TextInsertionFormatter.swift \
             scripts/validate_text_insertion_formatter.swift \
@@ -283,6 +284,21 @@ jobs:
             --wait
           xcrun stapler staple /tmp/AIDictation-export/AIDictation.app
           rm /tmp/AIDictation-notarize.zip
+
+      - name: Install live browser verifier
+        run: |
+          npm install --prefix /tmp/aidictation-release-browser playwright@1.55.0
+          /tmp/aidictation-release-browser/node_modules/.bin/playwright install chromium
+          cp scripts/capture_release_auth_callback.mjs /tmp/aidictation-release-browser/
+
+      - name: Verify release app browser sign-in and lifetime access
+        env:
+          AIDICTATION_RELEASE_TEST_EMAIL: ${{ secrets.AIDICTATION_RELEASE_TEST_EMAIL }}
+          AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
+        run: |
+          bash scripts/verify_macos_release_auth.sh \
+            /tmp/AIDictation-export/AIDictation.app \
+            "${{ steps.version.outputs.version }}"
 
       - name: Install create-dmg
         run: brew install create-dmg
@@ -342,6 +358,73 @@ jobs:
               --generate-notes \
               --repo "${{ github.repository }}"
           fi
+
+      - name: Verify public release asset
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          LOCAL_DMG="/tmp/AIDictation-v${VERSION}.dmg"
+          PUBLIC_DMG="/tmp/AIDictation-v${VERSION}-public.dmg"
+          PUBLIC_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/AIDictation-v${VERSION}.dmg"
+
+          for attempt in {1..12}; do
+            if curl --fail --location --silent --show-error "$PUBLIC_URL" --output "$PUBLIC_DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Published DMG did not become available at $PUBLIC_URL." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          local_sha="$(shasum -a 256 "$LOCAL_DMG" | awk '{print $1}')"
+          public_sha="$(shasum -a 256 "$PUBLIC_DMG" | awk '{print $1}')"
+          if [ "$local_sha" != "$public_sha" ]; then
+            echo "Published DMG checksum does not match the notarized release artifact." >&2
+            exit 1
+          fi
+
+          xcrun stapler validate "$PUBLIC_DMG"
+          hdiutil verify "$PUBLIC_DMG"
+
+          MOUNT_POINT="/tmp/AIDictation-v${VERSION}-mount"
+          PUBLISHED_APP="/tmp/AIDictation-published.app"
+          mkdir -p "$MOUNT_POINT"
+          cleanup_mount() {
+            hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_mount EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_POINT" "$PUBLIC_DMG"
+          ditto "$MOUNT_POINT/AIDictation.app" "$PUBLISHED_APP"
+          cleanup_mount
+          trap - EXIT
+
+          codesign --verify --deep --strict --verbose=2 "$PUBLISHED_APP"
+          spctl --assess --type execute --verbose=4 "$PUBLISHED_APP"
+          scripts/validate_macos_universal_app.sh "$PUBLISHED_APP"
+
+          INFO_PLIST="$PUBLISHED_APP/Contents/Info.plist"
+          packaged_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+          packaged_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
+          callback_scheme="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$INFO_PLIST")"
+          if [ "$packaged_version" != "$VERSION" ] || [ "$packaged_build" != "${{ steps.version.outputs.build }}" ]; then
+            echo "Published app is $packaged_version ($packaged_build), expected $VERSION (${{ steps.version.outputs.build }})." >&2
+            exit 1
+          fi
+          if [ "$callback_scheme" != "aidictation" ]; then
+            echo "Published app does not register the aidictation browser callback scheme." >&2
+            exit 1
+          fi
+          echo "Verified published AIDictation v${VERSION} asset with SHA-256 ${public_sha}."
+
+      - name: Verify published browser sign-in and lifetime access
+        env:
+          AIDICTATION_RELEASE_TEST_EMAIL: ${{ secrets.AIDICTATION_RELEASE_TEST_EMAIL }}
+          AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
+        run: |
+          bash scripts/verify_macos_release_auth.sh \
+            /tmp/AIDictation-published.app \
+            "${{ steps.version.outputs.version }}"
 
       - name: Update appcast
         run: |

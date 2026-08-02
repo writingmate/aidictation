@@ -1,0 +1,42 @@
+name: macOS UI Contracts
+
+on:
+  pull_request:
+    paths:
+      - 'Whishpermate/Whispermate/Services/HotkeyManager.swift'
+      - 'Whishpermate/Whispermate/Models/HistoryPresentationIdentity.swift'
+      - 'Whishpermate/Whispermate/Views/HistoryMasterDetailView.swift'
+      - 'Whishpermate/Whispermate/Views/HotkeyRecorderView.swift'
+      - 'scripts/validate_macos_history_row_refresh.swift'
+      - 'scripts/validate_macos_hotkey_options.swift'
+      - '.github/workflows/macos-ui-contracts.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'Whishpermate/Whispermate/Services/HotkeyManager.swift'
+      - 'Whishpermate/Whispermate/Models/HistoryPresentationIdentity.swift'
+      - 'Whishpermate/Whispermate/Views/HistoryMasterDetailView.swift'
+      - 'Whishpermate/Whispermate/Views/HotkeyRecorderView.swift'
+      - 'scripts/validate_macos_history_row_refresh.swift'
+      - 'scripts/validate_macos_hotkey_options.swift'
+      - '.github/workflows/macos-ui-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate modifier-only hotkey options
+        run: swift scripts/validate_macos_hotkey_options.swift
+      - name: Validate History presentation refresh
+        run: |
+          swiftc \
+            Whishpermate/Whispermate/Models/HistoryPresentationIdentity.swift \
+            scripts/validate_macos_history_row_refresh.swift \
+            -o "$RUNNER_TEMP/validate_macos_history_row_refresh"
+          "$RUNNER_TEMP/validate_macos_history_row_refresh"

@@ -19,6 +19,9 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
     case optionSpace = "opt_space"
     case shiftF9 = "shift_f9"
     case optionF7 = "opt_f7"
+    case leftCommand = "left_cmd"
+    case leftOption = "left_opt"
+    case leftShift = "left_shift"
     case leftControl = "left_ctrl"
     case rightCommand = "right_cmd"
     case rightOption = "right_opt"
@@ -61,6 +64,9 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
         case .optionSpace: return "⌥ + Space"
         case .shiftF9: return "⇧ + F9"
         case .optionF7: return "⌥ + F7"
+        case .leftCommand: return "Left ⌘"
+        case .leftOption: return "Left ⌥"
+        case .leftShift: return "Left ⇧"
         case .leftControl: return "Left ⌃"
         case .rightCommand: return "Right ⌘"
         case .rightOption: return "Right ⌥"
@@ -102,6 +108,15 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
         case .optionF7:
             // F7 key code is 98
             return Hotkey(keyCode: 98, modifiers: .option)
+        case .leftCommand:
+            // Left Command key code is 55
+            return Hotkey(keyCode: 55, modifiers: .command)
+        case .leftOption:
+            // Left Option key code is 58
+            return Hotkey(keyCode: 58, modifiers: .option)
+        case .leftShift:
+            // Left Shift key code is 56
+            return Hotkey(keyCode: 56, modifiers: .shift)
         case .leftControl:
             // Left Control key code is 59
             return Hotkey(keyCode: 59, modifiers: .control)
@@ -194,7 +209,16 @@ enum HotkeyOption: String, CaseIterable, Identifiable {
             return .optionF7
         }
 
-        // Check for left Control (keyCode 59)
+        // Check for left-side modifier keys
+        if hotkey.keyCode == 55, hotkey.modifiers.contains(.command) {
+            return .leftCommand
+        }
+        if hotkey.keyCode == 58, hotkey.modifiers.contains(.option) {
+            return .leftOption
+        }
+        if hotkey.keyCode == 56, hotkey.modifiers.contains(.shift) {
+            return .leftShift
+        }
         if hotkey.keyCode == 59, hotkey.modifiers.contains(.control) {
             return .leftControl
         }

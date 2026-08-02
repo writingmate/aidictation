@@ -39,6 +39,9 @@ offline on every platform.
 | [eudk/awesome-ai-tools](https://github.com/eudk/awesome-ai-tools) | Existing entry | Submitted focused cross-platform maintenance update: [PR #490](https://github.com/eudk/awesome-ai-tools/pull/490) |
 | [Mac-Menubar-Megalist](https://github.com/SKaplanOfficial/Mac-Menubar-Megalist) | `Utilities > Text > Speech` | Submitted one current menu-bar app entry: [PR #42](https://github.com/SKaplanOfficial/Mac-Menubar-Megalist/pull/42); ready, mergeable, and markdownlint-clean |
 | [awesome-swift](https://github.com/matteocrippa/awesome-swift) | `contents.json`, category `ai` | Submitted one schema-valid Swift project object: [PR #1985](https://github.com/matteocrippa/awesome-swift/pull/1985); ready and mergeable |
+| [ios-apps](https://github.com/linsa-io/ios-apps) | `Productivity` | Submitted one current iOS app entry: [PR #11](https://github.com/linsa-io/ios-apps/pull/11); ready, clean, and mergeable |
+| [awesome-voice-ai](https://github.com/ALLBOTSIO/awesome-voice-ai) | `Speech-to-Text > Open Source` | Submitted one factual open-source speech-to-text row: [PR #22](https://github.com/ALLBOTSIO/awesome-voice-ai/pull/22); all five automated checks pass |
+| [awesome-foss-android-apps](https://github.com/ivon852/awesome-foss-android-apps) | `README.md > 輸入法` | Submitted one Traditional Chinese Android input-method row: [PR #3](https://github.com/ivon852/awesome-foss-android-apps/pull/3); ready, clean, and mergeable |
 
 The other `awesome-windows` list at
 [`0PandaDEV/awesome-windows`](https://github.com/0PandaDEV/awesome-windows)
@@ -103,6 +106,15 @@ submit that entry manually.
 - [awesome-swift PR #1985](https://github.com/matteocrippa/awesome-swift/pull/1985):
   one schema-valid AI project object submitted and catalog-validated on August
   2, 2026.
+- [ios-apps PR #11](https://github.com/linsa-io/ios-apps/pull/11):
+  one Productivity entry submitted with the current App Store link on August 2,
+  2026.
+- [awesome-voice-ai PR #22](https://github.com/ALLBOTSIO/awesome-voice-ai/pull/22):
+  one open-source Speech-to-Text row submitted with all five automated checks
+  passing on August 2, 2026.
+- [awesome-foss-android-apps PR #3](https://github.com/ivon852/awesome-foss-android-apps/pull/3):
+  one Traditional Chinese input-method row submitted with source and Google
+  Play links on August 2, 2026.
 
-All fourteen current pull requests disclose the project affiliation and AI
+All seventeen current pull requests disclose the project affiliation and AI
 assistance.

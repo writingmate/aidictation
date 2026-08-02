@@ -41,6 +41,7 @@ dotnet publish $ProjectPath `
     --runtime $Runtime `
     --self-contained true `
     --output $PublishDir `
+    -p:Version=$Version `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:EnableCompressionInSingleFile=true

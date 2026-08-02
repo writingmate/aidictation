@@ -2,16 +2,19 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
+using AIDictation.Helpers;
 using AIDictation.Models;
 using AIDictation.Services;
 using AIDictation.Views;
 using H.NotifyIcon;
 using Microsoft.Win32;
+using Newtonsoft.Json;
 
 namespace AIDictation;
 
@@ -52,6 +55,23 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        if (TryGetReleaseValidationReportPath(e.Args, "--validate-release-config", out var configReportPath))
+        {
+            _isValidationOnly = true;
+            base.OnStartup(e);
+            WriteReleaseConfigReport(configReportPath);
+            return;
+        }
+
+        if (TryGetReleaseValidationReportPath(e.Args, "--validate-release-auth", out var authReportPath))
+        {
+            _isValidationOnly = true;
+            base.OnStartup(e);
+            RegisterUrlScheme();
+            await WriteReleaseAuthReportAsync(authReportPath);
+            return;
+        }
+
         // Single instance enforcement; forward our launch URL (e.g. the
         // aidictation://auth-callback from the browser) to the running instance.
         if (!EnsureSingleInstance())
@@ -96,6 +116,110 @@ public partial class App : Application
         await ShowStartupWindowAsync();
 
         SubscribeRuntimeEvents();
+    }
+
+    // MARK: - Release Validation
+
+    private static bool TryGetReleaseValidationReportPath(
+        string[] args,
+        string option,
+        out string reportPath)
+    {
+        reportPath = string.Empty;
+        var optionIndex = Array.FindIndex(
+            args,
+            arg => arg.Equals(option, StringComparison.OrdinalIgnoreCase));
+        if (optionIndex < 0 || optionIndex + 1 >= args.Length)
+        {
+            return false;
+        }
+
+        reportPath = Path.GetFullPath(args[optionIndex + 1]);
+        return true;
+    }
+
+    private void WriteReleaseConfigReport(string reportPath)
+    {
+        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? string.Empty;
+        WriteReleaseReport(reportPath, new
+        {
+            success = BuildConfig.IsAuthConfigured && BuildConfig.AuthBackendsAgree,
+            version,
+            auth_web_url = BuildConfig.AuthWebUrl,
+            profile_api_origin = BuildConfig.SupabaseUrl,
+            auth_configured = BuildConfig.IsAuthConfigured,
+            auth_backends_agree = BuildConfig.AuthBackendsAgree
+        });
+        Shutdown(BuildConfig.IsAuthConfigured && BuildConfig.AuthBackendsAgree ? 0 : 1);
+    }
+
+    private async Task WriteReleaseAuthReportAsync(string reportPath)
+    {
+        var accessToken = Environment.GetEnvironmentVariable("AIDICTATION_RELEASE_ACCESS_TOKEN") ?? string.Empty;
+        var refreshToken = Environment.GetEnvironmentVariable("AIDICTATION_RELEASE_REFRESH_TOKEN") ?? string.Empty;
+        var expectedTier = Environment.GetEnvironmentVariable("AIDICTATION_RELEASE_EXPECTED_TIER") ?? string.Empty;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(accessToken))
+            {
+                throw new InvalidOperationException("Release validation access token is missing.");
+            }
+
+            var callback = new Uri(
+                "aidictation://auth-callback#access_token=" + Uri.EscapeDataString(accessToken) +
+                "&refresh_token=" + Uri.EscapeDataString(refreshToken));
+            var authenticated = await AuthService.Instance.HandleOAuthCallbackAsync(callback);
+            var user = AuthService.Instance.CurrentUser;
+            if (!authenticated || user == null)
+            {
+                throw new InvalidOperationException("The packaged app could not load the authenticated profile.");
+            }
+
+            var tier = user.SubscriptionTier;
+            if (!string.IsNullOrWhiteSpace(expectedTier) &&
+                !tier.ToString().Equals(expectedTier, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Expected {expectedTier} access but the packaged app loaded {tier} access.");
+            }
+
+            var wordLimit = tier.GetWordLimit();
+            WriteReleaseReport(reportPath, new
+            {
+                success = true,
+                tier = tier.ToString(),
+                monthly_words = user.MonthlyWordCount,
+                word_limit = wordLimit,
+                words_remaining = user.WordsRemaining,
+                has_reached_limit = user.HasReachedLimit,
+                profile_record_loaded = user.Id != Guid.Empty,
+                auth_host = new Uri(BuildConfig.AuthWebUrl).Host,
+                profile_api_host = new Uri(BuildConfig.SupabaseUrl).Host
+            });
+            await AuthService.Instance.SignOutAsync();
+            Shutdown(0);
+        }
+        catch (Exception exception)
+        {
+            await AuthService.Instance.SignOutAsync();
+            WriteReleaseReport(reportPath, new
+            {
+                success = false,
+                error = exception.Message
+            });
+            Shutdown(1);
+        }
+    }
+
+    private static void WriteReleaseReport(string reportPath, object report)
+    {
+        var directory = Path.GetDirectoryName(reportPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+        File.WriteAllText(reportPath, JsonConvert.SerializeObject(report));
     }
 
     protected override void OnExit(ExitEventArgs e)

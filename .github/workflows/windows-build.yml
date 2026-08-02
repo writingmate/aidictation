@@ -177,9 +177,11 @@ jobs:
       TRANSCRIPTION_MODEL: ${{ secrets.TRANSCRIPTION_MODEL }}
       AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
       AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
+      # The public browser and packaged profile client must use one account
+      # service. Do not allow a stale organization secret to split them again.
+      SUPABASE_URL: https://aidictation.com
+      SUPABASE_ANON_KEY: public-anon-key
+      AUTH_WEB_URL: https://aidictation.com/auth
       STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
 
     steps:
@@ -228,10 +230,43 @@ jobs:
         -InstallerDir ./installer
         -Version ${{ steps.version.outputs.VERSION }}
 
+    - name: Validate packaged version and account flow
+      shell: pwsh
+      env:
+        AIDICTATION_RELEASE_TEST_EMAIL: ${{ secrets.AIDICTATION_RELEASE_TEST_EMAIL }}
+        AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $installer = "./installer/AIDictation-Windows-Setup-v$version.exe"
+        $installerVersion = [regex]::Match(
+          (Get-Item $installer).VersionInfo.ProductVersion,
+          '^\d+\.\d+\.\d+'
+        ).Value
+        if ($installerVersion -ne $version) {
+          throw "Installer reports $installerVersion; expected $version."
+        }
+        AIDictation.Windows/scripts/validate-release-auth.ps1 `
+          -AppPath ./release/AIDictation.exe `
+          -ExpectedVersion $version
+
     - name: Create ZIP
       shell: pwsh
       run: |
         Compress-Archive -Path ./release/* -DestinationPath ./AIDictation-Windows-v${{ steps.version.outputs.VERSION }}.zip
+
+    - name: Create release checksums
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $assets = @(
+          "./installer/AIDictation-Windows-Setup-v$version.exe",
+          "./AIDictation-Windows-v$version.zip"
+        )
+        $lines = foreach ($asset in $assets) {
+          $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLowerInvariant()
+          "$hash  $([System.IO.Path]::GetFileName($asset))"
+        }
+        Set-Content -Path ./SHA256SUMS.txt -Value $lines -Encoding ascii
 
     - name: Upload Release Artifact
       uses: actions/upload-artifact@v4
@@ -247,7 +282,14 @@ jobs:
         path: ./installer/AIDictation-Windows-Setup-v${{ steps.version.outputs.VERSION }}.exe
         retention-days: 90
 
-    - name: Publish GitHub Release
+    - name: Upload Release Checksum Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AIDictation-Windows-Checksums-v${{ steps.version.outputs.VERSION }}
+        path: ./SHA256SUMS.txt
+        retention-days: 90
+
+    - name: Stage draft GitHub Release
       shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
@@ -261,19 +303,216 @@ jobs:
         }
         $zip = "./AIDictation-Windows-v$version.zip"
         $installer = "./installer/AIDictation-Windows-Setup-v$version.exe"
+        $checksums = "./SHA256SUMS.txt"
         $notes = @"
         Classic Windows installer and portable ZIP for AIDictation Windows v$version.
 
         Built automatically from release tag $tag.
         "@
 
-        gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+        $existingDraft = gh release view $tag `
+          --json isDraft `
+          --jq '.isDraft' `
+          --repo $env:GITHUB_REPOSITORY 2> $null
         if ($LASTEXITCODE -eq 0) {
-          gh release upload $tag $installer $zip --clobber --repo $env:GITHUB_REPOSITORY
+          if ($existingDraft.Trim() -ne "true") {
+            throw "Refusing to replace an already-published Windows release."
+          }
+          gh release upload $tag $installer $zip $checksums --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not update the staged Windows release assets."
+          }
           gh release edit $tag --title "AIDictation Windows v$version" --notes $notes --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not update the staged Windows release metadata."
+          }
         } else {
-          gh release create $tag $installer $zip `
+          gh release create $tag $installer $zip $checksums `
+            --draft `
+            --verify-tag `
             --title "AIDictation Windows v$version" `
             --notes $notes `
             --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not stage the draft Windows release."
+          }
         }
+
+  verify-and-publish-release:
+    name: Verify staged installer and publish release
+    needs: release
+    runs-on: windows-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')
+    permissions:
+      contents: write
+    env:
+      SUPABASE_URL: https://aidictation.com
+      SUPABASE_ANON_KEY: public-anon-key
+      AUTH_WEB_URL: https://aidictation.com/auth
+      AIDICTATION_RELEASE_TEST_EMAIL: ${{ secrets.AIDICTATION_RELEASE_TEST_EMAIL }}
+      AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
+
+    steps:
+    - name: Checkout release source
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.sha }}
+
+    - name: Download staged release assets
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $tag = "${{ github.ref_name }}"
+        $downloadDir = Join-Path $env:RUNNER_TEMP "aidictation-staged-release"
+        New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+        gh release download $tag `
+          --pattern '*.exe' `
+          --pattern '*.zip' `
+          --pattern 'SHA256SUMS.txt' `
+          --dir $downloadDir `
+          --clobber `
+          --repo $env:GITHUB_REPOSITORY
+        if ($LASTEXITCODE -ne 0) {
+          throw "Could not download the staged Windows release assets."
+        }
+        "STAGED_RELEASE_DIR=$downloadDir" >> $env:GITHUB_ENV
+
+    - name: Verify staged asset names and checksums
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $version = "${{ github.ref_name }}" -replace '^windows-v', ''
+        $expectedNames = @(
+          "AIDictation-Windows-Setup-v$version.exe",
+          "AIDictation-Windows-v$version.zip",
+          "SHA256SUMS.txt"
+        )
+        $releaseNames = @(gh release view "${{ github.ref_name }}" `
+          --json assets `
+          --jq '.assets[].name' `
+          --repo $env:GITHUB_REPOSITORY)
+        if ($LASTEXITCODE -ne 0 -or
+            (Compare-Object ($expectedNames | Sort-Object) ($releaseNames | Sort-Object))) {
+          throw "The staged release does not contain exactly the expected Windows assets."
+        }
+
+        $manifestPath = Join-Path $env:STAGED_RELEASE_DIR "SHA256SUMS.txt"
+        $manifest = Get-Content -Raw $manifestPath
+        foreach ($name in $expectedNames | Where-Object { $_ -ne "SHA256SUMS.txt" }) {
+          $pattern = '(?im)^([0-9a-f]{64})\s+' + [regex]::Escape($name) + '\r?$'
+          $match = [regex]::Match($manifest, $pattern)
+          if (-not $match.Success) {
+            throw "SHA256SUMS.txt is missing $name."
+          }
+          $actual = (Get-FileHash `
+            -Algorithm SHA256 `
+            -Path (Join-Path $env:STAGED_RELEASE_DIR $name)).Hash.ToLowerInvariant()
+          if ($actual -ne $match.Groups[1].Value.ToLowerInvariant()) {
+            throw "Checksum verification failed for $name."
+          }
+        }
+
+    - name: Install and validate staged release
+      shell: pwsh
+      run: |
+        $version = "${{ github.ref_name }}" -replace '^windows-v', ''
+        $installer = Join-Path $env:STAGED_RELEASE_DIR "AIDictation-Windows-Setup-v$version.exe"
+        $installDir = Join-Path $env:RUNNER_TEMP "aidictation-installed-$version"
+        $install = Start-Process `
+          -FilePath $installer `
+          -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            "/DIR=$installDir"
+          ) `
+          -PassThru `
+          -Wait
+        if ($install.ExitCode -ne 0) {
+          throw "The staged Windows installer exited with code $($install.ExitCode)."
+        }
+        $appPath = Join-Path $installDir "AIDictation.exe"
+        if (-not (Test-Path $appPath)) {
+          throw "The staged installer did not install AIDictation.exe."
+        }
+        AIDictation.Windows/scripts/validate-release-auth.ps1 `
+          -AppPath $appPath `
+          -ExpectedVersion $version
+
+    - name: Publish verified release
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $tag = "${{ github.ref_name }}"
+        gh release edit $tag `
+          --draft=false `
+          --latest `
+          --repo $env:GITHUB_REPOSITORY
+        if ($LASTEXITCODE -ne 0) {
+          throw "The verified Windows release could not be published."
+        }
+
+    - name: Verify public release and download route
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $tag = "${{ github.ref_name }}"
+        $version = $tag -replace '^windows-v', ''
+        $release = gh api `
+          -H 'Accept: application/vnd.github+json' `
+          "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $release.draft -or $release.prerelease) {
+          throw "The verified Windows release is not publicly published."
+        }
+        $tagSha = (git rev-list -n 1 "refs/tags/$tag").Trim()
+        if ($release.tag_name -ne $tag -or $tagSha -ne $env:GITHUB_SHA) {
+          throw "The public release tag does not target the verified source commit."
+        }
+
+        $assetName = "AIDictation-Windows-Setup-v$version.exe"
+        $asset = $release.assets | Where-Object { $_.name -eq $assetName }
+        if (-not $asset -or -not $asset.browser_download_url) {
+          throw "The public release is missing its Windows installer."
+        }
+        $publicDir = Join-Path $env:RUNNER_TEMP "aidictation-public-release"
+        New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
+        $publicInstaller = Join-Path $publicDir $assetName
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $publicInstaller
+        $stagedHash = (Get-FileHash `
+          -Algorithm SHA256 `
+          -Path (Join-Path $env:STAGED_RELEASE_DIR $assetName)).Hash
+        $publicHash = (Get-FileHash -Algorithm SHA256 -Path $publicInstaller).Hash
+        if ($publicHash -ne $stagedHash) {
+          throw "The public installer differs from the verified staged installer."
+        }
+
+        $headers = @{ 'User-Agent' = 'AIDictation-Windows-Release-Verification' }
+        # The download page uses the first stable windows-v* item returned by
+        # this public GitHub feed, so verify that exact selection rule.
+        $currentWindows = $null
+        for ($attempt = 1; $attempt -le 12; $attempt++) {
+          $publicReleases = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100" `
+            -Headers $headers
+          $currentWindows = $publicReleases |
+            Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^windows-v\d+\.\d+\.\d+$' } |
+            Select-Object -First 1
+          if ($currentWindows -and $currentWindows.tag_name -eq $tag) {
+            break
+          }
+          Start-Sleep -Seconds 5
+        }
+        if (-not $currentWindows -or $currentWindows.tag_name -ne $tag) {
+          throw "The public release feed does not expose $tag as the current Windows download."
+        }
+        $downloadPage = Invoke-WebRequest -Uri 'https://aidictation.com/download'
+        if ($downloadPage.StatusCode -ne 200) {
+          throw "The public AIDictation download page is unavailable."
+        }
+        Write-Host "PASS: public Windows $version installer matches the end-to-end verified package"

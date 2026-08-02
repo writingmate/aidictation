@@ -1,6 +1,12 @@
 name: Release macOS
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver to validate without publishing (for example, 0.0.98)
+        required: true
+        type: string
   push:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'
@@ -21,17 +27,34 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Verify release commit is on main
+        env:
+          PREFLIGHT_VERSION: ${{ inputs.version }}
         run: |
           actual_sha="$(git rev-parse HEAD)"
-          tag_sha="$(git rev-list -n 1 "refs/tags/$GITHUB_REF_NAME")"
-          if [ "$actual_sha" != "$GITHUB_SHA" ] || [ "$tag_sha" != "$GITHUB_SHA" ]; then
-            echo "Release checkout ($actual_sha) or tag ($tag_sha) does not match event commit $GITHUB_SHA." >&2
+          if [ "$actual_sha" != "$GITHUB_SHA" ]; then
+            echo "Release checkout $actual_sha does not match event commit $GITHUB_SHA." >&2
             exit 1
           fi
           git fetch origin main --prune
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            tag_sha="$(git rev-list -n 1 "refs/tags/$GITHUB_REF_NAME")"
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "Release tag $GITHUB_REF_NAME does not match event commit $GITHUB_SHA." >&2
+              exit 1
+            fi
+          else
+            if [[ ! "$PREFLIGHT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Preflight version must match <major>.<minor>.<patch>; got $PREFLIGHT_VERSION." >&2
+              exit 1
+            fi
+            main_sha="$(git rev-parse origin/main)"
+            if [ "$GITHUB_SHA" != "$main_sha" ]; then
+              echo "Preflight must run from current origin/main ($main_sha), got $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "Release tag ${GITHUB_REF_NAME} is not based on origin/main." >&2
-            echo "Merge the release commit to main before tagging it." >&2
+            echo "Release source $GITHUB_SHA is not based on origin/main." >&2
             exit 1
           fi
 
@@ -50,6 +73,7 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Verify tagged source checkout
+        if: github.event_name == 'push'
         run: |
           actual_sha="$(git rev-parse HEAD)"
           tag_sha="$(git rev-list -n 1 "refs/tags/$GITHUB_REF_NAME")"
@@ -60,16 +84,26 @@ jobs:
 
       - name: Extract version info
         id: version
+        env:
+          PREFLIGHT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "Release tags must match v<major>.<minor>.<patch>; got $GITHUB_REF_NAME." >&2
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "Release tags must match v<major>.<minor>.<patch>; got $GITHUB_REF_NAME." >&2
+              exit 1
+            fi
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            if [[ ! "$PREFLIGHT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Preflight version must match <major>.<minor>.<patch>; got $PREFLIGHT_VERSION." >&2
+              exit 1
+            fi
+            VERSION="$PREFLIGHT_VERSION"
           fi
-          TAG="${BASH_REMATCH[1]}"
-          BUILD="${TAG##*.}"
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          BUILD="${VERSION##*.}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
-          echo "tag=v$TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Cache SPM packages
         uses: actions/cache@v4
@@ -301,9 +335,11 @@ jobs:
             "${{ steps.version.outputs.version }}"
 
       - name: Install create-dmg
+        if: github.event_name == 'push'
         run: brew install create-dmg
 
       - name: Create DMG
+        if: github.event_name == 'push'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           create-dmg \
@@ -319,6 +355,7 @@ jobs:
             /tmp/AIDictation-export/AIDictation.app
 
       - name: Notarize and staple DMG
+        if: github.event_name == 'push'
         env:
           NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID }}
           NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
@@ -335,6 +372,7 @@ jobs:
           hdiutil verify /tmp/AIDictation-v${VERSION}.dmg
 
       - name: Create GitHub Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -360,6 +398,7 @@ jobs:
           fi
 
       - name: Verify public release asset
+        if: github.event_name == 'push'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           LOCAL_DMG="/tmp/AIDictation-v${VERSION}.dmg"
@@ -418,6 +457,7 @@ jobs:
           echo "Verified published AIDictation v${VERSION} asset with SHA-256 ${public_sha}."
 
       - name: Verify published browser sign-in and lifetime access
+        if: github.event_name == 'push'
         env:
           AIDICTATION_RELEASE_TEST_EMAIL: ${{ secrets.AIDICTATION_RELEASE_TEST_EMAIL }}
           AIDICTATION_RELEASE_TEST_PASSWORD: ${{ secrets.AIDICTATION_RELEASE_TEST_PASSWORD }}
@@ -427,6 +467,7 @@ jobs:
             "${{ steps.version.outputs.version }}"
 
       - name: Update appcast
+        if: github.event_name == 'push'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           BUILD="${{ steps.version.outputs.build }}"
@@ -493,6 +534,7 @@ jobs:
           fi
 
       - name: Commit appcast to main
+        if: github.event_name == 'push'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           cp appcast.xml /tmp/appcast.xml

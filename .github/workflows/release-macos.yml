@@ -336,6 +336,7 @@ jobs:
           npm install --prefix /tmp/aidictation-release-browser playwright@1.55.0
           /tmp/aidictation-release-browser/node_modules/.bin/playwright install chromium
           cp scripts/capture_release_auth_callback.mjs /tmp/aidictation-release-browser/
+          node /tmp/aidictation-release-browser/capture_release_auth_callback.mjs --self-test
 
       - name: Verify release app browser sign-in and lifetime access
         env:

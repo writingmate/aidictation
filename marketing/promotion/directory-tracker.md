@@ -9,10 +9,15 @@ Machine-readable companion: [`directory-submissions.csv`](directory-submissions.
 LibHunt and freshcode.club now have verified live AI Dictation pages. SaaSHub
 ownership is verified and its unsupported copy and old repository URL were
 replaced. LocalAlternative, Open Source Startups, and NeuronFeed accepted
-editorial-review submissions, and the OpenAPK submission issue is open for
-maintainer review. The free Launching Next and FOSShub forms remain prepared in
-preserved browser tabs but require human CAPTCHA checks. Awesome-list pull
-requests are tracked separately in `awesome-list-targets.md`.
+editorial-review submissions. The OpenAPK issue, Obtainium PR #1570, and Open
+Source Observer PR #1140 are open for maintainer review, and a factual suggestion
+was emailed to the Open Source Software Directory editor; none is counted as a
+live listing yet. Internet Intro acknowledged a submission made before its
+anti-campaigning rule was confirmed, so that receipt is recorded as a rule
+mismatch and expected editorial rejection rather than a campaign win. The free
+Launching Next and FOSShub forms remain prepared in preserved browser tabs but
+require human CAPTCHA checks. Awesome-list pull requests are tracked separately
+in `awesome-list-targets.md`.
 
 ## Status and evidence rules
 
@@ -22,6 +27,7 @@ requests are tracked separately in `awesome-list-targets.md`.
 - `READY`: the route is available, but a human still needs to submit it.
 - `PREPARED—HUMAN CHECK`: the form is filled and awaits a required CAPTCHA or equivalent owner action.
 - `SUBMITTED—REVIEW`: the destination confirmed receipt and editorial review is pending.
+- `SUBMITTED—RULE MISMATCH`: receipt exists, but a subsequently confirmed destination rule makes rejection the expected outcome; this is not counted as a successful placement.
 - `RESEARCH / ASSET`: a valid target needs account, packaging, ownership, or media work first.
 - `BLOCKED`: a concrete current blocker prevents submission.
 - `DEFER—PAID`: no suitable free route was found.
@@ -118,6 +124,14 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 24 | OpenSaaSDirectory | Open-source SaaS directory | BLOCKED | https://opensaas.directory/submit-project | One carefully filled attempt returned to the form without a receipt, confirmation, or visible listing. Do not resubmit until the destination can confirm whether the first request was recorded. | No listing or receipt verified. |
 | 25 | OpenAltFinder | Open-source alternatives directory | READY | https://openaltfinder.com/submit | Duplicate audit passed and the product fits as an open-source alternative to proprietary dictation tools, but Cloudflare Turnstile requires a human submission. | Published examples link to website and source; AI Dictation is not yet listed. |
 | 27 | OpenAPK | Android FOSS catalog | SUBMITTED—REVIEW | https://github.com/mobilenetworkltd/openapk/issues/41 | Submitted through OpenAPK's official GitHub issue route after verifying the public MIT Android source, tagged APK release, checksums, package ID, and minimum Android version. Track issue #41; the optional reciprocal badge was not added. | No published OpenAPK listing yet; distribution target, so dofollow is not applicable. |
+| 28 | Obtainium crowdsourced app directory | Android app directory | SUBMITTED—REVIEW | https://github.com/ImranR98/apps.obtainium.imranr.dev/pull/1570 | PR #1570 adds one app configuration for the official tagged Android APK; pre-commit validation passes. Track review and verify the generated page and release synchronization only after merge. | No generated AI Dictation page exists yet; distribution target, so no backlink claim is made. |
+| 29 | Open Source Observer | Open-source project index | SUBMITTED—REVIEW | https://github.com/opensource-observer/oss-directory/pull/1140 | PR #1140 adds the canonical website and repository. The public `Validate PR` workflow passes; a separate maintainer-only artifact gate remains action-required. Track review without treating that gate as a code failure. | No indexed AI Dictation project page exists yet; link attributes cannot be evaluated before publication. |
+| 30 | Internet Intro | Web discovery directory | SUBMITTED—RULE MISMATCH | https://internetintro.com/submit/ | A receipt was returned, but the submission preceded confirmation that the live rules exclude stores, sales pages, and overt campaigning. Expect editorial rejection; do not resubmit or contact the editor without a direct self-service withdrawal route. | No listing exists and no link is claimed; this receipt is not counted as a campaign win. |
+| 31 | OpenLib | Open-source app library | READY | https://www.openlib.online/submit | An exact-name search returned no AI Dictation match. The owner must sign in with Google or GitHub, recheck for duplicates, and submit claim-safe source, license, platform, and install metadata. | No AI Dictation listing inspected; dofollow not verified. |
+| 32 | Hi Cyou | SaaS and product directory | READY | https://hicyou.com/submit | No exact duplicate was found. The free daily queue requires owner login and Cloudflare Turnstile; the badge is optional and should not be added merely for fast-track or a claimed dofollow link. | No AI Dictation listing exists; free-listing link attributes are not verified. |
+| 33 | Dir Hub | Indie app directory | READY | https://dirhub.io/submit | No exact duplicate was found. The owner must sign in with Google and use the free listing route; do not choose paid featured placement without a budget decision. | No AI Dictation listing exists; dofollow not verified. |
+| 34 | Open Assistive | Assistive-technology catalog | BLOCKED | https://openassistive.org/add/ | The official intake API returned HTTP 500 even when tested with a known existing project, and final submission also requires reCAPTCHA. Retry only after the API works, then complete the human check without implying certification. | No submission, listing, or link is claimed. |
+| 35 | Open Source Software Directory | Open-source application directory | SUBMITTED—REVIEW | https://opensourcesoftwaredirectory.com/about | A concise factual suggestion was sent from the connected owner mailbox to the editor address published on the live directory. Wait for editorial review, then verify any published copy and links. | The sent email is verified, but no AI Dictation listing is published or claimed; dofollow not verified. |
 
 ## Current submission receipts
 
@@ -181,6 +195,43 @@ so this tracker does not count it as submitted and prohibits a blind retry.
   MIT-licensed public source.
 - OpenAPK's reciprocal website badge is optional and was not added.
 
+### Obtainium — PR submitted August 2, 2026
+
+- Submission: https://github.com/ImranR98/apps.obtainium.imranr.dev/pull/1570
+- Scope: one configuration file for package `com.aidictation.app`, using the
+  official Android release feed, a single APK filter, numeric version extraction,
+  and the official icon.
+- Validation: pre-commit CI passes. The PR is open and mergeable; no generated
+  directory page is claimed until maintainers merge it.
+
+### Open Source Observer — PR submitted August 2, 2026
+
+- Submission: https://github.com/opensource-observer/oss-directory/pull/1140
+- Scope: one project record containing the canonical website and repository.
+- Validation: the upstream `Validate PR` workflow passes. The additional
+  `validate` state is a maintainer-only artifact gate marked action-required,
+  not a failing schema or contribution check. No indexed project page is
+  claimed before merge.
+
+### Internet Intro — receipt recorded with rule mismatch August 2, 2026
+
+The site acknowledged the link and said a human would review it. That submission
+was made just before the live rules were confirmed to exclude stores, sales
+pages, and overt campaigning. There is no self-service withdrawal control, so
+the tracker expects editorial rejection and prohibits a second submission or
+unsolicited follow-up. This is not counted as a successful placement, and no
+listing or backlink is claimed.
+
+### Open Source Software Directory — submitted August 2, 2026
+
+The live about page invites readers to suggest missing open-source applications
+by emailing `info@opensourcesoftwaredirectory.com`. A concise suggestion was
+sent from the connected owner mailbox with the canonical
+website and repository, current platform scope, MIT client-source statement,
+offline/cloud limitation, project affiliation, and AI-assistance disclosure.
+The send operation returned a Gmail `SENT` record. Editorial acceptance and a
+published listing remain unverified, so no placement or backlink is claimed.
+
 ### FOSShub — prepared, not submitted
 
 The preserved form uses `AI Dictation Team`, `support@aidictation.com`,
@@ -194,6 +245,11 @@ unresolved, so no application receipt exists.
 | --- | --- | --- | --- | --- |
 | F-Droid | BLOCKED | https://gitlab.com/fdroid/rfp/-/issues/new | Current Android delivery depends on Google Play asset delivery. Resolve the reproducible FOSS build/distribution path before opening an RFP. | Distribution target; dofollow not applicable. |
 | OpenSourceFest | BLOCKED | https://opensourcefest.org/submit | Final endpoint verification found that the live form posts to the placeholder address `your-email@opensourcefest.org`. Its FormSubmit activation screen therefore does not prove delivery to the directory; no submission is recorded. | No listing or valid receipt; dofollow not evaluated. |
+| ListSOpenSource | BLOCKED | https://listsopensource.com/submit/ | The current domain does not resolve in DNS. Cached crawler content is not a safe submission route; recheck the live domain later rather than opening a speculative issue. | No live submission or listing is claimed. |
+| OPEN_SRC.ME | BLOCKED | https://opensrc.me/submit | Cached content described a free basic listing, but the live site currently fails its TLS handshake. Recheck only after HTTPS works; do not submit through cached or alternate routes. | No live submission or listing is claimed. |
+| osssoftware.org | DEFER—PAID | https://osssoftware.org/ | The current visible submission choices are paid, starting at $299, and no clear free route was found. Require an explicit budget decision before proceeding. | Paid placement and link claims were not independently verified; no listing is claimed. |
+| The App Fair Project | NO FIT | https://appfair.org/marketplace/distribution/ | Current distribution requirements include GPL-2.0-or-later licensing, no monetization, FOSS dependencies, and App Fair-specific cross-platform and metadata constraints that the current product does not meet. | Distribution target; dofollow not applicable. |
+| tools.us.org | AVOID | https://tools.us.org/ | Placeholder content, contradictory proprietary/open-source categorization, and weak editorial signals make this a low-trust target. Do not submit. | No submission or listing is planned. |
 | Homebrew Cask | BLOCKED | https://docs.brew.sh/Adding-Software-to-Homebrew | The project does not currently meet Homebrew's documented popularity-policy thresholds captured in the research. Recheck later; do not manufacture stars, forks, or watchers. | Package distribution target; dofollow not applicable. |
 | G2 | NO FIT | https://sell.g2.com/ | Research found the current consumer app outside the intended B2B software-review fit. Revisit only if a real business/team product emerges. | No listing; dofollow not verified. |
 | Capterra | NO FIT | https://www.capterra.com/vendors/sign-up | Research found the current consumer app outside the intended B2B software-directory fit. | No listing; dofollow not verified. |
@@ -227,7 +283,9 @@ For every manual submission:
 - Cross-platform hero and current Windows/macOS store screenshots are missing.
 - Several distribution targets need stable versioned package URLs, checksums, signing/notarization, and owner accounts.
 - FileHorse specifically requires a trusted Windows Authenticode signature, a signed macOS DMG container, a valid public mailing address, and applicable terms/EULA; two human reCAPTCHAs remain after those fixes.
-- Android FOSS stores need a release APK and dependency/delivery audit.
+- A tagged Android APK now exists, and OpenAPK and Obtainium submissions are
+  pending. F-Droid and other strict FOSS catalogs still require a reproducible
+  non-Google delivery path and a dependency audit.
 - No budget is authorized for paid listings, expedited review, reciprocal-link placement, or directory packages.
 - The current user browser policy explicitly blocks Future Tools, Uneed, and
   Tally. It also blocked APKPure's official update route in this run. Do not

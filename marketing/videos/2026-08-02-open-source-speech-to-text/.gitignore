@@ -1,0 +1,7 @@
+node_modules/
+out/
+vo/
+*.mp3
+*.m4a
+*.mp4
+.DS_Store

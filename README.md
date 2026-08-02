@@ -19,7 +19,7 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-2ea44f"></a>
 </p>
 
-AI Dictation is an open-source voice-to-text app for macOS, Windows, iPhone, iPad, and Android. It turns speech into text in supported apps with offline speech recognition, optional cloud transcription and cleanup, personal vocabulary, writing rules, and spoken shortcuts.
+AI Dictation is an [MIT-licensed](LICENSE), open-source speech-to-text app for macOS, Windows, iPhone, iPad, and Android. It provides voice typing in supported apps with offline recognition, optional cloud transcription and cleanup, personal vocabulary, writing rules, and spoken shortcuts. Feature availability varies by platform and workflow.
 
 <p align="center">
   <a href="https://aidictation.com/download">Download for Mac or Windows</a>
@@ -51,7 +51,7 @@ AI Dictation provides native voice input controls for each platform:
 - Keep your regular Android keyboard and add a floating microphone beside editable text fields.
 - Dictate in supported messages, email, notes, documents, browsers, and other standard text fields.
 - Choose offline recognition when supported or cloud transcription when you want it.
-- Improve results with personal vocabulary, explicit replacements, writing rules, and spoken shortcuts.
+- Use the personal-vocabulary, replacement, writing-rule, and spoken-shortcut controls available on your platform.
 - Apply optional cleanup and formatting after transcription.
 - Keep local history for review, replay, and recovery where the platform supports it.
 
@@ -66,7 +66,7 @@ Platform behavior differs because macOS, Windows, iOS, and Android provide diffe
 | iPhone and iPad | [Download on the App Store](https://apps.apple.com/app/id6754910103) | iOS 15 or later | AI Dictation keyboard |
 | Android | [Get it on Google Play](https://play.google.com/store/apps/details?id=com.aidictation.app) | Android 8.0 or later | Floating microphone |
 
-The iOS offline model and Live Activity require iOS 17 or later. Android APKs, Windows portable builds, checksums, and other release assets are available from [GitHub Releases](https://github.com/writingmate/aidictation/releases).
+The macOS app installs on macOS 13 or later, while offline recognition requires macOS 14 or later. The iOS offline model and Live Activity require iOS 17 or later. Android APKs, Windows portable builds, checksums, and other release assets are available from [GitHub Releases](https://github.com/writingmate/aidictation/releases).
 
 ## How AI Dictation works
 
@@ -101,7 +101,7 @@ AI Dictation can use your reference context to improve the final transcript:
 - **Voice shortcuts** expand a spoken trigger into a phrase you use frequently.
 - **Writing rules** control formatting, tone, or structure for a particular context.
 
-Reference terms are used only when the recorded speech supports them; adding a term does not tell the app to insert it into unrelated transcripts.
+AI Dictation instructs cleanup to use reference terms only when the recorded speech supports them; adding a term is not intended to insert it into unrelated transcripts.
 
 ## How AI Dictation differs from basic dictation software
 
@@ -115,7 +115,7 @@ Built-in dictation and browser speech recognition are useful for quick voice typ
 | Handle names and jargon | Personal vocabulary and explicit replacements |
 | Reuse common phrases | Spoken shortcuts |
 | Adapt output to context | Writing and app-context rules |
-| Inspect or extend the implementation | Public source for the Apple, Windows, and Android apps |
+| Inspect or extend the implementation | MIT-licensed native client source for Apple, Windows, and Android |
 
 This comparison describes AI Dictation's implementation without making unsupported accuracy, speed, or “best app” claims.
 
@@ -132,8 +132,8 @@ cd aidictation
 
 Requirements:
 
-- macOS 13 or later
-- Xcode 15 or later
+- Xcode 26 or the current Xcode version used by the Apple CI workflow
+- A macOS version supported by that Xcode release
 
 ```bash
 cd Whishpermate
@@ -174,7 +174,7 @@ Copy `local.properties.template` to `local.properties` only when a local build n
 - Cloud transcription sends the recording to the transcription service.
 - Optional cloud cleanup can send a transcript even when speech recognition ran offline.
 - Some workflows keep recordings locally for history, replay, recovery, or retry; other temporary recordings are removed after successful processing.
-- App credentials are stored using platform-provided secure storage.
+- Account session tokens and user-entered API keys are stored using platform secure storage where applicable.
 
 Read the [AI Dictation privacy policy](https://aidictation.com/privacy) for the complete and current terms.
 
@@ -182,11 +182,11 @@ Read the [AI Dictation privacy policy](https://aidictation.com/privacy) for the 
 
 ### What is AI Dictation?
 
-AI Dictation is a cross-platform voice-to-text app that lets you dictate into supported apps on macOS, Windows, iPhone, iPad, and Android. It combines offline or cloud speech recognition with optional cleanup, personal vocabulary, writing rules, and voice shortcuts.
+AI Dictation is a cross-platform voice-to-text app that lets you dictate into supported apps on macOS, Windows, iPhone, iPad, and Android. Depending on the platform and workflow, it combines offline or cloud speech recognition with optional cleanup, personal vocabulary, writing rules, and voice shortcuts.
 
 ### Is AI Dictation open source?
 
-Yes. The macOS, iOS, Windows, and Android source code is available in this repository under the MIT License. Bundled third-party components remain under their respective licenses.
+Yes. AI Dictation's native client source is available under the [MIT License](LICENSE): [macOS and iOS](Whishpermate/), [Windows](AIDictation.Windows/), and [Android](AIDictationAndroid/). Bundled third-party components remain under their own licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 
 ### Does AI Dictation work offline?
 
@@ -202,7 +202,7 @@ On iPhone and iPad, AI Dictation includes a voice-to-text keyboard. On Android, 
 
 ### How is AI Dictation different from built-in speech recognition software?
 
-AI Dictation adds selectable offline and cloud processing, optional cleanup, personal vocabulary, replacements, spoken shortcuts, context rules, local history, and a shared product across desktop and mobile platforms. No accuracy comparison is implied without a reproducible benchmark.
+Depending on the platform and workflow, AI Dictation can add selectable offline or cloud processing, optional cleanup, personal vocabulary, replacements, spoken shortcuts, context rules, and local history. No accuracy comparison is implied without a reproducible benchmark.
 
 ### Is a free version available?
 
@@ -240,4 +240,4 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 
 ## License
 
-AI Dictation is available under the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components distributed under other licenses.
+AI Dictation's native client source is available under the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components distributed under other licenses.

@@ -214,44 +214,6 @@ function Get-BrowserSessionTokens {
     }
 }
 
-function ConvertTo-Base64Url {
-    param([Parameter(Mandatory = $true)] [string]$Value)
-    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Value)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-}
-
-function Start-LifetimeStub {
-    param([Parameter(Mandatory = $true)] [int]$Port)
-
-    return Start-Job -ScriptBlock {
-        param($ListenPort)
-        $listener = [System.Net.HttpListener]::new()
-        $listener.Prefixes.Add("http://127.0.0.1:$ListenPort/")
-        $listener.Start()
-        try {
-            for ($requestIndex = 0; $requestIndex -lt 2; $requestIndex++) {
-                $context = $listener.GetContext()
-                $path = $context.Request.Url.AbsolutePath
-                if ($path -eq "/auth/v1/user") {
-                    $json = '{"id":"11111111-1111-1111-1111-111111111111","email":"release-lifetime@example.test"}'
-                } elseif ($path -eq "/rest/v1/profiles") {
-                    $json = '[{"id":"22222222-2222-2222-2222-222222222222","user_id":"11111111-1111-1111-1111-111111111111","email":"release-lifetime@example.test","monthly_word_count":321,"subscription_status":"lifetime"}]'
-                } else {
-                    $context.Response.StatusCode = 404
-                    $json = '{"error":"not found"}'
-                }
-                $bytes = [Text.Encoding]::UTF8.GetBytes($json)
-                $context.Response.ContentType = "application/json"
-                $context.Response.ContentLength64 = $bytes.Length
-                $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
-                $context.Response.Close()
-            }
-        } finally {
-            $listener.Stop()
-            $listener.Close()
-        }
-    } -ArgumentList $Port
-}
-
 $app = Get-Item $AppPath
 $productVersion = Get-ThreePartVersion -Version $app.VersionInfo.ProductVersion
 if ($productVersion -ne $ExpectedVersion) {
@@ -304,7 +266,9 @@ try {
     $env:AUTH_WEB_URL = $null
     $env:AIDICTATION_RELEASE_ACCESS_TOKEN = $sessionTokens.access_token
     $env:AIDICTATION_RELEASE_REFRESH_TOKEN = $sessionTokens.refresh_token
-    $env:AIDICTATION_RELEASE_EXPECTED_TIER = ""
+    # A release must prove the real public account service returns the paid
+    # entitlement. A local fixture cannot qualify a package for publication.
+    $env:AIDICTATION_RELEASE_EXPECTED_TIER = "Lifetime"
     $liveReportPath = Join-Path $ReportDir "live-account.json"
     $live = Start-PackagedValidation `
         -Mode "--validate-release-auth" `
@@ -312,21 +276,18 @@ try {
     if ($live.auth_host -ne "aidictation.com" -or
         $live.profile_api_host -ne "aidictation.com" -or
         -not $live.profile_record_loaded -or
-        $live.tier -notin @("Free", "Pro", "Lifetime")) {
-        throw "The packaged app did not load the live account, limits, and access tier."
-    }
-    if ($live.tier -eq "Free" -and $live.word_limit -ne 2000) {
-        throw "The packaged app loaded the wrong free account limit."
-    }
-    if ($live.tier -in @("Pro", "Lifetime") -and $live.word_limit -ne [int]::MaxValue) {
-        throw "The packaged app loaded a finite paid account limit."
+        $live.tier -ne "Lifetime" -or
+        $live.word_limit -ne [int]::MaxValue -or
+        $live.words_remaining -ne [int]::MaxValue -or
+        $live.has_reached_limit) {
+        throw "The packaged app did not load live lifetime access with unlimited limits."
     }
     $protocolCommand = (Get-Item `
         -Path "Registry::HKEY_CURRENT_USER\Software\Classes\aidictation\shell\open\command").GetValue("")
     if (-not $protocolCommand -or -not $protocolCommand.Contains((Get-Item $AppPath).FullName)) {
         throw "The packaged app did not register its browser callback to the installed executable."
     }
-    Write-Host "Live packaged account validated: tier=$($live.tier), monthly_words=$($live.monthly_words), word_limit=$($live.word_limit)"
+    Write-Host "Live lifetime packaged account validated: tier=$($live.tier), monthly_words=$($live.monthly_words), word_limit=unlimited"
 } finally {
     $env:AIDICTATION_RELEASE_ACCESS_TOKEN = $null
     $env:AIDICTATION_RELEASE_REFRESH_TOKEN = $null
@@ -336,43 +297,4 @@ try {
     $env:AUTH_WEB_URL = $releaseAuthWebUrl
 }
 
-$stubPort = 18765
-$stubJob = Start-LifetimeStub -Port $stubPort
-try {
-    Start-Sleep -Milliseconds 800
-    $header = ConvertTo-Base64Url -Value '{"alg":"none","typ":"JWT"}'
-    $expiresAt = [DateTimeOffset]::UtcNow.AddHours(1).ToUnixTimeSeconds()
-    $payloadJson = @{ exp = $expiresAt } | ConvertTo-Json -Compress
-    $payload = ConvertTo-Base64Url -Value $payloadJson
-    $env:SUPABASE_URL = "http://127.0.0.1:$stubPort"
-    $env:SUPABASE_ANON_KEY = "release-validation"
-    $env:AUTH_WEB_URL = "http://127.0.0.1:$stubPort/auth"
-    $env:AIDICTATION_RELEASE_ACCESS_TOKEN = "$header.$payload.release-validation"
-    $env:AIDICTATION_RELEASE_REFRESH_TOKEN = "release-validation"
-    $env:AIDICTATION_RELEASE_EXPECTED_TIER = "Lifetime"
-    $lifetimeReportPath = Join-Path $ReportDir "lifetime-account.json"
-    $lifetime = Start-PackagedValidation `
-        -Mode "--validate-release-auth" `
-        -ReportPath $lifetimeReportPath
-    if ($lifetime.tier -ne "Lifetime" -or
-        -not $lifetime.profile_record_loaded -or
-        $lifetime.word_limit -ne [int]::MaxValue -or
-        $lifetime.words_remaining -ne [int]::MaxValue -or
-        $lifetime.has_reached_limit) {
-        throw "The packaged app did not preserve lifetime access and unlimited limits."
-    }
-    Write-Host "Lifetime packaged account validated: tier=$($lifetime.tier), word_limit=unlimited"
-} finally {
-    $env:AIDICTATION_RELEASE_ACCESS_TOKEN = $null
-    $env:AIDICTATION_RELEASE_REFRESH_TOKEN = $null
-    $env:AIDICTATION_RELEASE_EXPECTED_TIER = $null
-    $env:SUPABASE_URL = $releaseSupabaseUrl
-    $env:SUPABASE_ANON_KEY = $releaseSupabaseAnonKey
-    $env:AUTH_WEB_URL = $releaseAuthWebUrl
-    if ($stubJob) {
-        Stop-Job -Job $stubJob -ErrorAction SilentlyContinue
-        Remove-Job -Job $stubJob -Force -ErrorAction SilentlyContinue
-    }
-}
-
-Write-Host "PASS: published-path browser sign-in, packaged profile/limits, and lifetime access validated"
+Write-Host "PASS: published-path browser sign-in and live packaged lifetime profile/limits validated"

@@ -92,7 +92,7 @@ private struct HistoryDetailPane: View {
                     leadingPadding: 16,
                     onDelete: deleteRecording
                 )
-                .id("\(recording.id)-\(recording.status)-\(recording.transcription?.hashValue ?? 0)")
+                .id(recording.historyPresentationIdentity)
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "mic.circle")
@@ -205,6 +205,7 @@ struct HistorySidebarView: View {
         List(selection: $selectedRecording) {
             ForEach(filteredRecordings) { recording in
                 HistorySidebarRow(recording: recording)
+                    .id(recording.historyPresentationIdentity)
                     .tag(recording)
             }
         }
@@ -287,6 +288,17 @@ struct HistorySidebarView: View {
                 selectedRecording = nextSelection
             }
         }
+    }
+}
+
+private extension Recording {
+    var historyPresentationIdentity: HistoryPresentationIdentity {
+        HistoryPresentationIdentity(
+            recordingID: id,
+            status: status.rawValue,
+            transcription: transcription,
+            errorMessage: errorMessage
+        )
     }
 }
 

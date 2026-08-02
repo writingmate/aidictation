@@ -10,8 +10,10 @@ LibHunt and freshcode.club now have verified live AI Dictation pages. SaaSHub
 ownership is verified and its unsupported copy and old repository URL were
 replaced. LocalAlternative, Open Source Startups, and NeuronFeed accepted
 editorial-review submissions. The OpenAPK issue, Obtainium PR #1570, and Open
-Source Observer PR #1140 are open for maintainer review, and a factual suggestion
-was emailed to the Open Source Software Directory editor; none is counted as a
+Source Observer PR #1140 are open for maintainer review. WinGet PR #411291 adds
+the current official Windows release and is awaiting Microsoft's CLA plus
+repository validation. A factual suggestion was emailed to the Open Source
+Software Directory editor; none of those pending submissions is counted as a
 live listing yet. Internet Intro acknowledged a submission made before its
 anti-campaigning rule was confirmed, so that receipt is recorded as a rule
 mismatch and expected editorial rejection rather than a campaign win. The free
@@ -40,6 +42,11 @@ Presence and link evidence are separate:
 
 - A live page, a search-indexed mirror, or an approved listing does **not** prove a dofollow backlink.
 - `Dofollow: not verified` means no link-attribute claim should be made.
+- `NO RESTRICTIVE REL OBSERVED` means the inspected anchor had no
+  `nofollow`, `sponsored`, or `ugc` relation at the dated check; it does not
+  promise indexing, ranking value, or future behavior.
+- `NOFOLLOW OBSERVED` means the inspected public anchor explicitly used
+  `rel=nofollow`.
 - Uneed markets backlink value, but its July 2026 changelog explicitly promises dofollow links for its paid skip-the-wait-line route. The free listing's link attribute is not verified.
 - Some paid directories advertise dofollow links. That is the directory's commercial claim, not an independently inspected link on an AI Dictation listing.
 
@@ -61,7 +68,8 @@ Presence and link evidence are separate:
 12. `next_action`: single operational next step.
 13. `listing_evidence`: what is known about an AI Dictation listing.
 14. `index_evidence`: index/presence evidence, kept separate from link attributes.
-15. `link_attribute_status`: `not_verified`, `not_applicable`, or a qualified directory claim.
+15. `link_attribute_status`: `not_verified`, `not_applicable`,
+   `no_restrictive_rel_observed`, `nofollow_observed`, or a qualified directory claim.
 16. `link_attribute_evidence`: plain-language limit on the link claim.
 17. `last_checked`: ISO date.
 
@@ -73,9 +81,9 @@ Presence and link evidence are separate:
 | AppSumo | Partner marketplace | LIVE—UPDATE | https://appsumo.com/products/ai-dictation/ | Existing partner account; no public edit form captured | Listing is still positioned primarily as a Mac product. Request/update cross-platform copy and current privacy wording through the existing partner relationship. Do not copy its prices, metrics, language counts, or accuracy claims elsewhere. | Live indexed marketplace page verified; dofollow not verified. |
 | APKPure | Third-party Android mirror | LIVE—UPDATE | https://apkpure.com/ai-dictation/com.aidictation.app | https://apkpure.com/request-update | Research found a stale `0.0.29` mirror, but the current browser safety policy blocks the official update route and prohibits alternate automation. The owner may use the official route manually; do not upload an unverified APK. | Existing indexed mirror verified; dofollow not verified. |
 | APKCombo | Third-party Android mirror | LIVE—UPDATE | https://apkcombo.com/ai-dictation/com.aidictation.app/ | No verified publisher-claim route captured | Research found a stale `0.0.29` mirror. Confirm whether it is store-synced before requesting an update. Do not upload an unverified APK. | Existing indexed mirror reported; dofollow not verified. |
-| SaaSHub | Software alternatives directory | LIVE—MAINTAIN | https://www.saashub.com/ai-dictation | https://www.saashub.com/manage/ai-dictation/edit | Ownership was verified August 2. The public page now uses claim-safe cross-platform copy, and the managed GitHub URL points to `writingmate/aidictation`; monitor the remaining catalog-approval state. | Verified badge and corrected public copy are live; dofollow not verified. |
-| LibHunt | Open-source project catalog | LIVE—MAINTAIN | https://www.libhunt.com/r/aidictation | https://www.libhunt.com/repo/submit | Automatically approved August 2 with the canonical website, source, docs, MIT license label, and speech-to-text topics. A correction from `MIT` to `MIT License` is pending moderation so the OSI status renders correctly. | Public listing, website link, and source link verified; link attributes not separately verified. |
-| freshcode.club | FLOSS release catalog | LIVE—MAINTAIN | https://freshcode.club/projects/aidictation | https://freshcode.club/submit | Published August 2 with newly authored CC-BY-SA-compatible copy, the canonical homepage, MITL license, platform tags, and the public source URL in the description. | Public listing and direct homepage link verified; link attributes not separately verified. |
+| SaaSHub | Software alternatives directory | LIVE—MAINTAIN | https://www.saashub.com/ai-dictation | https://www.saashub.com/manage/ai-dictation/edit | Ownership was verified August 2. The public page now uses claim-safe cross-platform copy, and the managed GitHub URL points to `writingmate/aidictation`; monitor the remaining catalog-approval state. | Verified badge and corrected public copy are live. The official website anchor explicitly uses `rel=nofollow`; the managed source URL is not public yet. |
+| LibHunt | Open-source project catalog | LIVE—MAINTAIN | https://www.libhunt.com/r/aidictation | https://www.libhunt.com/repo/submit | Automatically approved August 2 with the canonical website, source, docs, speech-to-text topics, and the corrected `MIT License` label. The moderated correction is live and the page now renders the proper OSI-approved status. | Public listing, website link, source link, and license status verified. The inspected website and source anchors had no restrictive relation attribute; this is not a ranking guarantee. |
+| freshcode.club | FLOSS release catalog | LIVE—MAINTAIN | https://freshcode.club/projects/aidictation | https://freshcode.club/submit | Published August 2 with newly authored CC-BY-SA-compatible copy, the canonical homepage, MITL license, platform tags, and the public source URL in the description. | Public listing and direct homepage link verified. The inspected homepage anchor had no restrictive relation attribute; this is not a ranking guarantee. |
 | eudk/awesome-ai-tools | Community awesome list | LIVE—UPDATE | https://github.com/eudk/awesome-ai-tools | https://github.com/eudk/awesome-ai-tools/pull/490 | Cross-platform maintenance update submitted August 2, 2026. Track PR #490; do not add a duplicate. | Direct website link is visible in GitHub Markdown; no dofollow assertion. |
 
 ## Wave 1: free editorial and self-serve targets
@@ -91,7 +99,7 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 6 | MacUpdate | macOS software catalog | RESEARCH / ASSET | https://www.macupdate.com/help/submit-app | Follow the new-app guidelines. Provide a current signed/notarized macOS build, stable download URL, icon, and larger current screenshots. | Dofollow not verified. |
 | 7 | Uptodown | Multi-platform app distribution | RESEARCH / ASSET | https://en.uptodown.com/developers-console | Create/verify the developer account and package ownership. Decide whether to sync the Google Play package or provide a signed publisher build. | Dofollow not verified. |
 | 8 | SourceForge | Project hosting/distribution | READY | https://sourceforge.net/create/ | Create a project only if the team will maintain it. Prefer importing/mirroring the canonical Git repository and release files rather than creating a disconnected code history. | Dofollow not verified. |
-| 9 | WinGet Community Repository | Windows package manager | RESEARCH / ASSET | https://learn.microsoft.com/en-us/windows/package-manager/package/repository | Prepare a stable versioned HTTPS installer URL, SHA-256 hash, silent install/uninstall behavior, and a manifest PR. | Package distribution target; dofollow not applicable. |
+| 9 | WinGet Community Repository | Windows package manager | SUBMITTED—REVIEW | https://github.com/microsoft/winget-pkgs/pull/411291 | PR #411291 adds `WritingMate.AIDictation` `0.0.5` using the official versioned Inno installer and verified SHA-256. All three manifest files parse and pass Microsoft's 1.12 JSON schemas. The owner must read and answer Microsoft's CLA bot with the applicable personal or employer form; repository installer validation and maintainer review remain pending. No local Windows install, uninstall, upgrade, SmartScreen, or security result is claimed. | Manifest PR is open and mergeable, but no live WinGet catalog entry is claimed before merge and publication. |
 | 10 | There's An AI For That (TAAFT) | AI directory | BLOCKED | Paid/editorial page: https://theresanaiforthat.com/get-featured/ · former OSS form: https://tally.so/r/mRWbdK | The open-source/free Tally form currently says it is closed. Recheck for a reopened free route; do not pay or submit through another route without a budget decision. | No AI Dictation listing inspected; dofollow not verified. |
 
 ## Wave 2: distribution, company-profile, and longer-lead targets
@@ -107,8 +115,8 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 7 | Launching Next | Startup directory | PREPARED—HUMAN CHECK | https://www.launchingnext.com/submit/ | Duplicate search passed and the free form is filled with audited copy, nine relevant tags, `AI Dictation Team`, and `support@aidictation.com`; newsletter is off and funding/budget fields are blank. Complete the arithmetic Quick Check in the preserved Chrome tab and submit without choosing the optional $99 route. | Dofollow not verified; no listing exists until editorial approval. |
 | 8 | AIxploria | AI directory | BLOCKED | https://www.aixploria.com/en/free-listing/ | The official page embeds Tally form `31KOPg`, but both the direct and embedded form currently return 404. Recheck the official page later; do not seek an unofficial route. | No AI Dictation listing inspected; dofollow not verified. |
 | 9 | FOSShub | Free/open-source software hosting | PREPARED—HUMAN CHECK | https://www.fosshub.com/signup.html | Application is filled for a redirect to the existing service with unknown storage/bandwidth estimates. Complete the reCAPTCHA in the preserved in-app-browser tab, then request the free FOSShub account. | Dofollow not verified; no listing exists until approval. |
-| 10 | Scoop Extras | Windows package manager | RESEARCH / ASSET | https://github.com/ScoopInstaller/Extras | Build and test a JSON manifest against a stable Windows asset. Include version, description, homepage, license, architecture, URL, SHA-256 hash, shortcuts/uninstaller, and update logic as applicable, then open a PR. | Package distribution target; dofollow not applicable. |
-| 11 | Chocolatey Community Repository | Windows package manager | RESEARCH / ASSET | https://docs.chocolatey.org/en-us/create/create-packages/ | Create, test, publish, and continuously maintain a package. Confirm redistribution rights and stable installer/checksum behavior before moderation. | Package distribution target; dofollow not applicable. |
+| 10 | Scoop Extras | Windows package manager | BLOCKED | https://github.com/ScoopInstaller/Extras/blob/master/.github/ISSUE_TEMPLATE/package-request.yml | The required package-request attestation uses roughly 100 GitHub stars or 50 forks as its popularity example; AI Dictation currently has 33 stars and 10 forks. The public Windows ZIP also embeds app version `0.0.4` while the release is `0.0.5`, and version-specific protocol/startup registry paths need cleanup handling. Reach credible usage, publish a correctly versioned release, then request maintainer approval before opening a manifest PR. | Duplicate, policy, asset, and usage checks completed; no package request, manifest, or listing is claimed. |
+| 11 | Chocolatey Community Repository | Windows package manager | BLOCKED | https://docs.chocolatey.org/en-us/create/create-packages/ | The public Windows `0.0.5` build predates later account/version fixes, silent uninstall was not release-tested, and submission needs an owner Chocolatey account plus API key. Publish and test a fresh release, preferably Authenticode-sign it, then maintain a checksum-pinned remote-installer package. | Exact package ID and all-status searches returned no result; no package or submission is claimed. |
 | 12 | FileHorse | Windows/macOS download catalog | BLOCKED | https://www.filehorse.com/submit/ | No duplicate was found, but policy preflight failed: the Windows 0.0.5 installer lacks Authenticode, the macOS 0.0.97 DMG container is unsigned despite its inner app being notarized, `/terms` is missing, no full mailing address is published, and both platform contact forms require reCAPTCHA. Fix signing and policy evidence before asking the owner to accept FileHorse's mirroring/asset grant. | Dofollow not verified. |
 | 13 | SnapFiles | Windows download catalog | RESEARCH / ASSET | https://www.snapfiles.com/feedback/ | The public page directs developers to a Developer Account form and also offers `Suggest a software product`. Create/verify the developer account and provide a stable Windows build. | Dofollow not verified. |
 | 14 | MajorGeeks | Curated Windows download catalog | BLOCKED | Closed form: https://www.majorgeeks.com/files/submitfile · contact instructions: https://www.majorgeeks.com/content/page/aboutcontact_us.html | The submission form currently says new file submissions are not accepted. Current contact guidance allows editorial email, but acceptance is highly selective. Recheck later rather than repeatedly emailing. | No listing; dofollow not verified. |
@@ -135,6 +143,25 @@ The root MIT license and third-party notices are live on the default branch. Sea
 
 ## Current submission receipts
 
+### WinGet — PR submitted August 2, 2026
+
+- Submission: https://github.com/microsoft/winget-pkgs/pull/411291
+- Package: `WritingMate.AIDictation` version `0.0.5`, represented by the three
+  required WinGet 1.12 manifest files.
+- Installer: the official versioned GitHub release asset with SHA-256
+  `762A69C6917DF39B13DBB3B2F9C88DEC5DE8A0CADF443CC25376FE359D9252A4`.
+- Local evidence: YAML parsing, all three official JSON schemas, metadata URL
+  responses, the downloaded checksum, and `git diff --check` passed.
+- Limits: no local Windows Sandbox or `winget install` result is claimed. The
+  repository's automated and manual Windows checks must validate installation,
+  uninstall, upgrade, SmartScreen, and security behavior.
+- Signing caveat: the installer has no Authenticode signature. That is not a
+  deterministic WinGet policy rejection for this EXE format, but it can still
+  trigger SmartScreen or security-scan review.
+- Human gate: the owner must read Microsoft's CLA comment and reply with the
+  applicable personal or employer form. This tracker does not accept legal
+  terms or infer employer authority on the owner's behalf.
+
 ### LocalAlternative — submitted August 2, 2026
 
 - Name: `AI Dictation`
@@ -152,15 +179,21 @@ The public page now identifies AI Dictation as open source and uses the
 claim-safe tagline and description. The managed GitHub URL was corrected from
 `writingmate/whispermate` to `writingmate/aidictation`; the App Store and Google
 Play URLs were also added. The page remains in SaaSHub's catalog-approval queue.
+The public website anchor explicitly uses `rel=nofollow`; the managed source
+URL has not appeared on the public page.
 
 ### LibHunt — live August 2, 2026
 
 - Listing: https://www.libhunt.com/r/aidictation
 - Receipt: `Thanks for your submission! It's been approved automatically.`
-- Verified fields: canonical website, source repository, docs, Swift, MIT,
-  self-hosted/standalone status, and eight relevant topics.
-- Follow-up: a moderated edit requests the canonical `MIT License` label because
-  the initial free-text `MIT` value rendered an incorrect OSI-status sentence.
+- Verified fields: canonical website, source repository, docs, Swift,
+  self-hosted/standalone status, eight relevant topics, and the canonical
+  `MIT License` label with the correct OSI-approved status.
+- Follow-up: keep the public metadata aligned with the repository; the moderated
+  license-label correction is complete.
+- Link check: the inspected website and source anchors had no `nofollow`,
+  `sponsored`, or `ugc` relation; this is a dated HTML observation, not a search
+  ranking guarantee.
 
 ### freshcode.club — live August 2, 2026
 
@@ -168,6 +201,8 @@ Play URLs were also added. The page remains in SaaSHub's catalog-approval queue.
 - Receipt: `Submitted — Project and release information have been updated.`
 - The listing has the canonical homepage, MITL license, desktop/mobile/platform
   tags, and newly authored copy that was explicitly submitted under CC-BY-SA.
+- The inspected homepage anchor had no `nofollow`, `sponsored`, or `ugc`
+  relation; this is a dated HTML observation, not a search ranking guarantee.
 
 ### Open Source Startups — submitted August 2, 2026
 

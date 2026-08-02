@@ -59,6 +59,7 @@ offline on every platform.
 | [amitdev01/awesome-voice-ai](https://github.com/amitdev01/awesome-voice-ai) | `Vertical` | Submitted matching quick-list and detailed-section entries: [PR #14](https://github.com/amitdev01/awesome-voice-ai/pull/14); ready, clean, and mergeable |
 | [msb-msb/awesome-local-ai](https://github.com/msb-msb/awesome-local-ai) | `Voice & Multimodal` | Submitted one row limited to offline recognition on supported devices: [PR #28](https://github.com/msb-msb/awesome-local-ai/pull/28); ready, clean, and mergeable |
 | [Awesome-Whisper-Apps](https://github.com/danielrosehill/Awesome-Whisper-Apps) | `Windows System Integration` | Submitted one Windows entry: [PR #25](https://github.com/danielrosehill/Awesome-Whisper-Apps/pull/25); ready and mergeable, with GitGuardian passing |
+| [Top AI Tools](https://github.com/ghimiresunil/Top-AI-Tools) | `Productivity` | Submitted one claim-safe open-source voice-typing row: [PR #589](https://github.com/ghimiresunil/Top-AI-Tools/pull/589); ready, clean, and mergeable |
 
 ## Catalog issue submissions
 
@@ -177,9 +178,12 @@ submit that entry manually.
 - [Awesome-Whisper-Apps PR #25](https://github.com/danielrosehill/Awesome-Whisper-Apps/pull/25):
   one Windows System Integration entry submitted with GitGuardian passing on
   August 2, 2026.
+- [Top AI Tools PR #589](https://github.com/ghimiresunil/Top-AI-Tools/pull/589):
+  one Productivity row with claim-safe open-source and offline wording submitted
+  on August 2, 2026.
 
-All twenty-nine current pull requests were re-audited on August 2, 2026. They
-remain open and mergeable, with no actionable human review feedback. Four
+All thirty current pull requests were re-audited on August 2, 2026. They
+remain open and mergeable, with no actionable human review feedback. Five
 first-time workflows still await maintainer approval to run, and two pull
 requests still require maintainer branch-protection review. Every pull request
 discloses the project affiliation and AI assistance.

@@ -1,0 +1,51 @@
+[
+  {
+    "name": "title",
+    "start_frame": 0,
+    "next_start_frame": 210,
+    "on_screen": "Open-Source Speech to Text — What You Can Verify",
+    "text": "Looking for open-source speech to text? Here is what to verify before installing."
+  },
+  {
+    "name": "public_repo",
+    "start_frame": 210,
+    "next_start_frame": 435,
+    "on_screen": "Public source · Apple · Windows · Android",
+    "text": "AI Dictation's Apple, Windows, and Android clients are public on GitHub."
+  },
+  {
+    "name": "license",
+    "start_frame": 435,
+    "next_start_frame": 705,
+    "on_screen": "MIT repository · Third-party licenses preserved",
+    "text": "The repository uses MIT. Third-party components keep their own licenses, so check the notices."
+  },
+  {
+    "name": "build",
+    "start_frame": 705,
+    "next_start_frame": 915,
+    "on_screen": "Inspect each client · Build from source",
+    "text": "You can inspect each platform folder and follow the build instructions yourself."
+  },
+  {
+    "name": "offline_cloud",
+    "start_frame": 915,
+    "next_start_frame": 1245,
+    "on_screen": "Open source does not automatically mean offline",
+    "text": "Open source does not mean offline. Supported devices can recognize speech locally; cloud transcription sends audio remotely."
+  },
+  {
+    "name": "privacy",
+    "start_frame": 1245,
+    "next_start_frame": 1545,
+    "on_screen": "Offline recognition is not necessarily a fully offline workflow",
+    "text": "Cloud cleanup can send transcript text after local recognition. Disable cloud features when nothing should leave your device."
+  },
+  {
+    "name": "cta",
+    "start_frame": 1545,
+    "next_start_frame": 1800,
+    "on_screen": "github.com/writingmate/aidictation · aidictation.com",
+    "text": "Inspect the code on GitHub, or download AI Dictation at aidictation dot com."
+  }
+]

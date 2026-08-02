@@ -1,0 +1,18 @@
+{
+  "title": "Open-Source Speech to Text: Inspect AI Dictation Before You Install",
+  "description": "Open-source speech to text is more than a GitHub badge. Inspect AI Dictation's client code, MIT license, build instructions, and offline/cloud boundaries before installing.\n\nOfficial website: https://aidictation.com\nInspect the source: https://github.com/writingmate/aidictation\nMIT License: https://github.com/writingmate/aidictation/blob/main/LICENSE\nThird-party notices: https://github.com/writingmate/aidictation/blob/main/THIRD_PARTY_NOTICES.md\n\nThe repository's client code is available under the MIT License. Included third-party components retain their own licenses. This does not imply that every dependency, model, or hosted service is MIT-licensed or self-hostable. Offline recognition availability varies by device and language; enabled cloud transcription or cleanup may send relevant audio or transcript text for remote processing.\n\n#OpenSourceSpeechToText #SpeechToText #AIDictation",
+  "tags": [
+    "open-source speech to text",
+    "open source speech to text",
+    "open source voice typing",
+    "open source dictation",
+    "speech to text GitHub",
+    "MIT licensed speech to text",
+    "AI Dictation",
+    "offline speech recognition",
+    "voice to text open source",
+    "build speech to text from source"
+  ],
+  "privacyStatus": "unlisted",
+  "categoryId": "28"
+}

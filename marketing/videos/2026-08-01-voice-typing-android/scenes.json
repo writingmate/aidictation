@@ -1,0 +1,51 @@
+[
+  {
+    "name": "title",
+    "start_frame": 0,
+    "next_start_frame": 240,
+    "on_screen": "Voice Typing Android — Keep Your Keyboard",
+    "text": "Want voice typing on Android without replacing your keyboard? AI Dictation adds a floating mic beside supported text fields."
+  },
+  {
+    "name": "permissions",
+    "start_frame": 240,
+    "next_start_frame": 510,
+    "on_screen": "Microphone + Accessibility, with your consent",
+    "text": "Setup asks for microphone and Accessibility access so it can find the active field and insert text when you dictate."
+  },
+  {
+    "name": "focus",
+    "start_frame": 510,
+    "next_start_frame": 720,
+    "on_screen": "Tap a supported text field",
+    "text": "Tap a text field, and the microphone appears while your regular keyboard stays open."
+  },
+  {
+    "name": "dictate",
+    "start_frame": 720,
+    "next_start_frame": 990,
+    "on_screen": "Tap · Speak · Tap",
+    "text": "Tap the mic, speak, then tap again. When processing finishes, the text is inserted at your cursor."
+  },
+  {
+    "name": "modes",
+    "start_frame": 990,
+    "next_start_frame": 1230,
+    "on_screen": "Offline recognition or cloud transcription",
+    "text": "Choose optional offline recognition, which may need a model download, or choose cloud transcription in Settings."
+  },
+  {
+    "name": "customize",
+    "start_frame": 1230,
+    "next_start_frame": 1530,
+    "on_screen": "Cleanup · Vocabulary · Writing rules · Spoken shortcuts",
+    "text": "Cloud features can also apply cleanup, personal vocabulary, writing rules, and spoken shortcuts. Relevant audio or text may be processed remotely."
+  },
+  {
+    "name": "cta",
+    "start_frame": 1530,
+    "next_start_frame": 1800,
+    "on_screen": "aidictation.com · Open source on GitHub",
+    "text": "AI Dictation is open source. Try it at aidictation dot com, or inspect the code on GitHub."
+  }
+]

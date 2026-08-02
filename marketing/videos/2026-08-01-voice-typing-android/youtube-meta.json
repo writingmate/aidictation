@@ -1,0 +1,18 @@
+{
+  "title": "Voice Typing Android: Keep Your Keyboard, Add a Floating Mic",
+  "description": "Voice typing Android without replacing your keyboard. See AI Dictation's floating mic in a current Android build.\n\nTry AI Dictation: https://aidictation.com\nOpen-source code: https://github.com/writingmate/aidictation\nAndroid app: https://play.google.com/store/apps/details?id=com.aidictation.app\n\nAI Dictation uses microphone and Accessibility access, with your consent, to recognize speech and insert finished text into supported editable fields. Password and other secure fields are excluded. Offline recognition may require a model download. Cloud transcription or cleanup may send relevant audio or text for remote processing. Availability and insertion can vary by app and Android restrictions.\n\n#VoiceTypingAndroid #VoiceToText #AIDictation",
+  "tags": [
+    "voice typing Android",
+    "Android voice typing",
+    "voice to text Android",
+    "speech to text Android",
+    "Android dictation",
+    "AI Dictation",
+    "floating microphone",
+    "offline speech recognition",
+    "open source speech to text",
+    "voice typing without changing keyboard"
+  ],
+  "privacyStatus": "unlisted",
+  "categoryId": "28"
+}

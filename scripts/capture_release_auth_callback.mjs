@@ -30,6 +30,7 @@ await cdpSession.send("Page.enable");
 
 let resolveCallback;
 let rejectCallback;
+let capturedCallback = null;
 const callbackPromise = new Promise((resolve, reject) => {
   resolveCallback = resolve;
   rejectCallback = reject;
@@ -42,8 +43,27 @@ const timeout = setTimeout(
   isSelfTest ? 10_000 : 45_000,
 );
 
-const callbackParams = (candidate) => {
-  const parsed = new URL(candidate);
+const exactCallbackURL = (candidate) => {
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return null;
+  }
+  if (
+    parsed.protocol !== "aidictation:" ||
+    parsed.hostname !== "auth-callback" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    (parsed.pathname && parsed.pathname !== "/")
+  ) {
+    return null;
+  }
+  return parsed;
+};
+
+const callbackParams = (parsed) => {
   const params = new URLSearchParams(parsed.search);
   const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
   hashParams.forEach((value, key) => params.set(key, value));
@@ -51,9 +71,11 @@ const callbackParams = (candidate) => {
 };
 
 const captureCallback = (candidate) => {
-  if (!candidate.startsWith(callbackScheme)) return;
-  const params = callbackParams(candidate);
+  const parsed = exactCallbackURL(candidate);
+  if (!parsed) return;
+  const params = callbackParams(parsed);
   if (!params.get("access_token") || !params.get("refresh_token")) return;
+  capturedCallback = candidate;
   resolveCallback(candidate);
 };
 
@@ -71,11 +93,38 @@ await page.route("aidictation://**", async (route) => {
 try {
   if (isSelfTest) {
     await page.goto("about:blank");
-    await page
-      .evaluate((url) => {
-        window.location.href = url;
-      }, `${callbackScheme}#access_token=synthetic-access&refresh_token=synthetic-refresh`)
-      .catch(() => {});
+    captureCallback(
+      "aidictation://auth-callback%zz#access_token=synthetic-access&refresh_token=synthetic-refresh",
+    );
+    if (capturedCallback) {
+      throw new Error("Custom-protocol callback capture accepted a malformed callback");
+    }
+    const navigate = async (url) => {
+      await page
+        .evaluate((target) => {
+          setTimeout(() => {
+            window.location.href = target;
+          }, 0);
+        }, url)
+        .catch(() => {});
+      await page.waitForTimeout(100);
+    };
+    const rejectedCallbacks = [
+      `${callbackScheme}#access_token=synthetic-access`,
+      "aidictation://auth-callback.evil#access_token=synthetic-access&refresh_token=synthetic-refresh",
+      "aidictation://user@auth-callback#access_token=synthetic-access&refresh_token=synthetic-refresh",
+      "aidictation://auth-callback:123#access_token=synthetic-access&refresh_token=synthetic-refresh",
+      "aidictation://auth-callback/unexpected#access_token=synthetic-access&refresh_token=synthetic-refresh",
+    ];
+    for (const rejectedCallback of rejectedCallbacks) {
+      await navigate(rejectedCallback);
+      if (capturedCallback) {
+        throw new Error("Custom-protocol callback capture accepted a mismatched callback");
+      }
+    }
+    await navigate(
+      `${callbackScheme}#access_token=synthetic-access&refresh_token=synthetic-refresh`,
+    );
   } else {
     await page.goto(authURL.toString(), { waitUntil: "domcontentloaded" });
     await page.locator("#email").fill(email);
@@ -86,7 +135,8 @@ try {
   }
 
   const callbackURL = await callbackPromise;
-  const params = callbackParams(callbackURL);
+  const parsed = exactCallbackURL(callbackURL);
+  const params = parsed ? callbackParams(parsed) : new URLSearchParams();
   if (!params.get("access_token") || !params.get("refresh_token")) {
     throw new Error("Live browser callback did not contain a complete auth session");
   }

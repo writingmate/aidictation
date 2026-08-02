@@ -9,9 +9,10 @@ Machine-readable companion: [`directory-submissions.csv`](directory-submissions.
 LibHunt and freshcode.club now have verified live AI Dictation pages. SaaSHub
 ownership is verified and its unsupported copy and old repository URL were
 replaced. LocalAlternative, Open Source Startups, and NeuronFeed accepted
-editorial-review submissions. The free Launching Next and FOSShub forms remain
-prepared in preserved browser tabs but require human CAPTCHA checks.
-Awesome-list pull requests are tracked separately in `awesome-list-targets.md`.
+editorial-review submissions, and the OpenAPK submission issue is open for
+maintainer review. The free Launching Next and FOSShub forms remain prepared in
+preserved browser tabs but require human CAPTCHA checks. Awesome-list pull
+requests are tracked separately in `awesome-list-targets.md`.
 
 ## Status and evidence rules
 
@@ -116,6 +117,7 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 23 | NeuronFeed | AI startup directory | SUBMITTED—REVIEW | https://neuronfeed.com/submit/startup | Submitted August 2 with claim-safe copy and no optional location, founding, or traction claims. The site confirmed admin notification and review within 48 hours. | No published listing yet; published outbound links are currently nofollow. |
 | 24 | OpenSaaSDirectory | Open-source SaaS directory | BLOCKED | https://opensaas.directory/submit-project | One carefully filled attempt returned to the form without a receipt, confirmation, or visible listing. Do not resubmit until the destination can confirm whether the first request was recorded. | No listing or receipt verified. |
 | 25 | OpenAltFinder | Open-source alternatives directory | READY | https://openaltfinder.com/submit | Duplicate audit passed and the product fits as an open-source alternative to proprietary dictation tools, but Cloudflare Turnstile requires a human submission. | Published examples link to website and source; AI Dictation is not yet listed. |
+| 27 | OpenAPK | Android FOSS catalog | SUBMITTED—REVIEW | https://github.com/mobilenetworkltd/openapk/issues/41 | Submitted through OpenAPK's official GitHub issue route after verifying the public MIT Android source, tagged APK release, checksums, package ID, and minimum Android version. Track issue #41; the optional reciprocal badge was not added. | No published OpenAPK listing yet; distribution target, so dofollow is not applicable. |
 
 ## Current submission receipts
 
@@ -170,6 +172,14 @@ traction fields were left blank rather than inferred.
 The form was filled once with the canonical repository and claim-safe copy. It
 returned to its initial state without a confirmation, visible error, or listing,
 so this tracker does not count it as submitted and prohibits a blind retry.
+
+### OpenAPK — submitted August 2, 2026
+
+- Submission: https://github.com/mobilenetworkltd/openapk/issues/41
+- Verified release: `android-v0.0.32`, including its public APK and checksums.
+- Verified Android metadata: package `com.aidictation.app`, minimum SDK 26, and
+  MIT-licensed public source.
+- OpenAPK's reciprocal website badge is optional and was not added.
 
 ### FOSShub — prepared, not submitted
 

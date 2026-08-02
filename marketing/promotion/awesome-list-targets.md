@@ -23,20 +23,22 @@ offline on every platform.
 | 3 | [open-source-mac-os-apps](https://github.com/serhii-londar/open-source-mac-os-apps) | `applications.json`, `Productivity` | Include icon, screenshots, website, languages, source repository, MIT license, and category | Deferred: current base `applications.json` is invalid strict JSON; wait for [repair PR #1230](https://github.com/serhii-londar/open-source-mac-os-apps/pull/1230) |
 | 4 | [open-source-android-apps](https://github.com/pcqpcq/open-source-android-apps) | `categories/tools.md` | Add an alphabetical six-column Kotlin/MIT row with Google Play or release badge | Deferred: repository automation would label this mixed monorepo as Swift instead of the Android client's Kotlin; resolve metadata first |
 | 5 | [awesome-swift-macos-apps](https://github.com/jaywcjlove/awesome-swift-macos-apps) | `Audio` | Add to both `README.md` and `README.zh.md` with stars and last-commit badges | Submitted: [PR #85](https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/85); ready, mergeable, and manually validated |
-| 6 | [awesome-macOS](https://github.com/iCHAIT/awesome-macOS) | `Audio` | Website as primary link, source icon to GitHub; omit freeware badge | Ready |
-| 7 | [awesome-generative-ai Discoveries](https://github.com/steven2358/awesome-generative-ai/blob/main/DISCOVERIES.md#speech-to-text) | `Audio > Speech-to-text` | Add a concise project/service self-submission to `DISCOVERIES.md` | Ready |
-| 8 | [awesome-a11y](https://github.com/brunopulis/awesome-a11y) | `Assistive Technologies > Voice Control` | Add alphabetically and describe the motor-access benefit without claiming certification | Ready after accessibility copy review |
+| 6 | [awesome-macOS](https://github.com/iCHAIT/awesome-macOS) | `Productivity` | Website as primary link, source icon to GitHub; omit freeware badge | Submitted: [PR #967](https://github.com/iCHAIT/awesome-macOS/pull/967); ready, mergeable, and claim-safe |
+| 7 | [awesome-generative-ai Discoveries](https://github.com/steven2358/awesome-generative-ai/blob/main/DISCOVERIES.md#speech-to-text) | `Audio > Speech-to-text` | Add a concise project/service self-submission to `DISCOVERIES.md` | Submitted: [PR #1173](https://github.com/steven2358/awesome-generative-ai/pull/1173); link check awaits maintainer approval to run |
+| 8 | [awesome-a11y](https://github.com/brunopulis/awesome-a11y) | `Assistive Technologies > Voice Control` | Describe supported voice input without claiming certification or universal accessibility | Submitted: [PR #264](https://github.com/brunopulis/awesome-a11y/pull/264); ready, mergeable, and link-checked |
 
 ## Second Wave
 
 | List | Placement | Notes |
 | --- | --- | --- |
-| [awesome-free-apps](https://github.com/Axorax/awesome-free-apps) | `README.md > Utility` and `MOBILE.md > Utility` | Disclose the permanent free tier; do not call the product completely free |
-| [awesome-opensource-ai](https://github.com/alvinreal/awesome-opensource-ai) | `Applications & Interfaces > Desktop & Mobile AI Apps` | Add repository link, factual sentence, star badge, and run its validator |
-| [macos-apps](https://github.com/linsa-io/macos-apps) | `Audio` | Simple alphabetical name/link/description entry |
-| [thechampagne/awesome-windows](https://github.com/thechampagne/awesome-windows) | `Productivity` | Website as primary link and open-source icon to GitHub |
-| [Awesome-AITools](https://github.com/ikaijua/Awesome-AITools) | `Speech Recognition` | Add a Name / Description / Links / Fees row |
+| [awesome-free-apps](https://github.com/Axorax/awesome-free-apps) | `README.md > Utility` and `MOBILE.md > Utility` | Submitted claim-safe desktop and mobile entries: [PR #235](https://github.com/Axorax/awesome-free-apps/pull/235); ready and mergeable |
+| [awesome-opensource-ai](https://github.com/alvinreal/awesome-opensource-ai) | `Applications & Interfaces > Desktop & Mobile AI Apps` | Submitted and locally validated: [PR #649](https://github.com/alvinreal/awesome-opensource-ai/pull/649); CI awaits maintainer approval to run |
+| [macos-apps](https://github.com/linsa-io/macos-apps) | `Audio` | Existing owner submission refreshed with claim-safe wording: [PR #45](https://github.com/linsa-io/macos-apps/pull/45) |
+| [thechampagne/awesome-windows](https://github.com/thechampagne/awesome-windows) | `Productivity` | Submitted website and open-source source badge entry: [PR #39](https://github.com/thechampagne/awesome-windows/pull/39) |
+| [Awesome-AITools](https://github.com/ikaijua/Awesome-AITools) | `Speech Recognition` | Submitted matching English/Chinese entries and required changelog item: [PR #755](https://github.com/ikaijua/Awesome-AITools/pull/755); both checks pass |
 | [eudk/awesome-ai-tools](https://github.com/eudk/awesome-ai-tools) | Existing entry | Submitted focused cross-platform maintenance update: [PR #490](https://github.com/eudk/awesome-ai-tools/pull/490) |
+| [Mac-Menubar-Megalist](https://github.com/SKaplanOfficial/Mac-Menubar-Megalist) | `Utilities > Text > Speech` | Submitted one current menu-bar app entry: [PR #42](https://github.com/SKaplanOfficial/Mac-Menubar-Megalist/pull/42); ready, mergeable, and markdownlint-clean |
+| [awesome-swift](https://github.com/matteocrippa/awesome-swift) | `contents.json`, category `ai` | Submitted one schema-valid Swift project object: [PR #1985](https://github.com/matteocrippa/awesome-swift/pull/1985); ready and mergeable |
 
 The other `awesome-windows` list at
 [`0PandaDEV/awesome-windows`](https://github.com/0PandaDEV/awesome-windows)
@@ -76,5 +78,31 @@ submit that entry manually.
 - [awesome-swift-macos-apps PR #85](https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/85):
   bilingual Audio entries submitted with repository activity badges on August
   2, 2026.
+- [awesome-macOS PR #967](https://github.com/iCHAIT/awesome-macOS/pull/967):
+  new claim-safe Productivity entry submitted on August 2, 2026.
+- [awesome-generative-ai PR #1173](https://github.com/steven2358/awesome-generative-ai/pull/1173):
+  one Discoveries speech-to-text entry submitted on August 2, 2026.
+- [macos-apps PR #45](https://github.com/linsa-io/macos-apps/pull/45):
+  existing owner submission refreshed and rebased on August 2, 2026.
+- [awesome-windows PR #39](https://github.com/thechampagne/awesome-windows/pull/39):
+  one claim-safe Windows Productivity entry submitted on August 2, 2026.
+- [awesome-opensource-ai PR #649](https://github.com/alvinreal/awesome-opensource-ai/pull/649):
+  one Desktop & Mobile AI Apps entry submitted and validated with zero local
+  errors or warnings on August 2, 2026.
+- [awesome-a11y PR #264](https://github.com/brunopulis/awesome-a11y/pull/264):
+  one Voice Control row submitted with explicit limits on accessibility and
+  open-source claims on August 2, 2026.
+- [Awesome-AITools PR #755](https://github.com/ikaijua/Awesome-AITools/pull/755):
+  matching English and Chinese Speech Recognition entries submitted with both
+  repository checks passing on August 2, 2026.
+- [awesome-free-apps PR #235](https://github.com/Axorax/awesome-free-apps/pull/235):
+  matching Utility entries for desktop and mobile submitted on August 2, 2026.
+- [Mac-Menubar-Megalist PR #42](https://github.com/SKaplanOfficial/Mac-Menubar-Megalist/pull/42):
+  one Speech entry submitted after verifying the current macOS menu-bar
+  implementation on August 2, 2026.
+- [awesome-swift PR #1985](https://github.com/matteocrippa/awesome-swift/pull/1985):
+  one schema-valid AI project object submitted and catalog-validated on August
+  2, 2026.
 
-All four pull requests disclose the project affiliation and AI assistance.
+All fourteen current pull requests disclose the project affiliation and AI
+assistance.

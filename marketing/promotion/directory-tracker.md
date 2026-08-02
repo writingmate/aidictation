@@ -6,10 +6,12 @@ Copy source: [`submission-pack.md`](submission-pack.md)
 
 Machine-readable companion: [`directory-submissions.csv`](directory-submissions.csv)
 
-No directory submission was finalized in this run. The free Launching Next form
-is fully prepared in the preserved Chrome tab, but its final arithmetic Quick
-Check is a CAPTCHA that requires the owner to complete and submit. Awesome-list
-pull requests are tracked separately in `awesome-list-targets.md`.
+LibHunt and freshcode.club now have verified live AI Dictation pages. SaaSHub
+ownership is verified and its unsupported copy and old repository URL were
+replaced. LocalAlternative, Open Source Startups, and NeuronFeed accepted
+editorial-review submissions. The free Launching Next and FOSShub forms remain
+prepared in preserved browser tabs but require human CAPTCHA checks.
+Awesome-list pull requests are tracked separately in `awesome-list-targets.md`.
 
 ## Status and evidence rules
 
@@ -18,6 +20,7 @@ pull requests are tracked separately in `awesome-list-targets.md`.
 - `LIVE—CLAIM / UPDATE`: an existing listing needs owner verification and factual copy changes.
 - `READY`: the route is available, but a human still needs to submit it.
 - `PREPARED—HUMAN CHECK`: the form is filled and awaits a required CAPTCHA or equivalent owner action.
+- `SUBMITTED—REVIEW`: the destination confirmed receipt and editorial review is pending.
 - `RESEARCH / ASSET`: a valid target needs account, packaging, ownership, or media work first.
 - `BLOCKED`: a concrete current blocker prevents submission.
 - `DEFER—PAID`: no suitable free route was found.
@@ -61,9 +64,11 @@ Presence and link evidence are separate:
 | --- | --- | --- | --- | --- | --- | --- |
 | Google Play | First-party app store | LIVE—MAINTAIN | https://play.google.com/store/apps/details?id=com.aidictation.app | https://play.google.com/console/ | Keep description, screenshots, privacy declarations, and release current through the owner account. | Live first-party listing verified; dofollow not applicable/not evaluated. |
 | AppSumo | Partner marketplace | LIVE—UPDATE | https://appsumo.com/products/ai-dictation/ | Existing partner account; no public edit form captured | Listing is still positioned primarily as a Mac product. Request/update cross-platform copy and current privacy wording through the existing partner relationship. Do not copy its prices, metrics, language counts, or accuracy claims elsewhere. | Live indexed marketplace page verified; dofollow not verified. |
-| APKPure | Third-party Android mirror | LIVE—UPDATE | https://apkpure.com/ai-dictation/com.aidictation.app | No verified publisher-claim route captured | Research found a stale `0.0.29` mirror. Confirm ownership/claim options before providing files. Point all official links to Google Play. | Existing indexed mirror reported; dofollow not verified. |
+| APKPure | Third-party Android mirror | LIVE—UPDATE | https://apkpure.com/ai-dictation/com.aidictation.app | https://apkpure.com/request-update | Research found a stale `0.0.29` mirror, but the current browser safety policy blocks the official update route and prohibits alternate automation. The owner may use the official route manually; do not upload an unverified APK. | Existing indexed mirror verified; dofollow not verified. |
 | APKCombo | Third-party Android mirror | LIVE—UPDATE | https://apkcombo.com/ai-dictation/com.aidictation.app/ | No verified publisher-claim route captured | Research found a stale `0.0.29` mirror. Confirm whether it is store-synced before requesting an update. Do not upload an unverified APK. | Existing indexed mirror reported; dofollow not verified. |
-| SaaSHub | Software alternatives directory | LIVE—CLAIM / UPDATE | https://www.saashub.com/ai-dictation | https://www.saashub.com/verify/ai-dictation | Existing page is pending approval and contains stale or unsupported claims. Verify ownership with a domain email or owner login, then replace the copy with the claim-safe submission pack. | Existing live page verified; dofollow not verified. |
+| SaaSHub | Software alternatives directory | LIVE—MAINTAIN | https://www.saashub.com/ai-dictation | https://www.saashub.com/manage/ai-dictation/edit | Ownership was verified August 2. The public page now uses claim-safe cross-platform copy, and the managed GitHub URL points to `writingmate/aidictation`; monitor the remaining catalog-approval state. | Verified badge and corrected public copy are live; dofollow not verified. |
+| LibHunt | Open-source project catalog | LIVE—MAINTAIN | https://www.libhunt.com/r/aidictation | https://www.libhunt.com/repo/submit | Automatically approved August 2 with the canonical website, source, docs, MIT license label, and speech-to-text topics. A correction from `MIT` to `MIT License` is pending moderation so the OSI status renders correctly. | Public listing, website link, and source link verified; link attributes not separately verified. |
+| freshcode.club | FLOSS release catalog | LIVE—MAINTAIN | https://freshcode.club/projects/aidictation | https://freshcode.club/submit | Published August 2 with newly authored CC-BY-SA-compatible copy, the canonical homepage, MITL license, platform tags, and the public source URL in the description. | Public listing and direct homepage link verified; link attributes not separately verified. |
 | eudk/awesome-ai-tools | Community awesome list | LIVE—UPDATE | https://github.com/eudk/awesome-ai-tools | https://github.com/eudk/awesome-ai-tools/pull/490 | Cross-platform maintenance update submitted August 2, 2026. Track PR #490; do not add a duplicate. | Direct website link is visible in GitHub Markdown; no dofollow assertion. |
 
 ## Wave 1: free editorial and self-serve targets
@@ -94,25 +99,91 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 6 | Setapp | Curated Mac/iOS distribution | RESEARCH / ASSET | https://setapp.com/developers | Editorial approval and technical review precede distribution. The macOS path requires Setapp integration, a compliant bundle, and 1280×800-or-larger 16:10 screenshots; contact the developer team first. | Distribution target; dofollow not evaluated. |
 | 7 | Launching Next | Startup directory | PREPARED—HUMAN CHECK | https://www.launchingnext.com/submit/ | Duplicate search passed and the free form is filled with audited copy, nine relevant tags, `AI Dictation Team`, and `support@aidictation.com`; newsletter is off and funding/budget fields are blank. Complete the arithmetic Quick Check in the preserved Chrome tab and submit without choosing the optional $99 route. | Dofollow not verified; no listing exists until editorial approval. |
 | 8 | AIxploria | AI directory | BLOCKED | https://www.aixploria.com/en/free-listing/ | The official page embeds Tally form `31KOPg`, but both the direct and embedded form currently return 404. Recheck the official page later; do not seek an unofficial route. | No AI Dictation listing inspected; dofollow not verified. |
-| 9 | FOSShub | Free/open-source software hosting | READY | https://www.fosshub.com/signup.html | Accepts open-source or freeware projects subject to review. Decide whether FOSShub will host binaries or redirect to the existing service and commit to maintaining release files. | Dofollow not verified. |
+| 9 | FOSShub | Free/open-source software hosting | PREPARED—HUMAN CHECK | https://www.fosshub.com/signup.html | Application is filled for a redirect to the existing service with unknown storage/bandwidth estimates. Complete the reCAPTCHA in the preserved in-app-browser tab, then request the free FOSShub account. | Dofollow not verified; no listing exists until approval. |
 | 10 | Scoop Extras | Windows package manager | RESEARCH / ASSET | https://github.com/ScoopInstaller/Extras | Build and test a JSON manifest against a stable Windows asset. Include version, description, homepage, license, architecture, URL, SHA-256 hash, shortcuts/uninstaller, and update logic as applicable, then open a PR. | Package distribution target; dofollow not applicable. |
 | 11 | Chocolatey Community Repository | Windows package manager | RESEARCH / ASSET | https://docs.chocolatey.org/en-us/create/create-packages/ | Create, test, publish, and continuously maintain a package. Confirm redistribution rights and stable installer/checksum behavior before moderation. | Package distribution target; dofollow not applicable. |
-| 12 | FileHorse | Windows/macOS download catalog | RESEARCH / ASSET | https://www.filehorse.com/submit/ | Form asks for version, website, direct installer, license, icon, screenshots, description, and optional video. Submit only stable signed builds and canonical URLs. | Dofollow not verified. |
+| 12 | FileHorse | Windows/macOS download catalog | BLOCKED | https://www.filehorse.com/submit/ | No duplicate was found, but policy preflight failed: the Windows 0.0.5 installer lacks Authenticode, the macOS 0.0.97 DMG container is unsigned despite its inner app being notarized, `/terms` is missing, no full mailing address is published, and both platform contact forms require reCAPTCHA. Fix signing and policy evidence before asking the owner to accept FileHorse's mirroring/asset grant. | Dofollow not verified. |
 | 13 | SnapFiles | Windows download catalog | RESEARCH / ASSET | https://www.snapfiles.com/feedback/ | The public page directs developers to a Developer Account form and also offers `Suggest a software product`. Create/verify the developer account and provide a stable Windows build. | Dofollow not verified. |
 | 14 | MajorGeeks | Curated Windows download catalog | BLOCKED | Closed form: https://www.majorgeeks.com/files/submitfile · contact instructions: https://www.majorgeeks.com/content/page/aboutcontact_us.html | The submission form currently says new file submissions are not accepted. Current contact guidance allows editorial email, but acceptance is highly selective. Recheck later rather than repeatedly emailing. | No listing; dofollow not verified. |
 | 15 | FilePuma | Windows download catalog | RESEARCH / ASSET | https://www.filepuma.com/submit_program/ | Provide the current version, canonical website, and direct stable installer. The directory may link to or host submitted files and reserves editorial approval; review those terms first. | Dofollow not verified. |
 | 16 | IzzyOnDroid | F-Droid-compatible Android repository | BLOCKED | Policy: https://izzyondroid.org/docs/general/AppInclusionPolicy/ · tracker entry point: https://izzyondroid.org/about/ | Requires FOSS licensing, public source, and an APK attached to a current tagged release; its new-app guidance also calls out a sub-30 MB APK check. The current Android release/dependency shape must be audited before filing in the linked Codeberg tracker. | Distribution target; dofollow not applicable. |
 | 17 | Trustpilot | Review/company profile | RESEARCH / ASSET | https://business.trustpilot.com/signup | Search for an existing company page first. Claim/create only through the official business account and never seed, buy, gate, or incentivize reviews. | Profile presence is not a dofollow claim. |
 | 18 | Open Hub | Open-source project index | READY | https://openhub.net/p/new | Free account/login required. Add the canonical repository, then verify repository import and project ownership. | Indexed project profile does not imply dofollow. |
-| 19 | LocalAlternative | Local AI directory | READY | https://www.localalternative.io/submit | Fits only if offline/local behavior is described accurately. Form requires name, URL, tagline, description, and email; GitHub is optional but recommended. Do not call the cloud-cleanup workflow fully local. | Dofollow not verified. |
+| 19 | LocalAlternative | Local AI directory | SUBMITTED—REVIEW | https://www.localalternative.io/submit | Submitted August 2 after an exact duplicate search returned zero results. The accepted copy states that offline recognition is device-dependent, Apple offline mode requires macOS 14+ or iOS 17+, cloud cleanup can send text, and features vary by platform. The site confirmed receipt and estimated review within 48 hours. | No published listing yet; dofollow not verified. |
 | 20 | Privacy Guides Tool Suggestions | Community editorial review | BLOCKED | https://discuss.privacyguides.net/c/site-development/tool-suggestions/9 | Not a promotional form. A good-faith recommendation must address threat model, data flows, funding, reproducibility, security posture, and independent evidence. Current mixed local/cloud behavior and missing independent audit make a promotional pitch inappropriate. | Editorial recommendation target; no backlink promise. |
 | 21 | Microlaunch | Launch platform | READY | https://microlaunch.net/ | A free Basic Launch queue is available after login; the optional Pro launch is paid. Use only the free route unless a budget is explicitly approved. | Dofollow not verified. |
+| 22 | Open Source Startups | Open-source directory | SUBMITTED—REVIEW | https://www.opensourcestartups.com/submit | Submitted August 2 with the canonical repository, website, AI & ML category, and claim-safe product copy. The site confirmed receipt and said the project would appear after approval. | No published listing yet; dofollow not verified. |
+| 23 | NeuronFeed | AI startup directory | SUBMITTED—REVIEW | https://neuronfeed.com/submit/startup | Submitted August 2 with claim-safe copy and no optional location, founding, or traction claims. The site confirmed admin notification and review within 48 hours. | No published listing yet; published outbound links are currently nofollow. |
+| 24 | OpenSaaSDirectory | Open-source SaaS directory | BLOCKED | https://opensaas.directory/submit-project | One carefully filled attempt returned to the form without a receipt, confirmation, or visible listing. Do not resubmit until the destination can confirm whether the first request was recorded. | No listing or receipt verified. |
+| 25 | OpenAltFinder | Open-source alternatives directory | READY | https://openaltfinder.com/submit | Duplicate audit passed and the product fits as an open-source alternative to proprietary dictation tools, but Cloudflare Turnstile requires a human submission. | Published examples link to website and source; AI Dictation is not yet listed. |
+
+## Current submission receipts
+
+### LocalAlternative — submitted August 2, 2026
+
+- Name: `AI Dictation`
+- Website: `https://aidictation.com`
+- Repository: `https://github.com/writingmate/aidictation`
+- Tagline: `Cross-platform voice-to-text with offline recognition on supported devices`
+- Contact: `support@aidictation.com`
+- Description: `AI Dictation is a cross-platform voice-to-text app with MIT-licensed native client source. It provides offline speech recognition on supported devices and optional cloud transcription and cleanup. On Apple platforms, offline recognition requires macOS 14+ or iOS 17+. Cloud cleanup can still send transcript text when enabled, so users who need an on-device workflow must disable cloud features. Feature availability varies by platform.`
+- Receipt: `Thank you! Your tool has been submitted for review.` The page said review would occur within 48 hours.
+
+### SaaSHub — verified and corrected August 2, 2026
+
+The domain-email verification link was opened and SaaSHub confirmed ownership.
+The public page now identifies AI Dictation as open source and uses the
+claim-safe tagline and description. The managed GitHub URL was corrected from
+`writingmate/whispermate` to `writingmate/aidictation`; the App Store and Google
+Play URLs were also added. The page remains in SaaSHub's catalog-approval queue.
+
+### LibHunt — live August 2, 2026
+
+- Listing: https://www.libhunt.com/r/aidictation
+- Receipt: `Thanks for your submission! It's been approved automatically.`
+- Verified fields: canonical website, source repository, docs, Swift, MIT,
+  self-hosted/standalone status, and eight relevant topics.
+- Follow-up: a moderated edit requests the canonical `MIT License` label because
+  the initial free-text `MIT` value rendered an incorrect OSI-status sentence.
+
+### freshcode.club — live August 2, 2026
+
+- Listing: https://freshcode.club/projects/aidictation
+- Receipt: `Submitted — Project and release information have been updated.`
+- The listing has the canonical homepage, MITL license, desktop/mobile/platform
+  tags, and newly authored copy that was explicitly submitted under CC-BY-SA.
+
+### Open Source Startups — submitted August 2, 2026
+
+The site confirmed `Submission received!` and said AI Dictation would appear in
+the directory after review. The submission used the canonical repository and
+website, the `AI & ML` category, and claim-safe cross-platform copy.
+
+### NeuronFeed — submitted August 2, 2026
+
+The site confirmed `Submission received — admin notification sent` and a
+48-hour human review. Optional headquarters, founding-year, funding, and
+traction fields were left blank rather than inferred.
+
+### OpenSaaSDirectory — attempted, no receipt
+
+The form was filled once with the canonical repository and claim-safe copy. It
+returned to its initial state without a confirmation, visible error, or listing,
+so this tracker does not count it as submitted and prohibits a blind retry.
+
+### FOSShub — prepared, not submitted
+
+The preserved form uses `AI Dictation Team`, `support@aidictation.com`,
+`https://aidictation.com`, unknown storage and bandwidth estimates, and the
+“redirect it to my existing service” option. The required reCAPTCHA remains
+unresolved, so no application receipt exists.
 
 ## Deferred and rejected targets
 
 | Target | Status | Form / information URL | Reason to defer or reject | Link evidence |
 | --- | --- | --- | --- | --- |
 | F-Droid | BLOCKED | https://gitlab.com/fdroid/rfp/-/issues/new | Current Android delivery depends on Google Play asset delivery. Resolve the reproducible FOSS build/distribution path before opening an RFP. | Distribution target; dofollow not applicable. |
+| OpenSourceFest | BLOCKED | https://opensourcefest.org/submit | Final endpoint verification found that the live form posts to the placeholder address `your-email@opensourcefest.org`. Its FormSubmit activation screen therefore does not prove delivery to the directory; no submission is recorded. | No listing or valid receipt; dofollow not evaluated. |
 | Homebrew Cask | BLOCKED | https://docs.brew.sh/Adding-Software-to-Homebrew | The project does not currently meet Homebrew's documented popularity-policy thresholds captured in the research. Recheck later; do not manufacture stars, forks, or watchers. | Package distribution target; dofollow not applicable. |
 | G2 | NO FIT | https://sell.g2.com/ | Research found the current consumer app outside the intended B2B software-review fit. Revisit only if a real business/team product emerges. | No listing; dofollow not verified. |
 | Capterra | NO FIT | https://www.capterra.com/vendors/sign-up | Research found the current consumer app outside the intended B2B software-directory fit. | No listing; dofollow not verified. |
@@ -145,9 +216,11 @@ For every manual submission:
 
 - Cross-platform hero and current Windows/macOS store screenshots are missing.
 - Several distribution targets need stable versioned package URLs, checksums, signing/notarization, and owner accounts.
+- FileHorse specifically requires a trusted Windows Authenticode signature, a signed macOS DMG container, a valid public mailing address, and applicable terms/EULA; two human reCAPTCHAs remain after those fixes.
 - Android FOSS stores need a release APK and dependency/delivery audit.
 - No budget is authorized for paid listings, expedited review, reciprocal-link placement, or directory packages.
 - The current user browser policy explicitly blocks Future Tools, Uneed, and
-  Tally; do not retry those domains or use an alternate browser/submission path
-  unless the owner changes that preference.
+  Tally. It also blocked APKPure's official update route in this run. Do not
+  retry those domains or use an alternate browser/submission path unless the
+  owner changes that preference.
 - No external submission should quote website metrics, discounts, language counts, compliance labels, rankings, or comparative performance without dated primary evidence.

@@ -8,18 +8,18 @@ Machine-readable companion: [`directory-submissions.csv`](directory-submissions.
 
 LibHunt and freshcode.club now have verified live AI Dictation pages. SaaSHub
 ownership is verified and its unsupported copy and old repository URL were
-replaced. LocalAlternative, Open Source Startups, and NeuronFeed accepted
-editorial-review submissions. The OpenAPK issue, Obtainium PR #1570, and Open
-Source Observer PR #1140 are open for maintainer review. WinGet PR #411291 adds
-the current official Windows release and is awaiting Microsoft's CLA plus
-repository validation. A factual suggestion was emailed to the Open Source
-Software Directory editor; none of those pending submissions is counted as a
-live listing yet. Internet Intro acknowledged a submission made before its
-anti-campaigning rule was confirmed, so that receipt is recorded as a rule
-mismatch and expected editorial rejection rather than a campaign win. The free
-Launching Next and FOSShub forms remain prepared in preserved browser tabs but
-require human CAPTCHA checks. Awesome-list pull requests are tracked separately
-in `awesome-list-targets.md`.
+replaced. LocalAlternative, Open Source Startups, NeuronFeed, Fossies, and
+ListAi.cc accepted editorial-review submissions. The OpenAPK issue, Obtainium
+PR #1570, Open Source Observer PR #1140, OSSDrop PR #3, and Does It ARM issue
+#1083 are open for maintainer review. WinGet PR #411291 adds the current official
+Windows release; Microsoft's full validation pipeline and the CLA check passed,
+so maintainer review and merge are the remaining gates. None of those pending
+submissions is counted as a live listing yet. Internet Intro acknowledged a
+submission made before its anti-campaigning rule was confirmed, so that receipt
+is recorded as a rule mismatch and expected editorial rejection rather than a
+campaign win. The free Launching Next and FOSShub forms remain prepared in
+preserved browser tabs but require human CAPTCHA checks. Awesome-list pull
+requests are tracked separately in `awesome-list-targets.md`.
 
 ## Status and evidence rules
 
@@ -99,7 +99,7 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 6 | MacUpdate | macOS software catalog | RESEARCH / ASSET | https://www.macupdate.com/help/submit-app | Follow the new-app guidelines. Provide a current signed/notarized macOS build, stable download URL, icon, and larger current screenshots. | Dofollow not verified. |
 | 7 | Uptodown | Multi-platform app distribution | RESEARCH / ASSET | https://en.uptodown.com/developers-console | Create/verify the developer account and package ownership. Decide whether to sync the Google Play package or provide a signed publisher build. | Dofollow not verified. |
 | 8 | SourceForge | Project hosting/distribution | READY | https://sourceforge.net/create/ | Create a project only if the team will maintain it. Prefer importing/mirroring the canonical Git repository and release files rather than creating a disconnected code history. | Dofollow not verified. |
-| 9 | WinGet Community Repository | Windows package manager | SUBMITTED—REVIEW | https://github.com/microsoft/winget-pkgs/pull/411291 | PR #411291 adds `WritingMate.AIDictation` `0.0.5` using the official versioned Inno installer and verified SHA-256. All three manifest files parse and pass Microsoft's 1.12 JSON schemas. The owner must read and answer Microsoft's CLA bot with the applicable personal or employer form; repository installer validation and maintainer review remain pending. No local Windows install, uninstall, upgrade, SmartScreen, or security result is claimed. | Manifest PR is open and mergeable, but no live WinGet catalog entry is claimed before merge and publication. |
+| 9 | WinGet Community Repository | Windows package manager | SUBMITTED—REVIEW | https://github.com/microsoft/winget-pkgs/pull/411291 | PR #411291 adds `WritingMate.AIDictation` `0.0.5` using the official versioned Inno installer and verified SHA-256. All three manifest files pass Microsoft's 1.12 schemas, the full Azure validation pipeline succeeded, and the CLA check is green. Maintainer review and merge remain pending. No local Windows install, uninstall, upgrade, SmartScreen, or independent security result is claimed. | The manifest PR passed repository validation, but no live WinGet catalog entry is claimed before merge and publication. |
 | 10 | There's An AI For That (TAAFT) | AI directory | BLOCKED | Paid/editorial page: https://theresanaiforthat.com/get-featured/ · former OSS form: https://tally.so/r/mRWbdK | The open-source/free Tally form currently says it is closed. Recheck for a reopened free route; do not pay or submit through another route without a budget decision. | No AI Dictation listing inspected; dofollow not verified. |
 
 ## Wave 2: distribution, company-profile, and longer-lead targets
@@ -140,6 +140,10 @@ The root MIT license and third-party notices are live on the default branch. Sea
 | 33 | Dir Hub | Indie app directory | READY | https://dirhub.io/submit | No exact duplicate was found. The owner must sign in with Google and use the free listing route; do not choose paid featured placement without a budget decision. | No AI Dictation listing exists; dofollow not verified. |
 | 34 | Open Assistive | Assistive-technology catalog | BLOCKED | https://openassistive.org/add/ | The official intake API returned HTTP 500 even when tested with a known existing project, and final submission also requires reCAPTCHA. Retry only after the API works, then complete the human check without implying certification. | No submission, listing, or link is claimed. |
 | 35 | Open Source Software Directory | Open-source application directory | SUBMITTED—REVIEW | https://opensourcesoftwaredirectory.com/about | A concise factual suggestion was sent from the connected owner mailbox to the editor address published on the live directory. Wait for editorial review, then verify any published copy and links. | The sent email is verified, but no AI Dictation listing is published or claimed; dofollow not verified. |
+| 36 | Fossies | FOSS source archive | SUBMITTED—REVIEW | https://fossies.org/comments.html | A factual missing-project suggestion was sent August 2 from the connected owner mailbox with the canonical website, source archive, release, license, third-party notices, and constrained offline/cloud wording. Wait for the editor's response. | The `SENT` email record and official suggestion route are verified, but no Fossies listing or outbound link is published or claimed. |
+| 37 | ListAi.cc | AI directory | SUBMITTED—REVIEW | https://listai.cc/submit | The free first-party endpoint accepted the claim-safe Productivity submission with `HTTP 200` and `{"success":true}` after exact duplicate searches returned no listing. Wait for human review, then inspect the published copy and link. | No AI Dictation page exists yet; current published examples use direct product links, but AI Dictation link attributes cannot be verified before publication. |
+| 38 | OSSDrop | Open-source project catalog | SUBMITTED—REVIEW | https://github.com/OSSDrop/OSSDrop/pull/3 | PR #3 adds exactly one MIT-licensed Productivity entry with the canonical website and repository. JSON, uniqueness, description-length, and diff checks passed; track maintainer review. | The PR is open and mergeable, but no generated catalog page or outbound link is claimed before merge and publication. |
+| 39 | Does It ARM | Apple-silicon compatibility catalog | SUBMITTED—REVIEW | https://github.com/ThatGuySam/doesitarm/issues/1083 | Issue #1083 requests a native Apple-silicon listing based on the stable `0.0.97` universal binary, Developer ID signature, stapled notarization, and Gatekeeper acceptance. Track maintainer review. | The issue is open, but no published compatibility page or outbound-link attribute is claimed. |
 
 ## Current submission receipts
 
@@ -152,15 +156,18 @@ The root MIT license and third-party notices are live on the default branch. Sea
   `762A69C6917DF39B13DBB3B2F9C88DEC5DE8A0CADF443CC25376FE359D9252A4`.
 - Local evidence: YAML parsing, all three official JSON schemas, metadata URL
   responses, the downloaded checksum, and `git diff --check` passed.
+- Repository evidence: Microsoft's Azure pipeline completed every manifest,
+  catalog, installer, installation, metadata, and post-validation phase
+  successfully. The `license/cla` check also completed successfully after the
+  owner posted the requested employer-form response.
 - Limits: no local Windows Sandbox or `winget install` result is claimed. The
-  repository's automated and manual Windows checks must validate installation,
-  uninstall, upgrade, SmartScreen, and security behavior.
+  successful repository pipeline is not represented as a local uninstall,
+  upgrade, SmartScreen, or independent security result.
 - Signing caveat: the installer has no Authenticode signature. That is not a
   deterministic WinGet policy rejection for this EXE format, but it can still
   trigger SmartScreen or security-scan review.
-- Human gate: the owner must read Microsoft's CLA comment and reply with the
-  applicable personal or employer form. This tracker does not accept legal
-  terms or infer employer authority on the owner's behalf.
+- Remaining gate: maintainer review, merge, and catalog publication. No live
+  WinGet listing or install command is claimed before those steps complete.
 
 ### LocalAlternative — submitted August 2, 2026
 
@@ -266,6 +273,45 @@ website and repository, current platform scope, MIT client-source statement,
 offline/cloud limitation, project affiliation, and AI-assistance disclosure.
 The send operation returned a Gmail `SENT` record. Editorial acceptance and a
 published listing remain unverified, so no placement or backlink is claimed.
+
+### Fossies — suggested August 2, 2026
+
+The live Fossies comments page explicitly invites suggestions for useful FOSS
+projects missing from its archive. A factual suggestion was sent to
+`info@fossies.org` from the connected owner mailbox with the canonical homepage,
+repository, `v0.0.97` source archive and release, MIT license, third-party
+notices, platform scope, and constrained offline/cloud wording. Gmail message
+`19fc3791fad457be` is labeled `SENT`. Editorial acceptance and a published
+Fossies page remain unverified, so no placement or backlink is claimed.
+
+### ListAi.cc — submitted August 2, 2026
+
+The free first-party form submitted `AI Dictation` in the Productivity category
+with the canonical website and a claim-safe description covering the public MIT
+client source, supported platforms, device-dependent offline recognition, and
+optional cloud transcription and cleanup. Exact searches returned no existing
+listing. The endpoint returned `HTTP 200` with `{"success":true}`. Human review
+is pending; no published page or link attribute is claimed.
+
+### OSSDrop — PR submitted August 2, 2026
+
+- Submission: https://github.com/OSSDrop/OSSDrop/pull/3
+- Scope: one `data/tools.json` Productivity entry with the canonical website,
+  repository, MIT license, and a 102-character factual description.
+- Validation: JSON parsing, exact duplicate count, description length, and
+  `git diff --check` passed. The PR is open and mergeable with no configured
+  checks or human feedback. No generated catalog page is claimed before merge.
+
+### Does It ARM — issue submitted August 2, 2026
+
+- Submission: https://github.com/ThatGuySam/doesitarm/issues/1083
+- Evidence: the stable `AIDictation-v0.0.97.dmg` contains a universal
+  `x86_64 arm64` main executable, has a Developer ID signature and stapled
+  notarization ticket, and is accepted by Gatekeeper as a Notarized Developer
+  ID build.
+- Limit: the request claims native Apple-silicon architecture only, not a
+  performance benchmark. The issue is open; no live compatibility page or
+  backlink is claimed before editorial acceptance.
 
 ### FOSShub — prepared, not submitted
 

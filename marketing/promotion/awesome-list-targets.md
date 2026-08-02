@@ -61,6 +61,13 @@ offline on every platform.
 | [Awesome-Whisper-Apps](https://github.com/danielrosehill/Awesome-Whisper-Apps) | `Windows System Integration` | Submitted one Windows entry: [PR #25](https://github.com/danielrosehill/Awesome-Whisper-Apps/pull/25); ready and mergeable, with GitGuardian passing |
 | [Top AI Tools](https://github.com/ghimiresunil/Top-AI-Tools) | `Productivity` | Submitted one claim-safe open-source voice-typing row: [PR #589](https://github.com/ghimiresunil/Top-AI-Tools/pull/589); ready, clean, and mergeable |
 
+## Fourth Wave
+
+| List | Placement | Notes |
+| --- | --- | --- |
+| [awesome-openai-whisper](https://github.com/ancs21/awesome-openai-whisper) | `Applications` | Submitted one open-source cross-platform voice-to-text entry: [PR #21](https://github.com/ancs21/awesome-openai-whisper/pull/21); ready, clean, and mergeable |
+| [awesome-foss-alternatives](https://github.com/sfermigier/awesome-foss-alternatives) | `Productivity > Voice Dictation` | Submitted a focused voice-dictation category and one factual alternative entry: [PR #48](https://github.com/sfermigier/awesome-foss-alternatives/pull/48); ready, clean, and mergeable |
+
 ## Catalog issue submissions
 
 These open catalog requests use each repository's issue-based intake route and
@@ -181,9 +188,16 @@ submit that entry manually.
 - [Top AI Tools PR #589](https://github.com/ghimiresunil/Top-AI-Tools/pull/589):
   one Productivity row with claim-safe open-source and offline wording submitted
   on August 2, 2026.
+- [awesome-openai-whisper PR #21](https://github.com/ancs21/awesome-openai-whisper/pull/21):
+  one Applications entry for the current cross-platform voice-to-text app
+  submitted on August 2, 2026.
+- [awesome-foss-alternatives PR #48](https://github.com/sfermigier/awesome-foss-alternatives/pull/48):
+  one focused Voice Dictation category and factual open-source alternative entry
+  submitted on August 2, 2026.
 
-All thirty current pull requests were re-audited on August 2, 2026. They
-remain open and mergeable, with no actionable human review feedback. Five
-first-time workflows still await maintainer approval to run, and two pull
-requests still require maintainer branch-protection review. Every pull request
-discloses the project affiliation and AI assistance.
+All thirty-two current pull requests were re-audited on August 2, 2026. They
+remain open and mergeable, with no actionable human review feedback. Twenty-five
+have a clean merge state, five first-time workflows still await maintainer
+approval to run, and two pull requests still require maintainer
+branch-protection review. Every pull request discloses the project affiliation
+and AI assistance.

@@ -94,7 +94,7 @@ try {
   if (isSelfTest) {
     await page.goto("about:blank");
     captureCallback(
-      "aidictation://auth-callback%zz#access_token=synthetic-access&refresh_token=synthetic-refresh",
+      "aidictation://auth-callback[#access_token=synthetic-access&refresh_token=synthetic-refresh",
     );
     if (capturedCallback) {
       throw new Error("Custom-protocol callback capture accepted a malformed callback");

@@ -3,7 +3,8 @@ param(
     [string]$AppPath,
     [Parameter(Mandatory = $true)]
     [string]$ExpectedVersion,
-    [string]$ReportDir = ""
+    [string]$ReportDir = "",
+    [switch]$StructureOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -285,6 +286,11 @@ try {
     $env:AUTH_WEB_URL = $releaseAuthWebUrl
 }
 
+if ($StructureOnly) {
+    Write-Host "PASS: packaged version and account-service configuration validated"
+    return
+}
+
 $testEmail = $env:AIDICTATION_RELEASE_TEST_EMAIL
 $testPassword = $env:AIDICTATION_RELEASE_TEST_PASSWORD
 if (-not $testEmail -or -not $testPassword) {
@@ -336,7 +342,8 @@ try {
     Start-Sleep -Milliseconds 800
     $header = ConvertTo-Base64Url -Value '{"alg":"none","typ":"JWT"}'
     $expiresAt = [DateTimeOffset]::UtcNow.AddHours(1).ToUnixTimeSeconds()
-    $payload = ConvertTo-Base64Url -Value ("{\"exp\":$expiresAt}")
+    $payloadJson = @{ exp = $expiresAt } | ConvertTo-Json -Compress
+    $payload = ConvertTo-Base64Url -Value $payloadJson
     $env:SUPABASE_URL = "http://127.0.0.1:$stubPort"
     $env:SUPABASE_ANON_KEY = "release-validation"
     $env:AUTH_WEB_URL = "http://127.0.0.1:$stubPort/auth"

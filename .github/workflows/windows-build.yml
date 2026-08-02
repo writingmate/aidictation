@@ -106,6 +106,23 @@ jobs:
         -p:IncludeNativeLibrariesForSelfExtract=true
         -p:EnableCompressionInSingleFile=true
 
+    - name: Validate release script and packaged configuration
+      shell: pwsh
+      env:
+        SUPABASE_URL: https://aidictation.com
+        SUPABASE_ANON_KEY: public-anon-key
+        AUTH_WEB_URL: https://aidictation.com/auth
+      run: |
+        $appPath = Join-Path "${{ env.PUBLISH_DIR }}" "AIDictation.exe"
+        $version = [regex]::Match(
+          (Get-Item $appPath).VersionInfo.ProductVersion,
+          '^\d+\.\d+\.\d+'
+        ).Value
+        AIDictation.Windows/scripts/validate-release-auth.ps1 `
+          -AppPath $appPath `
+          -ExpectedVersion $version `
+          -StructureOnly
+
     - name: Smoke test published app
       shell: pwsh
       run: |

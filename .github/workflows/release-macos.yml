@@ -173,6 +173,11 @@ jobs:
       - name: Validate audio recovery contracts
         run: bash scripts/validate_apple_audio_recovery.sh
 
+      - name: Validate macOS UI contracts
+        run: |
+          swift -module-cache-path /tmp/aidictation-ui-contract-module-cache \
+            scripts/validate_macos_hotkey_options.swift
+
       - name: Resolve Swift package dependencies
         run: |
           xcodebuild -resolvePackageDependencies \

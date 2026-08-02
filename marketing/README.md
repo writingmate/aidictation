@@ -15,6 +15,15 @@ shipping behavior.
 - Every video is uploaded as **unlisted** first. It becomes public only after
   product-owner review and approval.
 
+## Repository Discovery
+
+The default branch uses a keyword-led root README, an accurate GitHub
+description, the canonical `https://aidictation.com` homepage, and all 20
+available repository-topic slots. The topic set covers the product's verified
+platforms, open-source license, speech-to-text use cases, offline recognition,
+personal vocabulary, and implementation languages. Last audited: August 2,
+2026.
+
 ## Directory and Awesome-List Program
 
 - [`promotion/submission-pack.md`](promotion/submission-pack.md) is the canonical

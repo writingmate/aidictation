@@ -43,6 +43,36 @@ offline on every platform.
 | [awesome-voice-ai](https://github.com/ALLBOTSIO/awesome-voice-ai) | `Speech-to-Text > Open Source` | Submitted one factual open-source speech-to-text row: [PR #22](https://github.com/ALLBOTSIO/awesome-voice-ai/pull/22); all five automated checks pass |
 | [awesome-foss-android-apps](https://github.com/ivon852/awesome-foss-android-apps) | `README.md > 輸入法` | Submitted one Traditional Chinese Android input-method row: [PR #3](https://github.com/ivon852/awesome-foss-android-apps/pull/3); ready, clean, and mergeable |
 
+## Third Wave
+
+| List | Placement | Notes |
+| --- | --- | --- |
+| [awesome-windows-foss](https://github.com/fithisux/awesome-windows-foss) | `Multimedia` | Submitted one Windows entry: [PR #6](https://github.com/fithisux/awesome-windows-foss/pull/6); ready, clean, and mergeable |
+| [abordage/awesome-mac](https://github.com/abordage/awesome-mac) | `Audio & Video > Utilities` | Submitted one schema-valid YAML entry: [PR #15](https://github.com/abordage/awesome-mac/pull/15); locally validated and mergeable, with the repository workflow awaiting maintainer approval to run |
+| [AndrewSB/awesome-macOS](https://github.com/AndrewSB/awesome-macOS) | `Apps` | Submitted one app entry: [PR #27](https://github.com/AndrewSB/awesome-macOS/pull/27); ready, clean, and mergeable |
+| [xyNNN/awesome-mac](https://github.com/xyNNN/awesome-mac) | `Productivity` | Submitted one claim-safe entry: [PR #39](https://github.com/xyNNN/awesome-mac/pull/39); ready, clean, and mergeable |
+| [awesome-productivity-tools](https://github.com/ProductivityDirectory/awesome-productivity-tools) | `AI Tools` | Earlier owner submission refreshed to remove stale pricing and platform claims: [PR #52](https://github.com/ProductivityDirectory/awesome-productivity-tools/pull/52); ready, clean, and mergeable |
+| [awesome-foss-ios-apps](https://github.com/ivon852/awesome-foss-ios-apps) | `輸入法` | Submitted one Traditional Chinese input-method row with App Store and source links: [PR #1](https://github.com/ivon852/awesome-foss-ios-apps/pull/1); ready, clean, and mergeable |
+| [Awesome-Android-Open-Source-Projects](https://github.com/binaryshrey/Awesome-Android-Open-Source-Projects) | `Productivity` | Submitted one project entry and the required contributor line: [PR #74](https://github.com/binaryshrey/Awesome-Android-Open-Source-Projects/pull/74); ready, clean, and mergeable |
+| [lukeslp/awesome-accessibility](https://github.com/lukeslp/awesome-accessibility) | Speech recognition and voice interaction | Submitted one limited, factual voice-interaction entry: [PR #49](https://github.com/lukeslp/awesome-accessibility/pull/49); ready and mergeable, with DCO passing and no actionable review feedback |
+| [awesome-voice-agents](https://github.com/yzfly/awesome-voice-agents) | Local dictation tools | Submitted one bilingual row: [PR #25](https://github.com/yzfly/awesome-voice-agents/pull/25); ready, clean, and mergeable |
+| [amitdev01/awesome-voice-ai](https://github.com/amitdev01/awesome-voice-ai) | `Vertical` | Submitted matching quick-list and detailed-section entries: [PR #14](https://github.com/amitdev01/awesome-voice-ai/pull/14); ready, clean, and mergeable |
+| [msb-msb/awesome-local-ai](https://github.com/msb-msb/awesome-local-ai) | `Voice & Multimodal` | Submitted one row limited to offline recognition on supported devices: [PR #28](https://github.com/msb-msb/awesome-local-ai/pull/28); ready, clean, and mergeable |
+| [Awesome-Whisper-Apps](https://github.com/danielrosehill/Awesome-Whisper-Apps) | `Windows System Integration` | Submitted one Windows entry: [PR #25](https://github.com/danielrosehill/Awesome-Whisper-Apps/pull/25); ready and mergeable, with GitGuardian passing |
+
+## Catalog issue submissions
+
+These open catalog requests use each repository's issue-based intake route and
+are not included in the awesome-list pull-request total:
+
+- [F3FFO/AndroidFossApps issue #38](https://github.com/F3FFO/AndroidFossApps/issues/38):
+  submitted through the official New App template with the Google Play link,
+  tagged-release APK availability, cloud-mode limitation, affiliation, and AI
+  assistance disclosed.
+- [nyas1/Material-You-app-list issue #659](https://github.com/nyas1/Material-You-app-list/issues/659):
+  submitted with `MD` and `FOSS` tags based on the current Material 3 UI and
+  static color scheme; it does not claim Material You support.
+
 The other `awesome-windows` list at
 [`0PandaDEV/awesome-windows`](https://github.com/0PandaDEV/awesome-windows)
 prohibits AI-authored contributions. A human project owner must write and
@@ -115,6 +145,41 @@ submit that entry manually.
 - [awesome-foss-android-apps PR #3](https://github.com/ivon852/awesome-foss-android-apps/pull/3):
   one Traditional Chinese input-method row submitted with source and Google
   Play links on August 2, 2026.
+- [awesome-windows-foss PR #6](https://github.com/fithisux/awesome-windows-foss/pull/6):
+  one Multimedia entry submitted on August 2, 2026.
+- [abordage/awesome-mac PR #15](https://github.com/abordage/awesome-mac/pull/15):
+  one locally validated Audio & Video utility entry submitted on August 2,
+  2026; its repository workflow still needs maintainer approval to run.
+- [AndrewSB/awesome-macOS PR #27](https://github.com/AndrewSB/awesome-macOS/pull/27):
+  one app entry submitted on August 2, 2026.
+- [xyNNN/awesome-mac PR #39](https://github.com/xyNNN/awesome-mac/pull/39):
+  one Productivity entry submitted on August 2, 2026.
+- [awesome-productivity-tools PR #52](https://github.com/ProductivityDirectory/awesome-productivity-tools/pull/52):
+  earlier owner submission refreshed with current cross-platform, open-source
+  wording on August 2, 2026.
+- [awesome-foss-ios-apps PR #1](https://github.com/ivon852/awesome-foss-ios-apps/pull/1):
+  one Traditional Chinese input-method row submitted with App Store and source
+  links on August 2, 2026.
+- [Awesome-Android-Open-Source-Projects PR #74](https://github.com/binaryshrey/Awesome-Android-Open-Source-Projects/pull/74):
+  one Productivity entry and the required contributor line submitted on August
+  2, 2026.
+- [lukeslp/awesome-accessibility PR #49](https://github.com/lukeslp/awesome-accessibility/pull/49):
+  one limited voice-interaction entry submitted with DCO passing on August 2,
+  2026.
+- [awesome-voice-agents PR #25](https://github.com/yzfly/awesome-voice-agents/pull/25):
+  one bilingual local-dictation row submitted on August 2, 2026.
+- [amitdev01/awesome-voice-ai PR #14](https://github.com/amitdev01/awesome-voice-ai/pull/14):
+  matching quick-list and detailed Vertical entries submitted on August 2,
+  2026.
+- [awesome-local-ai PR #28](https://github.com/msb-msb/awesome-local-ai/pull/28):
+  one Voice & Multimodal row with constrained offline wording submitted on
+  August 2, 2026.
+- [Awesome-Whisper-Apps PR #25](https://github.com/danielrosehill/Awesome-Whisper-Apps/pull/25):
+  one Windows System Integration entry submitted with GitGuardian passing on
+  August 2, 2026.
 
-All seventeen current pull requests disclose the project affiliation and AI
-assistance.
+All twenty-nine current pull requests were re-audited on August 2, 2026. They
+remain open and mergeable, with no actionable human review feedback. Four
+first-time workflows still await maintainer approval to run, and two pull
+requests still require maintainer branch-protection review. Every pull request
+discloses the project affiliation and AI assistance.

@@ -18,6 +18,11 @@ on:
       - 'AGENTS.md'
       - '.github/workflows/windows-build.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: Semver to validate without publishing (for example, 0.0.7)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -184,7 +189,10 @@ jobs:
   release:
     needs: [provenance, build]
     runs-on: windows-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')) ||
+      github.event_name == 'workflow_dispatch'
+    environment: release
     permissions:
       contents: write
     env:
@@ -211,11 +219,22 @@ jobs:
     - name: Verify release source
       shell: pwsh
       run: |
-        $tag = "${{ github.ref_name }}"
         $actualSha = (git rev-parse HEAD).Trim()
-        $tagSha = (git rev-list -n 1 "refs/tags/$tag").Trim()
-        if ($actualSha -ne $env:GITHUB_SHA -or $tagSha -ne $env:GITHUB_SHA) {
-          throw "Release checkout ($actualSha) or tag ($tagSha) does not match event commit $env:GITHUB_SHA."
+        if ($actualSha -ne $env:GITHUB_SHA) {
+          throw "Release checkout $actualSha does not match event commit $env:GITHUB_SHA."
+        }
+        if ($env:GITHUB_EVENT_NAME -eq "push") {
+          $tag = "${{ github.ref_name }}"
+          $tagSha = (git rev-list -n 1 "refs/tags/$tag").Trim()
+          if ($tagSha -ne $env:GITHUB_SHA) {
+            throw "Release tag $tagSha does not match event commit $env:GITHUB_SHA."
+          }
+        } else {
+          git fetch origin main --prune
+          $mainSha = (git rev-parse origin/main).Trim()
+          if ($env:GITHUB_REF -ne "refs/heads/main" -or $env:GITHUB_SHA -ne $mainSha) {
+            throw "Windows release preflight must run from current origin/main $mainSha."
+          }
         }
 
     - name: Setup .NET
@@ -227,10 +246,13 @@ jobs:
       id: version
       shell: pwsh
       run: |
-        $tag = "${{ github.ref_name }}"
-        $version = $tag -replace '^windows-v', ''
+        $version = if ($env:GITHUB_EVENT_NAME -eq "push") {
+          "${{ github.ref_name }}" -replace '^windows-v', ''
+        } else {
+          "${{ inputs.version }}"
+        }
         if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
-          throw "Windows release tags must look like windows-v0.0.1 or windows-v0.0.1.2"
+          throw "Windows release versions must look like 0.0.1 or 0.0.1.2"
         }
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
@@ -267,11 +289,13 @@ jobs:
           -ExpectedVersion $version
 
     - name: Create ZIP
+      if: github.event_name == 'push'
       shell: pwsh
       run: |
         Compress-Archive -Path ./release/* -DestinationPath ./AIDictation-Windows-v${{ steps.version.outputs.VERSION }}.zip
 
     - name: Create release checksums
+      if: github.event_name == 'push'
       shell: pwsh
       run: |
         $version = "${{ steps.version.outputs.VERSION }}"
@@ -286,6 +310,7 @@ jobs:
         Set-Content -Path ./SHA256SUMS.txt -Value $lines -Encoding ascii
 
     - name: Upload Release Artifact
+      if: github.event_name == 'push'
       uses: actions/upload-artifact@v4
       with:
         name: AIDictation-Windows-Release-v${{ steps.version.outputs.VERSION }}
@@ -293,6 +318,7 @@ jobs:
         retention-days: 90
 
     - name: Upload Release Installer Artifact
+      if: github.event_name == 'push'
       uses: actions/upload-artifact@v4
       with:
         name: AIDictation-Windows-Setup-v${{ steps.version.outputs.VERSION }}
@@ -300,6 +326,7 @@ jobs:
         retention-days: 90
 
     - name: Upload Release Checksum Artifact
+      if: github.event_name == 'push'
       uses: actions/upload-artifact@v4
       with:
         name: AIDictation-Windows-Checksums-v${{ steps.version.outputs.VERSION }}
@@ -307,6 +334,7 @@ jobs:
         retention-days: 90
 
     - name: Stage draft GitHub Release
+      if: github.event_name == 'push'
       shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
@@ -360,6 +388,7 @@ jobs:
     needs: release
     runs-on: windows-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')
+    environment: release
     permissions:
       contents: write
     env:

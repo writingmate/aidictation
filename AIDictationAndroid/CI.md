@@ -15,15 +15,20 @@ on-device transcription, and builds the Play AAB with the `parakeet_v3_pack`
 asset pack.
 
 `.github/workflows/android-play-release.yml` publishes the signed release
-AAB to Google Play from the same `android-v<versionName>` tag. Tag pushes ship
-to the track selected by repository variable `ANDROID_PLAY_TRACK`, with
-`production` as the workflow fallback and a `completed` release status. The
-repository is currently configured for `production`. Set the variable to
-`internal`, `alpha`, `beta`, or `production` to change the automatic target. Set
-`ANDROID_PLAY_RELEASE_STATUS` to `draft`, `inProgress`, `halted`, or
-`completed` to override the default. The workflow uses the checked-in
+AAB to Google Play from the same `android-v<versionName>` tag. Tag pushes are
+hard-coded to upload a completed release to the `internal` track; repository
+variables cannot redirect a tag to production. The workflow uses the checked-in
 `versionName` and `versionCode`, and rejects tags that do not point at a commit
 reachable from `origin/main`.
+
+The tag-triggered Android build uploads private GitHub Actions artifacts and
+creates or updates only a draft GitHub release. After the internal artifact has
+passed Android 16 device checks and Play pre-launch verification, manually run
+the Play release workflow for the same tag with `publish_mode=promote`,
+`promote_from_track=internal`, and `play_track=production`. Production uploads
+are rejected; production is promotion-only. Set `publish_github_release=true`
+to publish the checksummed draft GitHub release only after the Play promotion
+succeeds.
 
 Google Play version codes are monotonic across every track. Because an earlier
 internal upload used version code `1007`, Android release version codes must be
@@ -77,13 +82,6 @@ runs, matching the local-developer layout described in
 |---|---|
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64` | Preferred. Base64-encoded Google Play service account JSON. |
 | `ANDROID_PUBLISHER_CREDENTIALS` | Optional fallback. Raw Google Play service account JSON used by Gradle Play Publisher. |
-
-Optional repository variables:
-
-| Variable | Purpose |
-|---|---|
-| `ANDROID_PLAY_TRACK` | Automatic tagged release target. Defaults to `production`; supported values are `internal`, `alpha`, `beta`, and `production`. |
-| `ANDROID_PLAY_RELEASE_STATUS` | Automatic tagged release status. Defaults to `completed`; supported values are `draft`, `inProgress`, `halted`, and `completed`. |
 
 Before the workflow can publish, create the app once in Play Console and
 upload the first signed AAB manually if the package has never been uploaded.

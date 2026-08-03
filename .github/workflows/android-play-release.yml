@@ -33,7 +33,7 @@ on:
       publish_mode:
         description: 'Upload a new bundle, or promote an existing version code between tracks'
         required: true
-        default: upload
+        default: promote
         type: choice
         options:
           - upload
@@ -48,6 +48,11 @@ on:
           - alpha
           - beta
           - production
+      publish_github_release:
+        description: 'Publish the existing draft GitHub release after a verified internal-to-production promotion'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -72,10 +77,11 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      PLAY_TRACK: ${{ inputs.play_track || vars.ANDROID_PLAY_TRACK || 'production' }}
-      PLAY_RELEASE_STATUS: ${{ inputs.release_status || vars.ANDROID_PLAY_RELEASE_STATUS || 'completed' }}
-      PLAY_PUBLISH_MODE: ${{ inputs.publish_mode || 'upload' }}
-      PLAY_PROMOTE_FROM_TRACK: ${{ inputs.promote_from_track || 'internal' }}
+      PLAY_TRACK: ${{ github.event_name == 'push' && 'internal' || inputs.play_track }}
+      PLAY_RELEASE_STATUS: ${{ github.event_name == 'push' && 'completed' || inputs.release_status }}
+      PLAY_PUBLISH_MODE: ${{ github.event_name == 'push' && 'upload' || inputs.publish_mode }}
+      PLAY_PROMOTE_FROM_TRACK: ${{ github.event_name == 'push' && 'internal' || inputs.promote_from_track }}
+      PUBLISH_GITHUB_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_github_release || false }}
       PLAY_RELEASE_NAME: ''
       PARAKEET_RUNTIME: onnx
 
@@ -120,6 +126,29 @@ jobs:
         id: release_meta
         shell: bash
         run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            if [ "${PLAY_TRACK}" != "internal" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "upload" ]; then
+              echo "Tag-triggered releases must upload to the internal track with completed status." >&2
+              exit 1
+            fi
+            if [ "${PUBLISH_GITHUB_RELEASE}" != "false" ]; then
+              echo "Tag-triggered releases cannot publish the draft GitHub release." >&2
+              exit 1
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ "${PLAY_TRACK}" = "production" ] && { [ "${PLAY_PUBLISH_MODE}" != "promote" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ]; }; then
+              echo "Production is promotion-only and must promote the verified internal release." >&2
+              exit 1
+            fi
+            if [ "${PUBLISH_GITHUB_RELEASE}" = "true" ] && { [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "promote" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ]; }; then
+              echo "Publishing the GitHub release requires a completed internal-to-production Play promotion." >&2
+              exit 1
+            fi
+          else
+            echo "Unsupported release event ${GITHUB_EVENT_NAME}." >&2
+            exit 1
+          fi
+
           case "${PLAY_TRACK}" in
             internal|alpha|beta|production) ;;
             *)
@@ -419,3 +448,80 @@ jobs:
             args+=(-PPLAY_RELEASE_NAME="${PLAY_RELEASE_NAME}")
           fi
           ./gradlew "${args[@]}"
+
+  publish_github_release:
+    name: Publish verified GitHub release
+    needs: publish
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.publish_github_release &&
+      inputs.play_track == 'production' &&
+      inputs.release_status == 'completed' &&
+      inputs.publish_mode == 'promote' &&
+      inputs.promote_from_track == 'internal'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout verified release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: false
+          ref: ${{ format('refs/tags/{0}', inputs.release_tag) }}
+
+      - name: Publish existing draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          if [[ ! "${RELEASE_TAG}" =~ ^android-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid Android release tag ${RELEASE_TAG}." >&2
+            exit 1
+          fi
+
+          version_name=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p; s/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*configValue\("VERSION_NAME", "([^"]+)".*/\1/p' AIDictationAndroid/app/build.gradle.kts | head -n 1)
+          if [ "${RELEASE_TAG}" != "android-v${version_name}" ]; then
+            echo "Tag ${RELEASE_TAG} does not match Android versionName ${version_name}." >&2
+            exit 1
+          fi
+
+          tag_sha=$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")
+          actual_sha=$(git rev-parse HEAD)
+          git fetch origin main --prune
+          if [ "${actual_sha}" != "${tag_sha}" ] || ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
+            echo "Release tag ${RELEASE_TAG} must be checked out exactly and reachable from origin/main." >&2
+            exit 1
+          fi
+
+          is_draft=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)
+          if [ "${is_draft}" != "true" ]; then
+            echo "Release ${RELEASE_TAG} must exist as a draft before publication." >&2
+            exit 1
+          fi
+
+          artifact_version="${RELEASE_TAG#android-v}"
+          verification_dir="${RUNNER_TEMP}/github-release-verification"
+          mkdir -p "${verification_dir}"
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${verification_dir}"
+          test -s "${verification_dir}/AIDictation-Android-${artifact_version}.apk"
+          test -s "${verification_dir}/AIDictation-Android-${artifact_version}.aab"
+          test -s "${verification_dir}/SHA256SUMS.txt"
+          (
+            cd "${verification_dir}"
+            shasum -a 256 -c SHA256SUMS.txt
+          )
+
+          gh release edit "${RELEASE_TAG}" \
+            --draft=false \
+            --latest \
+            --repo "${GITHUB_REPOSITORY}"
+          published_draft_state=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)
+          if [ "${published_draft_state}" != "false" ]; then
+            echo "Release ${RELEASE_TAG} was not published." >&2
+            exit 1
+          fi

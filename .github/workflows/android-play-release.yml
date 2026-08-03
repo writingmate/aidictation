@@ -23,21 +23,23 @@ on:
       release_status:
         description: 'Google Play release status'
         required: true
-        default: completed
+        default: inProgress
         type: choice
         options:
-          - completed
-          - draft
           - inProgress
           - halted
+          - completed
       publish_mode:
-        description: 'Upload a new bundle, or promote an existing version code between tracks'
+        description: 'Upload internally, or start, update, halt, or complete the production rollout'
         required: true
         default: promote
         type: choice
         options:
           - upload
           - promote
+          - update
+          - halt
+          - complete
       promote_from_track:
         description: 'Source track when publish_mode is promote'
         required: true
@@ -48,8 +50,20 @@ on:
           - alpha
           - beta
           - production
+      rollout_fraction:
+        description: 'Production fraction for staged promote/update actions'
+        required: true
+        default: '0.05'
+        type: choice
+        options:
+          - '0.01'
+          - '0.05'
+          - '0.10'
+          - '0.25'
+          - '0.50'
+          - '0.75'
       publish_github_release:
-        description: 'Publish the existing draft GitHub release after a verified internal-to-production promotion'
+        description: 'Publish the existing draft GitHub release only after explicit production completion'
         required: true
         default: false
         type: boolean
@@ -81,6 +95,7 @@ jobs:
       PLAY_RELEASE_STATUS: ${{ github.event_name == 'push' && 'completed' || inputs.release_status }}
       PLAY_PUBLISH_MODE: ${{ github.event_name == 'push' && 'upload' || inputs.publish_mode }}
       PLAY_PROMOTE_FROM_TRACK: ${{ github.event_name == 'push' && 'internal' || inputs.promote_from_track }}
+      PLAY_USER_FRACTION: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_fraction || '0.05' }}
       PUBLISH_GITHUB_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_github_release || false }}
       PLAY_RELEASE_NAME: ''
       PARAKEET_RUNTIME: onnx
@@ -136,12 +151,63 @@ jobs:
               exit 1
             fi
           elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            if [ "${PLAY_TRACK}" = "production" ] && { [ "${PLAY_PUBLISH_MODE}" != "promote" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ]; }; then
-              echo "Production is promotion-only and must promote the verified internal release." >&2
-              exit 1
+            case "${PLAY_PUBLISH_MODE}" in
+              upload)
+                if [ "${PLAY_TRACK}" = "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ]; then
+                  echo "Manual uploads must be completed releases on a non-production track." >&2
+                  exit 1
+                fi
+                ;;
+              promote)
+                if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ] || [ "${PLAY_RELEASE_STATUS}" != "inProgress" ]; then
+                  echo "Initial production rollout must promote internal to production with inProgress status." >&2
+                  exit 1
+                fi
+                ;;
+              update)
+                if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "inProgress" ]; then
+                  echo "Rollout updates must keep the production release inProgress." >&2
+                  exit 1
+                fi
+                ;;
+              halt)
+                if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "halted" ]; then
+                  echo "Rollout halt must target production with halted status." >&2
+                  exit 1
+                fi
+                ;;
+              complete)
+                if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ]; then
+                  echo "Rollout completion must target production with completed status." >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Unsupported PLAY_PUBLISH_MODE '${PLAY_PUBLISH_MODE}'." >&2
+                exit 1
+                ;;
+            esac
+
+            if [ "${PLAY_PUBLISH_MODE}" = "promote" ] || [ "${PLAY_PUBLISH_MODE}" = "update" ]; then
+              python3 - "${PLAY_USER_FRACTION}" "${PLAY_PUBLISH_MODE}" <<'PY'
+          from decimal import Decimal, InvalidOperation
+          import sys
+
+          try:
+              fraction = Decimal(sys.argv[1])
+          except InvalidOperation as exc:
+              raise SystemExit(f"Invalid rollout fraction: {sys.argv[1]}") from exc
+
+          mode = sys.argv[2]
+          if not Decimal("0") < fraction < Decimal("1"):
+              raise SystemExit("Rollout fraction must be greater than 0 and less than 1")
+          if mode == "promote" and fraction > Decimal("0.10"):
+              raise SystemExit("Initial production rollout is capped at 10%")
+          PY
             fi
-            if [ "${PUBLISH_GITHUB_RELEASE}" = "true" ] && { [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "promote" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ]; }; then
-              echo "Publishing the GitHub release requires a completed internal-to-production Play promotion." >&2
+
+            if [ "${PUBLISH_GITHUB_RELEASE}" = "true" ] && { [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "complete" ]; }; then
+              echo "Publishing the GitHub release requires explicit completion of the production rollout." >&2
               exit 1
             fi
           else
@@ -426,6 +492,8 @@ jobs:
             --version-code="${VERSION_CODE}"
             -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}"
             -PPLAY_RELEASE_STATUS="${PLAY_RELEASE_STATUS}"
+            --release-status="${PLAY_RELEASE_STATUS}"
+            --user-fraction="${PLAY_USER_FRACTION}"
             --stacktrace
           )
           if [ -n "${PLAY_RELEASE_NAME}" ]; then
@@ -433,8 +501,42 @@ jobs:
           fi
           ./gradlew "${args[@]}"
 
+      - name: Update staged production rollout
+        if: env.PLAY_PUBLISH_MODE == 'update'
+        run: |
+          ./gradlew \
+            :app:promoteReleaseArtifact \
+            --update="${PLAY_TRACK}" \
+            --version-code="${VERSION_CODE}" \
+            --release-status="${PLAY_RELEASE_STATUS}" \
+            --user-fraction="${PLAY_USER_FRACTION}" \
+            -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}" \
+            --stacktrace
+
+      - name: Halt staged production rollout
+        if: env.PLAY_PUBLISH_MODE == 'halt'
+        run: |
+          ./gradlew \
+            :app:promoteReleaseArtifact \
+            --update="${PLAY_TRACK}" \
+            --version-code="${VERSION_CODE}" \
+            --release-status="${PLAY_RELEASE_STATUS}" \
+            -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}" \
+            --stacktrace
+
+      - name: Complete staged production rollout
+        if: env.PLAY_PUBLISH_MODE == 'complete'
+        run: |
+          ./gradlew \
+            :app:promoteReleaseArtifact \
+            --update="${PLAY_TRACK}" \
+            --version-code="${VERSION_CODE}" \
+            --release-status="${PLAY_RELEASE_STATUS}" \
+            -PPLAY_SERVICE_ACCOUNT_CREDENTIALS="${PLAY_SERVICE_ACCOUNT_CREDENTIALS}" \
+            --stacktrace
+
       - name: Publish to Google Play
-        if: env.PLAY_PUBLISH_MODE != 'promote'
+        if: env.PLAY_PUBLISH_MODE == 'upload'
         run: |
           args=(
             :app:publishReleaseBundle
@@ -457,8 +559,7 @@ jobs:
       inputs.publish_github_release &&
       inputs.play_track == 'production' &&
       inputs.release_status == 'completed' &&
-      inputs.publish_mode == 'promote' &&
-      inputs.promote_from_track == 'internal'
+      inputs.publish_mode == 'complete'
     runs-on: ubuntu-latest
     permissions:
       contents: write

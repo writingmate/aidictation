@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "rkr.simplekeyboard.inputmethod"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26

@@ -80,6 +80,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;35.0.0
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -164,6 +166,47 @@ jobs:
 
       - name: Validate auth configuration
         run: python3 scripts/validate_client_config.py --allow-missing
+
+      - name: Validate Android release gating contract
+        shell: bash
+        run: |
+          python3 - "$GITHUB_WORKSPACE/.github/workflows/android-play-release.yml" "$GITHUB_WORKSPACE/.github/workflows/android-build.yml" <<'PY'
+          from pathlib import Path
+          import sys
+
+          play = Path(sys.argv[1]).read_text()
+          build = Path(sys.argv[2]).read_text()
+          expression_open = "$" + "{{"
+
+          required_play_contract = (
+              f"PLAY_TRACK: {expression_open} github.event_name == 'push' && 'internal' || inputs.play_track }}",
+              f"PLAY_RELEASE_STATUS: {expression_open} github.event_name == 'push' && 'completed' || inputs.release_status }}",
+              f"PLAY_PUBLISH_MODE: {expression_open} github.event_name == 'push' && 'upload' || inputs.publish_mode }}",
+              f"PUBLISH_GITHUB_RELEASE: {expression_open} github.event_name == 'workflow_dispatch' && inputs.publish_github_release || false }}",
+              'if [ "${PLAY_TRACK}" != "internal" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "upload" ]; then',
+              'if [ "${PUBLISH_GITHUB_RELEASE}" != "false" ]; then',
+              'if [ "${PLAY_TRACK}" = "production" ] && { [ "${PLAY_PUBLISH_MODE}" != "promote" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ]; }; then',
+              "needs: publish",
+              "inputs.publish_github_release &&",
+              "inputs.release_status == 'completed' &&",
+              'gh release edit "${RELEASE_TAG}"',
+              "--draft=false",
+          )
+          missing = [entry for entry in required_play_contract if entry not in play]
+          if missing:
+              raise SystemExit(f"Android Play release gate is missing: {missing}")
+          if "vars.ANDROID_PLAY_TRACK" in play or "vars.ANDROID_PLAY_RELEASE_STATUS" in play:
+              raise SystemExit("Repository variables must not redirect a tag-triggered Play release")
+
+          release_marker = "- name: Create or update " + "draft GitHub Release"
+          release_block = build.split(release_marker, 1)
+          if len(release_block) != 2 or "gh release create" not in release_block[1] or "--draft" not in release_block[1]:
+              raise SystemExit("Tag release creation must remain draft-only")
+          if "--draft=false" in release_block[1]:
+              raise SystemExit("Tag workflow must not publish a GitHub release")
+
+          print("Android tag releases are internal-only and GitHub draft-only.")
+          PY
 
       - name: Write local.properties
         run: |
@@ -356,6 +399,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;35.0.0
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -523,7 +568,7 @@ jobs:
           path: AIDictationAndroid/app/build/outputs/bundle/release/*.aab
           retention-days: 90
 
-      - name: Publish GitHub Release
+      - name: Create or update draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
@@ -532,10 +577,15 @@ jobs:
         run: |
           actual_sha="$(git rev-parse HEAD)"
           if [ "$actual_sha" != "$GITHUB_SHA" ] || [ "$RELEASE_TAG_SHA" != "$GITHUB_SHA" ]; then
-            echo "Refusing to publish artifacts not built from event commit $GITHUB_SHA." >&2
+            echo "Refusing to stage artifacts not built from event commit $GITHUB_SHA." >&2
             exit 1
           fi
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            if [ "$is_draft" != "true" ]; then
+              echo "Refusing to modify already-public release $RELEASE_TAG from a tag build." >&2
+              exit 1
+            fi
             gh release upload "$RELEASE_TAG" release-artifacts/* --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --repo "$GITHUB_REPOSITORY"
           else
@@ -543,5 +593,11 @@ jobs:
               --target "$RELEASE_TAG_SHA" \
               --title "$RELEASE_TITLE" \
               --generate-notes \
+              --draft \
               --repo "$GITHUB_REPOSITORY"
+          fi
+          is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$is_draft" != "true" ]; then
+            echo "Tag build must leave release $RELEASE_TAG in draft state." >&2
+            exit 1
           fi

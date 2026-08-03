@@ -79,18 +79,38 @@ def validate_auth_backend_agreement(config: dict[str, Any], supabase_url: str) -
     another, which rejects it — sign-in silently returns the user to signed-out.
     """
     auth_web_url = required_string(config, "AUTH_WEB_URL")
-    auth_host = parse.urlparse(auth_web_url).netloc.lower()
-    api_host = parse.urlparse(supabase_url).netloc.lower()
-    if not auth_host or not api_host:
-        fail(f"AUTH_WEB_URL and SUPABASE_URL must be absolute URLs, got {auth_web_url!r} and {supabase_url!r}")
-    # The legacy split (a standalone auth page in front of Supabase) is gone:
-    # aidictation.com now serves both the sign-in page and the auth API.
-    if "aidictation.com" in (auth_host, api_host) and auth_host != api_host:
-        fail(
-            f"AUTH_WEB_URL host ({auth_host}) and SUPABASE_URL host ({api_host}) "
-            "point at different backends; sessions minted by one will be rejected by the other"
+    auth_parts = parse.urlparse(auth_web_url)
+    api_parts = parse.urlparse(supabase_url)
+    try:
+        auth_origin = (
+            auth_parts.scheme.lower(),
+            auth_parts.hostname,
+            auth_parts.port if auth_parts.port is not None else 443,
         )
-    print(f"auth backend ok: auth_host={auth_host}, api_host={api_host}")
+        api_origin = (
+            api_parts.scheme.lower(),
+            api_parts.hostname,
+            api_parts.port if api_parts.port is not None else 443,
+        )
+    except ValueError:
+        fail("AUTH_WEB_URL and SUPABASE_URL must use valid HTTPS origins")
+    if (
+        auth_origin[0] != "https"
+        or api_origin[0] != "https"
+        or not auth_origin[1]
+        or not api_origin[1]
+        or auth_parts.username
+        or auth_parts.password
+        or api_parts.username
+        or api_parts.password
+    ):
+        fail("AUTH_WEB_URL and SUPABASE_URL must use valid HTTPS origins")
+    if auth_origin != api_origin:
+        fail(
+            "AUTH_WEB_URL and SUPABASE_URL must share the exact origin so the "
+            "packaged app validates sessions against the service that issued them"
+        )
+    print("auth backend ok: exact origin agreement verified")
 
 
 def generate_speech_sample(output: Path) -> None:
@@ -228,7 +248,6 @@ def validate_authenticated_user(
 
     supabase_url = required_string(config, "SUPABASE_URL").rstrip("/")
     anon_key = required_string(config, "SUPABASE_ANON_KEY")
-    validate_auth_backend_agreement(config, supabase_url)
     token_url = f"{supabase_url}/auth/v1/token?grant_type=password"
     token = http_json(
         token_url,
@@ -292,6 +311,10 @@ def main() -> None:
     api_key = required_string(config, "CustomTranscriptionKey")
 
     validate_model(endpoint, model)
+    validate_auth_backend_agreement(
+        config,
+        required_string(config, "SUPABASE_URL").rstrip("/"),
+    )
     print(
         "config ok: "
         f"endpoint={parse.urlparse(endpoint).netloc}, model={model}, "

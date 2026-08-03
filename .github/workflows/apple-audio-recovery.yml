@@ -15,6 +15,7 @@ on:
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
       - 'scripts/validate_macos_url_handler_registration.sh'
+      - 'scripts/validate_macos_callback_token.py'
       - 'scripts/verify_macos_url_handler.swift'
       - 'scripts/verify_macos_release_auth.sh'
       - 'scripts/validate_parakeet_runtime_recovery.swift'
@@ -39,6 +40,7 @@ on:
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
       - 'scripts/validate_macos_url_handler_registration.sh'
+      - 'scripts/validate_macos_callback_token.py'
       - 'scripts/verify_macos_url_handler.swift'
       - 'scripts/verify_macos_release_auth.sh'
       - 'scripts/validate_parakeet_runtime_recovery.swift'
@@ -78,7 +80,9 @@ jobs:
           fi
 
       - name: Validate macOS callback registration
-        run: bash scripts/validate_macos_url_handler_registration.sh
+        run: |
+          python3 scripts/validate_macos_callback_token.py --self-test
+          bash scripts/validate_macos_url_handler_registration.sh
 
       - name: Run deterministic recovery matrix
         run: bash scripts/validate_apple_audio_recovery.sh

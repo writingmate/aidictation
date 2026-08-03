@@ -185,7 +185,9 @@ jobs:
           /tmp/validate_macos_history_row_refresh
 
       - name: Validate macOS callback registration
-        run: bash scripts/validate_macos_url_handler_registration.sh
+        run: |
+          python3 scripts/validate_macos_callback_token.py --self-test
+          bash scripts/validate_macos_url_handler_registration.sh
 
       - name: Resolve Swift package dependencies
         run: |

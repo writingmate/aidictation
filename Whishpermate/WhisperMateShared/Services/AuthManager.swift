@@ -11,6 +11,45 @@ import Supabase
     import UIKit
 #endif
 
+public enum AuthCallbackFailurePhase: String, Sendable {
+    case none
+    case callbackShape = "callback_shape"
+    case sessionValidation = "session_validation"
+    case profileFetch = "profile_fetch"
+}
+
+public enum AuthCallbackFailureCategory: String, Sendable {
+    case none
+    case missingRequiredFields = "missing_required_fields"
+    case noncanonicalFields = "noncanonical_fields"
+    case configurationUnavailable = "configuration_unavailable"
+    case implicitGrantRejected = "implicit_grant_rejected"
+    case jwtRejected = "jwt_rejected"
+    case sessionMissing = "session_missing"
+    case apiUnauthorized = "api_401"
+    case apiForbidden = "api_403"
+    case apiNotFound = "api_404"
+    case apiClientRejected = "api_client_rejected"
+    case apiServerRejected = "api_server_rejected"
+    case apiOtherRejected = "api_other_rejected"
+    case authOther = "auth_other"
+    case sessionUnavailableAfterCallback = "session_unavailable_after_callback"
+    case profileRequestRejected = "profile_request_rejected"
+    case unknown
+}
+
+public struct AuthCallbackOutcome: Sendable {
+    public let hasAccessToken: Bool
+    public let hasRefreshToken: Bool
+    public let hasTokenType: Bool
+    public let hasExpiresIn: Bool
+    public let sessionEstablished: Bool
+    public let profileRequestStarted: Bool
+    public let profileLoaded: Bool
+    public let failurePhase: AuthCallbackFailurePhase
+    public let failureCategory: AuthCallbackFailureCategory
+}
+
 /// Manages user authentication state and session lifecycle via Supabase
 public class AuthManager: ObservableObject {
     public static let shared = AuthManager()
@@ -40,6 +79,69 @@ public class AuthManager: ObservableObject {
         private var authSession: ASWebAuthenticationSession?
     #endif
 
+    private struct CallbackShape {
+        let hasAccessToken: Bool
+        let hasRefreshToken: Bool
+        let hasTokenType: Bool
+        let hasExpiresIn: Bool
+        let hasAuthFieldsInQuery: Bool
+        let tokenTypeIsBearer: Bool
+
+        init(url: URL) {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                hasAccessToken = false
+                hasRefreshToken = false
+                hasTokenType = false
+                hasExpiresIn = false
+                hasAuthFieldsInQuery = false
+                tokenTypeIsBearer = false
+                return
+            }
+
+            let requiredNames = Set([
+                "access_token",
+                "refresh_token",
+                "token_type",
+                "expires_in",
+            ])
+            hasAuthFieldsInQuery = (components.queryItems ?? []).contains {
+                requiredNames.contains($0.name)
+            }
+
+            var items: [URLQueryItem] = []
+            if let fragment = components.fragment,
+               let fragmentItems = URLComponents(string: "?\(fragment)")?.queryItems
+            {
+                items.append(contentsOf: fragmentItems)
+            }
+
+            func hasValue(_ name: String) -> Bool {
+                items.contains { $0.name == name && !($0.value ?? "").isEmpty }
+            }
+
+            hasAccessToken = hasValue("access_token")
+            hasRefreshToken = hasValue("refresh_token")
+            hasTokenType = hasValue("token_type")
+            hasExpiresIn = hasValue("expires_in")
+            tokenTypeIsBearer = items.last(where: { $0.name == "token_type" })?
+                .value?.lowercased() == "bearer"
+        }
+
+        var isComplete: Bool {
+            hasAccessToken && hasRefreshToken && hasTokenType && hasExpiresIn
+        }
+
+        var isCanonical: Bool {
+            !hasAuthFieldsInQuery && tokenTypeIsBearer
+        }
+    }
+
+    private enum UserRefreshOutcome {
+        case sessionUnavailable
+        case profileLoaded
+        case profileRequestRejected
+    }
+
     // MARK: - Initialization
 
     private init() {
@@ -67,13 +169,13 @@ public class AuthManager: ObservableObject {
             await startAutoRefreshIfNeeded()
             return true
         } catch {
-            DebugLog.info("No active session, attempting refresh: \(error.localizedDescription)", context: "AuthManager")
+            DebugLog.info("No active session; attempting refresh", context: "AuthManager")
             do {
                 _ = try await client.auth.refreshSession()
                 await startAutoRefreshIfNeeded()
                 return true
             } catch {
-                DebugLog.info("Session refresh failed: \(error.localizedDescription)", context: "AuthManager")
+                DebugLog.info("Session refresh failed", context: "AuthManager")
                 return false
             }
         }
@@ -165,9 +267,9 @@ public class AuthManager: ObservableObject {
                         return
                     }
 
-                    if let error {
-                        DebugLog.warning("Auth popup failed: \(error.localizedDescription)", context: "AuthManager")
-                        self.error = "Authentication failed: \(error.localizedDescription)"
+                    if error != nil {
+                        DebugLog.warning("Authentication popup failed", context: "AuthManager")
+                        self.error = "Authentication failed. Please try again or contact support."
                     }
                 }
             }
@@ -252,23 +354,99 @@ public class AuthManager: ObservableObject {
         }
     }
 
-    public func handleAuthCallback(url: URL) async {
-        DebugLog.info("Handling auth callback: \(url.absoluteString)", context: "AuthManager")
+    @discardableResult
+    public func handleAuthCallback(url: URL) async -> AuthCallbackOutcome {
+        DebugLog.info("Handling authentication callback", context: "AuthManager")
+        let shape = CallbackShape(url: url)
+
+        guard shape.isComplete else {
+            DebugLog.warning(
+                "Authentication callback is missing required session fields",
+                context: "AuthManager"
+            )
+            await setSupportSafeCallbackError()
+            return callbackOutcome(
+                shape: shape,
+                failurePhase: .callbackShape,
+                failureCategory: .missingRequiredFields
+            )
+        }
+        guard shape.isCanonical else {
+            DebugLog.warning(
+                "Authentication callback session fields are not canonical",
+                context: "AuthManager"
+            )
+            await setSupportSafeCallbackError()
+            return callbackOutcome(
+                shape: shape,
+                failurePhase: .callbackShape,
+                failureCategory: .noncanonicalFields
+            )
+        }
 
         do {
-            guard let client = supabase.client else { return }
-            let session = try await client.auth.session(from: url)
-            DebugLog.info("Session established for user: \(session.user.id)", context: "AuthManager")
-            await refreshUser()
-        } catch {
-            DebugLog.info("Auth callback failed: \(error.localizedDescription)", context: "AuthManager")
-            await MainActor.run {
-                self.error = "Authentication failed: \(error.localizedDescription)"
+            guard let client = supabase.client else {
+                await setSupportSafeCallbackError()
+                return callbackOutcome(
+                    shape: shape,
+                    failurePhase: .sessionValidation,
+                    failureCategory: .configurationUnavailable
+                )
             }
+            _ = try await client.auth.session(from: url)
+            DebugLog.info("Authentication callback established a session", context: "AuthManager")
+
+            switch await refreshUserWithOutcome() {
+            case .profileLoaded:
+                return callbackOutcome(
+                    shape: shape,
+                    sessionEstablished: true,
+                    profileRequestStarted: true,
+                    profileLoaded: true
+                )
+            case .sessionUnavailable:
+                await setSupportSafeCallbackError()
+                return callbackOutcome(
+                    shape: shape,
+                    sessionEstablished: true,
+                    failurePhase: .sessionValidation,
+                    failureCategory: .sessionUnavailableAfterCallback
+                )
+            case .profileRequestRejected:
+                return callbackOutcome(
+                    shape: shape,
+                    sessionEstablished: true,
+                    profileRequestStarted: true,
+                    failurePhase: .profileFetch,
+                    failureCategory: .profileRequestRejected
+                )
+            }
+        } catch {
+            let category = callbackFailureCategory(error)
+            DebugLog.warning(
+                "Authentication callback session validation failed (\(category.rawValue))",
+                context: "AuthManager"
+            )
+            await setSupportSafeCallbackError()
+            return callbackOutcome(
+                shape: shape,
+                failurePhase: .sessionValidation,
+                failureCategory: category
+            )
         }
     }
 
-    public func refreshUser() async {
+    @discardableResult
+    public func refreshUser() async -> Bool {
+        switch await refreshUserWithOutcome() {
+        case .profileLoaded:
+            return true
+        case .sessionUnavailable, .profileRequestRejected:
+            return false
+        }
+    }
+
+    private func refreshUserWithOutcome() async -> UserRefreshOutcome {
         DebugLog.info("Fetching user data...", context: "AuthManager")
         await MainActor.run {
             self.isLoading = true
@@ -282,7 +460,7 @@ public class AuthManager: ObservableObject {
                 self.isAuthenticated = false
                 self.isLoading = false
             }
-            return
+            return .sessionUnavailable
         }
 
         await MainActor.run {
@@ -301,12 +479,75 @@ public class AuthManager: ObservableObject {
                 NotificationCenter.default.post(name: NSNotification.Name(Constants.userAuthChangedNotification), object: nil)
             }
             DebugLog.info("Auth state updated - isAuthenticated: true", context: "AuthManager")
+            return .profileLoaded
         } catch {
-            DebugLog.info("Failed to fetch user: \(error.localizedDescription)", context: "AuthManager")
+            DebugLog.warning("Failed to fetch authenticated profile", context: "AuthManager")
             await MainActor.run {
-                self.error = error.localizedDescription
+                self.error = "We could not load your account. Please try again."
                 self.isLoading = false
             }
+            return .profileRequestRejected
+        }
+    }
+
+    private func callbackOutcome(
+        shape: CallbackShape,
+        sessionEstablished: Bool = false,
+        profileRequestStarted: Bool = false,
+        profileLoaded: Bool = false,
+        failurePhase: AuthCallbackFailurePhase = .none,
+        failureCategory: AuthCallbackFailureCategory = .none
+    ) -> AuthCallbackOutcome {
+        AuthCallbackOutcome(
+            hasAccessToken: shape.hasAccessToken,
+            hasRefreshToken: shape.hasRefreshToken,
+            hasTokenType: shape.hasTokenType,
+            hasExpiresIn: shape.hasExpiresIn,
+            sessionEstablished: sessionEstablished,
+            profileRequestStarted: profileRequestStarted,
+            profileLoaded: profileLoaded,
+            failurePhase: failurePhase,
+            failureCategory: failureCategory
+        )
+    }
+
+    private func callbackFailureCategory(_ error: Error) -> AuthCallbackFailureCategory {
+        guard let authError = error as? AuthError else {
+            return .unknown
+        }
+
+        switch authError {
+        case .implicitGrantRedirect:
+            return .implicitGrantRejected
+        case .jwtVerificationFailed:
+            return .jwtRejected
+        case .sessionMissing:
+            return .sessionMissing
+        case let .api(_, _, _, response):
+            switch response.statusCode {
+            case 401:
+                return .apiUnauthorized
+            case 403:
+                return .apiForbidden
+            case 404:
+                return .apiNotFound
+            case 400 ... 499:
+                return .apiClientRejected
+            case 500 ... 599:
+                return .apiServerRejected
+            default:
+                return .apiOtherRejected
+            }
+        case .weakPassword, .pkceGrantCodeExchange:
+            return .authOther
+        default:
+            return .authOther
+        }
+    }
+
+    private func setSupportSafeCallbackError() async {
+        await MainActor.run {
+            self.error = "Authentication failed. Please try again or contact support."
         }
     }
 

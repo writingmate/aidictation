@@ -7,6 +7,7 @@ BROWSER_SCRIPT="${AIDICTATION_RELEASE_AUTH_BROWSER_SCRIPT:-/tmp/aidictation-rele
 CALLBACK_PATH="${AIDICTATION_RELEASE_AUTH_CALLBACK_PATH:-/tmp/aidictation-release-auth-callback}"
 RESULT_PATH="${AIDICTATION_RELEASE_AUTH_RESULT_PATH:-/tmp/aidictation-release-auth-result.json}"
 HANDLER_VERIFIER="${AIDICTATION_RELEASE_URL_HANDLER_VERIFIER:-scripts/verify_macos_url_handler.swift}"
+TOKEN_VERIFIER="${AIDICTATION_RELEASE_CALLBACK_TOKEN_VERIFIER:-scripts/validate_macos_callback_token.py}"
 LSREGISTER_PATH="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 USER_APPLICATIONS_DIR="${HOME}/Applications"
 INSTALL_PREFIX="$USER_APPLICATIONS_DIR/AIDictationReleaseVerification."
@@ -25,8 +26,8 @@ if [[ ! -f "$BROWSER_SCRIPT" ]]; then
   echo "The live browser verifier is not installed at $BROWSER_SCRIPT." >&2
   exit 1
 fi
-if [[ ! -f "$HANDLER_VERIFIER" || ! -x "$LSREGISTER_PATH" ]]; then
-  echo "The macOS callback-handler verifier is unavailable." >&2
+if [[ ! -f "$HANDLER_VERIFIER" || ! -f "$TOKEN_VERIFIER" || ! -x "$LSREGISTER_PATH" ]]; then
+  echo "A macOS callback verifier is unavailable." >&2
   exit 1
 fi
 
@@ -78,6 +79,9 @@ swift "$HANDLER_VERIFIER" "$INSTALLED_APP" aidictation
 export AIDICTATION_RELEASE_AUTH_CALLBACK_PATH="$CALLBACK_PATH"
 node "$BROWSER_SCRIPT"
 test -s "$CALLBACK_PATH"
+python3 "$TOKEN_VERIFIER" \
+  "$CALLBACK_PATH" \
+  "$APP_PATH/Contents/Resources/Secrets.plist"
 
 rm -f "$RESULT_PATH"
 launchctl setenv AIDICTATION_RELEASE_AUTH_SMOKE 1
@@ -131,6 +135,14 @@ expected = {
     "has_reached_limit": False,
     "words_remaining_unlimited": True,
     "auth_error_present": False,
+    "callback_has_access_token": True,
+    "callback_has_refresh_token": True,
+    "callback_has_token_type": True,
+    "callback_has_expires_in": True,
+    "callback_session_established": True,
+    "profile_request_started": True,
+    "callback_failure_phase": "none",
+    "callback_failure_category": "none",
 }
 mismatches = {
     key: {"expected": value, "actual": result.get(key)}

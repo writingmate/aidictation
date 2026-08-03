@@ -100,7 +100,7 @@ private final class ReleaseAuthVerificationReporter {
         outputURL = URL(fileURLWithPath: outputPath)
     }
 
-    func report(_ authManager: AuthManager) {
+    func report(_ authManager: AuthManager, outcome: AuthCallbackOutcome) {
         guard let outputURL else { return }
 
         let user = authManager.currentUser
@@ -113,6 +113,14 @@ private final class ReleaseAuthVerificationReporter {
             "has_reached_limit": user?.hasReachedLimit ?? true,
             "words_remaining_unlimited": user?.effectiveWordLimit == Int.max,
             "auth_error_present": authManager.error != nil,
+            "callback_has_access_token": outcome.hasAccessToken,
+            "callback_has_refresh_token": outcome.hasRefreshToken,
+            "callback_has_token_type": outcome.hasTokenType,
+            "callback_has_expires_in": outcome.hasExpiresIn,
+            "callback_session_established": outcome.sessionEstablished,
+            "profile_request_started": outcome.profileRequestStarted,
+            "callback_failure_phase": outcome.failurePhase.rawValue,
+            "callback_failure_category": outcome.failureCategory.rawValue,
         ]
 
         do {
@@ -244,10 +252,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func handleURL(_ url: URL) {
-        DebugLog.info("AppDelegate received URL: \(url.absoluteString)", context: "AppDelegate")
-
         // Handle authentication callback (aidictation://auth-callback)
         if isAuthCallbackURL(url) {
+            DebugLog.info("AppDelegate received authentication callback", context: "AppDelegate")
             guard AuthCallbackGate.shouldProcess(url, context: "AppDelegate") else {
                 return
             }
@@ -258,9 +265,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             DebugLog.info("Processing auth callback...", context: "AppDelegate")
             Task {
-                await authManager.handleAuthCallback(url: url)
+                let outcome = await authManager.handleAuthCallback(url: url)
                 await MainActor.run {
-                    ReleaseAuthVerificationReporter.shared.report(authManager)
+                    ReleaseAuthVerificationReporter.shared.report(authManager, outcome: outcome)
                 }
             }
         }

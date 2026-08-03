@@ -47,8 +47,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urlTypes = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes")
             as? [[String: Any]]
         let expectedScheme = (urlTypes?.first?["CFBundleURLSchemes"] as? [String])?.first
-        guard urls.contains(where: {
-            $0.scheme == expectedScheme && $0.host == "auth-callback"
+        guard urls.contains(where: { url in
+            guard let components = URLComponents(
+                url: url,
+                resolvingAgainstBaseURL: false
+            ),
+                components.scheme == expectedScheme,
+                components.host == "auth-callback",
+                components.user == nil,
+                components.password == nil,
+                components.port == nil,
+                components.path.isEmpty,
+                components.query == nil,
+                let fragment = components.fragment,
+                let items = URLComponents(string: "?\(fragment)")?.queryItems
+            else {
+                return false
+            }
+            var params: [String: String] = [:]
+            for item in items {
+                params[item.name] = item.value ?? ""
+            }
+            return params == [
+                "access_token": "synthetic-access",
+                "refresh_token": "synthetic-refresh",
+                "token_type": "bearer",
+                "expires_in": "3600",
+            ]
         }) else {
             return
         }
@@ -114,7 +139,7 @@ ditto "$SOURCE_APP" "$INSTALLED_APP"
 codesign --verify --deep --strict "$INSTALLED_APP"
 "$LSREGISTER_PATH" -f "$INSTALLED_APP"
 swift "$HANDLER_VERIFIER" "$INSTALLED_APP" "$SCHEME"
-if ! open "$SCHEME://auth-callback" >/dev/null 2>&1; then
+if ! open "$SCHEME://auth-callback#access_token=synthetic-access&refresh_token=synthetic-refresh&token_type=bearer&expires_in=3600" >/dev/null 2>&1; then
   echo "macOS could not deliver the synthetic callback to the registered app." >&2
   exit 1
 fi
@@ -136,4 +161,4 @@ if [[ -e "$INSTALL_ROOT" || -e "$WORK_DIR" ]]; then
   exit 1
 fi
 
-echo "Verified exact LaunchServices registration, app callback receipt, and cleanup."
+echo "Verified exact LaunchServices registration, callback fragment receipt, and cleanup."

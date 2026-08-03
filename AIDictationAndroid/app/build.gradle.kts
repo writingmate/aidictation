@@ -150,7 +150,7 @@ val authApiKey = configValue("SUPABASE_ANON_KEY").ifBlank {
 
 android {
     namespace = "com.whispermate.aidictation"
-    compileSdk = 35
+    compileSdk = 36
 
     signingConfigs {
         create("release") {
@@ -164,7 +164,7 @@ android {
     defaultConfig {
         applicationId = "com.aidictation.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = configValue("VERSION_CODE", "1029").toInt()
         versionName = configValue("VERSION_NAME", "0.0.32")
 

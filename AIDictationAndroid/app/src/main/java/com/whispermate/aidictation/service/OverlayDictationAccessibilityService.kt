@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.res.ColorStateList
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -14,6 +15,8 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -28,10 +31,13 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
@@ -56,6 +62,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+
+internal enum class OverlayRecordingState {
+    Idle,
+    Starting,
+    Recording,
+    Processing
+}
+
+internal enum class OverlayBubblePresentation {
+    Idle,
+    Starting,
+    Recording,
+    Processing
+}
+
+internal fun OverlayRecordingState.bubblePresentation(): OverlayBubblePresentation = when (this) {
+    OverlayRecordingState.Idle -> OverlayBubblePresentation.Idle
+    OverlayRecordingState.Starting -> OverlayBubblePresentation.Starting
+    OverlayRecordingState.Recording -> OverlayBubblePresentation.Recording
+    OverlayRecordingState.Processing -> OverlayBubblePresentation.Processing
+}
+
+internal val OverlayRecordingState.streamsAudioLevels: Boolean
+    get() = this == OverlayRecordingState.Recording
+
+internal fun canStartSelectionCommand(
+    recordingState: OverlayRecordingState,
+    workflowActive: Boolean
+): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive
 
 /**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
@@ -83,8 +118,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
-        private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 220
-        private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 40
+        private const val COMMAND_ACTION_BUTTON_SIZE_DP = 55
+        private const val COMMAND_ACTION_CONTAINER_PADDING_DP = 6
+        private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 130
+        private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 67
         private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_CLEANUP_ID = "cleanup"
         private const val COMMAND_REWRITE_ID = "rewrite"
@@ -99,12 +136,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         )
-    }
-
-    private enum class RecordingState {
-        Idle,
-        Recording,
-        Processing
     }
 
     private enum class RecordingMode {
@@ -154,7 +185,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var dismissSnoozeZone: TextView? = null
     private var dismissHideZone: TextView? = null
 
-    private var recordingState: RecordingState = RecordingState.Idle
+    private var recordingState: OverlayRecordingState = OverlayRecordingState.Idle
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private val overlayWorkflowFence = ReplaceableDeliveryFence()
     private var audioWorkflowLease: AudioAttemptLease? = null
@@ -165,12 +196,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var bubbleAnimationJob: Job? = null
     private var pendingHideJob: Job? = null
     private var focusRecoveryJob: Job? = null
+    private var isServiceDestroyed = false
     private var stickyEditableFocusArmed = false
     private var dictationTargetNode: AccessibilityNodeInfo? = null
     private var activeCommandAction: CommandAction? = null
     private var pendingRewriteTarget: SelectionCommandTarget? = null
-    private var fixGrammarButton: TextView? = null
-    private var rewriteButton: TextView? = null
+    private var fixGrammarButton: ImageButton? = null
+    private var rewriteButton: ImageButton? = null
 
     private var bubbleIdleColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
     private var bubbleDictationActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
@@ -207,7 +239,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         audioWorkflowLease,
                         failedToken
                     ) &&
-                    recordingState != RecordingState.Idle
+                    recordingState != OverlayRecordingState.Idle
                 ) {
                     failedToken ?: return@collect
                     val failedMode = recordingMode
@@ -221,7 +253,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
         }
 
-        prewarmOnDeviceTranscriber()
+        prewarmCapturePath()
         refreshOverlayVisibility(null)
         scheduleFocusRecoveryIfNeeded(force = true)
     }
@@ -284,11 +316,25 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleDictationActiveColor = color
         bubbleRewriteActiveColor = color
         bubbleFixActiveColor = color
+        refreshCommandActionColors(color)
+        updateCommandActionButtons()
+    }
+
+    private fun refreshCommandActionColors(accent: Int) {
+        val onAccent = preferredOnColor(accent)
+        commandChipIdleTextColor = onAccent
+        commandChipIdleBackgroundColor = accent
+        commandChipFixTextColor = onAccent
+        commandChipFixBackgroundColor = accent
+        commandChipRewriteTextColor = onAccent
+        commandChipRewriteBackgroundColor = accent
     }
 
     override fun onDestroy() {
+        isServiceDestroyed = true
         super.onDestroy()
         val workflowToken = overlayWorkflowFence.currentToken()
+        workflowToken?.let(overlayWorkflowFence::finish)
         audioProcessingCoordinator.cancelCaptureFromLifecycle(
             AndroidAudioAttemptOwner.OVERLAY,
             "Dictation service stopped",
@@ -307,6 +353,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
+        if (isServiceDestroyed) return
         if (shouldShowBubble(source)) {
             bubbleShouldBeVisible = true
             showBubble()
@@ -412,12 +459,32 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return focused?.isPassword == true
     }
 
-    private fun prewarmOnDeviceTranscriber() {
+    private fun prewarmCapturePath() {
         serviceScope.launch(Dispatchers.Default) {
-            transcriptionRepository.prewarmOnDeviceIfEnabled()
-                .onFailure { error ->
-                    Log.w(TAG, "Unable to prewarm on-device transcription", error)
+            kotlinx.coroutines.coroutineScope {
+                launch {
+                    runCatching { audioProcessingCoordinator.awaitCaptureReadiness() }
+                        .onFailure { error ->
+                            Log.w(TAG, "Unable to prewarm audio startup recovery", error)
+                        }
                 }
+                launch {
+                    runCatching { appPreferences.getInstructionsForApp(null) }
+                        .onFailure { error ->
+                            Log.w(TAG, "Unable to prewarm context rules", error)
+                        }
+                }
+                launch {
+                    runCatching { transcriptionRepository.prewarmCaptureSettings() }
+                        .onFailure { error ->
+                            Log.w(TAG, "Unable to prewarm transcription settings", error)
+                        }
+                    transcriptionRepository.prewarmOnDeviceIfEnabled()
+                        .onFailure { error ->
+                            Log.w(TAG, "Unable to prewarm on-device transcription", error)
+                        }
+                }
+            }
         }
     }
 
@@ -675,41 +742,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ensureCommandActionsCreated() {
         if (commandActionsView != null) return
 
-        val horizontalPadding = dp(12)
-        val verticalPadding = dp(8)
+        val containerPadding = dp(COMMAND_ACTION_CONTAINER_PADDING_DP)
         val buttonGap = dp(COMMAND_ACTION_GAP_DP)
-        val surfaceColor = resolveThemeColor(
-            android.R.attr.colorBackgroundFloating,
-            resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
-        )
-        val onSurfaceColor = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
-        val containerColor = withAlpha(surfaceColor, 0.92f)
-        commandChipIdleTextColor = onSurfaceColor
-        commandChipIdleBackgroundColor = withAlpha(onSurfaceColor, 0.14f)
-
-        val fixAccent = resolveThemeColor(
-            android.R.attr.colorSecondary,
-            0xFFFF6300.toInt()
-        )
-        val rewriteAccent = resolveThemeColor(
-            android.R.attr.colorAccent,
-            0xFFFF6300.toInt()
-        )
-        commandChipFixBackgroundColor = withAlpha(fixAccent, 0.9f)
-        commandChipFixTextColor = preferredOnColor(commandChipFixBackgroundColor)
-        commandChipRewriteBackgroundColor = withAlpha(rewriteAccent, 0.9f)
-        commandChipRewriteTextColor = preferredOnColor(commandChipRewriteBackgroundColor)
+        val buttonSize = dp(COMMAND_ACTION_BUTTON_SIZE_DP)
+        refreshCommandActionColors(bubbleIdleColor)
         bubbleFixActiveColor = bubbleDictationActiveColor
         bubbleRewriteActiveColor = bubbleDictationActiveColor
 
         fixGrammarButton = createCommandActionButton(
             label = getString(R.string.overlay_action_fix_grammar),
+            iconRes = R.drawable.ic_cleanup,
             textColor = commandChipIdleTextColor,
             backgroundColor = commandChipIdleBackgroundColor,
             onClick = { executeSelectionCommand(COMMAND_CLEANUP_ID, CommandAction.FixGrammar) }
         )
         rewriteButton = createCommandActionButton(
             label = getString(R.string.overlay_action_rewrite_ai),
+            iconRes = R.drawable.ic_command_mic,
             textColor = commandChipIdleTextColor,
             backgroundColor = commandChipIdleBackgroundColor,
             onClick = { startRewriteInstructionRecording() }
@@ -718,19 +767,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         commandActionsView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            elevation = dp(6).toFloat()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(22).toFloat()
-                setColor(containerColor)
-            }
+            setPadding(containerPadding, containerPadding, containerPadding, containerPadding)
+            clipChildren = false
+            clipToPadding = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
 
-            addView(fixGrammarButton)
+            addView(fixGrammarButton, LinearLayout.LayoutParams(buttonSize, buttonSize))
             addView(rewriteButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+                buttonSize,
+                buttonSize
             ).apply {
                 leftMargin = buttonGap
             })
@@ -756,25 +801,47 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun createCommandActionButton(
         label: String,
+        iconRes: Int,
         textColor: Int,
         backgroundColor: Int,
         onClick: () -> Unit
-    ): TextView {
-        return TextView(this).apply {
-            text = label
-            setTextColor(textColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            isAllCaps = false
-            minHeight = dp(32)
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(16).toFloat()
-                setColor(backgroundColor)
+    ): ImageButton {
+        return ImageButton(this).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(textColor)
+            contentDescription = label
+            tooltipText = label
+            scaleType = ImageView.ScaleType.CENTER
+            minimumWidth = 0
+            minimumHeight = 0
+            isFocusable = true
+            setPadding(dp(15), dp(15), dp(15), dp(15))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            isHapticFeedbackEnabled = true
+            elevation = dp(6).toFloat()
+            background = commandActionBackground(backgroundColor, textColor)
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                onClick()
             }
-            setOnClickListener { onClick() }
         }
+    }
+
+    private fun commandActionBackground(backgroundColor: Int, rippleColor: Int): RippleDrawable {
+        val content = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(backgroundColor)
+        }
+        val mask = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.WHITE)
+        }
+        val surfaceInset = dp(4)
+        return RippleDrawable(
+            ColorStateList.valueOf(withAlpha(rippleColor, 0.24f)),
+            InsetDrawable(content, surfaceInset),
+            InsetDrawable(mask, surfaceInset)
+        )
     }
 
     private fun updateCommandActionsVisibility(source: AccessibilityNodeInfo?) {
@@ -783,7 +850,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (recordingState != RecordingState.Idle) {
+        if (recordingState != OverlayRecordingState.Idle) {
             if (activeCommandAction != null) {
                 showCommandActions()
             } else {
@@ -819,6 +886,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (isCommandActionsAttached) {
             actions.alpha = 1f
             updateCommandActionsPosition()
+            actions.post { updateCommandActionsPosition() }
             updateCommandActionButtons()
             return
         }
@@ -828,6 +896,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             windowManager.addView(actions, params)
             isCommandActionsAttached = true
             updateCommandActionsPosition()
+            actions.post { updateCommandActionsPosition() }
             updateCommandActionButtons()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to attach command actions overlay", e)
@@ -1106,15 +1175,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         when {
                             circularBubble?.isCancelHit(event.x, event.y) == true -> {
                                 performClickHaptic()
-                                stopRecording(discard = true)
+                                if (recordingState == OverlayRecordingState.Starting) {
+                                    cancelOverlayAudio("Dictation cancelled before recording started")
+                                } else {
+                                    stopRecording(discard = true)
+                                }
                             }
                             circularBubble?.isAcceptHit(event.x, event.y) == true -> {
                                 performClickHaptic()
-                                stopRecording(discard = false)
+                                if (recordingState == OverlayRecordingState.Starting) {
+                                    cancelOverlayAudio("Dictation stopped before recording started")
+                                } else {
+                                    stopRecording(discard = false)
+                                }
                             }
-                            recordingState == RecordingState.Recording -> Unit
+                            recordingState == OverlayRecordingState.Starting ||
+                                recordingState == OverlayRecordingState.Recording -> Unit
                             else -> {
-                                performClickHaptic()
                                 onBubbleTapped()
                             }
                         }
@@ -1148,12 +1225,22 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleView?.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
     }
 
+    private fun performRecordingReadyHaptic() {
+        val effect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.VIRTUAL_KEY
+        }
+        bubbleView?.performHapticFeedback(effect)
+    }
+
     private fun onBubbleTapped() {
         hideDismissActions()
         when (recordingState) {
-            RecordingState.Idle -> startRecording(mode = RecordingMode.Dictation)
-            RecordingState.Recording -> stopRecording(discard = false)
-            RecordingState.Processing -> Unit
+            OverlayRecordingState.Idle -> startRecording(mode = RecordingMode.Dictation)
+            OverlayRecordingState.Recording -> stopRecording(discard = false)
+            OverlayRecordingState.Starting,
+            OverlayRecordingState.Processing -> Unit
         }
     }
 
@@ -1221,7 +1308,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun executeSelectionCommand(commandId: String, action: CommandAction) {
-        if (recordingState != RecordingState.Idle) return
+        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
 
         val target = resolveSelectionCommandTarget()
         if (target == null) {
@@ -1232,7 +1319,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         dictationTargetNode = resolveFocusedEditableNode(null)
         activeCommandAction = action
         recordingMode = RecordingMode.Dictation
-        recordingState = RecordingState.Processing
+        recordingState = OverlayRecordingState.Processing
         updateBubbleUi()
         showCommandActions()
 
@@ -1286,7 +1373,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     ).show()
                 }
             } finally {
-                recordingState = RecordingState.Idle
+                recordingState = OverlayRecordingState.Idle
                 activeCommandAction = null
                 dictationTargetNode = null
                 updateBubbleUi()
@@ -1374,7 +1461,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun startRewriteInstructionRecording() {
-        if (recordingState != RecordingState.Idle) return
+        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
 
         val target = resolveSelectionCommandTarget()
         if (target == null) {
@@ -1388,7 +1475,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun startRecording(mode: RecordingMode) {
-        if (recordingState != RecordingState.Idle) return
+        if (recordingState != OverlayRecordingState.Idle) return
 
         if (mode == RecordingMode.Dictation) {
             pendingRewriteTarget = null
@@ -1447,17 +1534,28 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         cancelDeliveryForReplacement()
         val token = overlayWorkflowFence.beginAudio()
         recordingMode = mode
-        recordingState = RecordingState.Processing
+        recordingState = OverlayRecordingState.Starting
         updateBubbleUi()
 
         audioWorkflowJob = serviceScope.launch {
-            val contextRules = if (mode == RecordingMode.Dictation) {
-                try {
-                    withTimeout(SETTINGS_SNAPSHOT_TIMEOUT_MS) {
-                        appPreferences.getInstructionsForApp(contextPackageAtStart)
-                    }
-                } catch (error: CancellationException) {
-                    if (error is kotlinx.coroutines.TimeoutCancellationException) {
+            try {
+                val contextRules = if (mode == RecordingMode.Dictation) {
+                    try {
+                        withTimeout(SETTINGS_SNAPSHOT_TIMEOUT_MS) {
+                            appPreferences.getInstructionsForApp(contextPackageAtStart)
+                        }
+                    } catch (error: CancellationException) {
+                        if (error is kotlinx.coroutines.TimeoutCancellationException) {
+                            Toast.makeText(
+                                this@OverlayDictationAccessibilityService,
+                                "Your transcription settings could not be loaded. Try again.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            resetAfterRecording(mode, token)
+                            return@launch
+                        }
+                        throw error
+                    } catch (error: Throwable) {
                         Toast.makeText(
                             this@OverlayDictationAccessibilityService,
                             "Your transcription settings could not be loaded. Try again.",
@@ -1466,82 +1564,85 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         resetAfterRecording(mode, token)
                         return@launch
                     }
-                    throw error
-                } catch (error: Throwable) {
+                } else {
+                    null
+                }
+                val started = audioProcessingCoordinator.startCapture(
+                    owner = AndroidAudioAttemptOwner.OVERLAY,
+                    workflowToken = token,
+                    autoStopOnSilence = autoStopOnSilenceEnabled,
+                    additionalPrompt = cursorContext,
+                    contextRules = contextRules
+                )
+                if (!ownsAudioPhase(token)) {
+                    started.getOrNull()?.let { staleLease ->
+                        audioProcessingCoordinator.cancelCapture(
+                            AndroidAudioAttemptOwner.OVERLAY,
+                            "Dictation was replaced before recording started",
+                            expectedLease = staleLease,
+                            expectedWorkflowToken = token
+                        )
+                    }
+                    return@launch
+                }
+                started.onFailure {
                     Toast.makeText(
                         this@OverlayDictationAccessibilityService,
-                        "Your transcription settings could not be loaded. Try again.",
+                        R.string.dictation_recording_not_saved,
                         Toast.LENGTH_LONG
                     ).show()
                     resetAfterRecording(mode, token)
                     return@launch
                 }
-            } else {
-                null
-            }
-            val started = audioProcessingCoordinator.startCapture(
-                owner = AndroidAudioAttemptOwner.OVERLAY,
-                workflowToken = token,
-                autoStopOnSilence = autoStopOnSilenceEnabled,
-                additionalPrompt = cursorContext,
-                contextRules = contextRules
-            )
-            if (!ownsAudioPhase(token)) {
-                started.getOrNull()?.let { staleLease ->
-                    audioProcessingCoordinator.cancelCapture(
-                        AndroidAudioAttemptOwner.OVERLAY,
-                        "Dictation was replaced before recording started",
-                        expectedLease = staleLease,
-                        expectedWorkflowToken = token
-                    )
+                val lease = started.getOrThrow()
+                audioWorkflowLease = lease
+                val captureIsCurrent = audioProcessingCoordinator.isCaptureCurrent(
+                    AndroidAudioAttemptOwner.OVERLAY,
+                    lease
+                )
+                if (!captureIsCurrent || !ownsAudioPhase(token)) {
+                    if (captureIsCurrent) {
+                        audioProcessingCoordinator.cancelCapture(
+                            AndroidAudioAttemptOwner.OVERLAY,
+                            "Dictation was replaced before its UI became active",
+                            expectedLease = lease,
+                            expectedWorkflowToken = token
+                        )
+                    }
+                    resetAfterRecording(mode, token)
+                    return@launch
                 }
-                return@launch
-            }
-            started.onFailure {
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    R.string.dictation_recording_not_saved,
-                    Toast.LENGTH_LONG
-                ).show()
-                resetAfterRecording(mode, token)
-                return@launch
-            }
-            val lease = started.getOrThrow()
-            audioWorkflowLease = lease
-            val captureIsCurrent = audioProcessingCoordinator.isCaptureCurrent(
-                AndroidAudioAttemptOwner.OVERLAY,
-                lease
-            )
-            if (!captureIsCurrent || !ownsAudioPhase(token)) {
-                if (captureIsCurrent) {
-                    audioProcessingCoordinator.cancelCapture(
-                        AndroidAudioAttemptOwner.OVERLAY,
-                        "Dictation was replaced before its UI became active",
-                        expectedLease = lease,
-                        expectedWorkflowToken = token
-                    )
-                }
-                resetAfterRecording(mode, token)
-                return@launch
-            }
 
-            recordingState = RecordingState.Recording
-            updateBubbleUi()
-            vadJob?.cancel()
-            vadJob = serviceScope.launch {
-                audioProcessingCoordinator.shouldAutoStop.collectLatest { shouldStop ->
-                    if (shouldStop && ownsAudioPhase(token) &&
-                        recordingState == RecordingState.Recording
-                    ) {
-                        stopRecording(discard = false)
+                recordingState = OverlayRecordingState.Recording
+                updateBubbleUi()
+                performRecordingReadyHaptic()
+                vadJob?.cancel()
+                vadJob = serviceScope.launch {
+                    audioProcessingCoordinator.shouldAutoStop.collectLatest { shouldStop ->
+                        if (shouldStop && ownsAudioPhase(token) &&
+                            recordingState == OverlayRecordingState.Recording
+                        ) {
+                            stopRecording(discard = false)
+                        }
                     }
                 }
+            } catch (error: CancellationException) {
+                if (ownsAudioPhase(token)) {
+                    audioProcessingCoordinator.cancelCaptureFromLifecycle(
+                        AndroidAudioAttemptOwner.OVERLAY,
+                        "Dictation startup was cancelled",
+                        expectedLease = audioWorkflowLease,
+                        expectedWorkflowToken = token
+                    )
+                    resetAfterRecording(mode, token)
+                }
+                throw error
             }
         }
     }
 
     private fun stopRecording(discard: Boolean) {
-        if (recordingState != RecordingState.Recording) return
+        if (recordingState != OverlayRecordingState.Recording) return
         val mode = recordingMode
         val token = overlayWorkflowFence.currentToken() ?: return
         if (!ownsAudioPhase(token)) return
@@ -1563,7 +1664,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // MediaRecorder.stop() can block while Android finalizes the audio container. Move that
         // work off the accessibility service's main thread and change state first so auto-stop
         // cannot trigger a second stop while finalization is in progress.
-        recordingState = RecordingState.Processing
+        recordingState = OverlayRecordingState.Processing
         updateBubbleUi()
 
         audioWorkflowJob = serviceScope.launch {
@@ -1651,7 +1752,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val currentJob = kotlin.coroutines.coroutineContext[Job] ?: return false
         audioWorkflowJob = null
         deliveryJob = currentJob
-        recordingState = RecordingState.Idle
+        recordingState = OverlayRecordingState.Idle
         updateBubbleUi()
         refreshOverlayVisibility(null)
         return true
@@ -1668,7 +1769,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         audioWorkflowJob = null
         deliveryJob = null
         audioWorkflowLease = null
-        recordingState = RecordingState.Idle
+        recordingState = OverlayRecordingState.Idle
         dictationTargetNode = null
         if (mode == RecordingMode.RewriteInstruction) {
             activeCommandAction = null
@@ -2299,8 +2400,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun updateCommandActionButtons() {
         val hasActiveCommand = activeCommandAction != null
-        val isBusy = recordingState != RecordingState.Idle
-        val canTap = recordingState == RecordingState.Idle
+        val workflowActive = hasOverlayWorkflow()
+        val isBusy = recordingState != OverlayRecordingState.Idle || workflowActive
+        val canTap = canStartSelectionCommand(recordingState, workflowActive)
 
         val fixActive = hasActiveCommand && activeCommandAction == CommandAction.FixGrammar
         val rewriteActive = hasActiveCommand && activeCommandAction == CommandAction.RewriteWithAi
@@ -2310,41 +2412,61 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             textColor = if (fixActive) commandChipFixTextColor else commandChipIdleTextColor,
             backgroundColor = if (fixActive) commandChipFixBackgroundColor else commandChipIdleBackgroundColor,
             enabled = canTap,
-            subdued = isBusy && !fixActive
+            subdued = isBusy && !fixActive,
+            stateDescription = if (fixActive) getString(R.string.overlay_action_fix_grammar_state_active) else null
         )
         applyCommandButtonStyle(
             button = rewriteButton,
             textColor = if (rewriteActive) commandChipRewriteTextColor else commandChipIdleTextColor,
             backgroundColor = if (rewriteActive) commandChipRewriteBackgroundColor else commandChipIdleBackgroundColor,
             enabled = canTap,
-            subdued = isBusy && !rewriteActive
+            subdued = isBusy && !rewriteActive,
+            stateDescription = when {
+                !rewriteActive -> null
+                recordingState == OverlayRecordingState.Starting -> {
+                    getString(R.string.overlay_action_rewrite_ai_state_starting)
+                }
+                recordingState == OverlayRecordingState.Recording -> {
+                    getString(R.string.overlay_action_rewrite_ai_state_listening)
+                }
+                else -> getString(R.string.overlay_action_rewrite_ai_state_processing)
+            }
         )
     }
 
     private fun applyCommandButtonStyle(
-        button: TextView?,
+        button: ImageButton?,
         textColor: Int,
         backgroundColor: Int,
         enabled: Boolean,
-        subdued: Boolean
+        subdued: Boolean,
+        stateDescription: String?
     ) {
         button ?: return
         button.isEnabled = enabled
         button.alpha = if (subdued) 0.55f else 1f
-        button.setTextColor(textColor)
-        button.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(16).toFloat()
-            setColor(backgroundColor)
-        }
+        button.imageTintList = ColorStateList.valueOf(textColor)
+        button.background = commandActionBackground(backgroundColor, textColor)
+        ViewCompat.setStateDescription(button, stateDescription)
     }
 
     private fun preferredOnColor(backgroundColor: Int): Int {
-        val red = Color.red(backgroundColor) / 255f
-        val green = Color.green(backgroundColor) / 255f
-        val blue = Color.blue(backgroundColor) / 255f
-        val luma = (0.299f * red) + (0.587f * green) + (0.114f * blue)
-        return if (luma > 0.62f) Color.BLACK else Color.WHITE
+        fun linearChannel(channel: Int): Double {
+            val normalized = channel / 255.0
+            return if (normalized <= 0.04045) {
+                normalized / 12.92
+            } else {
+                Math.pow((normalized + 0.055) / 1.055, 2.4)
+            }
+        }
+
+        val luminance =
+            0.2126 * linearChannel(Color.red(backgroundColor)) +
+                0.7152 * linearChannel(Color.green(backgroundColor)) +
+                0.0722 * linearChannel(Color.blue(backgroundColor))
+        val whiteContrast = 1.05 / (luminance + 0.05)
+        val blackContrast = (luminance + 0.05) / 0.05
+        return if (whiteContrast >= blackContrast) Color.WHITE else Color.BLACK
     }
 
     private fun updateBubbleUi() {
@@ -2352,22 +2474,28 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val bubble = bubbleView ?: return
         bubble.setColors(bubbleIdleColor, resolveBubbleActiveColor())
         // Keep the screen awake while dictation is recording or processing
-        bubble.keepScreenOn = recordingState != RecordingState.Idle
+        bubble.keepScreenOn = recordingState != OverlayRecordingState.Idle
 
-        when (recordingState) {
-            RecordingState.Idle -> {
+        when (recordingState.bubblePresentation()) {
+            OverlayBubblePresentation.Idle -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Idle)
                 updateBubbleLayoutSize()
             }
 
-            RecordingState.Recording -> {
+            OverlayBubblePresentation.Starting -> {
+                stopBubbleAnimation()
+                bubble.setState(OverlayMicButtonView.State.Starting)
+                updateBubbleLayoutSize()
+            }
+
+            OverlayBubblePresentation.Recording -> {
                 bubble.setState(OverlayMicButtonView.State.Recording)
                 updateBubbleLayoutSize()
                 startBubbleAnimation()
             }
 
-            RecordingState.Processing -> {
+            OverlayBubblePresentation.Processing -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Processing)
                 updateBubbleLayoutSize()
@@ -2412,7 +2540,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun startBubbleAnimation() {
         bubbleAnimationJob?.cancel()
         bubbleAnimationJob = serviceScope.launch {
-            while (recordingState == RecordingState.Recording) {
+            while (recordingState.streamsAudioLevels) {
                 bubbleView?.setAudioLevel(audioProcessingCoordinator.audioLevel.value)
                 bubbleView?.setFrequencyBands(audioProcessingCoordinator.frequencyBands.value)
                 delay(50)

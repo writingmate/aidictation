@@ -80,6 +80,10 @@ env:
   ANDROID_PROJECT_DIR: AIDictationAndroid
   PARAKEET_ASSETS_RELEASE_TAG: android-parakeet-assets-v3
   PARAKEET_ASSETS_ARCHIVE: AIDictation-Parakeet-Assets-v3.zip
+  # Browser sign-in and native account/profile requests must share an origin.
+  SUPABASE_URL: https://aidictation.com
+  SUPABASE_ANON_KEY: public-anon-key
+  AUTH_WEB_URL: https://aidictation.com/auth
 
 jobs:
   publish:
@@ -114,9 +118,6 @@ jobs:
       AIDICTATION_POST_PROCESSING_KEY: ${{ secrets.AIDICTATION_POST_PROCESSING_KEY }}
       AIDICTATION_POST_PROCESSING_ENDPOINT: ${{ secrets.AIDICTATION_POST_PROCESSING_ENDPOINT }}
       AIDICTATION_POST_PROCESSING_MODEL: ${{ secrets.AIDICTATION_POST_PROCESSING_MODEL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      AUTH_WEB_URL: ${{ secrets.AUTH_WEB_URL }}
       STRIPE_PAYMENT_LINK: ${{ secrets.STRIPE_PAYMENT_LINK }}
       STRIPE_PAYMENT_LINK_MONTHLY: ${{ secrets.STRIPE_PAYMENT_LINK_MONTHLY }}
       STRIPE_PAYMENT_LINK_ANNUAL: ${{ secrets.STRIPE_PAYMENT_LINK_ANNUAL }}
@@ -413,7 +414,9 @@ jobs:
           rm /tmp/secrets.plist
 
       - name: Validate release client configuration
-        run: python3 scripts/validate_client_config.py
+        run: |
+          python3 scripts/test_validate_client_config.py
+          python3 scripts/validate_client_config.py
 
       - name: Write local.properties
         run: |

@@ -89,6 +89,7 @@ jobs:
   publish:
     name: Publish signed AAB to Play
     runs-on: ubuntu-latest
+    environment: release
 
     defaults:
       run:

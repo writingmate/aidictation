@@ -160,7 +160,7 @@ class AuthRepository @Inject constructor(
         // user to the signed-out screen with nothing explaining why — including
         // immediately after a successful sign-in.
         val firstError = firstAttempt.exceptionOrNull()
-        if (!firstError.isCredentialRejection()) {
+        if (!AuthSessionPolicy.rejectsStoredCredential(firstError)) {
             Log.w(TAG, "Keeping stored session after a non-auth profile failure", firstError)
             _authState.value = AuthState(isLoading = false, error = firstError?.message)
             return@withContext
@@ -169,7 +169,7 @@ class AuthRepository @Inject constructor(
         val refreshed = if (refreshToken.isNullOrBlank()) null else refreshSession(refreshToken)
         val activeToken = refreshed?.getOrNull()
         if (activeToken == null) {
-            if (refreshed == null || refreshed.exceptionOrNull().isCredentialRejection()) {
+            if (refreshed == null || AuthSessionPolicy.rejectsStoredCredential(refreshed.exceptionOrNull())) {
                 clearTokens()
                 _authState.value = AuthState(isLoading = false)
             } else {
@@ -183,7 +183,7 @@ class AuthRepository @Inject constructor(
             onSuccess = { _authState.value = AuthState(user = it, isLoading = false) },
             onFailure = { error ->
                 Log.w(TAG, "Failed to fetch profile", error)
-                if (error.isCredentialRejection()) clearTokens()
+                if (AuthSessionPolicy.rejectsStoredCredential(error)) clearTokens()
                 _authState.value = AuthState(isLoading = false, error = error.message)
             }
         )
@@ -250,7 +250,7 @@ class AuthRepository @Inject constructor(
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw HttpStatusException(response.code, "Profile fetch failed: ${response.code}")
+            if (!response.isSuccessful) throw AuthHttpException(response.code, "Profile fetch failed: ${response.code}")
             val profiles = parseProfileArray(response.body?.string().orEmpty(), authUser.second)
             profiles.firstOrNull() ?: UserProfile(
                 userId = authUser.first,
@@ -269,7 +269,7 @@ class AuthRepository @Inject constructor(
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw HttpStatusException(response.code, "Auth user fetch failed: ${response.code}")
+            if (!response.isSuccessful) throw AuthHttpException(response.code, "Auth user fetch failed: ${response.code}")
             val json = JSONObject(response.body?.string().orEmpty())
             return json.getString("id") to json.optString("email")
         }
@@ -288,7 +288,7 @@ class AuthRepository @Inject constructor(
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw HttpStatusException(response.code, "Session refresh failed: ${response.code}")
+            if (!response.isSuccessful) throw AuthHttpException(response.code, "Session refresh failed: ${response.code}")
             val json = JSONObject(response.body?.string().orEmpty())
             val accessToken = json.getString("access_token")
             storeTokens(accessToken, json.optString("refresh_token", refreshToken))
@@ -373,13 +373,7 @@ class AuthRepository @Inject constructor(
         return optString(name).takeIf { it.isNotBlank() }
     }
 
-    /** Carries the HTTP status so a rejected credential can be told apart from an unreachable backend. */
-    internal class HttpStatusException(val status: Int, message: String) : Exception(message)
-
     private companion object {
         const val TAG = "AuthRepository"
-
-        fun Throwable?.isCredentialRejection(): Boolean =
-            this is HttpStatusException && (status == 401 || status == 403)
     }
 }

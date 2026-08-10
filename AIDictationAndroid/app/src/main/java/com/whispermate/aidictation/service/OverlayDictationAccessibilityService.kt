@@ -155,6 +155,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var dismissHideZone: TextView? = null
 
     private var recordingState: RecordingState = RecordingState.Idle
+    // Capture startup is internally Processing, but the bubble renders it as
+    // Recording: a tap should feel like recording starts immediately, not show
+    // a spinner while settings load and the microphone spins up.
+    private var isStartingCapture = false
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private val overlayWorkflowFence = ReplaceableDeliveryFence()
     private var audioWorkflowLease: AudioAttemptLease? = null
@@ -284,6 +288,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         bubbleDictationActiveColor = color
         bubbleRewriteActiveColor = color
         bubbleFixActiveColor = color
+        refreshCommandChipColors()
+        updateCommandActionButtons()
+    }
+
+    private fun refreshCommandChipColors() {
+        val accent = OverlayBubblePreferences.getResolvedBubbleColor(this)
+        commandChipFixBackgroundColor = withAlpha(accent, 0.9f)
+        commandChipFixTextColor = preferredOnColor(commandChipFixBackgroundColor)
+        commandChipRewriteBackgroundColor = withAlpha(accent, 0.9f)
+        commandChipRewriteTextColor = preferredOnColor(commandChipRewriteBackgroundColor)
     }
 
     override fun onDestroy() {
@@ -687,18 +701,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         commandChipIdleTextColor = onSurfaceColor
         commandChipIdleBackgroundColor = withAlpha(onSurfaceColor, 0.14f)
 
-        val fixAccent = resolveThemeColor(
-            android.R.attr.colorSecondary,
-            0xFFFF6300.toInt()
-        )
-        val rewriteAccent = resolveThemeColor(
-            android.R.attr.colorAccent,
-            0xFFFF6300.toInt()
-        )
-        commandChipFixBackgroundColor = withAlpha(fixAccent, 0.9f)
-        commandChipFixTextColor = preferredOnColor(commandChipFixBackgroundColor)
-        commandChipRewriteBackgroundColor = withAlpha(rewriteAccent, 0.9f)
-        commandChipRewriteTextColor = preferredOnColor(commandChipRewriteBackgroundColor)
+        // The service theme is the framework default, not the app theme, so its
+        // colorSecondary/colorAccent never match the bubble. Style the active
+        // chips from the same user-selected accent the bubble itself uses.
+        refreshCommandChipColors()
         bubbleFixActiveColor = bubbleDictationActiveColor
         bubbleRewriteActiveColor = bubbleDictationActiveColor
 
@@ -1448,6 +1454,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val token = overlayWorkflowFence.beginAudio()
         recordingMode = mode
         recordingState = RecordingState.Processing
+        isStartingCapture = true
         updateBubbleUi()
 
         audioWorkflowJob = serviceScope.launch {
@@ -1526,6 +1533,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
 
             recordingState = RecordingState.Recording
+            isStartingCapture = false
             updateBubbleUi()
             vadJob?.cancel()
             vadJob = serviceScope.launch {
@@ -1652,6 +1660,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         audioWorkflowJob = null
         deliveryJob = currentJob
         recordingState = RecordingState.Idle
+        isStartingCapture = false
         updateBubbleUi()
         refreshOverlayVisibility(null)
         return true
@@ -1669,6 +1678,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         deliveryJob = null
         audioWorkflowLease = null
         recordingState = RecordingState.Idle
+        isStartingCapture = false
         dictationTargetNode = null
         if (mode == RecordingMode.RewriteInstruction) {
             activeCommandAction = null
@@ -2368,9 +2378,17 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             }
 
             RecordingState.Processing -> {
-                stopBubbleAnimation()
-                bubble.setState(OverlayMicButtonView.State.Processing)
-                updateBubbleLayoutSize()
+                if (isStartingCapture) {
+                    // Render capture startup as recording so the tap responds
+                    // immediately; the waveform goes live once audio flows.
+                    bubble.setState(OverlayMicButtonView.State.Recording)
+                    updateBubbleLayoutSize()
+                    startBubbleAnimation()
+                } else {
+                    stopBubbleAnimation()
+                    bubble.setState(OverlayMicButtonView.State.Processing)
+                    updateBubbleLayoutSize()
+                }
             }
         }
     }
@@ -2412,7 +2430,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun startBubbleAnimation() {
         bubbleAnimationJob?.cancel()
         bubbleAnimationJob = serviceScope.launch {
-            while (recordingState == RecordingState.Recording) {
+            while (recordingState == RecordingState.Recording || isStartingCapture) {
                 bubbleView?.setAudioLevel(audioProcessingCoordinator.audioLevel.value)
                 bubbleView?.setFrequencyBands(audioProcessingCoordinator.frequencyBands.value)
                 delay(50)

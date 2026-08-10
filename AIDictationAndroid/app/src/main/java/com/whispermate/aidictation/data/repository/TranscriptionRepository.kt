@@ -46,6 +46,18 @@ class TranscriptionRepository @Inject constructor(
         const val CLEANUP_TIMEOUT_MS = 35_000L
     }
 
+    /**
+     * Loads the DataStore-backed inputs used to freeze an attempt configuration. The actual
+     * immutable snapshot is still captured at tap time, but it no longer has to pay the first-read
+     * disk cost while the user is waiting for the microphone.
+     */
+    suspend fun prewarmCaptureSettings() {
+        appPreferences.selectedLanguages.first()
+        appPreferences.onDeviceTranscriptionEnabled.first()
+        appPreferences.dictionaryEntries.first()
+        appPreferences.shortcuts.first()
+    }
+
     suspend fun prewarmOnDeviceIfEnabled(): Result<Unit> {
         val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()

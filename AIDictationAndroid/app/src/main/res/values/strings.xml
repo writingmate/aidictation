@@ -165,7 +165,11 @@
     <!-- Accessibility -->
     <string name="accessibility_service_description">Shows a dictation bubble for active text fields and inserts dictated text only when you start dictation.</string>
     <string name="overlay_action_fix_grammar">Fix grammar</string>
+    <string name="overlay_action_fix_grammar_state_active">Fixing grammar</string>
     <string name="overlay_action_rewrite_ai">Rewrite with AI</string>
+    <string name="overlay_action_rewrite_ai_state_starting">Starting microphone</string>
+    <string name="overlay_action_rewrite_ai_state_listening">Listening for rewrite instructions</string>
+    <string name="overlay_action_rewrite_ai_state_processing">Rewriting selected text</string>
     <string name="overlay_command_unavailable">Command unavailable</string>
     <string name="overlay_command_apply_failed">Could not apply command</string>
     <string name="overlay_command_failed">%1$s failed</string>

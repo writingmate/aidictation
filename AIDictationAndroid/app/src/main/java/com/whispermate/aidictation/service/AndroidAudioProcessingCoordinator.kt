@@ -330,6 +330,11 @@ class AndroidAudioProcessingCoordinator internal constructor(
     private val _failureEvents = MutableSharedFlow<AndroidAudioFailureEvent>(extraBufferCapacity = 1)
     val failureEvents: SharedFlow<AndroidAudioFailureEvent> = _failureEvents.asSharedFlow()
 
+    /** Completes once startup recovery is out of the tap-to-record critical path. */
+    suspend fun awaitCaptureReadiness() {
+        recordingRepository.awaitStartupRecovery()
+    }
+
     suspend fun startCapture(
         owner: AndroidAudioAttemptOwner,
         workflowToken: Long,

@@ -29,6 +29,7 @@ jobs:
   publish-listing:
     name: Publish Play listing
     runs-on: ubuntu-latest
+    environment: release
 
     defaults:
       run:

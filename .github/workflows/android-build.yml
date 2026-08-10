@@ -13,6 +13,7 @@ on:
       - 'docs/audio-processing-failure-contract.md'
       - 'AGENTS.md'
       - '.github/workflows/android-build.yml'
+      - '.github/workflows/android-play-listing.yml'
       - '.github/workflows/android-play-release.yml'
 
 permissions:
@@ -174,13 +175,25 @@ jobs:
       - name: Validate Android release gating contract
         shell: bash
         run: |
-          python3 - "$GITHUB_WORKSPACE/.github/workflows/android-play-release.yml" "$GITHUB_WORKSPACE/.github/workflows/android-build.yml" <<'PY'
+          python3 - "$GITHUB_WORKSPACE/.github/workflows/android-play-release.yml" "$GITHUB_WORKSPACE/.github/workflows/android-build.yml" "$GITHUB_WORKSPACE/.github/workflows/android-play-listing.yml" <<'PY'
           from pathlib import Path
+          import re
           import sys
 
           play = Path(sys.argv[1]).read_text()
           build = Path(sys.argv[2]).read_text()
+          listing = Path(sys.argv[3]).read_text()
           expression_open = "$" + "{{"
+
+          def require_release_environment(workflow, job_name):
+              marker = f"  {job_name}:\n"
+              if marker not in workflow:
+                  raise SystemExit(f"Android release workflow is missing job {job_name}")
+              tail = workflow.split(marker, 1)[1]
+              next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\n", tail)
+              block = tail[:next_job.start()] if next_job else tail
+              if "\n    environment: release\n" not in f"\n{block}":
+                  raise SystemExit(f"Android release job {job_name} must use the protected release environment")
 
           required_play_contract = (
               f"PLAY_TRACK: {expression_open} github.event_name == 'push' && 'internal' || inputs.play_track }}",
@@ -206,6 +219,10 @@ jobs:
               raise SystemExit(f"Android Play release gate is missing: {missing}")
           if "vars.ANDROID_PLAY_TRACK" in play or "vars.ANDROID_PLAY_RELEASE_STATUS" in play:
               raise SystemExit("Repository variables must not redirect a tag-triggered Play release")
+
+          require_release_environment(play, "publish")
+          require_release_environment(build, "release")
+          require_release_environment(listing, "publish-listing")
 
           release_marker = "- name: Create or update " + "draft GitHub Release"
           release_block = build.split(release_marker, 1)
@@ -278,6 +295,7 @@ jobs:
     needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/android-v')
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
 

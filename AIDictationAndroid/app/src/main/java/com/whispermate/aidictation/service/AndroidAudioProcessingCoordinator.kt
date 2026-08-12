@@ -809,6 +809,14 @@ class AndroidAudioProcessingCoordinator internal constructor(
         val durableLease = target.lease
         if (!target.hasDurableLease || durableLease == null) return true
         return withContext(NonCancellable) {
+            // A cancellation with nothing transcribed is not a result worth keeping.
+            // Writing it as a CANCELLED terminal put a note in History for every
+            // aborted attempt — closing the recording screen left one reading
+            // "Recording screen closed". Drop the attempt instead, and only fall
+            // back to recording the terminal if the delete does not land.
+            if (!target.preserveRecognitionProgress && discardCancelledAttempt(durableLease)) {
+                return@withContext true
+            }
             val saved = persistFailureTerminal(
                 durableLease,
                 AudioProcessingStatus.CANCELLED,
@@ -1498,6 +1506,24 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 preserveRecognitionProgress = true
             )
         }
+    }
+
+    /** Removes an aborted attempt so it never surfaces in History. Returns false
+     *  when the row cannot be read or deleted, so the caller can still record a
+     *  terminal rather than leave the attempt stuck in an active state. */
+    private suspend fun discardCancelledAttempt(lease: AudioAttemptLease): Boolean {
+        val lookup = runCatching {
+            withPersistenceDeadline { recordingRepository.getRecordingById(lease.recordingId) }
+        }
+        if (lookup.isFailure) return false
+        val current = lookup.getOrNull() ?: return true
+        // Someone else already moved this recording on; leave it alone.
+        if (current.generation != lease.generation || current.attemptId != lease.attemptId) {
+            return true
+        }
+        return runCatching {
+            withPersistenceDeadline { recordingRepository.deleteRecording(current) }
+        }.getOrDefault(false)
     }
 
     private suspend fun persistFailureTerminal(

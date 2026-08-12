@@ -228,14 +228,14 @@ jobs:
           require_release_environment(build, "release")
           require_release_environment(listing, "publish-listing")
 
-          release_marker = "- name: Create or update " + "draft GitHub Release"
+          release_marker = "- name: Publish " + "GitHub Release"
           release_block = build.split(release_marker, 1)
-          if len(release_block) != 2 or "gh release create" not in release_block[1] or "--draft" not in release_block[1]:
-              raise SystemExit("Tag release creation must remain draft-only")
-          if "--draft=false" in release_block[1]:
-              raise SystemExit("Tag workflow must not publish a GitHub release")
+          if len(release_block) != 2 or "gh release create" not in release_block[1] or "--latest" not in release_block[1]:
+              raise SystemExit("Tag build must create and publish the GitHub release")
+          if "--draft \\" in release_block[1] or '"$is_draft" != "false"' not in release_block[1]:
+              raise SystemExit("Tag build must not leave the GitHub release in draft state")
 
-          print("Android tag releases are internal-only and GitHub draft-only.")
+          print("Android tag releases publish to GitHub and upload to the internal Play track.")
           PY
 
       - name: Write local.properties
@@ -596,7 +596,7 @@ jobs:
           path: AIDictationAndroid/app/build/outputs/bundle/release/*.aab
           retention-days: 90
 
-      - name: Create or update draft GitHub Release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
@@ -609,23 +609,23 @@ jobs:
             exit 1
           fi
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
-            if [ "$is_draft" != "true" ]; then
-              echo "Refusing to modify already-public release $RELEASE_TAG from a tag build." >&2
+            release_sha=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
+            if [ -n "$release_sha" ] && [ "$release_sha" != "$RELEASE_TAG_SHA" ] && [ "$release_sha" != "main" ]; then
+              echo "Refusing to modify release $RELEASE_TAG targeting $release_sha from a build of $RELEASE_TAG_SHA." >&2
               exit 1
             fi
             gh release upload "$RELEASE_TAG" release-artifacts/* --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --draft=false --latest --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" release-artifacts/* \
               --target "$RELEASE_TAG_SHA" \
               --title "$RELEASE_TITLE" \
               --generate-notes \
-              --draft \
+              --latest \
               --repo "$GITHUB_REPOSITORY"
           fi
           is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
-          if [ "$is_draft" != "true" ]; then
-            echo "Tag build must leave release $RELEASE_TAG in draft state." >&2
+          if [ "$is_draft" != "false" ]; then
+            echo "Tag build must leave release $RELEASE_TAG published." >&2
             exit 1
           fi

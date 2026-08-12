@@ -601,11 +601,10 @@ jobs:
             exit 1
           fi
 
+          # The tag build publishes the GitHub release directly, so this job
+          # normally just re-verifies the published artifacts. It still knows
+          # how to flip an older draft release live.
           is_draft=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)
-          if [ "${is_draft}" != "true" ]; then
-            echo "Release ${RELEASE_TAG} must exist as a draft before publication." >&2
-            exit 1
-          fi
 
           artifact_version="${RELEASE_TAG#android-v}"
           verification_dir="${RUNNER_TEMP}/github-release-verification"
@@ -621,10 +620,14 @@ jobs:
             shasum -a 256 -c SHA256SUMS.txt
           )
 
-          gh release edit "${RELEASE_TAG}" \
-            --draft=false \
-            --latest \
-            --repo "${GITHUB_REPOSITORY}"
+          if [ "${is_draft}" = "true" ]; then
+            gh release edit "${RELEASE_TAG}" \
+              --draft=false \
+              --latest \
+              --repo "${GITHUB_REPOSITORY}"
+          else
+            echo "Release ${RELEASE_TAG} is already published; verified artifacts only."
+          fi
           published_draft_state=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)
           if [ "${published_draft_state}" != "false" ]; then
             echo "Release ${RELEASE_TAG} was not published." >&2

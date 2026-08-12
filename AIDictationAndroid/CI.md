@@ -21,11 +21,13 @@ variables cannot redirect a tag to production. The workflow uses the checked-in
 `versionName` and `versionCode`, and rejects tags that do not point at a commit
 reachable from `origin/main`.
 
-The tag-triggered Android build uploads private GitHub Actions artifacts and
-creates or updates only a draft GitHub release. After the internal artifact has
-passed Android 16 device checks and Play pre-launch verification, manually run
-the Play release workflow for the same tag with `publish_mode=promote`,
-`promote_from_track=internal`, `play_track=production`,
+The tag is the release: the tag-triggered Android build signs the APK/AAB,
+uploads GitHub Actions artifacts, and publishes the GitHub release for the tag
+directly, with checksummed assets and generated notes. On the Play side the
+same tag uploads a completed release to the `internal` track only. After the
+internal artifact has passed Android 16 device checks and Play pre-launch
+verification, manually run the Play release workflow for the same tag with
+`publish_mode=promote`, `promote_from_track=internal`, `play_track=production`,
 `release_status=inProgress`, and a rollout fraction of at most 10%. Production
 uploads are rejected.
 
@@ -33,8 +35,9 @@ After monitoring, use `publish_mode=update`, `release_status=inProgress`, and a
 higher fraction to expand the same production version, or `publish_mode=halt`
 with `release_status=halted` to stop it. Finish the same version explicitly with
 `publish_mode=complete` and `release_status=completed`; a fraction of 1.0 is not
-used. Set `publish_github_release=true` only on this completion run so the
-checksummed draft GitHub release remains private throughout the staged rollout.
+used. `publish_github_release=true` on the completion run re-verifies the
+published release's checksums (and still knows how to flip a legacy draft
+release live).
 
 Google Play version codes are monotonic across every track. Because an earlier
 internal upload used version code `1007`, Android release version codes must be

@@ -46,6 +46,7 @@ jobs:
   archive-and-upload:
     name: Archive and upload
     needs: provenance
+    environment: release
     runs-on: macos-26
     timeout-minutes: 90
 

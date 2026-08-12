@@ -14,6 +14,10 @@ struct RecordingOverlayView: View {
     @State private var isPointingHandCursorActive = false
     @State private var isCancelButtonHovering = false
     @State private var isStopButtonHovering = false
+    @State private var isCopyButtonHovering = false
+    @State private var didCopyTranscription = false
+    @State private var copyConfirmationWorkItem: DispatchWorkItem?
+    @ObservedObject private var history = HistoryManager.shared
 
     // MARK: - Size Constants (single source of truth)
 
@@ -38,6 +42,17 @@ struct RecordingOverlayView: View {
     private let buttonSize: CGFloat = 28 * RecordingOverlayView.overlayScale
     private let cancelIconSize: CGFloat = 12 * RecordingOverlayView.overlayScale
     private let stopIconSize: CGFloat = 11 * RecordingOverlayView.overlayScale
+    private let copyIconSize: CGFloat = 11 * RecordingOverlayView.overlayScale
+    /// Gap between the dots and the copy button.
+    private let copyButtonSpacing: CGFloat = 10 * RecordingOverlayView.overlayScale
+    /// Hit target for the copy glyph. Wider than the glyph so it is easy to
+    /// click, and invisible, so only the glyph itself counts for spacing.
+    private let copyHitTargetWidth: CGFloat = 18
+    /// Width the pill gains for the copy affordance: the hit target plus its
+    /// gap. The pill's own 11.25pt padding plus the ~4.5pt of slack inside the
+    /// hit target leaves the glyph ~15.8pt from the pill edge, against ~14.1pt
+    /// before the first dot on the left.
+    private var copyAffordanceWidth: CGFloat { copyHitTargetWidth + copyButtonSpacing }
 
     // MARK: - Computed Properties
 
@@ -51,6 +66,20 @@ struct RecordingOverlayView: View {
 
     private var isCollapsedIdleState: Bool {
         !manager.isRecording && !manager.isProcessing && !shouldShowExpandedPill
+    }
+
+    /// Newest successful transcript, or nil when there is nothing to copy yet.
+    private var latestTranscription: String? {
+        history.recordings
+            .first { $0.status == .success && !($0.transcription ?? "").isEmpty }?
+            .transcription
+    }
+
+    /// The copy control belongs to the idle hover state only — during recording
+    /// the pill already carries cancel/stop, and copying mid-capture would hand
+    /// back the previous transcript, which reads as the wrong one.
+    private var showsCopyAffordance: Bool {
+        !manager.isRecording && !manager.isProcessing && shouldShowExpandedPill && latestTranscription != nil
     }
 
     private var idleHoverTopHitPadding: CGFloat {
@@ -191,7 +220,9 @@ struct RecordingOverlayView: View {
             updateHoverCursor(isActive: hovering && !manager.isRecording && !manager.isProcessing)
         }
         .onTapGesture {
-            if !manager.isRecording && !manager.isProcessing {
+            // The copy button lives inside the pill while tap-to-record is armed,
+            // so clicking it must not also start a recording.
+            if !manager.isRecording && !manager.isProcessing && !isCopyButtonHovering {
                 updateHoverCursor(isActive: false)
                 manager.startRecordingFromOverlay()
             }
@@ -213,7 +244,10 @@ struct RecordingOverlayView: View {
 
     @ViewBuilder
     private var contentView: some View {
-        let targetContentWidth = shouldShowExpandedPill ? (recordingWithControls ? recordingControlsStateWidth : activeStateWidth) : idleStateWidth
+        let expandedContentWidth = recordingWithControls
+            ? recordingControlsStateWidth
+            : activeStateWidth + (showsCopyAffordance ? copyAffordanceWidth : 0)
+        let targetContentWidth = shouldShowExpandedPill ? expandedContentWidth : idleStateWidth
         let targetContentHeight = shouldShowExpandedPill ? activeStateHeight : idleStateHeight
         let targetHorizontalPadding = shouldShowExpandedPill ? (recordingWithControls ? recordingControlsPadding : activePadding) : idlePaddingNormal
         let targetVerticalPadding = verticalPadding
@@ -274,11 +308,26 @@ struct RecordingOverlayView: View {
                     targetHeight: targetPillHeight
                 )
             } else if shouldShowExpandedPill && shouldShowContent {
-                centeredWaveContent(
-                    OverlayIdleDotsView(color: .white.opacity(0.92)),
-                    targetWidth: targetPillWidth,
-                    targetHeight: targetPillHeight
-                )
+                if showsCopyAffordance {
+                    // Lay the two out in sequence rather than stacking the button
+                    // on top of centred dots: the dots then centre in the space
+                    // that is actually theirs, and the button keeps the pill's
+                    // own padding as its trailing inset.
+                    HStack(spacing: copyButtonSpacing) {
+                        OverlayIdleDotsView(color: .white.opacity(0.92))
+                            .frame(width: waveSpanWidth, height: activeStateHeight)
+                            .frame(maxWidth: .infinity)
+                        copyTranscriptionButton
+                    }
+                    .frame(width: targetContentWidth, height: targetContentHeight)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                } else {
+                    centeredWaveContent(
+                        OverlayIdleDotsView(color: .white.opacity(0.92)),
+                        targetWidth: targetPillWidth,
+                        targetHeight: targetPillHeight
+                    )
+                }
             }
         }
         .frame(width: targetPillWidth, height: targetPillHeight)
@@ -301,6 +350,45 @@ struct RecordingOverlayView: View {
         }
         .frame(width: targetWidth, height: targetHeight)
         .transition(.opacity.combined(with: .scale(scale: 0.96)))
+    }
+
+    private var copyTranscriptionButton: some View {
+        Button(action: copyLatestTranscription) {
+            Image(systemName: didCopyTranscription ? "checkmark" : "doc.on.doc")
+                .font(.system(size: copyIconSize, weight: .semibold))
+                .foregroundStyle(.white.opacity(isCopyButtonHovering ? 1 : 0.75))
+                // Hit target stays comfortably larger than the glyph; the frame
+                // is invisible, so only the glyph counts for spacing.
+                .frame(width: copyHitTargetWidth, height: buttonSize)
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isCopyButtonHovering ? 1.08 : 1)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isCopyButtonHovering = hovering
+            updateHoverCursor(isActive: hovering)
+        }
+        .animation(.easeInOut(duration: 0.12), value: isCopyButtonHovering)
+        .animation(.easeInOut(duration: 0.12), value: didCopyTranscription)
+        .help(didCopyTranscription ? "Copied to clipboard" : "Click to copy last transcription")
+        .accessibilityLabel("Copy last transcription")
+    }
+
+    private func copyLatestTranscription() {
+        guard let transcription = latestTranscription else { return }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(transcription, forType: .string)
+        DebugLog.info("Copied last transcription from overlay (\(transcription.count) chars)", context: "RecordingOverlayView")
+
+        // Confirm in place rather than stealing focus with an alert; the pill is
+        // already under the pointer, so the checkmark is where the user is looking.
+        copyConfirmationWorkItem?.cancel()
+        didCopyTranscription = true
+        let workItem = DispatchWorkItem { didCopyTranscription = false }
+        copyConfirmationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: workItem)
     }
 
     private var cancelButton: some View {

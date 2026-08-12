@@ -159,7 +159,7 @@ class ClipboardManager {
 
         DebugLog.info("Target app for paste: \(app.localizedName ?? "unknown")", context: "ClipboardManager")
         _ = writePasteText(textToPaste, to: pasteboard)
-        app.activate(options: [])
+        app.activate(options: [.activateIgnoringOtherApps])
         DebugLog.info("Paste target activation requested", context: "ClipboardManager")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + appActivationDelay) {
@@ -347,7 +347,7 @@ class ClipboardManager {
         state.pendingLogicalText = nil
         liveInsertionState = state
 
-        state.targetApp.activate(options: [])
+        state.targetApp.activate(options: [.activateIgnoringOtherApps])
 
         DispatchQueue.main.asyncAfter(deadline: .now() + liveAppActivationDelay) {
             guard var currentState = liveInsertionState else { return }
@@ -446,9 +446,27 @@ class ClipboardManager {
             return (0, next)
         }
 
-        // Re-apply the latest full transcript snapshot so realtime corrections,
-        // capitalization, and spacing replace the live text instead of appending raw deltas.
-        return (previous.count, next)
+        let unchangedPrefixLength = commonPrefixLength(previous, next)
+        let deleteCount = previous.count - unchangedPrefixLength
+        let textToPaste = String(next.dropFirst(unchangedPrefixLength))
+        return (deleteCount, textToPaste)
+    }
+
+    private static func commonPrefixLength(_ previous: String, _ next: String) -> Int {
+        var previousIndex = previous.startIndex
+        var nextIndex = next.startIndex
+        var count = 0
+
+        while previousIndex < previous.endIndex,
+              nextIndex < next.endIndex,
+              previous[previousIndex] == next[nextIndex]
+        {
+            count += 1
+            previous.formIndex(after: &previousIndex)
+            next.formIndex(after: &nextIndex)
+        }
+
+        return count
     }
 
     private static func postDeleteBackwards(characterCount: Int) {

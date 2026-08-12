@@ -51,6 +51,7 @@ enum SentryTelemetry {
 
     static func captureError(_ message: String, context: String?) {
         guard started else { return }
+        guard shouldCaptureIssue(message, context: context) else { return }
 
         addBreadcrumb(
             message,
@@ -58,6 +59,25 @@ enum SentryTelemetry {
             level: .error
         )
         SentrySDK.capture(message: context.map { "[\($0)] \(message)" } ?? message)
+    }
+
+    private static func shouldCaptureIssue(_ message: String, context: String?) -> Bool {
+        guard let context else { return true }
+
+        switch context {
+        case "HotkeyDiagnostics":
+            return false
+        case "FnKeyMonitor":
+            return false
+        case "DockIconManager":
+            return false
+        case "HotkeyManager LOG":
+            return !message.contains("Accessibility permission")
+                && !message.contains("event tap")
+                && !message.contains("hotkey")
+        default:
+            return true
+        }
     }
 
     static func recordAudioDeviceEvent(

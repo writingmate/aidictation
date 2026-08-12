@@ -380,7 +380,7 @@ private enum HotkeyConflictDetector {
             return shouldShowFunctionKeyWarning(for: option.hotkey)
         case .controlSpace:
             let hasConflict = hasEnabledSymbolicHotkey(exactMatch: option.hotkey)
-            DebugLog.error("Ctrl+Space conflict check showWarning=\(hasConflict)", context: "HotkeyDiagnostics")
+            DebugLog.info("Ctrl+Space conflict check showWarning=\(hasConflict)", context: "HotkeyDiagnostics")
             return hasConflict
         default:
             return true
@@ -392,7 +392,7 @@ private enum HotkeyConflictDetector {
         let matchingSymbolicHotkeys = enabledSymbolicHotkeyIDs(withKeyCode: Int(hotkey.keyCode))
         let keycodeConflict = !matchingSymbolicHotkeys.isEmpty
         let shouldShow = !standardFunctionKeysEnabled || keycodeConflict
-        DebugLog.error(
+        DebugLog.info(
             "F-key conflict check keyCode=\(hotkey.keyCode) fnStateEnabled=\(standardFunctionKeysEnabled) symbolicMatches=\(matchingSymbolicHotkeys) showWarning=\(shouldShow)",
             context: "HotkeyDiagnostics"
         )
@@ -531,7 +531,7 @@ struct HotkeyRecorderView: View {
         } else {
             currentConflictHelp = nil
             showConflictHelpPopover = false
-            DebugLog.error("Conflict help skipped for \(option.displayName) (requirements already satisfied)", context: "HotkeyDiagnostics")
+            DebugLog.info("Conflict help skipped for \(option.displayName) (requirements already satisfied)", context: "HotkeyDiagnostics")
         }
     }
 

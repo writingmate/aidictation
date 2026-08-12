@@ -162,13 +162,15 @@ class AuthRepository @Inject constructor(
                 _authState.value = AuthState(user = it, isLoading = false)
                 return@withContext
             },
-            onFailure = {
+            onFailure = { fetchError ->
+                Log.w(TAG, "Initial profile fetch failed", fetchError)
                 if (refreshToken.isNullOrBlank()) {
                     null
                 } else {
                     refreshSession(refreshToken).fold(
                         onSuccess = { token -> token },
                         onFailure = { error ->
+                            Log.w(TAG, "Session refresh failed", error)
                             rejected = error is SessionRejectedException
                             null
                         }
@@ -184,10 +186,19 @@ class AuthRepository @Inject constructor(
             if (rejected || refreshToken.isNullOrBlank()) {
                 clearTokens()
                 _authState.value = AuthState(isLoading = false)
-            } else {
-                Log.w(TAG, "Keeping session after a non-rejecting refresh failure")
-                _authState.value = AuthState(user = cachedProfile(), isLoading = false)
+                return@withContext
             }
+            // Keep the tokens — the failure was not a rejection — but only report a
+            // signed-in state when there is actually a profile to show. Emitting a
+            // null user with no error stranded the UI in a state that is neither
+            // signed in nor signed out, so a sign-in appeared to do nothing at all.
+            val cached = cachedProfile()
+            Log.w(TAG, "Keeping session after a non-rejecting refresh failure; cached profile: ${cached != null}")
+            _authState.value = AuthState(
+                user = cached,
+                isLoading = false,
+                error = if (cached == null) "Could not reach your account. Please try again." else null
+            )
             return@withContext
         }
 
@@ -286,8 +297,11 @@ class AuthRepository @Inject constructor(
         }
     }
 
+    // The auth backend answers an invalid or already-used refresh token with 400
+    // ({"error_code":"invalid_credentials"}), not 401. Treating 400 as transient
+    // kept a dead session alive: no re-login prompt, no error, nothing on screen.
     private fun sessionFailure(message: String, code: Int): Exception =
-        if (code == 401 || code == 403) {
+        if (code == 400 || code == 401 || code == 403) {
             SessionRejectedException("$message: $code")
         } else {
             IllegalStateException("$message: $code")

@@ -205,7 +205,6 @@ class MainViewModel @Inject constructor(
             when (state) {
                 AndroidAudioProcessingState.IDLE -> RecordingState.Idle
                 AndroidAudioProcessingState.RECORDING -> RecordingState.Recording
-                AndroidAudioProcessingState.STARTING,
                 AndroidAudioProcessingState.FINALIZING,
                 AndroidAudioProcessingState.PROCESSING -> RecordingState.Processing
             }

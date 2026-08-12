@@ -60,7 +60,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 enum class AndroidAudioProcessingState {
-    IDLE, STARTING, RECORDING, FINALIZING, PROCESSING
+    IDLE, RECORDING, FINALIZING, PROCESSING
 }
 
 enum class AndroidAudioAttemptOwner {
@@ -373,7 +373,10 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 check(captureNativeFence.reserveStart(it.token))
                 activeStart = it
                 _owner.value = owner
-                _state.value = AndroidAudioProcessingState.STARTING
+                // A tap goes straight to recording. Ownership of the in-flight start is
+                // tracked by activeStart's token and captureNativeFence, which are what
+                // actually make the start/stop races deterministic.
+                _state.value = AndroidAudioProcessingState.RECORDING
             }
         }
         val partial = File(start.provisionalLease.sourcePath)
@@ -426,7 +429,7 @@ class AndroidAudioProcessingCoordinator internal constructor(
             val installed = withContext(NonCancellable) {
                 mutex.withLock {
                     if (activeStart?.token == start.token && start.callerJob.isActive &&
-                        _owner.value == owner && _state.value == AndroidAudioProcessingState.STARTING &&
+                        _owner.value == owner && _state.value == AndroidAudioProcessingState.RECORDING &&
                         captureNativeFence.promoteToRecording(start.token)
                     ) {
                         activeStart = null
@@ -1085,7 +1088,9 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 check(retryStartFence.reserve(it.token))
                 activeRetryStart = it
                 _owner.value = owner
-                _state.value = AndroidAudioProcessingState.STARTING
+                // A retry re-transcribes an existing recording, so it is processing
+                // from the outset; nothing is being captured.
+                _state.value = AndroidAudioProcessingState.PROCESSING
             }
         }
 
@@ -1141,7 +1146,7 @@ class AndroidAudioProcessingCoordinator internal constructor(
             val installed = withContext(NonCancellable) {
                 mutex.withLock {
                     if (activeRetryStart?.token == retryStart.token && retryStart.callerJob.isActive &&
-                        _owner.value == owner && _state.value == AndroidAudioProcessingState.STARTING &&
+                        _owner.value == owner && _state.value == AndroidAudioProcessingState.PROCESSING &&
                         retryStartFence.install(retryStart.token)
                     ) {
                         activeRetryStart = null

@@ -7,14 +7,8 @@ import org.junit.Test
 
 class OverlayRecordingPresentationTest {
 
-    @Test
-    fun `capture startup presents a non processing microphone state`() {
-        assertEquals(
-            OverlayBubblePresentation.Starting,
-            OverlayRecordingState.Starting.bubblePresentation()
-        )
-        assertFalse(OverlayRecordingState.Starting.streamsAudioLevels)
-    }
+    // There is no startup state: a tap goes straight to recording, so the bubble
+    // shows the waveform immediately and never a microphone glyph.
 
     @Test
     fun `live capture presents recording controls and audio levels`() {

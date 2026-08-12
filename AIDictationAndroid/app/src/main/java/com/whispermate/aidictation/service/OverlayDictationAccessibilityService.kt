@@ -65,21 +65,18 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 internal enum class OverlayRecordingState {
     Idle,
-    Starting,
     Recording,
     Processing
 }
 
 internal enum class OverlayBubblePresentation {
     Idle,
-    Starting,
     Recording,
     Processing
 }
 
 internal fun OverlayRecordingState.bubblePresentation(): OverlayBubblePresentation = when (this) {
     OverlayRecordingState.Idle -> OverlayBubblePresentation.Idle
-    OverlayRecordingState.Starting -> OverlayBubblePresentation.Starting
     OverlayRecordingState.Recording -> OverlayBubblePresentation.Recording
     OverlayRecordingState.Processing -> OverlayBubblePresentation.Processing
 }
@@ -1175,22 +1172,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         when {
                             circularBubble?.isCancelHit(event.x, event.y) == true -> {
                                 performClickHaptic()
-                                if (recordingState == OverlayRecordingState.Starting) {
-                                    cancelOverlayAudio("Dictation cancelled before recording started")
-                                } else {
-                                    stopRecording(discard = true)
-                                }
+                                stopRecording(discard = true)
                             }
                             circularBubble?.isAcceptHit(event.x, event.y) == true -> {
                                 performClickHaptic()
-                                if (recordingState == OverlayRecordingState.Starting) {
-                                    cancelOverlayAudio("Dictation stopped before recording started")
-                                } else {
-                                    stopRecording(discard = false)
-                                }
+                                stopRecording(discard = false)
                             }
-                            recordingState == OverlayRecordingState.Starting ||
-                                recordingState == OverlayRecordingState.Recording -> Unit
+                            recordingState == OverlayRecordingState.Recording -> Unit
                             else -> {
                                 onBubbleTapped()
                             }
@@ -1239,7 +1227,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         when (recordingState) {
             OverlayRecordingState.Idle -> startRecording(mode = RecordingMode.Dictation)
             OverlayRecordingState.Recording -> stopRecording(discard = false)
-            OverlayRecordingState.Starting,
             OverlayRecordingState.Processing -> Unit
         }
     }
@@ -1534,7 +1521,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         cancelDeliveryForReplacement()
         val token = overlayWorkflowFence.beginAudio()
         recordingMode = mode
-        recordingState = OverlayRecordingState.Starting
+        recordingState = OverlayRecordingState.Recording
         updateBubbleUi()
 
         audioWorkflowJob = serviceScope.launch {
@@ -2423,9 +2410,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             subdued = isBusy && !rewriteActive,
             stateDescription = when {
                 !rewriteActive -> null
-                recordingState == OverlayRecordingState.Starting -> {
-                    getString(R.string.overlay_action_rewrite_ai_state_starting)
-                }
                 recordingState == OverlayRecordingState.Recording -> {
                     getString(R.string.overlay_action_rewrite_ai_state_listening)
                 }
@@ -2480,12 +2464,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             OverlayBubblePresentation.Idle -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Idle)
-                updateBubbleLayoutSize()
-            }
-
-            OverlayBubblePresentation.Starting -> {
-                stopBubbleAnimation()
-                bubble.setState(OverlayMicButtonView.State.Starting)
                 updateBubbleLayoutSize()
             }
 

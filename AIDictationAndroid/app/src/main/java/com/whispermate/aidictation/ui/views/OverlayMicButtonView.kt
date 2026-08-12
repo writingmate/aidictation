@@ -22,7 +22,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    enum class State { Idle, Starting, Recording, Processing }
+    enum class State { Idle, Recording, Processing }
 
     private var idleColor: Int = 0xFFFF6300.toInt()
     private var activeColor: Int = 0xFFFF6300.toInt()
@@ -88,14 +88,14 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     fun preferredWidthDp(): Int = when (state) {
-        State.Starting, State.Recording, State.Processing -> 250
+        State.Recording, State.Processing -> 250
         State.Idle -> 55
     }
 
     fun preferredHeightDp(): Int = 55
 
     fun isCancelHit(x: Float, y: Float): Boolean {
-        return (state == State.Starting || state == State.Recording) && cancelRect.contains(x, y)
+        return state == State.Recording && cancelRect.contains(x, y)
     }
 
     fun isAcceptHit(x: Float, y: Float): Boolean {
@@ -150,7 +150,6 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private fun updateBarHeights(animate: Boolean = state == State.Recording) {
         val activeBarCount = when (state) {
             State.Idle -> TOTAL_BARS
-            State.Starting -> TOTAL_BARS
             State.Recording -> {
                 val range = TOTAL_BARS - MIN_ACTIVE_BARS
                 val boostedLevel = boostWaveformLevel(audioLevel)
@@ -162,7 +161,6 @@ class OverlayMicButtonView @JvmOverloads constructor(
         for (i in 0 until TOTAL_BARS) {
             val targetHeight = when (state) {
                 State.Idle -> FROZEN_HEIGHTS[i]
-                State.Starting -> FROZEN_HEIGHTS[i]
                 State.Recording -> {
                     val barsFromEdge = (TOTAL_BARS - activeBarCount) / 2
                     val minDistance = minOf(i, TOTAL_BARS - 1 - i)
@@ -278,7 +276,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
         }
 
         backgroundPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
-        if (expanded > 0f && (state == State.Starting || state == State.Recording)) {
+        if (expanded > 0f && state == State.Recording) {
             canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
         }
 
@@ -290,47 +288,16 @@ class OverlayMicButtonView @JvmOverloads constructor(
             drawSpinner(canvas, acceptRect)
         } else {
             drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
-            if (state == State.Starting || state == State.Recording) {
+            if (state == State.Recording) {
                 drawX(canvas, cancelRect, expanded)
             }
-            if (state == State.Starting) {
-                drawMic(canvas, acceptRect, expanded)
-            } else {
-                drawCheck(canvas, acceptRect, expanded)
-            }
+            drawCheck(canvas, acceptRect, expanded)
             if (expanded < 1f) {
                 drawBars(canvas, acceptRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
             }
         }
     }
 
-    private fun drawMic(canvas: Canvas, bounds: RectF, alpha: Float) {
-        iconPaint.color = withAlpha(Color.WHITE, alpha)
-        iconPaint.strokeWidth = bounds.width() * 0.052f
-        val centerX = bounds.centerX()
-        val capsuleTop = bounds.top + bounds.height() * 0.30f
-        val capsuleBottom = bounds.top + bounds.height() * 0.59f
-        val capsuleHalfWidth = bounds.width() * 0.10f
-        tempRect.set(centerX - capsuleHalfWidth, capsuleTop, centerX + capsuleHalfWidth, capsuleBottom)
-        canvas.drawRoundRect(tempRect, capsuleHalfWidth, capsuleHalfWidth, iconPaint)
-        canvas.drawArc(
-            bounds.left + bounds.width() * 0.30f,
-            bounds.top + bounds.height() * 0.40f,
-            bounds.right - bounds.width() * 0.30f,
-            bounds.top + bounds.height() * 0.72f,
-            0f,
-            180f,
-            false,
-            iconPaint
-        )
-        canvas.drawLine(
-            centerX,
-            bounds.top + bounds.height() * 0.72f,
-            centerX,
-            bounds.top + bounds.height() * 0.79f,
-            iconPaint
-        )
-    }
 
     private fun drawProcessingBars(canvas: Canvas, bounds: RectF) {
         val phase = (processingPhaseDegrees / 360f) * (2f * PI.toFloat())

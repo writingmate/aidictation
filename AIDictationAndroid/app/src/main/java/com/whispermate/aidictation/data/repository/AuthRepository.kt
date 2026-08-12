@@ -40,7 +40,14 @@ class AuthRepository @Inject constructor(
     private object SecureKeys {
         const val ACCESS_TOKEN = "access_token"
         const val REFRESH_TOKEN = "refresh_token"
+        const val CACHED_PROFILE = "cached_profile"
     }
+
+    /** Thrown when the backend actively rejects the session, as opposed to a
+     *  network blip or a server-side error. Only the former should sign anyone
+     *  out; treating both alike logged paying users out over a dropped Wi-Fi
+     *  connection and left them staring at the signed-out gate. */
+    private class SessionRejectedException(message: String) : Exception(message)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jsonMediaType = "application/json".toMediaType()
@@ -148,32 +155,63 @@ class AuthRepository @Inject constructor(
         }
 
         _authState.value = _authState.value.copy(isLoading = true, error = null)
+        var rejected = false
         val activeToken = fetchProfile(accessToken).fold(
             onSuccess = {
+                cacheProfile(it)
                 _authState.value = AuthState(user = it, isLoading = false)
                 return@withContext
             },
             onFailure = {
-                if (refreshToken.isNullOrBlank()) null else refreshSession(refreshToken).getOrNull()
+                if (refreshToken.isNullOrBlank()) {
+                    null
+                } else {
+                    refreshSession(refreshToken).fold(
+                        onSuccess = { token -> token },
+                        onFailure = { error ->
+                            rejected = error is SessionRejectedException
+                            null
+                        }
+                    )
+                }
             }
         )
 
         if (activeToken == null) {
-            clearTokens()
-            _authState.value = AuthState(isLoading = false)
+            // Only a rejected session means the user is really signed out. Clearing
+            // tokens on a network failure logged paying users out of a working
+            // session, and the signed-out state reads as "no subscription".
+            if (rejected || refreshToken.isNullOrBlank()) {
+                clearTokens()
+                _authState.value = AuthState(isLoading = false)
+            } else {
+                Log.w(TAG, "Keeping session after a non-rejecting refresh failure")
+                _authState.value = AuthState(user = cachedProfile(), isLoading = false)
+            }
             return@withContext
         }
 
         fetchProfile(activeToken).fold(
-            onSuccess = { _authState.value = AuthState(user = it, isLoading = false) },
+            onSuccess = {
+                cacheProfile(it)
+                _authState.value = AuthState(user = it, isLoading = false)
+            },
             onFailure = { error ->
                 Log.w(TAG, "Failed to fetch profile", error)
-                _authState.value = AuthState(isLoading = false, error = error.message)
+                // A failed fetch means the entitlement is unknown, not absent. Keep
+                // the last known profile so lifetime access survives an outage.
+                val cached = cachedProfile()
+                _authState.value = AuthState(
+                    user = cached,
+                    isLoading = false,
+                    error = if (cached == null) error.message else null
+                )
             }
         )
     }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
+        securePrefs.edit().remove(SecureKeys.CACHED_PROFILE).apply()
         clearTokens()
         _authState.value = AuthState(isLoading = false)
     }
@@ -234,15 +272,44 @@ class AuthRepository @Inject constructor(
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Profile fetch failed: ${response.code}")
+            if (!response.isSuccessful) throw sessionFailure("Profile fetch failed", response.code)
             val profiles = parseProfileArray(response.body?.string().orEmpty(), authUser.second)
-            profiles.firstOrNull() ?: UserProfile(
+            // An empty result is "we could not see a profile", which is not the same
+            // as "this account has nothing". Prefer the last known profile over
+            // inventing a free one.
+            profiles.firstOrNull() ?: cachedProfile() ?: UserProfile(
                 userId = authUser.first,
                 email = authUser.second,
                 monthlyWordCount = 0,
                 subscriptionStatus = "free"
             )
         }
+    }
+
+    private fun sessionFailure(message: String, code: Int): Exception =
+        if (code == 401 || code == 403) {
+            SessionRejectedException("$message: $code")
+        } else {
+            IllegalStateException("$message: $code")
+        }
+
+    private fun cacheProfile(profile: UserProfile) {
+        runCatching {
+            val json = JSONObject()
+                .put("user_id", profile.userId)
+                .put("email", profile.email)
+                .put("monthly_word_count", profile.monthlyWordCount)
+                .put("subscription_status", profile.subscriptionStatus)
+                .put("referral_code", profile.referralCode)
+                .put("referred_by_user_id", profile.referredByUserId)
+                .put("referral_bonus_words", profile.referralBonusWords)
+            securePrefs.edit().putString(SecureKeys.CACHED_PROFILE, json.toString()).apply()
+        }.onFailure { Log.w(TAG, "Failed to cache profile", it) }
+    }
+
+    private fun cachedProfile(): UserProfile? {
+        val stored = securePrefs.getString(SecureKeys.CACHED_PROFILE, null) ?: return null
+        return runCatching { parseProfile(stored, "") }.getOrNull()
     }
 
     private fun fetchAuthUser(accessToken: String): Pair<String, String> {
@@ -253,7 +320,7 @@ class AuthRepository @Inject constructor(
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Auth user fetch failed: ${response.code}")
+            if (!response.isSuccessful) throw sessionFailure("Auth user fetch failed", response.code)
             val json = JSONObject(response.body?.string().orEmpty())
             return json.getString("id") to json.optString("email")
         }
@@ -272,7 +339,7 @@ class AuthRepository @Inject constructor(
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Session refresh failed: ${response.code}")
+            if (!response.isSuccessful) throw sessionFailure("Session refresh failed", response.code)
             val json = JSONObject(response.body?.string().orEmpty())
             val accessToken = json.getString("access_token")
             storeTokens(accessToken, json.optString("refresh_token", refreshToken))

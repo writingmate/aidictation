@@ -13,7 +13,7 @@ class FnKeyMonitor {
     private var eventTapHealthTimer: Timer?
     private var previousFnState = false
     private var suppressUntil: Date?
-    private var consumePureFnEvents = false
+    private(set) var consumePureFnEvents = false
 
     private enum Constants {
         static let suppressionDuration: TimeInterval = 0.5
@@ -161,12 +161,12 @@ class FnKeyMonitor {
         guard consumePureFnEvents else { return }
 
         guard AXIsProcessTrusted() else {
-            DebugLog.error("Fn event tap health check: Accessibility permission is missing", context: "FnKeyMonitor")
+            DebugLog.info("Fn event tap health check skipped because Accessibility permission is missing", context: "FnKeyMonitor")
             return
         }
 
         guard let tap = eventTap else {
-            DebugLog.error("Fn event tap missing during health check; recreating", context: "FnKeyMonitor")
+            DebugLog.info("Fn event tap missing during health check; recreating", context: "FnKeyMonitor")
             setupConsumingEventTap()
             return
         }
@@ -181,7 +181,7 @@ class FnKeyMonitor {
 
         previousFnState = false
         CGEvent.tapEnable(tap: tap, enable: true)
-        DebugLog.error("Re-enabled Fn event tap after \(reason)", context: "FnKeyMonitor")
+        DebugLog.info("Re-enabled Fn event tap after \(reason)", context: "FnKeyMonitor")
     }
 
     @discardableResult

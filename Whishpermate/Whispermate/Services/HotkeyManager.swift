@@ -50,6 +50,10 @@ class HotkeyManager: ObservableObject {
         static let functionModifierRawValue = NSEvent.ModifierFlags.function.rawValue
     }
 
+    private var functionKeyStateValue: Any {
+        UserDefaults.standard.object(forKey: Diagnostics.functionKeyStateDefaultsKey) ?? "nil"
+    }
+
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var keyUpMonitor: Any?
@@ -62,6 +66,7 @@ class HotkeyManager: ObservableObject {
     private var flagsMonitor: Any?
     private var screenWakeObserver: NSObjectProtocol?
     private var systemWakeObserver: NSObjectProtocol?
+    private var appActivationObserver: NSObjectProtocol?
     private var eventTapHealthTimer: Timer?
     private var accessibilityRetryScheduled = false
     private var accessibilityRetryAttempts = 0
@@ -103,6 +108,33 @@ class HotkeyManager: ObservableObject {
         ) { [weak self] _ in
             self?.scheduleHotkeyReregistrationAfterWake(reason: "system did wake")
         }
+
+        // Granting Accessibility happens in System Settings, so the app is
+        // inactive while it happens and comes back active right after. The
+        // short retry poll only covers the first seconds after launch; without
+        // this the hotkey would stay dead until the next launch.
+        appActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reregisterFnHotkeyIfAccessibilityRecovered()
+        }
+    }
+
+    /// Re-arms the Fn monitor once Accessibility comes back, so a grant made
+    /// after launch takes effect without restarting the app.
+    private func reregisterFnHotkeyIfAccessibilityRecovered() {
+        guard let hotkey = currentHotkey, isFnOnlyHotkey(hotkey), !deferRegistration else { return }
+        guard AXIsProcessTrusted(), fnKeyMonitor?.consumePureFnEvents == false else { return }
+
+        DebugLog.info(
+            "Accessibility permission restored while the app was away; re-registering Fn hotkey",
+            context: "HotkeyManager LOG"
+        )
+        accessibilityRetryScheduled = false
+        accessibilityRetryAttempts = 0
+        registerHotkey()
     }
 
     // MARK: - Public API
@@ -127,10 +159,8 @@ class HotkeyManager: ObservableObject {
         saveHotkey()
 
         if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-            let fnStateValue = UserDefaults.standard.object(forKey: Diagnostics.functionKeyStateDefaultsKey) ?? "nil"
-            DebugLog.error(
-                "Configured dictation hotkey=\(hotkey.displayString) keyCode=\(hotkey.keyCode) modifiers=\(hotkey.modifiers.rawValue) fnState=\(fnStateValue)",
-                context: "HotkeyDiagnostics"
+            logFunctionKeyDiagnostic(
+                "Configured dictation hotkey=\(hotkey.displayString) keyCode=\(hotkey.keyCode) modifiers=\(hotkey.modifiers.rawValue) fnState=\(functionKeyStateValue)"
             )
         }
 
@@ -288,9 +318,8 @@ class HotkeyManager: ObservableObject {
             (cmdHotkey != nil && cmdHotkey?.isMouseButton != true)
 
         if let dictationHotkey, Diagnostics.trackedFunctionKeyCodes.contains(dictationHotkey.keyCode) {
-            DebugLog.error(
+            logFunctionKeyDiagnostic(
                 "registerHotkey for \(dictationHotkey.displayString) keyCode=\(dictationHotkey.keyCode) modifiers=\(dictationHotkey.modifiers.rawValue) needsKeyTap=\(needsKeyTap) needsMouseTap=\(needsMouseTap) AXTrusted=\(AXIsProcessTrusted())",
-                context: "HotkeyDiagnostics"
             )
         }
 
@@ -315,6 +344,10 @@ class HotkeyManager: ObservableObject {
         setupSystemDefinedDiagnosticsIfNeeded(dictationHotkey: dictationHotkey)
     }
 
+    private func logFunctionKeyDiagnostic(_ message: String) {
+        DebugLog.info(message, context: "HotkeyDiagnostics")
+    }
+
     private func setupFnOnlyMonitor() {
         DebugLog.info("Using dedicated Fn-only monitor for dictation hotkey", context: "HotkeyManager LOG")
 
@@ -330,9 +363,17 @@ class HotkeyManager: ObservableObject {
             self.handleModifierFlagsStateChange(isModifierPressed: false, isDictation: true)
         }
 
+        // Check silently. Registering the hotkey happens on launch, so prompting
+        // here threw the system Accessibility dialog at anyone who had finished
+        // onboarding and later lost the grant — unprompted, before they touched
+        // anything. The poller below still notices the moment permission comes
+        // back, and Settings › Permissions is where the user asks for the dialog.
         let accessibilityTrusted = AXIsProcessTrusted()
         if !accessibilityTrusted {
-            requestAccessibilityForFnHotkey()
+            DebugLog.info(
+                "Fn dictation hotkey needs Accessibility permission; waiting for the user to grant it",
+                context: "HotkeyManager LOG"
+            )
             scheduleAccessibilityRetryForFnHotkey()
         } else {
             accessibilityRetryScheduled = false
@@ -340,17 +381,6 @@ class HotkeyManager: ObservableObject {
         }
 
         fnKeyMonitor?.startMonitoring(consumePureFnEvents: accessibilityTrusted)
-    }
-
-    private func requestAccessibilityForFnHotkey() {
-        DebugLog.error(
-            "Fn dictation hotkey needs Accessibility permission; requesting access",
-            context: "HotkeyManager LOG"
-        )
-        let options = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-        ] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
     }
 
     private func scheduleAccessibilityRetryForFnHotkey() {
@@ -383,7 +413,7 @@ class HotkeyManager: ObservableObject {
             if self.accessibilityRetryAttempts < 30 {
                 self.pollAccessibilityForFnHotkey()
             } else {
-                DebugLog.error("Accessibility permission still missing; Fn hotkey remains inactive", context: "HotkeyManager LOG")
+                DebugLog.info("Accessibility permission still missing; Fn hotkey remains inactive", context: "HotkeyManager LOG")
                 self.accessibilityRetryScheduled = false
                 self.accessibilityRetryAttempts = 0
             }
@@ -495,7 +525,7 @@ class HotkeyManager: ObservableObject {
 
         previousFunctionKeyState = false
         CGEvent.tapEnable(tap: tap, enable: true)
-        DebugLog.error("Re-enabled hotkey event tap after \(reason)", context: "HotkeyDiagnostics")
+        logFunctionKeyDiagnostic("Re-enabled hotkey event tap after \(reason)")
     }
 
     private func setupSystemDefinedDiagnosticsIfNeeded(dictationHotkey: Hotkey?) {
@@ -503,7 +533,7 @@ class HotkeyManager: ObservableObject {
             return
         }
 
-        DebugLog.error("Enabling systemDefined diagnostics monitor for function-key hotkey", context: "HotkeyDiagnostics")
+        logFunctionKeyDiagnostic("Enabling systemDefined diagnostics monitor for function-key hotkey")
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .systemDefined) { [weak self] event in
             self?.logSystemDefinedEvent(event, source: "global")
@@ -523,9 +553,8 @@ class HotkeyManager: ObservableObject {
         let mediaState = (mediaFlags & 0xFF00) >> 8
         let isDown = mediaState == 0xA
         let isUp = mediaState == 0xB
-        DebugLog.error(
+        logFunctionKeyDiagnostic(
             "systemDefined[\(source)] subtype=\(event.subtype.rawValue) mediaKeyCode=\(mediaKeyCode) mediaFlags=0x\(String(mediaFlags, radix: 16)) isDown=\(isDown) isUp=\(isUp) data1=0x\(String(data1, radix: 16))",
-            context: "HotkeyDiagnostics"
         )
     }
 
@@ -636,14 +665,13 @@ class HotkeyManager: ObservableObject {
             // Create NSEvent for compatibility with existing handler
             if let nsEvent = NSEvent(cgEvent: event) {
                 if shouldLogFunctionDiagnostics(for: nsEvent) {
-                    DebugLog.error(
+                    logFunctionKeyDiagnostic(
                         "Observed keyDown keyCode=\(nsEvent.keyCode) key=\(KeyCodeHelper.string(for: nsEvent.keyCode) ?? "?") modifiers=\(nsEvent.modifierFlags.rawValue) repeat=\(nsEvent.isARepeat)",
-                        context: "HotkeyDiagnostics"
                     )
                 }
                 let shouldConsume = handleKeyDownEvent(nsEvent)
                 if shouldLogFunctionDiagnostics(for: nsEvent) {
-                    DebugLog.error("keyDown consume=\(shouldConsume)", context: "HotkeyDiagnostics")
+                    logFunctionKeyDiagnostic("keyDown consume=\(shouldConsume)")
                 }
                 if shouldConsume {
                     return nil // Consume the event
@@ -653,14 +681,13 @@ class HotkeyManager: ObservableObject {
             // Create NSEvent for compatibility with existing handler
             if let nsEvent = NSEvent(cgEvent: event) {
                 if shouldLogFunctionDiagnostics(for: nsEvent) {
-                    DebugLog.error(
+                    logFunctionKeyDiagnostic(
                         "Observed keyUp keyCode=\(nsEvent.keyCode) key=\(KeyCodeHelper.string(for: nsEvent.keyCode) ?? "?") modifiers=\(nsEvent.modifierFlags.rawValue)",
-                        context: "HotkeyDiagnostics"
                     )
                 }
                 let shouldConsume = handleKeyUpEvent(nsEvent)
                 if shouldLogFunctionDiagnostics(for: nsEvent) {
-                    DebugLog.error("keyUp consume=\(shouldConsume)", context: "HotkeyDiagnostics")
+                    logFunctionKeyDiagnostic("keyUp consume=\(shouldConsume)")
                 }
                 if shouldConsume {
                     return nil // Consume the event
@@ -805,9 +832,8 @@ class HotkeyManager: ObservableObject {
         }
 
         if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-            DebugLog.error(
+            logFunctionKeyDiagnostic(
                 "Match check targetKeyCode=\(hotkey.keyCode) eventKeyCode=\(event.keyCode) requiredMods=\(requiredModifiers.rawValue) rawEventMods=\(rawEventModifiers.rawValue) normalizedEventMods=\(eventModifiers.rawValue) modifiersMatch=\(modifiersMatch)",
-                context: "HotkeyDiagnostics"
             )
         }
 
@@ -819,7 +845,7 @@ class HotkeyManager: ObservableObject {
 
         if isDictation {
             if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-                DebugLog.error("Dictation function-key MATCH on keyDown", context: "HotkeyDiagnostics")
+                logFunctionKeyDiagnostic("Dictation function-key MATCH on keyDown")
             }
             // Dictation hotkey handling
             // Check for double-tap
@@ -891,7 +917,7 @@ class HotkeyManager: ObservableObject {
             }
 
             if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-                DebugLog.error("Dictation function-key MATCH on keyUp", context: "HotkeyDiagnostics")
+                logFunctionKeyDiagnostic("Dictation function-key MATCH on keyUp")
             }
             if isPushToTalk && isHoldingKey {
                 DebugLog.info("handleKeyUpEvent: Dictation MATCH (Push-to-Talk) - calling onHotkeyReleased", context: "HotkeyManager LOG")

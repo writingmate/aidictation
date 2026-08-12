@@ -13,8 +13,10 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import androidx.core.content.res.ResourcesCompat
 import android.os.Bundle
 import android.util.Log
 import android.util.TypedValue
@@ -84,7 +86,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
         private const val COMMAND_ACTION_GAP_DP = 8
         private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 220
-        private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 40
+        private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 56
+        // Chip metrics tuned to the app's Figtree label styling and 16dp rhythm.
+        private const val COMMAND_CHIP_HEIGHT_DP = 40
+        private const val COMMAND_CHIP_HORIZONTAL_PADDING_DP = 16
+        private const val COMMAND_CHIP_TEXT_SP = 14f
         private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_CLEANUP_ID = "cleanup"
         private const val COMMAND_REWRITE_ID = "rewrite"
@@ -180,6 +186,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var bubbleDictationActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
     private var bubbleRewriteActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
     private var bubbleFixActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
+    private var cachedCommandChipTypeface: Typeface? = null
     private var commandChipIdleTextColor: Int = Color.WHITE
     private var commandChipIdleBackgroundColor: Int = 0x24FFFFFF
     private var commandChipFixTextColor: Int = Color.WHITE
@@ -729,7 +736,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             elevation = dp(6).toFloat()
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(22).toFloat()
+                // Fully wrap the chips: half of chip height plus the container's
+                // own vertical padding, so the outer pill stays concentric.
+                cornerRadius = (dp(COMMAND_CHIP_HEIGHT_DP) + verticalPadding * 2) / 2f
                 setColor(containerColor)
             }
 
@@ -766,21 +775,43 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         backgroundColor: Int,
         onClick: () -> Unit
     ): TextView {
+        val chipHeight = dp(COMMAND_CHIP_HEIGHT_DP)
         return TextView(this).apply {
             text = label
             setTextColor(textColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            // The overlay runs under the framework theme, so nothing inherits the
+            // app's Figtree/SemiBold label styling. Match it here so the chips
+            // read as part of the app instead of raw system UI.
+            typeface = commandChipTypeface()
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, COMMAND_CHIP_TEXT_SP)
             isAllCaps = false
-            minHeight = dp(32)
+            letterSpacing = 0f
+            includeFontPadding = false
+            minHeight = chipHeight
             gravity = Gravity.CENTER
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setPadding(dp(COMMAND_CHIP_HORIZONTAL_PADDING_DP), 0, dp(COMMAND_CHIP_HORIZONTAL_PADDING_DP), 0)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(16).toFloat()
+                // Fully rounded pill, matching the recording sheet's controls.
+                cornerRadius = chipHeight / 2f
                 setColor(backgroundColor)
             }
             setOnClickListener { onClick() }
         }
+    }
+
+    /** App-brand typeface for the overlay chips, resolved once and cached. */
+    private fun commandChipTypeface(): Typeface {
+        cachedCommandChipTypeface?.let { return it }
+        val base = runCatching { ResourcesCompat.getFont(this, R.font.figtree_variable) }.getOrNull()
+            ?: Typeface.DEFAULT
+        val semiBold = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Typeface.create(base, 600, false)
+        } else {
+            Typeface.create(base, Typeface.BOLD)
+        }
+        cachedCommandChipTypeface = semiBold
+        return semiBold
     }
 
     private fun updateCommandActionsVisibility(source: AccessibilityNodeInfo?) {

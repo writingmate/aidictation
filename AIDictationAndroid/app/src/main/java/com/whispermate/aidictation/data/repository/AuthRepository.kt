@@ -288,7 +288,17 @@ class AuthRepository @Inject constructor(
             // An empty result is "we could not see a profile", which is not the same
             // as "this account has nothing". Prefer the last known profile over
             // inventing a free one.
-            profiles.firstOrNull() ?: cachedProfile() ?: UserProfile(
+            val profile = profiles.firstOrNull()
+            if (profile != null) {
+                // The profile row only carries a subscription once something has
+                // synced it. Entitlement can also come from a redeemed code or a
+                // Stripe purchase, which check-subscription resolves (and writes
+                // back). Without asking, a lifetime owner reads as free here.
+                return@use fetchSubscriptionStatus(accessToken)
+                    ?.let { profile.copy(subscriptionStatus = it) }
+                    ?: profile
+            }
+            cachedProfile() ?: UserProfile(
                 userId = authUser.first,
                 email = authUser.second,
                 monthlyWordCount = 0,
@@ -300,6 +310,23 @@ class AuthRepository @Inject constructor(
     // The auth backend answers an invalid or already-used refresh token with 400
     // ({"error_code":"invalid_credentials"}), not 401. Treating 400 as transient
     // kept a dead session alive: no re-login prompt, no error, nothing on screen.
+    /** Resolves entitlement that the profile row may not reflect yet. Failures are
+     *  swallowed: an unreachable check means unknown, and the stored profile value
+     *  is a better answer than downgrading someone to free. */
+    private fun fetchSubscriptionStatus(accessToken: String): String? = runCatching {
+        val request = Request.Builder()
+            .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/functions/v1/check-subscription")
+            .addSupabaseHeaders(accessToken)
+            .post("{}".toRequestBody(jsonMediaType))
+            .build()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@runCatching null
+            val json = JSONObject(response.body?.string().orEmpty())
+            if (json.has("error")) return@runCatching null
+            json.optNullableString("subscription_status")
+        }
+    }.onFailure { Log.w(TAG, "Subscription check failed", it) }.getOrNull()
+
     private fun sessionFailure(message: String, code: Int): Exception =
         if (code == 400 || code == 401 || code == 403) {
             SessionRejectedException("$message: $code")

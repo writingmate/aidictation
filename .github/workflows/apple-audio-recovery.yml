@@ -26,31 +26,6 @@ on:
       - '.github/workflows/apple-audio-recovery.yml'
       - '.github/workflows/release-macos.yml'
       - '.github/workflows/ios-appstore-connect.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'Whishpermate/**'
-      - 'scripts/validate_apple_http_audio_recovery.swift'
-      - 'scripts/validate_apple_audio_recovery.sh'
-      - 'scripts/validate_ios_audio_processing_recovery.swift'
-      - 'scripts/validate_keyboard_audio_recovery.swift'
-      - 'scripts/validate_macos_audio_processing_store.swift'
-      - 'scripts/validate_macos_lifecycle_guards.swift'
-      - 'scripts/validate_macos_recording_recovery.swift'
-      - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
-      - 'scripts/validate_macos_vad_recovery.swift'
-      - 'scripts/validate_macos_url_handler_registration.sh'
-      - 'scripts/validate_macos_callback_token.py'
-      - 'scripts/verify_macos_url_handler.swift'
-      - 'scripts/verify_macos_release_auth.sh'
-      - 'scripts/validate_parakeet_runtime_recovery.swift'
-      - 'scripts/validate_transcription_prompt_routing.py'
-      - 'scripts/validate_transcription_cleanup_prompt.swift'
-      - 'docs/audio-processing-failure-contract.md'
-      - 'AGENTS.md'
-      - '.github/workflows/apple-audio-recovery.yml'
-      - '.github/workflows/release-macos.yml'
-      - '.github/workflows/ios-appstore-connect.yml'
 
 permissions:
   contents: read

@@ -11,16 +11,6 @@ on:
       - 'scripts/validate_transcription_cleanup_prompt.swift'
       - 'AGENTS.md'
       - '.github/workflows/transcription-contracts.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'Whishpermate/**'
-      - 'AIDictationAndroid/**'
-      - 'AIDictation.Windows/**'
-      - 'scripts/validate_transcription_prompt_routing.py'
-      - 'scripts/validate_transcription_cleanup_prompt.swift'
-      - 'AGENTS.md'
-      - '.github/workflows/transcription-contracts.yml'
 
 permissions:
   contents: read

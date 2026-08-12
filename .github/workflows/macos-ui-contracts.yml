@@ -10,17 +10,6 @@ on:
       - 'scripts/validate_macos_history_row_refresh.swift'
       - 'scripts/validate_macos_hotkey_options.swift'
       - '.github/workflows/macos-ui-contracts.yml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'Whishpermate/Whispermate/Services/HotkeyManager.swift'
-      - 'Whishpermate/Whispermate/Models/HistoryPresentationIdentity.swift'
-      - 'Whishpermate/Whispermate/Views/HistoryMasterDetailView.swift'
-      - 'Whishpermate/Whispermate/Views/HotkeyRecorderView.swift'
-      - 'scripts/validate_macos_history_row_refresh.swift'
-      - 'scripts/validate_macos_hotkey_options.swift'
-      - '.github/workflows/macos-ui-contracts.yml'
 
 permissions:
   contents: read

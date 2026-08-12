@@ -2,14 +2,8 @@ name: Windows Build
 
 on:
   push:
-    branches: [ main ]
     tags:
       - 'windows-v*'
-    paths:
-      - 'AIDictation.Windows/**'
-      - 'docs/audio-processing-failure-contract.md'
-      - 'AGENTS.md'
-      - '.github/workflows/windows-build.yml'
   pull_request:
     branches: [ main ]
     paths:

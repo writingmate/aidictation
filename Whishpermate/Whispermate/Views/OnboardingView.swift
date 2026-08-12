@@ -830,7 +830,7 @@ struct OnboardingView: View {
                         .stroke(Color.green.opacity(0.35), lineWidth: 1)
                 )
             } else {
-                VStack(alignment: .leading, spacing: 14) {
+                Button(action: goNext) {
                     HStack(spacing: 12) {
                         Image(systemName: "person.crop.circle.badge.plus")
                             .font(.system(size: 28, weight: .semibold))
@@ -847,17 +847,17 @@ struct OnboardingView: View {
                         }
 
                         Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.tertiary)
                     }
+                    .padding(16)
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.secondary.opacity(0.06))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                )
+                .buttonStyle(AccountCardButtonStyle())
+                .accessibilityLabel("Sign in")
+                .accessibilityHint("Opens sign-in in your browser")
 
                 if authManager.isLoading {
                     HStack(spacing: 10) {
@@ -1334,6 +1334,38 @@ struct OnboardingView: View {
         fnKeyMonitor?.stopMonitoring()
         fnKeyMonitor = nil
         fnKeyDetected = false
+    }
+}
+
+// MARK: - Account Card Button Style
+
+/// Card-shaped button for the onboarding account step: it reads as a resting
+/// container until pointed at, so the sign-in affordance is discoverable
+/// without competing with the footer's primary action.
+private struct AccountCardButtonStyle: ButtonStyle {
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(configuration.isPressed ? 0.14 : (isHovering ? 0.1 : 0.06)))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.secondary.opacity(isHovering ? 0.35 : 0.2), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .onHover { hovering in
+                isHovering = hovering
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 

@@ -809,7 +809,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME)";
@@ -844,7 +844,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
 				SKIP_INSTALL = YES;
@@ -875,7 +875,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
 				SKIP_INSTALL = YES;
@@ -902,7 +902,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1059,7 +1059,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -1100,7 +1100,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -1136,7 +1136,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -1182,7 +1182,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -1227,7 +1227,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1265,7 +1265,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_APPSTORE_PROFILE_NAME)";
@@ -1299,7 +1299,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1332,7 +1332,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.96;
+				MARKETING_VERSION = 0.0.98;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_KEYBOARD_APPSTORE_PROFILE_NAME)";

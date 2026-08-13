@@ -405,6 +405,7 @@ struct SettingsView: View {
                 }
             }
 
+            if ReferralProgram.isEnabled {
             SettingsCard {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -459,6 +460,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+            }
             }
 
             // Upgrade Card (only for authenticated Free tier users)

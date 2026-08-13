@@ -136,9 +136,11 @@ public class SubscriptionManager: ObservableObject {
     public func getUpgradeMessage(for user: User) -> String {
         let remaining = user.wordsRemaining
         if remaining <= 0 {
-            return "You've used all \(user.effectiveWordLimit.formatted()) free words. Upgrade to Pro for unlimited transcriptions or invite a friend for more words."
+            let inviteSuffix = ReferralProgram.isEnabled ? " or invite a friend for more words" : ""
+            return "You've used all \(user.effectiveWordLimit.formatted()) free words. Upgrade to Pro for unlimited transcriptions\(inviteSuffix)."
         } else if remaining < 200 {
-            return "Only \(remaining) words left. Upgrade for unlimited access or invite a friend for more words."
+            let inviteSuffix = ReferralProgram.isEnabled ? " or invite a friend for more words" : ""
+            return "Only \(remaining) words left. Upgrade for unlimited access\(inviteSuffix)."
         } else {
             return "Upgrade to Pro for unlimited transcriptions and included API access."
         }
@@ -251,6 +253,11 @@ public class SubscriptionManager: ObservableObject {
 }
 
 public enum ReferralProgram {
+    /// Hides the invite surface in every app. Bonus words already granted are
+    /// unaffected — they live on the profile and still count toward the word
+    /// limit, so nobody loses what they earned while the feature was live.
+    public static let isEnabled = false
+
     public static let bonusWordsPerReferral = 2000
 
     public static func inviteURL(for code: String) -> URL? {

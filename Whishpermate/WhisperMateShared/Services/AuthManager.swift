@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Network
 import Supabase
 #if canImport(AuthenticationServices)
     import AuthenticationServices
@@ -78,6 +79,9 @@ public class AuthManager: ObservableObject {
 
     private let supabase = SupabaseManager.shared
     private var didStartAutoRefresh = false
+    private let networkMonitor = NWPathMonitor()
+    private let networkMonitorQueue = DispatchQueue(label: "com.whispermate.auth.network")
+    private var activationObserver: NSObjectProtocol?
     #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
         private let authPresentationContextProvider = AuthPresentationContextProvider()
         private var authSession: ASWebAuthenticationSession?
@@ -149,6 +153,7 @@ public class AuthManager: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        observeSessionRestoreTriggers()
         Task {
             await checkSession()
         }
@@ -158,6 +163,48 @@ public class AuthManager: ObservableObject {
 
     private func checkSession() async {
         await refreshUser()
+    }
+
+    /// The stored session is only restored once, at launch. If that attempt happens before the
+    /// network is up — a very common case when the app launches at login — the refresh call
+    /// fails and the user looks signed out until they log in again. Retry whenever the app
+    /// regains focus or the network comes back.
+    private func observeSessionRestoreTriggers() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            self?.retrySessionRestoreIfNeeded(reason: "network available")
+        }
+        networkMonitor.start(queue: networkMonitorQueue)
+
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            activationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.retrySessionRestoreIfNeeded(reason: "app activated")
+            }
+        #elseif canImport(UIKit)
+            activationObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.retrySessionRestoreIfNeeded(reason: "app activated")
+            }
+        #endif
+    }
+
+    private func retrySessionRestoreIfNeeded(reason: String) {
+        guard supabase.client != nil, supabase.hasPersistedSession else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard !self.isAuthenticated, !self.isLoading, !self.isAuthenticationSessionActive else { return }
+
+            DebugLog.info("Retrying session restore (\(reason))", context: "AuthManager")
+            await self.refreshUser()
+        }
     }
 
     private func startAutoRefreshIfNeeded() async {

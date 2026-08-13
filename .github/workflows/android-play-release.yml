@@ -96,7 +96,10 @@ jobs:
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
     env:
-      PLAY_TRACK: ${{ github.event_name == 'push' && 'internal' || inputs.play_track }}
+      # A tag is the release decision, so it goes to production on its own.
+      # Promotion used to need a second, manual workflow_dispatch, which meant a
+      # tagged build sat in the internal track until someone remembered it.
+      PLAY_TRACK: ${{ github.event_name == 'push' && 'production' || inputs.play_track }}
       PLAY_RELEASE_STATUS: ${{ github.event_name == 'push' && 'completed' || inputs.release_status }}
       PLAY_PUBLISH_MODE: ${{ github.event_name == 'push' && 'upload' || inputs.publish_mode }}
       PLAY_PROMOTE_FROM_TRACK: ${{ github.event_name == 'push' && 'internal' || inputs.promote_from_track }}
@@ -144,8 +147,8 @@ jobs:
         shell: bash
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            if [ "${PLAY_TRACK}" != "internal" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "upload" ]; then
-              echo "Tag-triggered releases must upload to the internal track with completed status." >&2
+            if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "upload" ]; then
+              echo "Tag-triggered releases must upload to the production track with completed status." >&2
               exit 1
             fi
             if [ "${PUBLISH_GITHUB_RELEASE}" != "false" ]; then

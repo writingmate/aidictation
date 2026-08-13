@@ -33,10 +33,17 @@ jobs:
             echo "Provenance checkout $actual_sha does not match event commit $GITHUB_SHA." >&2
             exit 1
           fi
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "App Store uploads must run from the main branch, not $GITHUB_REF." >&2
-            exit 1
-          fi
+          # Releases are cut by tag now, so the ref is refs/tags/ios-vX.Y.Z
+          # rather than a branch. What actually needs guaranteeing is that the
+          # commit is on main, which the ancestor check below does; requiring a
+          # branch ref on top of that just rejected every tagged release.
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/ios-v*) ;;
+            *)
+              echo "App Store uploads must run from main or an ios-v tag, not $GITHUB_REF." >&2
+              exit 1
+              ;;
+          esac
           git fetch origin main --prune
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "Upload commit $GITHUB_SHA is not on origin/main." >&2

@@ -1,5 +1,6 @@
 package com.whispermate.aidictation.data.repository
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -96,9 +97,22 @@ class AuthRepository @Inject constructor(
         val encodedRedirect = URLEncoder.encode(redirectTo, Charsets.UTF_8.name())
         val separator = if (BuildConfig.AUTH_WEB_URL.contains("?")) "&" else "?"
         val authUrl = "${BuildConfig.AUTH_WEB_URL}${separator}redirect_to=$encodedRedirect"
-        context.startActivity(Intent(Intent.ACTION_VIEW, authUrl.toUri()).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        })
+        openExternally(context, authUrl, "Could not open the sign-in page")
+    }
+
+    /// Sign-in and checkout both hand off to a browser, and a device without one
+    /// — no browser installed, or the default disabled — made startActivity throw
+    /// ActivityNotFoundException straight out of a tap handler, taking the app
+    /// down. Tell the user instead.
+    private fun openExternally(context: Context, url: String, failureMessage: String) {
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            })
+        } catch (error: ActivityNotFoundException) {
+            _authState.value = _authState.value.copy(error = failureMessage)
+            Toast.makeText(context, failureMessage, Toast.LENGTH_LONG).show()
+        }
     }
 
     fun openUpgrade(context: Context) {
@@ -120,9 +134,11 @@ class AuthRepository @Inject constructor(
 
         val separator = if (link.contains("?")) "&" else "?"
         val encodedEmail = URLEncoder.encode(user.email, Charsets.UTF_8.name())
-        context.startActivity(Intent(Intent.ACTION_VIEW, "$link${separator}prefilled_email=$encodedEmail".toUri()).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        })
+        openExternally(
+            context,
+            "$link${separator}prefilled_email=$encodedEmail",
+            "Could not open the checkout page",
+        )
     }
 
     suspend fun handleAuthCallback(uri: Uri) {

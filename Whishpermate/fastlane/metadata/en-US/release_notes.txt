@@ -1,5 +1,4 @@
-This update fixes account login and improves the keyboard.
+This update keeps you signed in.
 
-• The Log In button in Settings now opens the sign-in form reliably.
-• The keyboard now supports 18 language layouts — tap the language key to switch, hold it to pick, and hold letters for accents.
-• Simplified the Settings screen.
+• Your session is now restored when the app returns to the foreground or when the network comes back, instead of only once at launch — a cold start without connectivity no longer leaves you looking signed out.
+• More reliable storage of your login, so signing in sticks between launches.

@@ -304,3 +304,59 @@ jobs:
           name: WhisperMate-iOS-${{ github.run_number }}
           path: Whishpermate/build/WhisperMate.ipa
           if-no-files-found: ignore
+
+  submit-for-review:
+    name: Submit for App Review
+    needs: archive-and-upload
+    # Only a tagged release goes to review; a manual dispatch stops at TestFlight.
+    if: startsWith(github.ref, 'refs/tags/ios-v')
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_KEY_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+      IOS_RELEASE_TYPE: AFTER_APPROVAL
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install App Store Connect API key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          key_dir="${HOME}/.appstoreconnect/private_keys"
+          key_path="${key_dir}/AuthKey_${APP_STORE_CONNECT_API_KEY_KEY_ID}.p8"
+          mkdir -p "${key_dir}"
+
+          if [ -n "${APP_STORE_CONNECT_API_KEY_P8_BASE64:-}" ]; then
+            printf '%s' "${APP_STORE_CONNECT_API_KEY_P8_BASE64}" | base64 --decode > "${key_path}"
+          else
+            printf '%s' "${APP_STORE_CONNECT_API_KEY_P8}" > "${key_path}"
+          fi
+
+          chmod 600 "${key_path}"
+          echo "APP_STORE_CONNECT_API_KEY_KEY=${key_path}" >> "${GITHUB_ENV}"
+
+      - name: Resolve version from the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#ios-v}"
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not carry an X.Y.Z version"
+            exit 1
+          fi
+          echo "IOS_MARKETING_VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "Submitting version ${version}"
+
+      - name: Submit build for App Review
+        run: node scripts/submit_ios_for_review.mjs

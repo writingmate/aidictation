@@ -26,7 +26,6 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -183,6 +182,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var dismissHideZone: TextView? = null
 
     private var recordingState: OverlayRecordingState = OverlayRecordingState.Idle
+    private var stopRequestedDuringStart = false
     private var recordingMode: RecordingMode = RecordingMode.Dictation
     private val overlayWorkflowFence = ReplaceableDeliveryFence()
     private var audioWorkflowLease: AudioAttemptLease? = null
@@ -354,6 +354,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (shouldShowBubble(source)) {
             bubbleShouldBeVisible = true
             showBubble()
+            // IME window-list updates can arrive after the accessibility event.
+            // Reposition only when fresh keyboard bounds are available; never
+            // remove the bubble just because the IME is temporarily absent.
+            if (inputMethodBounds() != null) updateBubblePosition()
             updateCommandActionsVisibility(source)
             return
         }
@@ -362,22 +366,24 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Hides the bubble only when the hide condition still holds after a debounce window.
-     * Focus and IME visibility reports flap for single events during keyboard animations
-     * and in WebView/Compose fields; hiding immediately would remove and re-add the
-     * overlay window between consecutive events, which shows up as flicker.
+     * Focus and IME visibility reports flap during keyboard animations and
+     * accessibility-tree rebuilds. A missing IME window is therefore not a
+     * reason to destroy the bubble: the bubble follows the editable target,
+     * while the IME only affects its position.
      */
     private fun scheduleDeferredHide() {
-        if (pendingHideJob?.isActive == true) return
-
         if (!isBubbleAttached && !isCommandActionsAttached && !hasOverlayWorkflow()) {
             bubbleShouldBeVisible = false
             return
         }
 
+        if (pendingHideJob?.isActive == true) return
         pendingHideJob = serviceScope.launch {
             delay(BUBBLE_HIDE_DEBOUNCE_MS)
-            if (shouldShowBubble(null)) return@launch
+            if (hasEditableDictationTarget(null) && !isBubbleSuppressed()) {
+                showBubble()
+                return@launch
+            }
 
             bubbleShouldBeVisible = false
             if (hasOverlayWorkflow()) cancelOverlayAudio("The target text field was closed")
@@ -392,11 +398,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        // Focus commonly arrives before the IME window, especially immediately after the
-        // accessibility service is enabled. Remember the field first so a later keyboard/window
-        // update can reveal the bubble even if that update no longer carries the field node.
+        // The editable target owns bubble visibility. The IME is an independent
+        // window and may disappear briefly while it animates or switches; using
+        // it as a hard visibility gate causes the bubble to flicker or vanish.
         if (!hasEditableDictationTarget(source)) return false
-        if (!isKeyboardVisible()) return false
         if (isBubbleSuppressed()) return false
         return true
     }
@@ -483,16 +488,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 }
             }
         }
-    }
-
-    private fun isKeyboardVisible(): Boolean {
-        if (inputMethodBounds() != null) return true
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            bubbleView?.rootWindowInsets?.let { insets ->
-                if (insets.isVisible(WindowInsets.Type.ime())) return true
-            }
-        }
-        return false
     }
 
     private fun keyboardTop(): Int {
@@ -1474,7 +1469,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         val focusedNode = resolveFocusedEditableNode(null)
-        if (focusedNode == null && !(stickyEditableFocusArmed && isKeyboardVisible())) {
+        if (focusedNode == null && !stickyEditableFocusArmed) {
             if (mode == RecordingMode.RewriteInstruction) {
                 activeCommandAction = null
                 pendingRewriteTarget = null
@@ -1521,6 +1516,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         cancelDeliveryForReplacement()
         val token = overlayWorkflowFence.beginAudio()
         recordingMode = mode
+        stopRequestedDuringStart = false
+        // Show recording immediately. Recorder initialization and settings
+        // loading happen asynchronously below and must not present as a
+        // processing/loading state to the user.
         recordingState = OverlayRecordingState.Recording
         updateBubbleUi()
 
@@ -1603,6 +1602,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 recordingState = OverlayRecordingState.Recording
                 updateBubbleUi()
                 performRecordingReadyHaptic()
+                if (stopRequestedDuringStart && ownsAudioPhase(token)) {
+                    stopRequestedDuringStart = false
+                    stopRecording(discard = false)
+                    return@launch
+                }
                 vadJob?.cancel()
                 vadJob = serviceScope.launch {
                     audioProcessingCoordinator.shouldAutoStop.collectLatest { shouldStop ->
@@ -1633,6 +1637,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val mode = recordingMode
         val token = overlayWorkflowFence.currentToken() ?: return
         if (!ownsAudioPhase(token)) return
+
+        // The UI enters Recording before the recorder lease is available so the
+        // first tap has no loading state. Preserve stop/cancel semantics during
+        // that short initialization window.
+        if (audioWorkflowLease == null) {
+            stopRequestedDuringStart = true
+            if (discard) {
+                audioWorkflowJob?.cancel()
+                resetAfterRecording(mode, token)
+            }
+            return
+        }
 
         vadJob?.cancel()
         vadJob = null

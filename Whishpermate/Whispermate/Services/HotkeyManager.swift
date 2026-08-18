@@ -8,11 +8,17 @@ class HotkeyManager: ObservableObject {
 
     // MARK: - Published Properties
 
-    @Published var currentHotkey: Hotkey?
-    @Published var commandHotkey: Hotkey?
+    @Published var currentHotkey: Hotkey? {
+        didSet { syncResolvers() }
+    }
+
+    @Published var commandHotkey: Hotkey? {
+        didSet { syncResolvers() }
+    }
     @Published var isPushToTalk: Bool {
         didSet {
             AppDefaults.shared.set(isPushToTalk, forKey: Keys.pushToTalk)
+            syncResolvers()
         }
     }
 
@@ -71,14 +77,11 @@ class HotkeyManager: ObservableObject {
     private var accessibilityRetryScheduled = false
     private var accessibilityRetryAttempts = 0
 
-    // Double-tap detection
-    private var lastTapTime: Date?
-    private var isHoldingKey = false
-    private var isHoldingCommandKey = false
-
-    // Toggle mode state (for non-push-to-talk)
-    private var isToggleRecording = false
-    private var isCommandToggleRecording = false
+    // All press/release/double-tap/toggle state lives in these two resolvers, one
+    // per channel. See HotkeyGestureResolver — it is covered by unit tests, this
+    // class is only the event-tap plumbing around it.
+    private var dictationResolver = HotkeyGestureResolver(supportsDoubleTap: true)
+    private var commandResolver = HotkeyGestureResolver(supportsDoubleTap: false)
 
     // MARK: - Initialization
 
@@ -88,6 +91,7 @@ class HotkeyManager: ObservableObject {
         DebugLog.info("HotkeyManager init - loading hotkeys", context: "HotkeyManager LOG")
         loadHotkey()
         loadCommandHotkey()
+        syncResolvers()
         DebugLog.info("HotkeyManager init complete - dictation=\(currentHotkey?.displayString ?? "none"), command=\(commandHotkey?.displayString ?? "none")", context: "HotkeyManager LOG")
 
         // Re-register hotkeys after system wake from sleep/hibernation.
@@ -524,8 +528,88 @@ class HotkeyManager: ObservableObject {
         guard let tap = eventTap else { return }
 
         previousFunctionKeyState = false
+        releaseHeldHotkeys(reason: reason)
         CGEvent.tapEnable(tap: tap, enable: true)
         logFunctionKeyDiagnostic("Re-enabled hotkey event tap after \(reason)")
+    }
+
+    /// Ends any push-to-talk hold that was in flight when the tap went away.
+    /// macOS disables a tap on timeout or on user input, and the key-up that would
+    /// have stopped the recording is delivered to nobody, so we have to synthesize
+    /// it — otherwise dictation runs until the app is restarted.
+    private func releaseHeldHotkeys(reason: String) {
+        for isDictation in [true, false] {
+            var resolver = isDictation ? dictationResolver : commandResolver
+            let outcome = resolver.interrupt()
+            store(resolver, isDictation: isDictation)
+
+            if !outcome.actions.isEmpty {
+                DebugLog.info(
+                    "Releasing held \(isDictation ? "dictation" : "command") hotkey after \(reason)",
+                    context: "HotkeyManager LOG"
+                )
+                apply(outcome, isDictation: isDictation)
+            }
+        }
+    }
+
+    // MARK: - Resolver plumbing
+
+    /// Monotonic clock, so gesture timing is unaffected by the wall clock moving.
+    private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// Pushes the current hotkeys and mode into the resolvers. Called whenever any
+    /// of them changes, so the resolvers are always the single source of truth.
+    private func syncResolvers() {
+        dictationResolver.binding = currentHotkey.map(HotkeyGestureResolver.Binding.init)
+        dictationResolver.isPushToTalk = isPushToTalk
+        commandResolver.binding = commandHotkey.map(HotkeyGestureResolver.Binding.init)
+        commandResolver.isPushToTalk = isPushToTalk
+    }
+
+    private func store(_ resolver: HotkeyGestureResolver, isDictation: Bool) {
+        if isDictation {
+            dictationResolver = resolver
+        } else {
+            commandResolver = resolver
+        }
+    }
+
+    /// Offers an event to the dictation channel, then the command channel, stopping
+    /// at whichever consumes it.
+    private func dispatch(
+        _ resolve: (inout HotkeyGestureResolver) -> HotkeyGestureResolver.Outcome
+    ) -> Bool {
+        for isDictation in [true, false] {
+            var resolver = isDictation ? dictationResolver : commandResolver
+            let outcome = resolve(&resolver)
+            store(resolver, isDictation: isDictation)
+            apply(outcome, isDictation: isDictation)
+
+            if outcome.handled {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func apply(_ outcome: HotkeyGestureResolver.Outcome, isDictation: Bool) {
+        for action in outcome.actions {
+            DebugLog.info(
+                "\(isDictation ? "Dictation" : "Command") hotkey \(action)",
+                context: "HotkeyManager LOG"
+            )
+
+            switch (action, isDictation) {
+            case (.pressed, true): onHotkeyPressed?()
+            case (.released, true): onHotkeyReleased?()
+            case (.doubleTap, true): onDoubleTap?()
+            case (.pressed, false): onCommandHotkeyPressed?()
+            case (.released, false): onCommandHotkeyReleased?()
+            case (.doubleTap, false): break
+            }
+        }
     }
 
     private func setupSystemDefinedDiagnosticsIfNeeded(dictationHotkey: Hotkey?) {
@@ -575,78 +659,17 @@ class HotkeyManager: ObservableObject {
     }
 
     private func handleMouseButtonEvent(type: CGEventType, buttonNumber: Int64, isDictation: Bool) -> Unmanaged<CGEvent>? {
-        if type == .otherMouseDown {
-            DebugLog.info("🖱️ Mouse button \(buttonNumber) pressed (isDictation=\(isDictation))", context: "HotkeyManager LOG")
+        let button = Int32(buttonNumber)
+        var resolver = isDictation ? dictationResolver : commandResolver
+        let outcome = type == .otherMouseDown
+            ? resolver.mouseDown(button: button, at: now)
+            : resolver.mouseUp(button: button, at: now)
+        store(resolver, isDictation: isDictation)
+        apply(outcome, isDictation: isDictation)
 
-            let now = Date()
-
-            if isDictation {
-                // Dictation hotkey - check for double-tap
-                if let lastTap = lastTapTime, now.timeIntervalSince(lastTap) < Constants.doubleTapInterval {
-                    DebugLog.info("🖱️ DOUBLE-TAP detected - calling onDoubleTap", context: "HotkeyManager LOG")
-                    lastTapTime = nil
-                    isHoldingKey = false
-                    isToggleRecording = false
-                    onDoubleTap?()
-                    return nil
-                }
-
-                if isPushToTalk {
-                    DebugLog.info("🖱️ Dictation Push-to-Talk - calling onHotkeyPressed", context: "HotkeyManager LOG")
-                    lastTapTime = now
-                    isHoldingKey = true
-                    onHotkeyPressed?()
-                } else {
-                    DebugLog.info("🖱️ Dictation Toggle mode - isToggleRecording=\(isToggleRecording)", context: "HotkeyManager LOG")
-                    lastTapTime = now
-                    if isToggleRecording {
-                        isToggleRecording = false
-                        onHotkeyReleased?()
-                    } else {
-                        isToggleRecording = true
-                        onHotkeyPressed?()
-                    }
-                }
-            } else {
-                // Command hotkey
-                if isPushToTalk {
-                    DebugLog.info("🖱️ Command Push-to-Talk - calling onCommandHotkeyPressed", context: "HotkeyManager LOG")
-                    isHoldingCommandKey = true
-                    onCommandHotkeyPressed?()
-                } else {
-                    DebugLog.info("🖱️ Command Toggle mode - isCommandToggleRecording=\(isCommandToggleRecording)", context: "HotkeyManager LOG")
-                    if isCommandToggleRecording {
-                        isCommandToggleRecording = false
-                        onCommandHotkeyReleased?()
-                    } else {
-                        isCommandToggleRecording = true
-                        onCommandHotkeyPressed?()
-                    }
-                }
-            }
-            return nil // Consume the event
-
-        } else if type == .otherMouseUp {
-            DebugLog.info("🖱️ Mouse button \(buttonNumber) released (isDictation=\(isDictation))", context: "HotkeyManager LOG")
-
-            if isDictation {
-                if isPushToTalk, isHoldingKey {
-                    DebugLog.info("🖱️ Dictation Push-to-Talk - calling onHotkeyReleased", context: "HotkeyManager LOG")
-                    isHoldingKey = false
-                    onHotkeyReleased?()
-                }
-            } else {
-                if isPushToTalk, isHoldingCommandKey {
-                    DebugLog.info("🖱️ Command Push-to-Talk - calling onCommandHotkeyReleased", context: "HotkeyManager LOG")
-                    isHoldingCommandKey = false
-                    onCommandHotkeyReleased?()
-                }
-            }
-            return nil // Consume the event
-        }
-
-        return nil
+        return nil // Consume the event
     }
+
 
     private func handleCGEvent(proxy _: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -709,29 +732,12 @@ class HotkeyManager: ObservableObject {
     /// Handle modifier key press/release (flagsChanged events)
     @discardableResult
     private func handleFlagsChangedEvent(_ event: NSEvent) -> Bool {
-        let keyCode = event.keyCode
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        var handled = false
-
-        // Check dictation hotkey for modifier-only keys (Fn, Control, Command, etc.)
-        if let hotkey = currentHotkey, !hotkey.isMouseButton, isModifierOnlyHotkey(hotkey), flagsChangedKeyMatchesHotkey(eventKeyCode: keyCode, hotkey: hotkey) {
-            let isModifierPressed = isRequiredModifierPressed(for: hotkey, eventModifiers: modifiers)
-            handled = handleModifierFlagsStateChange(isModifierPressed: isModifierPressed, isDictation: true) || handled
+        return dispatch { resolver in
+            resolver.flagsChanged(keyCode: event.keyCode, modifiers: modifiers, at: self.now)
         }
-
-        // Check command hotkey for modifier-only keys
-        if !handled,
-           let cmdHotkey = commandHotkey,
-           !cmdHotkey.isMouseButton,
-           isModifierOnlyHotkey(cmdHotkey),
-           flagsChangedKeyMatchesHotkey(eventKeyCode: keyCode, hotkey: cmdHotkey)
-        {
-            let isModifierPressed = isRequiredModifierPressed(for: cmdHotkey, eventModifiers: modifiers)
-            handled = handleModifierFlagsStateChange(isModifierPressed: isModifierPressed, isDictation: false) || handled
-        }
-
-        return handled
     }
+
 
     private func unregisterHotkey() {
         DebugLog.info("unregisterHotkey called", context: "HotkeyManager LOG")
@@ -784,184 +790,29 @@ class HotkeyManager: ObservableObject {
 
     @discardableResult
     private func handleKeyDownEvent(_ event: NSEvent) -> Bool {
-        DebugLog.info("handleKeyDownEvent: keyCode=\(event.keyCode), modifiers=\(event.modifierFlags.rawValue), isARepeat=\(event.isARepeat)", context: "HotkeyManager LOG")
-
-        // Check dictation hotkey first
-        if let hotkey = currentHotkey, !hotkey.isMouseButton {
-            if checkKeyDownMatch(event: event, hotkey: hotkey, isDictation: true) {
-                return true
-            }
-        }
-
-        // Check command hotkey
-        if let cmdHotkey = commandHotkey, !cmdHotkey.isMouseButton {
-            if checkKeyDownMatch(event: event, hotkey: cmdHotkey, isDictation: false) {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    /// Check if event matches hotkey and handle accordingly
-    /// - Returns: true if event was consumed
-    private func checkKeyDownMatch(event: NSEvent, hotkey: Hotkey, isDictation: Bool) -> Bool {
-        // Modifier-only hotkeys are handled via flagsChanged to avoid duplicate triggers.
-        if isModifierOnlyHotkey(hotkey) {
-            return false
-        }
-
-        // Consume key repeat events to prevent typing sounds
-        if event.isARepeat {
-            DebugLog.info("handleKeyDownEvent: Ignoring key repeat event", context: "HotkeyManager LOG")
-            return event.keyCode == hotkey.keyCode
-        }
-
-        // Check if the key code matches and required modifiers are present
-        let rawEventModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let eventModifiers = normalizedEventModifiers(rawEventModifiers, for: hotkey)
-        let requiredModifiers = hotkey.modifiers
-
-        // For hotkeys with modifiers, check if all required modifiers are present
-        // For hotkeys without modifiers, check for exact match (no modifiers)
-        let modifiersMatch: Bool
-        if requiredModifiers.isEmpty {
-            modifiersMatch = eventModifiers.isEmpty
-        } else {
-            modifiersMatch = eventModifiers.intersection(requiredModifiers) == requiredModifiers
-        }
-
-        if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-            logFunctionKeyDiagnostic(
-                "Match check targetKeyCode=\(hotkey.keyCode) eventKeyCode=\(event.keyCode) requiredMods=\(requiredModifiers.rawValue) rawEventMods=\(rawEventModifiers.rawValue) normalizedEventMods=\(eventModifiers.rawValue) modifiersMatch=\(modifiersMatch)",
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return dispatch { resolver in
+            resolver.keyDown(
+                keyCode: event.keyCode,
+                modifiers: modifiers,
+                isARepeat: event.isARepeat,
+                at: self.now
             )
         }
-
-        guard event.keyCode == hotkey.keyCode && modifiersMatch else {
-            return false
-        }
-
-        let now = Date()
-
-        if isDictation {
-            if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-                logFunctionKeyDiagnostic("Dictation function-key MATCH on keyDown")
-            }
-            // Dictation hotkey handling
-            // Check for double-tap
-            if let lastTap = lastTapTime, now.timeIntervalSince(lastTap) < Constants.doubleTapInterval {
-                DebugLog.info("handleKeyDownEvent: DOUBLE-TAP detected - calling onDoubleTap", context: "HotkeyManager LOG")
-                lastTapTime = nil
-                isHoldingKey = false
-                isToggleRecording = false
-                onDoubleTap?()
-                return true
-            }
-
-            if isPushToTalk {
-                DebugLog.info("handleKeyDownEvent: Dictation MATCH (Push-to-Talk) - calling onHotkeyPressed", context: "HotkeyManager LOG")
-                lastTapTime = now
-                isHoldingKey = true
-                onHotkeyPressed?()
-            } else {
-                DebugLog.info("handleKeyDownEvent: Dictation MATCH (Toggle mode) - isToggleRecording=\(isToggleRecording)", context: "HotkeyManager LOG")
-                lastTapTime = now
-                if isToggleRecording {
-                    isToggleRecording = false
-                    onHotkeyReleased?()
-                } else {
-                    isToggleRecording = true
-                    onHotkeyPressed?()
-                }
-            }
-        } else {
-            // Command hotkey handling
-            DebugLog.info("🎯 COMMAND HOTKEY DETECTED - keyCode=\(event.keyCode), modifiers=\(event.modifierFlags.rawValue)", context: "HotkeyManager LOG")
-            if isPushToTalk {
-                DebugLog.info("🎯 Command MATCH (Push-to-Talk) - calling onCommandHotkeyPressed", context: "HotkeyManager LOG")
-                isHoldingCommandKey = true
-                onCommandHotkeyPressed?()
-            } else {
-                DebugLog.info("🎯 Command MATCH (Toggle mode) - isCommandToggleRecording=\(isCommandToggleRecording)", context: "HotkeyManager LOG")
-                if isCommandToggleRecording {
-                    isCommandToggleRecording = false
-                    onCommandHotkeyReleased?()
-                } else {
-                    isCommandToggleRecording = true
-                    onCommandHotkeyPressed?()
-                }
-            }
-        }
-        return true
     }
+
 
     @discardableResult
     private func handleKeyUpEvent(_ event: NSEvent) -> Bool {
-        DebugLog.info("handleKeyUpEvent: keyCode=\(event.keyCode), modifiers=\(event.modifierFlags.rawValue)", context: "HotkeyManager LOG")
-
-        // Check dictation hotkey
-        if let hotkey = currentHotkey, !hotkey.isMouseButton, !isModifierOnlyHotkey(hotkey), event.keyCode == hotkey.keyCode {
-            // Only consume if modifiers match, OR we're already holding the key (push-to-talk where
-            // modifier may have been released slightly before the main key).
-            let rawEventModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let eventModifiers = normalizedEventModifiers(rawEventModifiers, for: hotkey)
-            let requiredModifiers = hotkey.modifiers
-            let modifiersMatch: Bool
-            if requiredModifiers.isEmpty {
-                modifiersMatch = eventModifiers.isEmpty
-            } else {
-                modifiersMatch = eventModifiers.intersection(requiredModifiers) == requiredModifiers
-            }
-            guard modifiersMatch || isHoldingKey else {
-                return false
-            }
-
-            if Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-                logFunctionKeyDiagnostic("Dictation function-key MATCH on keyUp")
-            }
-            if isPushToTalk && isHoldingKey {
-                DebugLog.info("handleKeyUpEvent: Dictation MATCH (Push-to-Talk) - calling onHotkeyReleased", context: "HotkeyManager LOG")
-                isHoldingKey = false
-                onHotkeyReleased?()
-            } else if !isPushToTalk {
-                DebugLog.info("handleKeyUpEvent: Dictation Toggle mode - ignoring key release", context: "HotkeyManager LOG")
-            }
-            return true
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return dispatch { resolver in
+            resolver.keyUp(keyCode: event.keyCode, modifiers: modifiers, at: self.now)
         }
-
-        // Check command hotkey
-        if let cmdHotkey = commandHotkey, !cmdHotkey.isMouseButton, !isModifierOnlyHotkey(cmdHotkey), event.keyCode == cmdHotkey.keyCode {
-            let rawEventModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let eventModifiers = normalizedEventModifiers(rawEventModifiers, for: cmdHotkey)
-            let requiredModifiers = cmdHotkey.modifiers
-            let modifiersMatch: Bool
-            if requiredModifiers.isEmpty {
-                modifiersMatch = eventModifiers.isEmpty
-            } else {
-                modifiersMatch = eventModifiers.intersection(requiredModifiers) == requiredModifiers
-            }
-            guard modifiersMatch || isHoldingCommandKey else {
-                return false
-            }
-
-            DebugLog.info("🎯 COMMAND HOTKEY RELEASED - keyCode=\(event.keyCode)", context: "HotkeyManager LOG")
-            if isPushToTalk && isHoldingCommandKey {
-                DebugLog.info("🎯 Command MATCH (Push-to-Talk) - calling onCommandHotkeyReleased", context: "HotkeyManager LOG")
-                isHoldingCommandKey = false
-                onCommandHotkeyReleased?()
-            } else if !isPushToTalk {
-                DebugLog.info("🎯 Command Toggle mode - ignoring key release", context: "HotkeyManager LOG")
-            }
-            return true
-        }
-
-        return false
     }
 
+
     private func isModifierOnlyHotkey(_ hotkey: Hotkey) -> Bool {
-        // These keys generate flagsChanged events instead of regular keyDown/keyUp.
-        let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 58, 59, 60, 61, 62, 63, 179]
-        return modifierKeyCodes.contains(hotkey.keyCode)
+        HotkeyGestureResolver.Binding(hotkey).isModifierOnly
     }
 
     private func isFnOnlyHotkey(_ hotkey: Hotkey) -> Bool {
@@ -985,99 +836,17 @@ class HotkeyManager: ObservableObject {
         return event.keyCode == dictationHotkey.keyCode
     }
 
-    private func normalizedEventModifiers(_ eventModifiers: NSEvent.ModifierFlags, for hotkey: Hotkey) -> NSEvent.ModifierFlags {
-        var normalized = eventModifiers
-        if hotkey.modifiers.isEmpty, Diagnostics.trackedFunctionKeyCodes.contains(hotkey.keyCode) {
-            normalized.remove(NSEvent.ModifierFlags(rawValue: Diagnostics.functionModifierRawValue))
-        }
-        return normalized
-    }
-
-    private func flagsChangedKeyMatchesHotkey(eventKeyCode: UInt16, hotkey: Hotkey) -> Bool {
-        // Some keyboards report Fn/Globe as 179 instead of 63.
-        if hotkey.modifiers == .function, hotkey.keyCode == 63 {
-            return eventKeyCode == 63 || eventKeyCode == 179
-        }
-        return eventKeyCode == hotkey.keyCode
-    }
-
-    private func isRequiredModifierPressed(for hotkey: Hotkey, eventModifiers: NSEvent.ModifierFlags) -> Bool {
-        let requiredModifier = hotkey.modifiers.intersection(.deviceIndependentFlagsMask)
-        guard !requiredModifier.isEmpty else { return false }
-        return eventModifiers.intersection(requiredModifier) == requiredModifier
-    }
 
     @discardableResult
     private func handleModifierFlagsStateChange(isModifierPressed: Bool, isDictation: Bool) -> Bool {
-        if isDictation {
-            if isModifierPressed && !isHoldingKey {
-                let now = Date()
-
-                // Keep double-tap behavior for modifier-only dictation hotkeys.
-                if let lastTap = lastTapTime, now.timeIntervalSince(lastTap) < Constants.doubleTapInterval {
-                    DebugLog.info("handleFlagsChangedEvent: Dictation DOUBLE-TAP detected", context: "HotkeyManager LOG")
-                    lastTapTime = nil
-                    isHoldingKey = false
-                    isToggleRecording = false
-                    onDoubleTap?()
-                    return true
-                }
-
-                if isPushToTalk {
-                    DebugLog.info("handleFlagsChangedEvent: Dictation modifier pressed (Push-to-Talk)", context: "HotkeyManager LOG")
-                    lastTapTime = now
-                    isHoldingKey = true
-                    onHotkeyPressed?()
-                } else {
-                    DebugLog.info("handleFlagsChangedEvent: Dictation modifier pressed (Toggle mode), isToggleRecording=\(isToggleRecording)", context: "HotkeyManager LOG")
-                    lastTapTime = now
-                    if isToggleRecording {
-                        isToggleRecording = false
-                        onHotkeyReleased?()
-                    } else {
-                        isToggleRecording = true
-                        onHotkeyPressed?()
-                    }
-                }
-                return true
-            } else if !isModifierPressed && isHoldingKey {
-                if isPushToTalk {
-                    DebugLog.info("handleFlagsChangedEvent: Dictation modifier released (Push-to-Talk)", context: "HotkeyManager LOG")
-                    isHoldingKey = false
-                    onHotkeyReleased?()
-                }
-                return true
-            }
-            return false
-        }
-
-        if isModifierPressed && !isHoldingCommandKey {
-            if isPushToTalk {
-                DebugLog.info("handleFlagsChangedEvent: Command modifier pressed (Push-to-Talk)", context: "HotkeyManager LOG")
-                isHoldingCommandKey = true
-                onCommandHotkeyPressed?()
-            } else {
-                DebugLog.info("handleFlagsChangedEvent: Command modifier pressed (Toggle mode), isCommandToggleRecording=\(isCommandToggleRecording)", context: "HotkeyManager LOG")
-                if isCommandToggleRecording {
-                    isCommandToggleRecording = false
-                    onCommandHotkeyReleased?()
-                } else {
-                    isCommandToggleRecording = true
-                    onCommandHotkeyPressed?()
-                }
-            }
-            return true
-        } else if !isModifierPressed && isHoldingCommandKey {
-            if isPushToTalk {
-                DebugLog.info("handleFlagsChangedEvent: Command modifier released (Push-to-Talk)", context: "HotkeyManager LOG")
-                isHoldingCommandKey = false
-                onCommandHotkeyReleased?()
-            }
-            return true
-        }
-
-        return false
+        // Kept for the Fn-only monitor, which reports an already-decoded press/release.
+        var resolver = isDictation ? dictationResolver : commandResolver
+        let outcome = isModifierPressed ? resolver.forcePress(at: now) : resolver.forceRelease()
+        store(resolver, isDictation: isDictation)
+        apply(outcome, isDictation: isDictation)
+        return outcome.handled
     }
+
 
     deinit {
         unregisterHotkey()
@@ -1144,6 +913,12 @@ struct Hotkey: Equatable {
         }
 
         return parts.joined()
+    }
+}
+
+extension HotkeyGestureResolver.Binding {
+    init(_ hotkey: Hotkey) {
+        self.init(keyCode: hotkey.keyCode, modifiers: hotkey.modifiers, mouseButton: hotkey.mouseButton)
     }
 }
 

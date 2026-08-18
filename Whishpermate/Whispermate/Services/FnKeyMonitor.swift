@@ -11,7 +11,7 @@ class FnKeyMonitor {
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
     private var eventTapHealthTimer: Timer?
-    private var previousFnState = false
+    private var resolver = FnKeyGestureResolver()
     private var suppressUntil: Date?
     private(set) var consumePureFnEvents = false
 
@@ -71,7 +71,7 @@ class FnKeyMonitor {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             if let source = eventTapRunLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
                 eventTapRunLoopSource = nil
             }
             eventTap = nil
@@ -87,7 +87,7 @@ class FnKeyMonitor {
             localMonitor = nil
         }
 
-        previousFnState = false
+        interruptGesture(reason: "monitoring stopped")
         consumePureFnEvents = false
     }
 
@@ -113,6 +113,7 @@ class FnKeyMonitor {
                 let monitor = Unmanaged<FnKeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
 
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    monitor.interruptGesture(reason: "tap disabled event \(type.rawValue)")
                     monitor.enableEventTap(reason: "callback disabled event \(type.rawValue)")
                     return Unmanaged.passUnretained(event)
                 }
@@ -136,7 +137,7 @@ class FnKeyMonitor {
         eventTap = tap
         eventTapRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         if let source = eventTapRunLoopSource {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         }
         CGEvent.tapEnable(tap: tap, enable: true)
         DebugLog.info("Consuming Fn event tap created and enabled", context: "FnKeyMonitor")
@@ -158,7 +159,13 @@ class FnKeyMonitor {
     }
 
     private func validateEventTapHealth() {
-        guard consumePureFnEvents else { return }
+        guard consumePureFnEvents else {
+            // Passive mode has no tap to repair, but a gesture can still be left
+            // half-finished if macOS drops the release (fast app switch, sleep).
+            // Trust the live modifier flags over the latch.
+            reconcileWithLiveModifierFlags()
+            return
+        }
 
         guard AXIsProcessTrusted() else {
             DebugLog.info("Fn event tap health check skipped because Accessibility permission is missing", context: "FnKeyMonitor")
@@ -173,65 +180,63 @@ class FnKeyMonitor {
 
         if !CGEvent.tapIsEnabled(tap: tap) {
             enableEventTap(reason: "health check")
+            return
         }
+
+        reconcileWithLiveModifierFlags()
     }
 
     private func enableEventTap(reason: String) {
         guard let tap = eventTap else { return }
 
-        previousFnState = false
+        interruptGesture(reason: reason)
         CGEvent.tapEnable(tap: tap, enable: true)
         DebugLog.info("Re-enabled Fn event tap after \(reason)", context: "FnKeyMonitor")
     }
 
+    /// Ends an in-flight gesture and tells the app about it. Without the callback a
+    /// recording started by a press whose release we never saw would never stop.
+    private func interruptGesture(reason: String) {
+        guard resolver.interrupt() else { return }
+
+        DebugLog.info("Releasing in-flight Fn gesture: \(reason)", context: "FnKeyMonitor")
+        let callback = onFnReleased
+        DispatchQueue.main.async { callback?() }
+    }
+
+    /// Recovers from a release that never reached us by comparing the latch
+    /// against the modifier flags macOS reports right now.
+    private func reconcileWithLiveModifierFlags() {
+        guard resolver.isFnDown, !NSEvent.modifierFlags.contains(.function) else { return }
+
+        interruptGesture(reason: "Fn latch stuck down with the key physically up")
+    }
+
     @discardableResult
     private func handleFlagsChanged(_ event: NSEvent) -> Bool {
-        let isFnPressed = event.modifierFlags.contains(.function)
-        let keyCode = event.keyCode
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-
-        // Log all events for debugging
-        DebugLog.info("handleFlagsChanged: keyCode=\(keyCode), isFnPressed=\(isFnPressed), modifiers=\(modifiers.rawValue)", context: "FnKeyMonitor")
-
-        // Check if suppression is active (e.g., right after a paste operation)
-        if let suppressUntil = suppressUntil, Date() < suppressUntil {
-            DebugLog.info("Fn detection suppressed (until \(suppressUntil)), ignoring event", context: "FnKeyMonitor")
-            return false
-        }
-
-        // Only respond to actual Fn key events (keyCode 63 or 179/globe key)
-        // AND only if no other modifiers are pressed (to filter out synthetic events from paste)
-        let isFnKeyCode = keyCode == 63 || keyCode == 179
         let hasOtherModifiers = modifiers.contains(.command) || modifiers.contains(.option) ||
             modifiers.contains(.control) || modifiers.contains(.shift)
+        let isSuppressed = suppressUntil.map { Date() < $0 } ?? false
 
-        guard isFnKeyCode, !hasOtherModifiers else {
-            // Not a pure Fn key event, ignore
-            return false
-        }
+        let outcome = resolver.resolve(
+            FnKeyGestureResolver.Event(
+                keyCode: event.keyCode,
+                isFnFlagSet: modifiers.contains(.function),
+                hasOtherModifiers: hasOtherModifiers,
+                isSuppressed: isSuppressed
+            )
+        )
 
-        DebugLog.info("Pure Fn key event detected, previousFnState=\(previousFnState)", context: "FnKeyMonitor")
-
-        // Detect state transitions
-        if isFnPressed, !previousFnState {
-            // Fn key was just pressed
-            DebugLog.info("⚡️ STATE CHANGE: Fn key PRESSED ⚡️", context: "FnKeyMonitor")
-            DebugLog.info("Calling onFnPressed callback...", context: "FnKeyMonitor")
-            previousFnState = true
+        if outcome.pressed {
+            DebugLog.info("Fn key PRESSED", context: "FnKeyMonitor")
             onFnPressed?()
-            DebugLog.info("onFnPressed callback completed", context: "FnKeyMonitor")
-            return true
-        } else if !isFnPressed, previousFnState {
-            // Fn key was just released
-            DebugLog.info("⚡️ STATE CHANGE: Fn key RELEASED ⚡️", context: "FnKeyMonitor")
-            DebugLog.info("Calling onFnReleased callback...", context: "FnKeyMonitor")
-            previousFnState = false
+        } else if outcome.released {
+            DebugLog.info("Fn key RELEASED", context: "FnKeyMonitor")
             onFnReleased?()
-            DebugLog.info("onFnReleased callback completed", context: "FnKeyMonitor")
-            return true
         }
 
-        return true
+        return outcome.handled
     }
 
     deinit {

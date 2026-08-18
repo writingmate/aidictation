@@ -145,6 +145,9 @@ EXPORT_OPTIONS="$RELEASE_DIR/exportOptions.plist"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
+echo "==> Running preflight tests"
+"$SCRIPT_DIR/preflight_tests.sh"
+
 echo "==> Building archive for $TAG (version $VERSION, build $BUILD_NUMBER)"
 ARCHIVE_CMD=(
   xcodebuild

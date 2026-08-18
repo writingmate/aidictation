@@ -246,6 +246,9 @@ jobs:
           )
           PYEOF
 
+      - name: Run preflight tests
+        run: scripts/preflight_tests.sh
+
       - name: Build archive
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -329,11 +332,6 @@ jobs:
             --secrets "$APP/Contents/Resources/Secrets.plist" \
             --require-auth \
             --require-lifetime
-          swiftc \
-            Whishpermate/Whispermate/Services/TextInsertionFormatter.swift \
-            scripts/validate_text_insertion_formatter.swift \
-            -o /tmp/validate_text_insertion_formatter
-          /tmp/validate_text_insertion_formatter
           swift scripts/validate_parakeet_runtime.swift "$APP"
 
       - name: Notarize app

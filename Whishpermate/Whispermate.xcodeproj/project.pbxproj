@@ -7,8 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		16463B427730D7FD75EA0791 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6DAE0F0310D8E0C37D98C312 /* Cocoa.framework */; };
+		19702C83BABA8D7EE38F09DA /* HotkeyGestureResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */; };
 		1FB33087FF396340CC97677A /* ParakeetRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */; };
+		42FEFF2DC2C470F6B62A0E72 /* TextInsertionFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */; };
 		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
+		87B3798E0D4426EE53993B51 /* HotkeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */; };
+		8C545C8B9B27F9E03A581045 /* FnKeyGestureResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */; };
+		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B2D5E0032F9BF00100000003 /* WhisperMateKeyboard.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -20,6 +26,7 @@
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		C3D3AA06BB367CC2B12D382D /* TextInsertionFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */; };
 		D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
 		D1B200012F65000200000003 /* PermissionFlowRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */; };
@@ -146,9 +153,16 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatter.swift; sourceTree = "<group>"; };
 		19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardDictationLiveActivity.swift; sourceTree = "<group>"; };
 		4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParakeetRuntimeBridge.swift; sourceTree = "<group>"; };
+		53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FnKeyGestureResolverTests.swift; sourceTree = "<group>"; };
+		56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatterTests.swift; sourceTree = "<group>"; };
+		5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolver.swift; sourceTree = "<group>"; };
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6DAE0F0310D8E0C37D98C312 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FnKeyGestureResolver.swift; sourceTree = "<group>"; };
+		BD1BD0DBC885721955552BBC /* WhispermateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhispermateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ParakeetRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE643F2ED8417000D24235 /* AIDictation.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIDictation.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE64402ED8417000D24235 /* WhisperMateIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperMateIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -161,6 +175,7 @@
 		D7A900012F72000100000002 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/System/Library/Frameworks/AppIntents.framework; sourceTree = DEVELOPER_DIR; };
 		DC33D501A203B8AEFB7871DF /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		DD26FE6C4F67FD01DC7E517E /* WhisperMateLiveActivity.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = WhisperMateLiveActivity.entitlements; sourceTree = "<group>"; };
+		EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolverTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -224,6 +239,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		1CBECB6AF32479D754D259A1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				16463B427730D7FD75EA0791 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B0E18A98138A039334FDF997 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -288,6 +311,25 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		21A5273E11E464F64CCA2930 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				6DAE0F0310D8E0C37D98C312 /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
+		7645026F648E8336F7A7853E /* WhispermateTests */ = {
+			isa = PBXGroup;
+			children = (
+				53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */,
+				56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */,
+				EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */,
+			);
+			name = WhispermateTests;
+			path = WhispermateTests;
+			sourceTree = "<group>";
+		};
 		7DA206F35D005C2CFE8F218A /* iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -295,6 +337,17 @@
 				DC33D501A203B8AEFB7871DF /* Foundation.framework */,
 			);
 			name = iOS;
+			sourceTree = "<group>";
+		};
+		98100320DE37E1160ADE235E /* WhispermateTestsSources */ = {
+			isa = PBXGroup;
+			children = (
+				7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */,
+				0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */,
+				5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */,
+			);
+			name = WhispermateTestsSources;
+			path = Whispermate/Services;
 			sourceTree = "<group>";
 		};
 		AE72061A8B5F2469574714D4 /* ParakeetRuntime */ = {
@@ -317,6 +370,7 @@
 			isa = PBXGroup;
 			children = (
 				7DA206F35D005C2CFE8F218A /* iOS */,
+				21A5273E11E464F64CCA2930 /* OS X */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -340,6 +394,9 @@
 				B55B10012F65000200000006 /* PermissionFlowRuntime */,
 				D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */,
 				F1D579F6CC1A6C2F5518960B /* WhisperMateLiveActivity */,
+				BD1BD0DBC885721955552BBC /* WhispermateTests.xctest */,
+				7645026F648E8336F7A7853E /* WhispermateTests */,
+				98100320DE37E1160ADE235E /* WhispermateTestsSources */,
 			);
 			sourceTree = "<group>";
 		};
@@ -544,6 +601,23 @@
 			productReference = D1B200012F65000200000002 /* PermissionFlowRuntime.framework */;
 			productType = "com.apple.product-type.framework";
 		};
+		D7199B5FD18FC82104169F70 /* WhispermateTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 09AB589F8F85C310BFC451E5 /* Build configuration list for PBXNativeTarget "WhispermateTests" */;
+			buildPhases = (
+				86EF2026CCB8E1C20129710C /* Sources */,
+				1CBECB6AF32479D754D259A1 /* Frameworks */,
+				9896FA6A0C9ED4C7D50EB4B1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WhispermateTests;
+			productName = WhispermateTests;
+			productReference = BD1BD0DBC885721955552BBC /* WhispermateTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -595,12 +669,20 @@
 				75F76DD9E51FB4E901E3F114 /* ParakeetRuntime */,
 				D1B200012F6500020000000B /* PermissionFlowRuntime */,
 				10EB843CCBD61B851E66788C /* WhisperMateLiveActivity */,
+				D7199B5FD18FC82104169F70 /* WhispermateTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4374118F75FD5A6D174CFE24 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9896FA6A0C9ED4C7D50EB4B1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -691,6 +773,19 @@
 			buildActionMask = 2147483647;
 			files = (
 				D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		86EF2026CCB8E1C20129710C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */,
+				42FEFF2DC2C470F6B62A0E72 /* TextInsertionFormatterTests.swift in Sources */,
+				8C545C8B9B27F9E03A581045 /* FnKeyGestureResolver.swift in Sources */,
+				C3D3AA06BB367CC2B12D382D /* TextInsertionFormatter.swift in Sources */,
+				87B3798E0D4426EE53993B51 /* HotkeyGestureResolverTests.swift in Sources */,
+				19702C83BABA8D7EE38F09DA /* HotkeyGestureResolver.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1349,6 +1444,23 @@
 			};
 			name = Release;
 		};
+		CB57F948D31C9FBAD873762D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.writingmate.whispermate.tests;
+				PRODUCT_MODULE_NAME = WhispermateTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
 		D1B200012F6500020000000E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1407,9 +1519,35 @@
 			};
 			name = Release;
 		};
+		EEE917D9AEAF105348C63AB9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.writingmate.whispermate.tests;
+				PRODUCT_MODULE_NAME = WhispermateTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		09AB589F8F85C310BFC451E5 /* Build configuration list for PBXNativeTarget "WhispermateTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EEE917D9AEAF105348C63AB9 /* Release */,
+				CB57F948D31C9FBAD873762D /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A76BBEFD447F26D6FA71142D /* Build configuration list for PBXNativeTarget "WhisperMateLiveActivity" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

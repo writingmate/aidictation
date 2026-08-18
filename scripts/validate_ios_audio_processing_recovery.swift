@@ -2315,9 +2315,22 @@ private func testIOSCallerRecoveryContracts() throws {
         mobileRecovery.lowerBound < keyboardRecovery.lowerBound,
         "Keyboard commands can start before mobile audio recovery finishes"
     )
+    let recoveryGate = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "Whishpermate/WhisperMateShared/Services/HostLaunchRecoveryGate.swift"
+        ),
+        encoding: .utf8
+    )
     try require(
-        content.contains("private enum MobileAudioHostLaunchRecoveryGate"),
+        content.contains("mobileAudioHostLaunchRecoveryGate.ensureReady")
+            && recoveryGate.contains("if isReady { return true }")
+            && recoveryGate.contains("if let existing = inFlight {"),
         "Mobile recovery can rerun and terminalize a live attempt"
+    )
+    try require(
+        recoveryGate.contains("if succeeded {\n            isReady = true\n        }")
+            && recoveryGate.contains("if inFlightID == passID {\n            inFlight = nil\n        }"),
+        "A failed launch recovery pass latches and can never be retried"
     )
     try require(
         content.contains("guard requireMobileAudioRecoveryReady() else { return }"),
@@ -2349,7 +2362,7 @@ private func testIOSCallerRecoveryContracts() throws {
         of: "for snapshot in snapshots where snapshot.stage == .deleted"
     ),
     let deletedHistoryLoopEnd = content.range(
-        of: "for snapshot in snapshots\n            where snapshot.stage == .succeeded",
+        of: "for snapshot in snapshots\n        where snapshot.stage == .succeeded",
         range: deletedHistoryLoop.upperBound ..< content.endIndex
     )
     else { throw ValidationFailure.failed("Launch history deletion reconciliation is missing") }

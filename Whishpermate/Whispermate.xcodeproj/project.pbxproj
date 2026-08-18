@@ -15,6 +15,8 @@
 		87B3798E0D4426EE53993B51 /* HotkeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */; };
 		8C545C8B9B27F9E03A581045 /* FnKeyGestureResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */; };
 		8F1AC4D7088B410D519BF10F /* MacAsyncDeadline.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12CA068C799386D2BF9EA4A /* MacAsyncDeadline.swift */; };
+		AA10000000000000000002 /* HostLaunchRecoveryGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000001 /* HostLaunchRecoveryGateTests.swift */; };
+		AA10000000000000000004 /* HostLaunchRecoveryGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000003 /* HostLaunchRecoveryGate.swift */; };
 		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -162,6 +164,8 @@
 		19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardDictationLiveActivity.swift; sourceTree = "<group>"; };
 		4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParakeetRuntimeBridge.swift; sourceTree = "<group>"; };
 		53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FnKeyGestureResolverTests.swift; sourceTree = "<group>"; };
+		AA10000000000000000001 /* HostLaunchRecoveryGateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HostLaunchRecoveryGateTests.swift; sourceTree = "<group>"; };
+		AA10000000000000000003 /* HostLaunchRecoveryGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HostLaunchRecoveryGate.swift; path = WhisperMateShared/Services/HostLaunchRecoveryGate.swift; sourceTree = SOURCE_ROOT; };
 		56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatterTests.swift; sourceTree = "<group>"; };
 		5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolver.swift; sourceTree = "<group>"; };
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -331,6 +335,8 @@
 			isa = PBXGroup;
 			children = (
 				53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */,
+				AA10000000000000000001 /* HostLaunchRecoveryGateTests.swift */,
+				AA10000000000000000003 /* HostLaunchRecoveryGate.swift */,
 				56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */,
 				EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */,
 				18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */,
@@ -802,6 +808,8 @@
 				E9CBF90A3FF2D435D3E2FEEC /* TranscriptionOutputFilter.swift in Sources */,
 				EA6E899FBFC37D9BF8D7DE06 /* MacAsyncDeadlineTests.swift in Sources */,
 				8F1AC4D7088B410D519BF10F /* MacAsyncDeadline.swift in Sources */,
+				AA10000000000000000002 /* HostLaunchRecoveryGateTests.swift in Sources */,
+				AA10000000000000000004 /* HostLaunchRecoveryGate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -920,7 +928,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME)";
@@ -955,7 +963,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
 				SKIP_INSTALL = YES;
@@ -986,7 +994,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.whispermate.parakeet-runtime";
 				PRODUCT_NAME = ParakeetRuntime;
 				SKIP_INSTALL = YES;
@@ -1013,7 +1021,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1170,7 +1178,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -1211,7 +1219,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
 				PRODUCT_NAME = AIDictation;
 				REGISTER_APP_GROUPS = YES;
@@ -1247,7 +1255,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -1293,7 +1301,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.shared;
@@ -1338,7 +1346,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1376,7 +1384,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_APPSTORE_PROFILE_NAME)";
@@ -1410,7 +1418,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1443,7 +1451,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.99;
+				MARKETING_VERSION = 0.0.100;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_KEYBOARD_APPSTORE_PROFILE_NAME)";

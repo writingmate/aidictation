@@ -14,10 +14,7 @@ private enum KeyboardHostLaunchRecoveryGate {
 }
 
 @MainActor
-private enum MobileAudioHostLaunchRecoveryGate {
-    static var attempted = false
-    static var ready = false
-}
+private let mobileAudioHostLaunchRecoveryGate = HostLaunchRecoveryGate()
 
 struct ContentView: View {
     @StateObject private var historyManager = HistoryManager()
@@ -1140,6 +1137,7 @@ struct ContentView: View {
                 identity: identity,
                 userMessage: "Saved recordings are still being checked. Try again in a moment."
             )
+            Task { @MainActor in await recoverMobileAudioProcessingIfNeeded() }
             return
         }
         guard let snapshot = loadKeyboardSnapshot(identity: identity) else { return }
@@ -1459,83 +1457,29 @@ struct ContentView: View {
     private func requireMobileAudioRecoveryReady() -> Bool {
         guard mobileAudioRecoveryReady else {
             historyActionMessage = "Saved recordings are still being checked. Try again in a moment."
+            // A previous pass may have failed or is still running; make sure another one is
+            // under way so the next tap can succeed.
+            Task { @MainActor in await recoverMobileAudioProcessingIfNeeded() }
             return false
         }
         return true
     }
 
     private func recoverMobileAudioProcessingIfNeeded() async {
-        guard !MobileAudioHostLaunchRecoveryGate.attempted else {
-            mobileAudioRecoveryReady = MobileAudioHostLaunchRecoveryGate.ready
-            return
-        }
-        MobileAudioHostLaunchRecoveryGate.attempted = true
-
-        do {
-            try await historyManager.reload()
-            _ = try await MobileAudioProcessingStore.shared.normalizeInterruptedAttempts()
-            let snapshots = try await MobileAudioProcessingStore.shared.allSnapshots()
-            let usageRecordingIDs = snapshots.compactMap { snapshot -> UUID? in
-                guard snapshot.stage == .succeeded,
-                      snapshot.usageAccountingState != .acknowledged
-                else { return nil }
-                return snapshot.recordingID
-            }
-            for snapshot in snapshots where snapshot.stage == .deleted {
-                if let recording = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
-                    try historyManager.removeAudioFileIfPresent(for: recording)
-                    try await historyManager.deleteRecording(recording)
-                }
-            }
-
-            for snapshot in snapshots
-            where snapshot.stage == .succeeded
-                || snapshot.stage == .failed
-                || snapshot.stage == .cancelled
-            {
-                guard FileManager.default.fileExists(atPath: snapshot.sourcePath) else { continue }
-                let text = try await MobileAudioProcessingStore.shared.recognizedText(
-                    for: snapshot.recordingID
+        let historyManager = historyManager
+        let succeeded = await mobileAudioHostLaunchRecoveryGate.ensureReady {
+            let usageRecordingIDs: [UUID]
+            do {
+                usageRecordingIDs = try await Self.performMobileAudioRecovery(
+                    historyManager: historyManager
                 )
-                if snapshot.stage == .succeeded,
-                   text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-                {
-                    continue
-                }
-                let outputMode = snapshot.outputModeRaw.flatMap(TranscriptionOutputMode.init(rawValue:))
-                    ?? .dictation
-                let transcriptionOptions = snapshot.transcriptionOptions
-                    ?? (outputMode == .meetings ? TranscriptionOptions(diarization: true) : .default)
-                if let existing = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
-                    if snapshot.stage == .succeeded,
-                       let text,
-                       existing.transcription != text
-                    {
-                        try await historyManager.upsertRecording(Recording(
-                            id: existing.id,
-                            timestamp: existing.timestamp,
-                            transcription: text,
-                            duration: snapshot.duration ?? existing.duration,
-                            audioFileURL: snapshot.sourceURL,
-                            outputMode: outputMode,
-                            transcriptionOptions: snapshot.transcriptionOptions ?? existing.transcriptionOptions
-                        ))
-                    }
-                } else {
-                    try await historyManager.upsertRecording(Recording(
-                        id: snapshot.recordingID,
-                        timestamp: snapshot.createdAt,
-                        transcription: text ?? "",
-                        duration: snapshot.duration,
-                        audioFileURL: snapshot.sourceURL,
-                        outputMode: outputMode,
-                        transcriptionOptions: transcriptionOptions
-                    ))
-                }
-
+            } catch {
+                DebugLog.warning(
+                    "Mobile audio recovery failed: \(error.localizedDescription)",
+                    context: "ContentView"
+                )
+                throw error
             }
-            MobileAudioHostLaunchRecoveryGate.ready = true
-            mobileAudioRecoveryReady = true
             // Recovery readiness must never wait on a usage-network request. Claims happen in
             // this follow-up task; once claimed, a request is deliberately never replayed.
             Task { @MainActor in
@@ -1546,11 +1490,81 @@ struct ContentView: View {
                     )
                 }
             }
-        } catch {
-            MobileAudioHostLaunchRecoveryGate.ready = false
-            mobileAudioRecoveryReady = false
-            historyActionMessage = "Saved recordings need attention. Restart the app before recording again."
         }
+
+        mobileAudioRecoveryReady = succeeded
+        if !succeeded {
+            historyActionMessage = "Saved recordings need attention. Try again in a moment."
+        }
+    }
+
+    @MainActor
+    private static func performMobileAudioRecovery(
+        historyManager: HistoryManager
+    ) async throws -> [UUID] {
+        try await historyManager.reload()
+        _ = try await MobileAudioProcessingStore.shared.normalizeInterruptedAttempts()
+        let snapshots = try await MobileAudioProcessingStore.shared.allSnapshots()
+        let usageRecordingIDs = snapshots.compactMap { snapshot -> UUID? in
+            guard snapshot.stage == .succeeded,
+                  snapshot.usageAccountingState != .acknowledged
+            else { return nil }
+            return snapshot.recordingID
+        }
+        for snapshot in snapshots where snapshot.stage == .deleted {
+            if let recording = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
+                try historyManager.removeAudioFileIfPresent(for: recording)
+                try await historyManager.deleteRecording(recording)
+            }
+        }
+
+        for snapshot in snapshots
+        where snapshot.stage == .succeeded
+            || snapshot.stage == .failed
+            || snapshot.stage == .cancelled
+        {
+            guard FileManager.default.fileExists(atPath: snapshot.sourcePath) else { continue }
+            let text = try await MobileAudioProcessingStore.shared.recognizedText(
+                for: snapshot.recordingID
+            )
+            if snapshot.stage == .succeeded,
+               text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+            {
+                continue
+            }
+            let outputMode = snapshot.outputModeRaw.flatMap(TranscriptionOutputMode.init(rawValue:))
+                ?? .dictation
+            let transcriptionOptions = snapshot.transcriptionOptions
+                ?? (outputMode == .meetings ? TranscriptionOptions(diarization: true) : .default)
+            if let existing = historyManager.recordings.first(where: { $0.id == snapshot.recordingID }) {
+                if snapshot.stage == .succeeded,
+                   let text,
+                   existing.transcription != text
+                {
+                    try await historyManager.upsertRecording(Recording(
+                        id: existing.id,
+                        timestamp: existing.timestamp,
+                        transcription: text,
+                        duration: snapshot.duration ?? existing.duration,
+                        audioFileURL: snapshot.sourceURL,
+                        outputMode: outputMode,
+                        transcriptionOptions: snapshot.transcriptionOptions ?? existing.transcriptionOptions
+                    ))
+                }
+            } else {
+                try await historyManager.upsertRecording(Recording(
+                    id: snapshot.recordingID,
+                    timestamp: snapshot.createdAt,
+                    transcription: text ?? "",
+                    duration: snapshot.duration,
+                    audioFileURL: snapshot.sourceURL,
+                    outputMode: outputMode,
+                    transcriptionOptions: transcriptionOptions
+                ))
+            }
+
+        }
+        return usageRecordingIDs
     }
 }
 

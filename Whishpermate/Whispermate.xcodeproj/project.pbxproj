@@ -14,6 +14,7 @@
 		7F4FEE534A3C48F98F9F7620 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C1FA00022F0B000000000002 /* FluidAudio */; };
 		87B3798E0D4426EE53993B51 /* HotkeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */; };
 		8C545C8B9B27F9E03A581045 /* FnKeyGestureResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */; };
+		8F1AC4D7088B410D519BF10F /* MacAsyncDeadline.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12CA068C799386D2BF9EA4A /* MacAsyncDeadline.swift */; };
 		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -36,7 +37,10 @@
 		D800E78DFFA88DCED50EE9F9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC33D501A203B8AEFB7871DF /* Foundation.framework */; };
 		DA93F0D2F436F9AF6A241959 /* WhisperMateLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DBA987B2CD71DDC4710889EA /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+		E9CBF90A3FF2D435D3E2FEEC /* TranscriptionOutputFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F88B49998F76BE514F77D63 /* TranscriptionOutputFilter.swift */; };
+		EA6E899FBFC37D9BF8D7DE06 /* MacAsyncDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */; };
 		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F9D2353CF2D81C9462A3DC3A /* TranscriptionOutputFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -154,6 +158,7 @@
 
 /* Begin PBXFileReference section */
 		0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatter.swift; sourceTree = "<group>"; };
+		18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptionOutputFilterTests.swift; sourceTree = "<group>"; };
 		19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardDictationLiveActivity.swift; sourceTree = "<group>"; };
 		4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ParakeetRuntimeBridge.swift; sourceTree = "<group>"; };
 		53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FnKeyGestureResolverTests.swift; sourceTree = "<group>"; };
@@ -162,6 +167,7 @@
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		6DAE0F0310D8E0C37D98C312 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FnKeyGestureResolver.swift; sourceTree = "<group>"; };
+		7F88B49998F76BE514F77D63 /* TranscriptionOutputFilter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptionOutputFilter.swift; sourceTree = "<group>"; };
 		BD1BD0DBC885721955552BBC /* WhispermateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhispermateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ParakeetRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1CE643F2ED8417000D24235 /* AIDictation.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIDictation.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -169,6 +175,7 @@
 		C1CE64412ED8417000D24235 /* WhisperMateKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WhisperMateShared.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D02C45F38B04FB16E083C5BD /* WhisperMateLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WhisperMateLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D12CA068C799386D2BF9EA4A /* MacAsyncDeadline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacAsyncDeadline.swift; sourceTree = "<group>"; };
 		D1B200012F65000200000001 /* PermissionFlowRuntimeBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionFlowRuntimeBridge.swift; sourceTree = "<group>"; };
 		D1B200012F65000200000002 /* PermissionFlowRuntime.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = PermissionFlowRuntime.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1B200012F65000200000011 /* PermissionFlow_PermissionFlow.bundle */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PermissionFlow_PermissionFlow.bundle; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -176,6 +183,7 @@
 		DC33D501A203B8AEFB7871DF /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		DD26FE6C4F67FD01DC7E517E /* WhisperMateLiveActivity.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = WhisperMateLiveActivity.entitlements; sourceTree = "<group>"; };
 		EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolverTests.swift; sourceTree = "<group>"; };
+		F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacAsyncDeadlineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -325,6 +333,8 @@
 				53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */,
 				56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */,
 				EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */,
+				18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */,
+				F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */,
 			);
 			name = WhispermateTests;
 			path = WhispermateTests;
@@ -345,6 +355,8 @@
 				7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */,
 				0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */,
 				5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */,
+				7F88B49998F76BE514F77D63 /* TranscriptionOutputFilter.swift */,
+				D12CA068C799386D2BF9EA4A /* MacAsyncDeadline.swift */,
 			);
 			name = WhispermateTestsSources;
 			path = Whispermate/Services;
@@ -786,6 +798,10 @@
 				C3D3AA06BB367CC2B12D382D /* TextInsertionFormatter.swift in Sources */,
 				87B3798E0D4426EE53993B51 /* HotkeyGestureResolverTests.swift in Sources */,
 				19702C83BABA8D7EE38F09DA /* HotkeyGestureResolver.swift in Sources */,
+				F9D2353CF2D81C9462A3DC3A /* TranscriptionOutputFilterTests.swift in Sources */,
+				E9CBF90A3FF2D435D3E2FEEC /* TranscriptionOutputFilter.swift in Sources */,
+				EA6E899FBFC37D9BF8D7DE06 /* MacAsyncDeadlineTests.swift in Sources */,
+				8F1AC4D7088B410D519BF10F /* MacAsyncDeadline.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

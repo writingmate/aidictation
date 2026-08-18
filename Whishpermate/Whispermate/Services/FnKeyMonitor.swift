@@ -159,13 +159,7 @@ class FnKeyMonitor {
     }
 
     private func validateEventTapHealth() {
-        guard consumePureFnEvents else {
-            // Passive mode has no tap to repair, but a gesture can still be left
-            // half-finished if macOS drops the release (fast app switch, sleep).
-            // Trust the live modifier flags over the latch.
-            reconcileWithLiveModifierFlags()
-            return
-        }
+        guard consumePureFnEvents else { return }
 
         guard AXIsProcessTrusted() else {
             DebugLog.info("Fn event tap health check skipped because Accessibility permission is missing", context: "FnKeyMonitor")
@@ -180,10 +174,7 @@ class FnKeyMonitor {
 
         if !CGEvent.tapIsEnabled(tap: tap) {
             enableEventTap(reason: "health check")
-            return
         }
-
-        reconcileWithLiveModifierFlags()
     }
 
     private func enableEventTap(reason: String) {
@@ -196,20 +187,17 @@ class FnKeyMonitor {
 
     /// Ends an in-flight gesture and tells the app about it. Without the callback a
     /// recording started by a press whose release we never saw would never stop.
+    ///
+    /// Only ever call this from an event-driven signal (the tap being disabled, or
+    /// monitoring stopping). Never from a timer that samples `NSEvent.modifierFlags`:
+    /// that snapshot does not reliably report `.function` while Fn/Globe is
+    /// physically held, so polling it cuts off a recording mid-sentence.
     private func interruptGesture(reason: String) {
         guard resolver.interrupt() else { return }
 
         DebugLog.info("Releasing in-flight Fn gesture: \(reason)", context: "FnKeyMonitor")
         let callback = onFnReleased
         DispatchQueue.main.async { callback?() }
-    }
-
-    /// Recovers from a release that never reached us by comparing the latch
-    /// against the modifier flags macOS reports right now.
-    private func reconcileWithLiveModifierFlags() {
-        guard resolver.isFnDown, !NSEvent.modifierFlags.contains(.function) else { return }
-
-        interruptGesture(reason: "Fn latch stuck down with the key physically up")
     }
 
     @discardableResult

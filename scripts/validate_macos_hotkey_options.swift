@@ -30,6 +30,12 @@ private func run() throws {
         ),
         encoding: .utf8
     )
+    let resolverSource = try String(
+        contentsOf: root.appendingPathComponent(
+            "Whishpermate/Whispermate/Services/HotkeyGestureResolver.swift"
+        ),
+        encoding: .utf8
+    )
 
     try requireContains(
         pickerSource,
@@ -66,11 +72,34 @@ private func run() throws {
         )
     }
 
+    // Modifier-only hotkey logic now lives in HotkeyGestureResolver
     try requireContains(
-        managerSource,
-        "let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 58, 59, 60, 61, 62, 63, 179]",
-        "the event path does not recognize all left modifier-only keycodes"
+        resolverSource,
+        "static let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 58, 59, 60, 61, 62, 63, 179]",
+        "the resolver does not recognize all left modifier-only keycodes"
     )
+    try requireContains(
+        resolverSource,
+        "private func flagsChangedKeyMatches(_ eventKeyCode: UInt16, binding: Binding) -> Bool",
+        "modifier-only events are not matched by their physical keycode"
+    )
+    try requireContains(
+        resolverSource,
+        "return eventKeyCode == binding.keyCode",
+        "left and right modifier keys are no longer distinguished"
+    )
+    try requireContains(
+        resolverSource,
+        "mutating func flagsChanged(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, at time: TimeInterval) -> Outcome",
+        "modifier press and release state is no longer derived from flagsChanged events"
+    )
+    try requireContains(
+        resolverSource,
+        "let isPressed = modifiers.intersection(required) == required",
+        "modifier pressed state is no longer computed from event flags"
+    )
+
+    // HotkeyManager still observes flagsChanged via the global event tap
     try requireContains(
         managerSource,
         "(1 << CGEventType.flagsChanged.rawValue)",
@@ -78,23 +107,8 @@ private func run() throws {
     )
     try requireContains(
         managerSource,
-        "flagsChangedKeyMatchesHotkey(eventKeyCode: keyCode, hotkey: hotkey)",
-        "modifier-only events are not matched by their physical keycode"
-    )
-    try requireContains(
-        managerSource,
-        "return eventKeyCode == hotkey.keyCode",
-        "left and right modifier keys are no longer distinguished"
-    )
-    try requireContains(
-        managerSource,
-        "let isModifierPressed = isRequiredModifierPressed(for: hotkey, eventModifiers: modifiers)",
-        "modifier press and release state is no longer derived from event flags"
-    )
-    try requireContains(
-        managerSource,
-        "handled = handleModifierFlagsStateChange(isModifierPressed: isModifierPressed, isDictation: true) || handled",
-        "modifier-only dictation no longer reaches the press/release state machine"
+        "handleFlagsChangedEvent(_ event: NSEvent)",
+        "modifier-only events are no longer dispatched to the resolver"
     )
 
     let existingCombinationContracts = [

@@ -749,6 +749,22 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 2)
 
+                    if hotkeyManager.isFnHotkeyDegraded {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color.orange)
+                            Text("Fn hotkey requires Accessibility permission to work. Grant access in Permissions below.")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                            Spacer()
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(6)
+                        .padding(.top, 4)
+                    }
+
                     Divider()
                         .padding(.vertical, 6)
 

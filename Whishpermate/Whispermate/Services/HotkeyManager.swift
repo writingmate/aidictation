@@ -22,6 +22,10 @@ class HotkeyManager: ObservableObject {
         }
     }
 
+    /// Indicates the Fn hotkey is configured but not fully functional due to
+    /// missing Accessibility permission.
+    @Published private(set) var isFnHotkeyDegraded: Bool = false
+
     // MARK: - Public Callbacks
 
     var onHotkeyPressed: (() -> Void)?
@@ -48,6 +52,9 @@ class HotkeyManager: ObservableObject {
         // Command mode has not been shipped publicly yet. Keep any saved value
         // untouched, but do not register it until the feature is enabled.
         static let commandHotkeyEnabled = false
+        static let wakeRecoveryDelays: [TimeInterval] = [0.5, 1.5, 3.0, 5.0, 8.0]
+        static let accessibilityPollInterval: TimeInterval = 30.0
+        static let tapRecreationCooldown: TimeInterval = 2.0
     }
 
     private enum Diagnostics {
@@ -72,10 +79,15 @@ class HotkeyManager: ObservableObject {
     private var flagsMonitor: Any?
     private var screenWakeObserver: NSObjectProtocol?
     private var systemWakeObserver: NSObjectProtocol?
+    private var sessionActiveObserver: NSObjectProtocol?
     private var appActivationObserver: NSObjectProtocol?
     private var eventTapHealthTimer: Timer?
     private var accessibilityRetryScheduled = false
     private var accessibilityRetryAttempts = 0
+    private var wakeRecoveryGeneration = 0
+    private var wakeRecoveryWorkItem: DispatchWorkItem?
+    private var accessibilityPollingTimer: Timer?
+    private var lastTapCreationTime: Date?
 
     // All press/release/double-tap/toggle state lives in these two resolvers, one
     // per channel. See HotkeyGestureResolver — it is covered by unit tests, this
@@ -113,6 +125,14 @@ class HotkeyManager: ObservableObject {
             self?.scheduleHotkeyReregistrationAfterWake(reason: "system did wake")
         }
 
+        sessionActiveObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleHotkeyReregistrationAfterWake(reason: "session did become active (unlock)")
+        }
+
         // Granting Accessibility happens in System Settings, so the app is
         // inactive while it happens and comes back active right after. The
         // short retry poll only covers the first seconds after launch; without
@@ -136,6 +156,7 @@ class HotkeyManager: ObservableObject {
             "Accessibility permission restored while the app was away; re-registering Fn hotkey",
             context: "HotkeyManager LOG"
         )
+        isFnHotkeyDegraded = false
         accessibilityRetryScheduled = false
         accessibilityRetryAttempts = 0
         registerHotkey()
@@ -378,13 +399,56 @@ class HotkeyManager: ObservableObject {
                 "Fn dictation hotkey needs Accessibility permission; waiting for the user to grant it",
                 context: "HotkeyManager LOG"
             )
+            isFnHotkeyDegraded = true
             scheduleAccessibilityRetryForFnHotkey()
+            startAccessibilityPollingTimer()
         } else {
+            isFnHotkeyDegraded = false
             accessibilityRetryScheduled = false
             accessibilityRetryAttempts = 0
+            stopAccessibilityPollingTimer()
         }
 
         fnKeyMonitor?.startMonitoring(consumePureFnEvents: accessibilityTrusted)
+    }
+
+    private func startAccessibilityPollingTimer() {
+        stopAccessibilityPollingTimer()
+
+        let timer = Timer(timeInterval: Constants.accessibilityPollInterval, repeats: true) { [weak self] _ in
+            self?.checkAccessibilityAndRecoverIfNeeded()
+        }
+        accessibilityPollingTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        DebugLog.info("Started accessibility polling timer", context: "HotkeyManager LOG")
+    }
+
+    private func stopAccessibilityPollingTimer() {
+        accessibilityPollingTimer?.invalidate()
+        accessibilityPollingTimer = nil
+    }
+
+    private func checkAccessibilityAndRecoverIfNeeded() {
+        guard let hotkey = currentHotkey, isFnOnlyHotkey(hotkey), !deferRegistration else {
+            stopAccessibilityPollingTimer()
+            isFnHotkeyDegraded = false
+            return
+        }
+
+        guard fnKeyMonitor?.consumePureFnEvents == false else {
+            stopAccessibilityPollingTimer()
+            isFnHotkeyDegraded = false
+            return
+        }
+
+        if AXIsProcessTrusted() {
+            DebugLog.info("Accessibility permission restored; re-registering Fn hotkey from polling timer", context: "HotkeyManager LOG")
+            stopAccessibilityPollingTimer()
+            isFnHotkeyDegraded = false
+            accessibilityRetryScheduled = false
+            accessibilityRetryAttempts = 0
+            registerHotkey()
+        }
     }
 
     private func scheduleAccessibilityRetryForFnHotkey() {
@@ -454,6 +518,7 @@ class HotkeyManager: ObservableObject {
         eventTapRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), eventTapRunLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        lastTapCreationTime = Date()
         startEventTapHealthTimer()
 
         DebugLog.info("Event tap created and enabled (includes flagsChanged for modifier keys)", context: "HotkeyManager LOG")
@@ -484,6 +549,7 @@ class HotkeyManager: ObservableObject {
         eventTapRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), eventTapRunLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        lastTapCreationTime = Date()
         startEventTapHealthTimer()
 
         DebugLog.info("Mouse event tap created and enabled", context: "HotkeyManager LOG")
@@ -493,12 +559,31 @@ class HotkeyManager: ObservableObject {
         DebugLog.info("Wake notification (\(reason)) - scheduling hotkey re-registration", context: "HotkeyManager LOG")
         guard !deferRegistration, currentHotkey != nil || commandHotkey != nil else { return }
 
-        // Small delay to let macOS finish rebuilding input devices/event taps after wake.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self else { return }
-            guard !self.deferRegistration, self.currentHotkey != nil || self.commandHotkey != nil else { return }
-            self.registerHotkey()
+        wakeRecoveryGeneration += 1
+        wakeRecoveryWorkItem?.cancel()
+
+        runWakeRecoveryAttempt(reason: reason, generation: wakeRecoveryGeneration, attempt: 0)
+    }
+
+    private func runWakeRecoveryAttempt(reason: String, generation: Int, attempt: Int) {
+        guard attempt < Constants.wakeRecoveryDelays.count else {
+            DebugLog.info("Hotkey wake recovery series complete after \(attempt) attempts", context: "HotkeyManager LOG")
+            return
         }
+
+        let delay = Constants.wakeRecoveryDelays[attempt]
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.wakeRecoveryGeneration else { return }
+            guard !self.deferRegistration, self.currentHotkey != nil || self.commandHotkey != nil else { return }
+
+            self.releaseHeldHotkeys(reason: "wake recovery attempt \(attempt + 1)")
+            self.registerHotkey()
+
+            DebugLog.info("Hotkey wake recovery attempt \(attempt + 1) done, scheduling next", context: "HotkeyManager LOG")
+            self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
+        }
+        wakeRecoveryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func startEventTapHealthTimer() {
@@ -519,8 +604,14 @@ class HotkeyManager: ObservableObject {
     private func validateEventTapHealth() {
         guard let tap = eventTap else { return }
 
+        if !CFMachPortIsValid(tap) {
+            DebugLog.info("Hotkey event tap invalid during health check; recreating", context: "HotkeyManager LOG")
+            forceRecreateEventTap(reason: "health check (invalid port)")
+            return
+        }
+
         if !CGEvent.tapIsEnabled(tap: tap) {
-            enableEventTap(reason: "health check")
+            forceRecreateEventTap(reason: "health check (tap disabled)")
         }
     }
 
@@ -531,6 +622,89 @@ class HotkeyManager: ObservableObject {
         releaseHeldHotkeys(reason: reason)
         CGEvent.tapEnable(tap: tap, enable: true)
         logFunctionKeyDiagnostic("Re-enabled hotkey event tap after \(reason)")
+    }
+
+    /// Called from the tap callback when macOS disables the tap. Apple and
+    /// libuiohook #184 found that tapEnable is the reliable recovery from the
+    /// callback; recreating from inside the callback is racy. We enable here,
+    /// then hop to the main queue and only recreate if enable didn't stick.
+    private func handleTapDisabledInCallback(type: CGEventType) {
+        guard let tap = eventTap else { return }
+
+        releaseHeldHotkeys(reason: "tap disabled in callback \(type.rawValue)")
+        CGEvent.tapEnable(tap: tap, enable: true)
+        DebugLog.info("Re-enabled hotkey event tap in callback for disabled event \(type.rawValue)", context: "HotkeyManager LOG")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.recreateTapIfStillBroken(reason: "callback disabled event \(type.rawValue)")
+        }
+    }
+
+    /// After re-enabling in the callback, check if the tap is truly functional.
+    /// Recreate only if still missing, invalid, or disabled.
+    private func recreateTapIfStillBroken(reason: String) {
+        guard let tap = eventTap else {
+            DebugLog.info("Hotkey event tap nil after callback enable; recreating", context: "HotkeyManager LOG")
+            forceRecreateEventTap(reason: reason)
+            return
+        }
+
+        if !CFMachPortIsValid(tap) {
+            DebugLog.info("Hotkey event tap invalid after callback enable; recreating", context: "HotkeyManager LOG")
+            forceRecreateEventTap(reason: reason)
+            return
+        }
+
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            DebugLog.info("Hotkey event tap still disabled after callback enable; recreating", context: "HotkeyManager LOG")
+            forceRecreateEventTap(reason: reason)
+            return
+        }
+
+        DebugLog.info("Hotkey event tap recovered via callback enable", context: "HotkeyManager LOG")
+    }
+
+    /// Tears down and recreates the event tap from scratch. Used when the tap
+    /// becomes non-functional after wake or timeout.
+    private func forceRecreateEventTap(reason: String) {
+        if let cooldownStart = lastTapCreationTime,
+           Date().timeIntervalSince(cooldownStart) < Constants.tapRecreationCooldown
+        {
+            DebugLog.info("Skipping tap recreation due to cooldown", context: "HotkeyManager LOG")
+            return
+        }
+
+        DebugLog.info("Force recreating hotkey event tap: \(reason)", context: "HotkeyManager LOG")
+
+        releaseHeldHotkeys(reason: reason)
+        invalidateAndClearTap()
+
+        let dictationHotkey = currentHotkey
+        let cmdHotkey = commandHotkey
+        let needsDictationFnMonitor = dictationHotkey.map(isFnOnlyHotkey) ?? false
+        let needsMouseTap = (dictationHotkey?.isMouseButton == true) || (cmdHotkey?.isMouseButton == true)
+        let needsKeyTap = (dictationHotkey != nil && dictationHotkey?.isMouseButton != true && !needsDictationFnMonitor) ||
+            (cmdHotkey != nil && cmdHotkey?.isMouseButton != true)
+
+        if needsMouseTap {
+            setupMouseEventTap()
+        } else if needsKeyTap {
+            setupEventTap()
+        }
+    }
+
+    /// Invalidates the Mach port and clears all tap references. Karabiner #4508
+    /// found that not invalidating leaves disabled taps in WindowServer.
+    private func invalidateAndClearTap() {
+        guard let tap = eventTap else { return }
+
+        CGEvent.tapEnable(tap: tap, enable: false)
+        if let source = eventTapRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+            eventTapRunLoopSource = nil
+        }
+        CFMachPortInvalidate(tap)
+        eventTap = nil
     }
 
     /// Ends any push-to-talk hold that was in flight when the tap went away.
@@ -673,7 +847,7 @@ class HotkeyManager: ObservableObject {
 
     private func handleCGEvent(proxy _: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            enableEventTap(reason: "callback disabled event \(type.rawValue)")
+            handleTapDisabledInCallback(type: type)
             return Unmanaged.passUnretained(event)
         }
 
@@ -743,17 +917,11 @@ class HotkeyManager: ObservableObject {
         DebugLog.info("unregisterHotkey called", context: "HotkeyManager LOG")
 
         stopEventTapHealthTimer()
+        stopAccessibilityPollingTimer()
+        wakeRecoveryWorkItem?.cancel()
+        wakeRecoveryWorkItem = nil
 
-        // Disable and remove event tap
-        if let tap = eventTap {
-            DebugLog.info("Disabling event tap", context: "HotkeyManager LOG")
-            CGEvent.tapEnable(tap: tap, enable: false)
-            if let source = eventTapRunLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
-                eventTapRunLoopSource = nil
-            }
-            eventTap = nil
-        }
+        invalidateAndClearTap()
 
         if let monitor = globalMonitor {
             DebugLog.info("Removing global monitor", context: "HotkeyManager LOG")
@@ -850,11 +1018,19 @@ class HotkeyManager: ObservableObject {
 
     deinit {
         unregisterHotkey()
+        stopAccessibilityPollingTimer()
+        wakeRecoveryWorkItem?.cancel()
         if let screenWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(screenWakeObserver)
         }
         if let systemWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(systemWakeObserver)
+        }
+        if let sessionActiveObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sessionActiveObserver)
+        }
+        if let appActivationObserver {
+            NotificationCenter.default.removeObserver(appActivationObserver)
         }
     }
 }

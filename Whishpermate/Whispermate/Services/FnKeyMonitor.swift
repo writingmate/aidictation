@@ -14,10 +14,17 @@ class FnKeyMonitor {
     private var resolver = FnKeyGestureResolver()
     private var suppressUntil: Date?
     private(set) var consumePureFnEvents = false
+    private var screenWakeObserver: NSObjectProtocol?
+    private var systemWakeObserver: NSObjectProtocol?
+    private var wakeRecoveryGeneration = 0
+    private var wakeRecoveryWorkItem: DispatchWorkItem?
+    private var lastTapCreationTime: Date?
 
     private enum Constants {
         static let suppressionDuration: TimeInterval = 0.5
         static let eventTapHealthInterval: TimeInterval = 5.0
+        static let wakeRecoveryDelays: [TimeInterval] = [0.5, 1.5, 3.0, 5.0, 8.0]
+        static let tapRecreationCooldown: TimeInterval = 2.0
     }
 
     var onFnPressed: (() -> Void)?
@@ -58,8 +65,100 @@ class FnKeyMonitor {
             return event
         }
 
+        setupWakeObservers()
         startEventTapHealthTimer()
         DebugLog.info("Fn key monitors registered", context: "FnKeyMonitor")
+    }
+
+    private func setupWakeObservers() {
+        removeWakeObservers()
+
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleWakeRecovery(reason: "screens did wake")
+        }
+
+        systemWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleWakeRecovery(reason: "system did wake")
+        }
+    }
+
+    private func removeWakeObservers() {
+        if let observer = screenWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            screenWakeObserver = nil
+        }
+        if let observer = systemWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            systemWakeObserver = nil
+        }
+    }
+
+    private func scheduleWakeRecovery(reason: String) {
+        guard consumePureFnEvents else { return }
+
+        wakeRecoveryGeneration += 1
+        wakeRecoveryWorkItem?.cancel()
+        DebugLog.info("Scheduling Fn event tap wake recovery: \(reason)", context: "FnKeyMonitor")
+
+        runWakeRecoveryAttempt(reason: reason, generation: wakeRecoveryGeneration, attempt: 0)
+    }
+
+    private func runWakeRecoveryAttempt(reason: String, generation: Int, attempt: Int) {
+        guard attempt < Constants.wakeRecoveryDelays.count else {
+            DebugLog.info("Fn event tap wake recovery exhausted after \(attempt) attempts", context: "FnKeyMonitor")
+            return
+        }
+
+        let delay = Constants.wakeRecoveryDelays[attempt]
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.wakeRecoveryGeneration else { return }
+
+            interruptGesture(reason: "wake recovery attempt \(attempt + 1)")
+            forceRecreateTap(reason: "wake recovery (\(reason))")
+
+            if self.eventTap != nil, let tap = self.eventTap, CGEvent.tapIsEnabled(tap: tap) {
+                DebugLog.info("Fn event tap wake recovery succeeded on attempt \(attempt + 1)", context: "FnKeyMonitor")
+            } else {
+                DebugLog.info("Fn event tap wake recovery attempt \(attempt + 1) failed, scheduling retry", context: "FnKeyMonitor")
+                self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
+            }
+        }
+        wakeRecoveryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    /// Tears down and recreates the event tap from scratch. Used for wake recovery
+    /// and when the tap appears non-functional despite being "enabled".
+    private func forceRecreateTap(reason: String) {
+        guard consumePureFnEvents else { return }
+
+        if let cooldownStart = lastTapCreationTime,
+           Date().timeIntervalSince(cooldownStart) < Constants.tapRecreationCooldown
+        {
+            DebugLog.info("Skipping tap recreation due to cooldown", context: "FnKeyMonitor")
+            return
+        }
+
+        DebugLog.info("Force recreating Fn event tap: \(reason)", context: "FnKeyMonitor")
+
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            if let source = eventTapRunLoopSource {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+                eventTapRunLoopSource = nil
+            }
+            eventTap = nil
+        }
+
+        setupConsumingEventTap()
     }
 
     /// Stop monitoring the Fn key
@@ -67,6 +166,9 @@ class FnKeyMonitor {
         DebugLog.info("Stopping Fn key monitoring", context: "FnKeyMonitor")
 
         stopEventTapHealthTimer()
+        removeWakeObservers()
+        wakeRecoveryWorkItem?.cancel()
+        wakeRecoveryWorkItem = nil
 
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
@@ -114,7 +216,7 @@ class FnKeyMonitor {
 
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     monitor.interruptGesture(reason: "tap disabled event \(type.rawValue)")
-                    monitor.enableEventTap(reason: "callback disabled event \(type.rawValue)")
+                    monitor.forceRecreateTap(reason: "callback disabled event \(type.rawValue)")
                     return Unmanaged.passUnretained(event)
                 }
 
@@ -140,6 +242,7 @@ class FnKeyMonitor {
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         }
         CGEvent.tapEnable(tap: tap, enable: true)
+        lastTapCreationTime = Date()
         DebugLog.info("Consuming Fn event tap created and enabled", context: "FnKeyMonitor")
     }
 
@@ -168,12 +271,12 @@ class FnKeyMonitor {
 
         guard let tap = eventTap else {
             DebugLog.info("Fn event tap missing during health check; recreating", context: "FnKeyMonitor")
-            setupConsumingEventTap()
+            forceRecreateTap(reason: "health check (nil tap)")
             return
         }
 
         if !CGEvent.tapIsEnabled(tap: tap) {
-            enableEventTap(reason: "health check")
+            forceRecreateTap(reason: "health check (tap disabled)")
         }
     }
 
@@ -229,5 +332,6 @@ class FnKeyMonitor {
 
     deinit {
         stopMonitoring()
+        removeWakeObservers()
     }
 }

@@ -16,6 +16,7 @@ class FnKeyMonitor {
     private(set) var consumePureFnEvents = false
     private var screenWakeObserver: NSObjectProtocol?
     private var systemWakeObserver: NSObjectProtocol?
+    private var sessionActiveObserver: NSObjectProtocol?
     private var wakeRecoveryGeneration = 0
     private var wakeRecoveryWorkItem: DispatchWorkItem?
     private var lastTapCreationTime: Date?
@@ -88,6 +89,14 @@ class FnKeyMonitor {
         ) { [weak self] _ in
             self?.scheduleWakeRecovery(reason: "system did wake")
         }
+
+        sessionActiveObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleWakeRecovery(reason: "session did become active (unlock)")
+        }
     }
 
     private func removeWakeObservers() {
@@ -98,6 +107,10 @@ class FnKeyMonitor {
         if let observer = systemWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             systemWakeObserver = nil
+        }
+        if let observer = sessionActiveObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            sessionActiveObserver = nil
         }
     }
 
@@ -113,7 +126,7 @@ class FnKeyMonitor {
 
     private func runWakeRecoveryAttempt(reason: String, generation: Int, attempt: Int) {
         guard attempt < Constants.wakeRecoveryDelays.count else {
-            DebugLog.info("Fn event tap wake recovery exhausted after \(attempt) attempts", context: "FnKeyMonitor")
+            DebugLog.info("Fn event tap wake recovery series complete after \(attempt) attempts", context: "FnKeyMonitor")
             return
         }
 
@@ -124,12 +137,8 @@ class FnKeyMonitor {
             interruptGesture(reason: "wake recovery attempt \(attempt + 1)")
             forceRecreateTap(reason: "wake recovery (\(reason))")
 
-            if self.eventTap != nil, let tap = self.eventTap, CGEvent.tapIsEnabled(tap: tap) {
-                DebugLog.info("Fn event tap wake recovery succeeded on attempt \(attempt + 1)", context: "FnKeyMonitor")
-            } else {
-                DebugLog.info("Fn event tap wake recovery attempt \(attempt + 1) failed, scheduling retry", context: "FnKeyMonitor")
-                self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
-            }
+            DebugLog.info("Fn event tap wake recovery attempt \(attempt + 1) done, scheduling next", context: "FnKeyMonitor")
+            self.runWakeRecoveryAttempt(reason: reason, generation: generation, attempt: attempt + 1)
         }
         wakeRecoveryWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
@@ -149,16 +158,22 @@ class FnKeyMonitor {
 
         DebugLog.info("Force recreating Fn event tap: \(reason)", context: "FnKeyMonitor")
 
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            if let source = eventTapRunLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-                eventTapRunLoopSource = nil
-            }
-            eventTap = nil
-        }
-
+        invalidateAndClearTap()
         setupConsumingEventTap()
+    }
+
+    /// Invalidates the Mach port and clears all tap references. Karabiner #4508
+    /// found that not invalidating leaves disabled taps in WindowServer.
+    private func invalidateAndClearTap() {
+        guard let tap = eventTap else { return }
+
+        CGEvent.tapEnable(tap: tap, enable: false)
+        if let source = eventTapRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            eventTapRunLoopSource = nil
+        }
+        CFMachPortInvalidate(tap)
+        eventTap = nil
     }
 
     /// Stop monitoring the Fn key
@@ -170,14 +185,7 @@ class FnKeyMonitor {
         wakeRecoveryWorkItem?.cancel()
         wakeRecoveryWorkItem = nil
 
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            if let source = eventTapRunLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-                eventTapRunLoopSource = nil
-            }
-            eventTap = nil
-        }
+        invalidateAndClearTap()
 
         if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
@@ -216,7 +224,7 @@ class FnKeyMonitor {
 
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     monitor.interruptGesture(reason: "tap disabled event \(type.rawValue)")
-                    monitor.forceRecreateTap(reason: "callback disabled event \(type.rawValue)")
+                    monitor.handleTapDisabledInCallback(type: type)
                     return Unmanaged.passUnretained(event)
                 }
 
@@ -275,6 +283,12 @@ class FnKeyMonitor {
             return
         }
 
+        if !CFMachPortIsValid(tap) {
+            DebugLog.info("Fn event tap invalid during health check; recreating", context: "FnKeyMonitor")
+            forceRecreateTap(reason: "health check (invalid port)")
+            return
+        }
+
         if !CGEvent.tapIsEnabled(tap: tap) {
             forceRecreateTap(reason: "health check (tap disabled)")
         }
@@ -286,6 +300,47 @@ class FnKeyMonitor {
         interruptGesture(reason: reason)
         CGEvent.tapEnable(tap: tap, enable: true)
         DebugLog.info("Re-enabled Fn event tap after \(reason)", context: "FnKeyMonitor")
+    }
+
+    /// Called from the tap callback when macOS disables the tap. Apple and
+    /// libuiohook #184 found that tapEnable is the reliable recovery from the
+    /// callback; recreating from inside the callback is racy. We enable here,
+    /// then hop to the main queue and only recreate if enable didn't stick.
+    private func handleTapDisabledInCallback(type: CGEventType) {
+        guard let tap = eventTap else { return }
+
+        CGEvent.tapEnable(tap: tap, enable: true)
+        DebugLog.info("Re-enabled Fn event tap in callback for disabled event \(type.rawValue)", context: "FnKeyMonitor")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.recreateTapIfStillBroken(reason: "callback disabled event \(type.rawValue)")
+        }
+    }
+
+    /// After re-enabling in the callback, check if the tap is truly functional.
+    /// Recreate only if still missing, invalid, or disabled.
+    private func recreateTapIfStillBroken(reason: String) {
+        guard consumePureFnEvents else { return }
+
+        guard let tap = eventTap else {
+            DebugLog.info("Fn event tap nil after callback enable; recreating", context: "FnKeyMonitor")
+            forceRecreateTap(reason: reason)
+            return
+        }
+
+        if !CFMachPortIsValid(tap) {
+            DebugLog.info("Fn event tap invalid after callback enable; recreating", context: "FnKeyMonitor")
+            forceRecreateTap(reason: reason)
+            return
+        }
+
+        if !CGEvent.tapIsEnabled(tap: tap) {
+            DebugLog.info("Fn event tap still disabled after callback enable; recreating", context: "FnKeyMonitor")
+            forceRecreateTap(reason: reason)
+            return
+        }
+
+        DebugLog.info("Fn event tap recovered via callback enable", context: "FnKeyMonitor")
     }
 
     /// Ends an in-flight gesture and tells the app about it. Without the callback a

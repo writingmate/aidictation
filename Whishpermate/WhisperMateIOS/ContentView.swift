@@ -208,7 +208,7 @@ struct ContentView: View {
         ZStack {
             historyView
 
-            if inlineRecording.isPanelVisible {
+            if inlineRecording.isPanelVisible, !showKeyboardReturnScreen {
                 GeometryReader { proxy in
                     let sheetBaseHeight = max(proxy.size.height, UIScreen.main.bounds.height)
                     let isCompleting = inlineRecording.state == .completing
@@ -257,25 +257,27 @@ struct ContentView: View {
                     .zIndex(3)
             }
 
-            VStack {
-                Spacer()
-                Button(action: handleInlineRecordingTap) {
-                    AIDictationMicButtonVisual(
-                        state: inlineRecording.visualState,
-                        audioLevel: inlineRecording.audioLevel,
-                        frequencyBands: inlineRecording.frequencyBands,
-                        size: 64
-                    )
-                    .shadow(color: .black.opacity(inlineRecording.isActive ? 0.28 : 0.2), radius: inlineRecording.isActive ? 10 : 4, x: 0, y: inlineRecording.isActive ? 5 : 2)
+            if !showKeyboardReturnScreen {
+                VStack {
+                    Spacer()
+                    Button(action: handleInlineRecordingTap) {
+                        AIDictationMicButtonVisual(
+                            state: inlineRecording.visualState,
+                            audioLevel: inlineRecording.audioLevel,
+                            frequencyBands: inlineRecording.frequencyBands,
+                            size: 64
+                        )
+                        .shadow(color: .black.opacity(inlineRecording.isActive ? 0.28 : 0.2), radius: inlineRecording.isActive ? 10 : 4, x: 0, y: inlineRecording.isActive ? 5 : 2)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inlineRecording.state == .processing || inlineRecording.state == .completing)
+                    .opacity(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0 : 1)
+                    .scaleEffect(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0.82 : 1)
+                    .accessibilityLabel(inlineRecording.isActive ? "Stop recording" : "Start recording")
+                    .padding(.bottom, 28)
                 }
-                .buttonStyle(.plain)
-                .disabled(inlineRecording.state == .processing || inlineRecording.state == .completing)
-                .opacity(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0 : 1)
-                .scaleEffect(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0.82 : 1)
-                .accessibilityLabel(inlineRecording.isActive ? "Stop recording" : "Start recording")
-                .padding(.bottom, 28)
+                .zIndex(2)
             }
-            .zIndex(2)
         }
         .animation(.spring(response: 0.42, dampingFraction: 0.86, blendDuration: 0.08), value: inlineRecording.state)
         .animation(.easeInOut(duration: 0.2), value: inlineRecording.errorMessage)
@@ -2937,6 +2939,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     guard KeyboardDictationHandoff.snapshot(for: keyboardIdentity)?.phase == .preparing else {
                         throw CancellationError()
                     }
+                    guard KeyboardDictationHandoff.publishHostPhase(
+                        .recording,
+                        identity: keyboardIdentity,
+                        recordingID: prepared.recordingID.uuidString
+                    ) else {
+                        throw CancellationError()
+                    }
                 }
 
                 _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
@@ -2952,16 +2961,6 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 )
                 guard activeAttempt == prepared, !Task.isCancelled else {
                     throw CancellationError()
-                }
-
-                if let keyboardIdentity {
-                    guard KeyboardDictationHandoff.publishHostPhase(
-                        .recording,
-                        identity: keyboardIdentity,
-                        recordingID: prepared.recordingID.uuidString
-                    ) else {
-                        throw CancellationError()
-                    }
                 }
 
                 recordingStartTime = Date()

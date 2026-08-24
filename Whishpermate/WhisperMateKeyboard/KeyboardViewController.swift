@@ -444,7 +444,7 @@ class KeyboardViewController: UIInputViewController {
 
     private func startAppOpenFallbackTimer(identity: KeyboardDictationHandoff.AttemptIdentity) {
         stopStartFallbackTimer()
-        let timer = Timer(timeInterval: 1.25, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: 3.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self,
                       self.handoffPhase == .preparing,

@@ -338,35 +338,43 @@ try {
     
     Take-Screenshot "02-before-paste"
     
-    Write-Host ""
-    Write-Host "[4] Verifying focus and sending Ctrl+V..."
+    # Create a debug log file
+    $debugLog = Join-Path $OutDir "debug-log.txt"
+    
+    function Log-Debug($msg) {
+        Write-Host $msg
+        $msg | Out-File -FilePath $debugLog -Append
+    }
+    
+    Log-Debug ""
+    Log-Debug "[4] Verifying focus and sending Ctrl+V..."
     
     # Check focus multiple times with delays
     $fgBefore = [SessionInfo]::GetForegroundWindow()
-    Write-Host "  Foreground window before send: $fgBefore (target: $targetHwnd)"
+    Log-Debug "  Foreground window before send: $fgBefore (target: $targetHwnd)"
     
     if ($fgBefore -ne $targetHwnd) {
-        Write-Host "  WARNING: Focus is NOT on Notepad! Trying to restore..."
+        Log-Debug "  WARNING: Focus is NOT on Notepad! Trying to restore..."
         $focusRetry = [SessionInfo]::TryFocusWindow($targetHwnd)
         Start-Sleep -Milliseconds 300
         $fgBefore = [SessionInfo]::GetForegroundWindow()
-        Write-Host "  Retry result: $focusRetry, foreground now: $fgBefore"
+        Log-Debug "  Retry result: $focusRetry, foreground now: $fgBefore"
     }
     
     # Give extra time for focus to settle
-    Write-Host "  Waiting 500ms for focus to settle..."
+    Log-Debug "  Waiting 500ms for focus to settle..."
     Start-Sleep -Milliseconds 500
     
     $fgAtSend = [SessionInfo]::GetForegroundWindow()
-    Write-Host "  Foreground window at send time: $fgAtSend"
+    Log-Debug "  Foreground window at send time: $fgAtSend"
     
     $sendResult = [SessionInfo]::SendPaste()
     $lastError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-    Write-Host "  SendInput result: $sendResult/4 (error: $lastError)"
+    Log-Debug "  SendInput result: $sendResult/4 (error: $lastError)"
     
     # Check foreground immediately after
     $fgAfter = [SessionInfo]::GetForegroundWindow()
-    Write-Host "  Foreground window after send: $fgAfter"
+    Log-Debug "  Foreground window after send: $fgAfter"
     
     Start-Sleep -Milliseconds 500
     Take-Screenshot "03-after-paste"
@@ -434,12 +442,38 @@ public static class ChildFinder {
             if ($editHwnd -ne [IntPtr]::Zero) {
                 [SessionInfo]::SetFocus($editHwnd) | Out-Null
                 $wmPasteEdit = [SessionInfo]::PostMessage($editHwnd, [SessionInfo]::WM_PASTE, [IntPtr]::Zero, [IntPtr]::Zero)
-                Write-Host "  WM_PASTE to edit control: $wmPasteEdit"
+                Log-Debug "  WM_PASTE to edit control: $wmPasteEdit"
                 Start-Sleep -Milliseconds 500
             }
         }
         
         Take-Screenshot "04a-after-wm-paste"
+        
+        # Check after WM_PASTE attempts
+        $contentAfterAllWmPaste = Read-NotepadText
+        Log-Debug "  Content after all WM_PASTE attempts: '$contentAfterAllWmPaste'"
+        
+        # Final fallback: try .NET SendKeys
+        if (-not ($contentAfterAllWmPaste -match [regex]::Escape($testText))) {
+            Log-Debug "  WM_PASTE didn't work, trying .NET SendKeys..."
+            
+            try {
+                Add-Type -AssemblyName System.Windows.Forms
+                
+                # Re-focus
+                [SessionInfo]::TryFocusWindow($targetHwnd) | Out-Null
+                Start-Sleep -Milliseconds 200
+                
+                # SendKeys ^v (Ctrl+V)
+                [System.Windows.Forms.SendKeys]::SendWait("^v")
+                Log-Debug "  SendKeys ^v sent"
+                
+                Start-Sleep -Milliseconds 500
+                Take-Screenshot "04b-after-sendkeys"
+            } catch {
+                Log-Debug "  SendKeys failed: $_"
+            }
+        }
     }
     
     Write-Host ""

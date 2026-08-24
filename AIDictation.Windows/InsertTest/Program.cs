@@ -1,7 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -258,22 +256,9 @@ class Program
 
     static void TakeScreenshot(string name)
     {
-        try
-        {
-            var bounds = System.Windows.Forms.Screen.PrimaryScreen?.Bounds;
-            if (bounds == null || bounds.Value.Width == 0) return;
-
-            using var bmp = new Bitmap(bounds.Value.Width, bounds.Value.Height);
-            using var gfx = Graphics.FromImage(bmp);
-            gfx.CopyFromScreen(bounds.Value.Left, bounds.Value.Top, 0, 0, bmp.Size);
-            var path = Path.Combine(_outDir, $"{name}.png");
-            bmp.Save(path, ImageFormat.Png);
-            Log($"  Screenshot: {name}.png");
-        }
-        catch (Exception ex)
-        {
-            Log($"  Screenshot {name} failed: {ex.Message}");
-        }
+        // Note: Screenshots disabled to avoid WPF/WinForms conflicts.
+        // The test result matters, not screenshots.
+        Log($"  [Checkpoint: {name}]");
     }
 
     static void WriteResults(string testText, string notepadContent, PasteResult result,

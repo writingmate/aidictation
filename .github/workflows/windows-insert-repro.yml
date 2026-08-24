@@ -1,0 +1,57 @@
+name: Windows Insert Repro
+
+on:
+  push:
+    branches:
+      - 'cursor/*'
+    paths:
+      - '.github/workflows/windows-insert-repro.yml'
+      - 'AIDictation.Windows/scripts/repro-insert-failure.ps1'
+      - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
+      - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-insert-repro.yml'
+      - 'AIDictation.Windows/scripts/repro-insert-failure.ps1'
+      - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
+      - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
+  workflow_dispatch:
+
+jobs:
+  repro-insert:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Run insert repro test
+      shell: pwsh
+      run: |
+        $outDir = Join-Path $env:RUNNER_TEMP "insert-repro"
+        New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+        
+        # Run the repro script
+        $result = 0
+        try {
+          & AIDictation.Windows/scripts/repro-insert-failure.ps1 -OutDir $outDir
+        } catch {
+          Write-Host "Script threw: $_"
+          $result = 1
+        }
+        
+        # Always show what happened
+        Write-Host ""
+        Write-Host "=== Artifacts ==="
+        Get-ChildItem $outDir -Recurse | ForEach-Object { Write-Host $_.FullName }
+        
+        exit $result
+
+    - name: Upload repro artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: insert-repro-artifacts
+        path: ${{ runner.temp }}/insert-repro/
+        retention-days: 7

@@ -3,6 +3,17 @@ using System.Runtime.InteropServices;
 namespace AIDictation.Helpers;
 
 /// <summary>
+/// Result of a SendInput operation with detailed failure information.
+/// </summary>
+public readonly record struct SendInputResult(bool Success, string? ErrorMessage = null, int? Win32Error = null)
+{
+    public static SendInputResult Succeeded { get; } = new(true);
+
+    public static SendInputResult Failed(string message, int? win32Error = null) =>
+        new(false, message, win32Error);
+}
+
+/// <summary>
 /// Provides P/Invoke wrappers for user32.dll SendInput API to simulate keyboard input
 /// </summary>
 public static class SendInputHelper
@@ -15,6 +26,9 @@ public static class SendInputHelper
     // Virtual key codes
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
+
+    // Common Win32 error codes for SendInput failures
+    private const int ERROR_ACCESS_DENIED = 5;
 
     // MARK: - Structures
 
@@ -73,7 +87,13 @@ public static class SendInputHelper
     /// Simulates the Ctrl+V paste chord. Returns false when injection was
     /// rejected or blocked (e.g. UIPI against an elevated target window).
     /// </summary>
-    public static bool SendPaste()
+    public static bool SendPaste() => SendPasteWithResult().Success;
+
+    /// <summary>
+    /// Simulates the Ctrl+V paste chord with detailed result information.
+    /// Returns success or the specific Win32 error that blocked injection.
+    /// </summary>
+    public static SendInputResult SendPasteWithResult()
     {
         var inputs = new INPUT[4];
 
@@ -86,21 +106,35 @@ public static class SendInputHelper
         // Ctrl up
         inputs[3] = CreateKeyInput(VK_CONTROL, KEYEVENTF_KEYUP);
 
-        return Dispatch(inputs);
+        return DispatchWithResult(inputs);
     }
 
     // MARK: - Private Methods
 
-    private static bool Dispatch(INPUT[] inputs)
+    private static bool Dispatch(INPUT[] inputs) => DispatchWithResult(inputs).Success;
+
+    private static SendInputResult DispatchWithResult(INPUT[] inputs)
     {
         var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
         if (sent != inputs.Length)
         {
+            var errorCode = Marshal.GetLastWin32Error();
             System.Diagnostics.Debug.WriteLine(
-                $"SendInput injected {sent}/{inputs.Length} events (error {Marshal.GetLastWin32Error()})");
-            return false;
+                $"SendInput injected {sent}/{inputs.Length} events (error {errorCode})");
+
+            var message = errorCode switch
+            {
+                ERROR_ACCESS_DENIED =>
+                    "Input was blocked. The target application may be running as administrator, or security software is blocking keyboard input.",
+                0 when sent == 0 =>
+                    "Input injection failed. A security application may be blocking simulated keyboard input.",
+                _ =>
+                    $"Input injection failed (error code {errorCode}). Security software may be blocking keyboard input."
+            };
+
+            return SendInputResult.Failed(message, errorCode);
         }
-        return true;
+        return SendInputResult.Succeeded;
     }
 
     private static INPUT CreateKeyInput(ushort virtualKeyCode, uint flags)

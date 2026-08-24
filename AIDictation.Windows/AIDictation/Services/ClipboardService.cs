@@ -7,6 +7,34 @@ using AIDictation.Helpers;
 namespace AIDictation.Services;
 
 /// <summary>
+/// Result of a paste operation with detailed failure information.
+/// </summary>
+public sealed record PasteResult(
+    bool Success,
+    PasteFailureReason FailureReason = PasteFailureReason.None,
+    string? ErrorMessage = null)
+{
+    public static PasteResult Succeeded { get; } = new(true);
+    public static PasteResult Empty { get; } = new(true);
+
+    public static PasteResult Failed(PasteFailureReason reason, string message) =>
+        new(false, reason, message);
+}
+
+/// <summary>
+/// Categorizes paste failures for user-facing guidance.
+/// </summary>
+public enum PasteFailureReason
+{
+    None,
+    ClipboardLocked,
+    TargetWindowGone,
+    FocusBlocked,
+    InputInjectionBlocked,
+    ElevatedTargetWindow
+}
+
+/// <summary>
 /// Inserts transcribed text into the target application via clipboard +
 /// synthesized Ctrl+V, preserving the user's clipboard content.
 /// </summary>
@@ -46,6 +74,26 @@ public sealed class ClipboardService
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(
+        IntPtr TokenHandle,
+        int TokenInformationClass,
+        IntPtr TokenInformation,
+        int TokenInformationLength,
+        out int ReturnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hHandle);
+
+    private const uint TOKEN_QUERY = 0x0008;
+    private const int TokenElevation = 20;
+
     // MARK: - Public API
 
     /// <summary>
@@ -56,8 +104,23 @@ public sealed class ClipboardService
     /// </summary>
     public async Task<bool> PasteTextAsync(string text, IntPtr targetWindow = default, bool smartSpacing = true)
     {
+        var result = await PasteTextWithResultAsync(text, targetWindow, smartSpacing);
+        return result.Success;
+    }
+
+    /// <summary>
+    /// Copies text to the clipboard and pastes it into the target window via
+    /// Ctrl+V. Returns a detailed result indicating success or the specific
+    /// failure reason. On failure, the transcript is left on the clipboard
+    /// so the user can paste manually.
+    /// </summary>
+    public async Task<PasteResult> PasteTextWithResultAsync(
+        string text,
+        IntPtr targetWindow = default,
+        bool smartSpacing = true)
+    {
         if (string.IsNullOrEmpty(text))
-            return true;
+            return PasteResult.Empty;
 
         // Save original clipboard content
         var originalClipboard = await GetClipboardContentAsync();
@@ -70,25 +133,59 @@ public sealed class ClipboardService
             if (!await SetClipboardTextAsync(textToInsert))
             {
                 System.Diagnostics.Debug.WriteLine("PasteTextAsync: clipboard write failed");
-                return false;
+                return PasteResult.Failed(
+                    PasteFailureReason.ClipboardLocked,
+                    "Could not write to the clipboard. Another application may be holding it.");
             }
 
             await Task.Delay(Constants.ClipboardDelayMs);
 
             // Re-focus the window the user dictated into; pasting into whatever
             // happens to be foreground would send the text to the wrong app.
-            if (targetWindow != IntPtr.Zero && !await TryFocusWindowAsync(targetWindow))
+            if (targetWindow != IntPtr.Zero)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    "PasteTextAsync: target window not focusable; transcript left on clipboard");
-                return false;
+                if (!IsWindow(targetWindow))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "PasteTextAsync: target window no longer exists");
+                    return PasteResult.Failed(
+                        PasteFailureReason.TargetWindowGone,
+                        "The window you were typing into has closed.");
+                }
+
+                // Check if target is an elevated process (UIPI blocks SendInput)
+                if (IsTargetWindowElevated(targetWindow))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "PasteTextAsync: target window belongs to an elevated process");
+                    return PasteResult.Failed(
+                        PasteFailureReason.ElevatedTargetWindow,
+                        "The target application is running as administrator. Press Ctrl+V to paste.");
+                }
+
+                if (!await TryFocusWindowAsync(targetWindow))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "PasteTextAsync: target window not focusable; transcript left on clipboard");
+                    return PasteResult.Failed(
+                        PasteFailureReason.FocusBlocked,
+                        "Could not bring the target window to the foreground. Press Ctrl+V to paste.");
+                }
             }
 
-            pasted = SendInputHelper.SendPaste();
+            var sendResult = SendInputHelper.SendPasteWithResult();
+            if (!sendResult.Success)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
+                return PasteResult.Failed(
+                    PasteFailureReason.InputInjectionBlocked,
+                    sendResult.ErrorMessage ?? "Keyboard input was blocked. Press Ctrl+V to paste.");
+            }
 
-            // Wait for paste to complete
+            pasted = true;
             await Task.Delay(Constants.PasteDelayMs);
-            return pasted;
+            return PasteResult.Succeeded;
         }
         finally
         {
@@ -102,6 +199,52 @@ public sealed class ClipboardService
                 await RestoreClipboardAsync(originalClipboard);
             }
         }
+    }
+
+    /// <summary>
+    /// Checks if the window belongs to a process running with elevated privileges.
+    /// SendInput cannot inject into elevated windows from a non-elevated process
+    /// due to User Interface Privilege Isolation (UIPI).
+    /// </summary>
+    private static bool IsTargetWindowElevated(IntPtr hWnd)
+    {
+        try
+        {
+            GetWindowThreadProcessId(hWnd, out var processId);
+            if (processId == 0) return false;
+
+            using var process = System.Diagnostics.Process.GetProcessById((int)processId);
+            if (!OpenProcessToken(process.Handle, TOKEN_QUERY, out var tokenHandle))
+                return false;
+
+            try
+            {
+                var elevationSize = Marshal.SizeOf<int>();
+                var elevationPtr = Marshal.AllocHGlobal(elevationSize);
+                try
+                {
+                    if (GetTokenInformation(tokenHandle, TokenElevation, elevationPtr, elevationSize, out _))
+                    {
+                        var elevation = Marshal.ReadInt32(elevationPtr);
+                        return elevation != 0;
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(elevationPtr);
+                }
+            }
+            finally
+            {
+                CloseHandle(tokenHandle);
+            }
+        }
+        catch
+        {
+            // If we can't determine elevation status, assume not elevated
+        }
+
+        return false;
     }
 
     // MARK: - Private Methods

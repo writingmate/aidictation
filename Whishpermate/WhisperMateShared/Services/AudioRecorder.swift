@@ -154,7 +154,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             }
 
             // Install a tap that discards all samples. This keeps the audio session active.
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { _, _ in
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable _, _ in
                 // Discard samples - we're just keeping the session alive
             }
 

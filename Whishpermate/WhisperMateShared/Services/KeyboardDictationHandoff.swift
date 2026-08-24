@@ -145,9 +145,10 @@ public enum KeyboardDictationHandoff {
             heartbeatAt: Date? = nil
         ) {
             self.schemaVersion = Self.schemaVersion
-            self.activatedAt = Self.normalizedTimestamp(activatedAt)
+            let normalizedActivatedAt = Self.normalizedTimestamp(activatedAt)
+            self.activatedAt = normalizedActivatedAt
             self.expiresAt = Self.normalizedTimestamp(expiresAt ?? activatedAt.addingTimeInterval(Self.quickDictationWindowSeconds))
-            self.heartbeatAt = Self.normalizedTimestamp(heartbeatAt ?? activatedAt)
+            self.heartbeatAt = Self.normalizedTimestamp(heartbeatAt) ?? normalizedActivatedAt
         }
 
         public func isReady(at date: Date = Date()) -> Bool {
@@ -172,7 +173,7 @@ public enum KeyboardDictationHandoff {
         }
 
         private static func normalizedTimestamp(_ date: Date?) -> Date? {
-            date.map { Date(timeIntervalSince1970: $0.timeIntervalSince1970.rounded(.down)) }
+            date.map { Self.normalizedTimestamp($0) }
         }
 
         private static func normalizedTimestamp(_ date: Date) -> Date {

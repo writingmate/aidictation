@@ -74,20 +74,20 @@ jobs:
         $scriptPath = Resolve-Path "AIDictation.Windows/scripts/interactive-insert-test.ps1"
         $taskName = "AIDictation_Test_$([guid]::NewGuid().ToString('N').Substring(0,8))"
         
-        # Create wrapper script that the task will run
-        $wrapperContent = @"
-        Set-Location "$PWD"
-        `$ErrorActionPreference = "Continue"
-        try {
-            & "$scriptPath" -OutDir "$outDir" 2>&1 | Tee-Object -FilePath "$outDir\output.txt"
-            `$LASTEXITCODE | Out-File "$outDir\exitcode.txt"
-        } catch {
-            `$_ | Out-File "$outDir\error.txt"
-            1 | Out-File "$outDir\exitcode.txt"
-        }
-"@
+        # Create wrapper script that the task will run (avoid here-string for YAML compat)
+        $wrapperLines = @(
+            "Set-Location `"$PWD`"",
+            "`$ErrorActionPreference = `"Continue`"",
+            "try {",
+            "    & `"$scriptPath`" -OutDir `"$outDir`" 2>&1 | Tee-Object -FilePath `"$outDir\output.txt`"",
+            "    `$LASTEXITCODE | Out-File `"$outDir\exitcode.txt`"",
+            "} catch {",
+            "    `$_ | Out-File `"$outDir\error.txt`"",
+            "    1 | Out-File `"$outDir\exitcode.txt`"",
+            "}"
+        )
         $wrapperPath = Join-Path $outDir "wrapper.ps1"
-        $wrapperContent | Out-File $wrapperPath -Encoding UTF8
+        $wrapperLines -join "`n" | Out-File $wrapperPath -Encoding UTF8
         
         Write-Host "Creating scheduled task: $taskName"
         Write-Host "Script: $scriptPath"
@@ -95,8 +95,7 @@ jobs:
         Write-Host ""
         
         # Create and run task
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-            -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$wrapperPath`""
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$wrapperPath`""
         
         # Run as SYSTEM but allow interaction with desktop
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest

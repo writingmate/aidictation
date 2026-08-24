@@ -1,13 +1,7 @@
 name: Windows Insert Repro
 
-# This workflow tests the text insertion path on Windows.
-# NOTE: GitHub Actions windows-latest runners are HEADLESS and cannot deliver
-# synthetic keyboard input to GUI applications. SendInput "succeeds" but the
-# keys never arrive at the target window.
-#
-# This workflow documents the limitation and provides diagnostic information.
-# Actual text insertion testing requires a real Windows desktop with RDP or
-# a physical machine.
+# This workflow tests the text insertion path on a GitHub Windows VM.
+# The key is to run in an INTERACTIVE desktop session, not session 0.
 
 on:
   push:
@@ -15,84 +9,178 @@ on:
       - 'cursor/*'
     paths:
       - '.github/workflows/windows-insert-repro.yml'
-      - 'AIDictation.Windows/scripts/repro-insert-failure.ps1'
-      - 'AIDictation.Windows/scripts/repro-insert-diagnostic.ps1'
+      - 'AIDictation.Windows/scripts/*.ps1'
       - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
       - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
   pull_request:
     paths:
       - '.github/workflows/windows-insert-repro.yml'
-      - 'AIDictation.Windows/scripts/repro-insert-failure.ps1'
-      - 'AIDictation.Windows/scripts/repro-insert-diagnostic.ps1'
+      - 'AIDictation.Windows/scripts/*.ps1'
       - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
       - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
   workflow_dispatch:
 
 jobs:
-  repro-insert:
+  interactive-insert-test:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Note about headless environment
+    - name: Session diagnostics
       shell: pwsh
       run: |
-        Write-Host "==============================================================="
-        Write-Host "NOTE: This workflow runs on a HEADLESS Windows runner."
-        Write-Host "SendInput and other input injection methods will 'succeed'"
-        Write-Host "but keys will NOT be delivered to GUI applications."
-        Write-Host "This is a known GitHub Actions limitation, not a code bug."
-        Write-Host "==============================================================="
+        Write-Host "=== Session Diagnostics ==="
+        Write-Host "Username: $env:USERNAME"
+        Write-Host "Computer: $env:COMPUTERNAME"
         Write-Host ""
+        
+        Write-Host "Sessions:"
+        query session 2>&1
+        Write-Host ""
+        
+        Write-Host "Processes with windows:"
+        Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object Id, ProcessName, MainWindowTitle | Format-Table
 
-    - name: Run insert repro test
+    - name: Install PsExec
       shell: pwsh
       run: |
-        $outDir = Join-Path $env:RUNNER_TEMP "insert-repro"
+        Write-Host "Downloading PsExec..."
+        $url = "https://download.sysinternals.com/files/PSTools.zip"
+        $zip = Join-Path $env:RUNNER_TEMP "PSTools.zip"
+        $dest = Join-Path $env:RUNNER_TEMP "PSTools"
+        
+        Invoke-WebRequest -Uri $url -OutFile $zip
+        Expand-Archive -Path $zip -DestinationPath $dest -Force
+        
+        $psexec = Join-Path $dest "PsExec64.exe"
+        if (Test-Path $psexec) {
+          Write-Host "PsExec installed at: $psexec"
+          # Accept EULA
+          & $psexec -accepteula -nobanner 2>&1 | Out-Null
+        } else {
+          Write-Host "ERROR: PsExec not found"
+          exit 1
+        }
+
+    - name: Run interactive insert test via Scheduled Task
+      shell: pwsh
+      run: |
+        $outDir = Join-Path $env:RUNNER_TEMP "insert-interactive"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
         
-        # Run the repro script - expected to fail on headless runner
-        # We capture but don't propagate the failure since headless can't inject keys
+        $scriptPath = Resolve-Path "AIDictation.Windows/scripts/interactive-insert-test.ps1"
+        $taskName = "AIDictation_Test_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        
+        # Create wrapper script that the task will run
+        $wrapperContent = @"
+        Set-Location "$PWD"
+        `$ErrorActionPreference = "Continue"
         try {
-          & AIDictation.Windows/scripts/repro-insert-failure.ps1 -OutDir $outDir
-          Write-Host "::notice::Text insertion succeeded (unexpected on headless runner)"
+            & "$scriptPath" -OutDir "$outDir" 2>&1 | Tee-Object -FilePath "$outDir\output.txt"
+            `$LASTEXITCODE | Out-File "$outDir\exitcode.txt"
         } catch {
-          Write-Host "::notice::Text insertion failed (expected on headless runner - no real input queue)"
+            `$_ | Out-File "$outDir\error.txt"
+            1 | Out-File "$outDir\exitcode.txt"
+        }
+"@
+        $wrapperPath = Join-Path $outDir "wrapper.ps1"
+        $wrapperContent | Out-File $wrapperPath -Encoding UTF8
+        
+        Write-Host "Creating scheduled task: $taskName"
+        Write-Host "Script: $scriptPath"
+        Write-Host "Output: $outDir"
+        Write-Host ""
+        
+        # Create and run task
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$wrapperPath`""
+        
+        # Run as SYSTEM but allow interaction with desktop
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettings -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        
+        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+        
+        Write-Host "Starting task..."
+        Start-ScheduledTask -TaskName $taskName
+        
+        # Wait for completion
+        $timeout = 120
+        $elapsed = 0
+        while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 3
+            $elapsed += 3
+            
+            $task = Get-ScheduledTask -TaskName $taskName
+            $info = Get-ScheduledTaskInfo -TaskName $taskName
+            
+            Write-Host "  [$elapsed s] State: $($task.State), LastResult: $($info.LastTaskResult)"
+            
+            if ($task.State -eq "Ready") {
+                break
+            }
+        }
+        
+        # Cleanup
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        
+        Write-Host ""
+        Write-Host "=== Task Output ==="
+        if (Test-Path "$outDir\output.txt") {
+            Get-Content "$outDir\output.txt"
+        } else {
+            Write-Host "No output file found"
         }
         
         Write-Host ""
-        Write-Host "=== Artifacts ==="
-        Get-ChildItem $outDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+        Write-Host "=== Exit Code ==="
+        if (Test-Path "$outDir\exitcode.txt") {
+            $exitCode = [int](Get-Content "$outDir\exitcode.txt" -Raw).Trim()
+            Write-Host "Exit code: $exitCode"
+        } else {
+            Write-Host "No exit code file - task may not have run"
+            $exitCode = 1
+        }
         
-        # Always succeed - this is a diagnostic workflow, not a gate
-        exit 0
+        if (Test-Path "$outDir\error.txt") {
+            Write-Host ""
+            Write-Host "=== Errors ==="
+            Get-Content "$outDir\error.txt"
+        }
 
-    - name: Run diagnostic test
+    - name: Run test via PsExec (interactive session)
       if: always()
       shell: pwsh
       run: |
-        $outDir = Join-Path $env:RUNNER_TEMP "insert-diag"
+        $outDir = Join-Path $env:RUNNER_TEMP "insert-psexec"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
         
-        # Run the diagnostic script - confirms ALL methods fail on headless
-        try {
-          & AIDictation.Windows/scripts/repro-insert-diagnostic.ps1 -OutDir $outDir
-        } catch {
-          Write-Host "::notice::Diagnostic script completed (all methods expected to fail on headless)"
-        }
+        $psexec = Join-Path $env:RUNNER_TEMP "PSTools\PsExec64.exe"
+        $scriptPath = Resolve-Path "AIDictation.Windows/scripts/interactive-insert-test.ps1"
         
-        # Always succeed - this is a diagnostic workflow
-        exit 0
+        Write-Host "Running via PsExec with -i (interactive)..."
+        Write-Host ""
+        
+        # -i = interactive session
+        # -s = run as SYSTEM  
+        # -accepteula = auto-accept EULA
+        & $psexec -accepteula -nobanner -i -s powershell.exe `
+            -ExecutionPolicy Bypass -NoProfile `
+            -File "$scriptPath" -OutDir "$outDir" 2>&1 | Tee-Object -Variable psexecOutput
+        
+        $psexecExit = $LASTEXITCODE
+        Write-Host ""
+        Write-Host "PsExec exit code: $psexecExit"
 
-    - name: Upload repro artifacts
+    - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: insert-repro-artifacts
+        name: insert-test-artifacts
         path: |
-          ${{ runner.temp }}/insert-repro/
-          ${{ runner.temp }}/insert-diag/
+          ${{ runner.temp }}/insert-interactive/
+          ${{ runner.temp }}/insert-psexec/
         retention-days: 7

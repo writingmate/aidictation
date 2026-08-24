@@ -25,7 +25,18 @@ public static class SendInputHelper
 
     // Virtual key codes
     private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_SHIFT = 0x10;
+    private const ushort VK_MENU = 0x12;  // Alt
+    private const ushort VK_LCONTROL = 0xA2;
+    private const ushort VK_RCONTROL = 0xA3;
+    private const ushort VK_LSHIFT = 0xA0;
+    private const ushort VK_RSHIFT = 0xA1;
+    private const ushort VK_LMENU = 0xA4;
+    private const ushort VK_RMENU = 0xA5;
     private const ushort VK_V = 0x56;
+
+    // MapVirtualKey map type for VK to scan code
+    private const uint MAPVK_VK_TO_VSC = 0;
 
     // Common Win32 error codes for SendInput failures
     private const int ERROR_ACCESS_DENIED = 5;
@@ -81,6 +92,12 @@ public static class SendInputHelper
     [DllImport("user32.dll")]
     private static extern IntPtr GetMessageExtraInfo();
 
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
     // MARK: - Public API
 
     /// <summary>
@@ -95,6 +112,11 @@ public static class SendInputHelper
     /// </summary>
     public static SendInputResult SendPasteWithResult()
     {
+        // First, release any stuck modifier keys that could interfere with Ctrl+V.
+        // This handles cases where F8 release didn't fully clear the keyboard state,
+        // or where security software has left modifiers in an inconsistent state.
+        ReleaseStuckModifiers();
+
         var inputs = new INPUT[4];
 
         // Ctrl down
@@ -107,6 +129,40 @@ public static class SendInputHelper
         inputs[3] = CreateKeyInput(VK_CONTROL, KEYEVENTF_KEYUP);
 
         return DispatchWithResult(inputs);
+    }
+
+    /// <summary>
+    /// Releases any modifier keys that appear to be stuck down.
+    /// This can happen when hotkey handling or security software leaves keys
+    /// in an inconsistent state.
+    /// </summary>
+    private static void ReleaseStuckModifiers()
+    {
+        var modifiers = new ushort[]
+        {
+            VK_CONTROL, VK_SHIFT, VK_MENU,
+            VK_LCONTROL, VK_RCONTROL,
+            VK_LSHIFT, VK_RSHIFT,
+            VK_LMENU, VK_RMENU
+        };
+
+        var releases = new List<INPUT>();
+        foreach (var vk in modifiers)
+        {
+            // Check if the key appears to be down
+            if ((GetAsyncKeyState(vk) & 0x8000) != 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"Releasing stuck modifier: 0x{vk:X2}");
+                releases.Add(CreateKeyInput(vk, KEYEVENTF_KEYUP));
+            }
+        }
+
+        if (releases.Count > 0)
+        {
+            SendInput((uint)releases.Count, releases.ToArray(), Marshal.SizeOf<INPUT>());
+            // Small delay to let the releases process
+            Thread.Sleep(10);
+        }
     }
 
     // MARK: - Private Methods
@@ -139,6 +195,10 @@ public static class SendInputHelper
 
     private static INPUT CreateKeyInput(ushort virtualKeyCode, uint flags)
     {
+        // Get the hardware scan code for better compatibility with applications
+        // that process raw input or use DirectInput.
+        var scanCode = (ushort)MapVirtualKey(virtualKeyCode, MAPVK_VK_TO_VSC);
+
         return new INPUT
         {
             type = INPUT_KEYBOARD,
@@ -147,7 +207,7 @@ public static class SendInputHelper
                 ki = new KEYBDINPUT
                 {
                     wVk = virtualKeyCode,
-                    wScan = 0,
+                    wScan = scanCode,
                     dwFlags = flags,
                     time = 0,
                     dwExtraInfo = GetMessageExtraInfo()

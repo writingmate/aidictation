@@ -163,7 +163,12 @@ public sealed class ClipboardService
                         "The target application is running as administrator. Press Ctrl+V to paste.");
                 }
 
-                if (!await TryFocusWindowAsync(targetWindow))
+                // Focus the window and send the paste command while keeping thread
+                // attachment. This improves reliability on some systems where input
+                // injection fails if we detach before sending.
+                var (focusOk, sendResult) = await FocusAndSendPasteAsync(targetWindow);
+
+                if (!focusOk)
                 {
                     System.Diagnostics.Debug.WriteLine(
                         "PasteTextAsync: target window not focusable; transcript left on clipboard");
@@ -171,16 +176,28 @@ public sealed class ClipboardService
                         PasteFailureReason.FocusBlocked,
                         "Could not bring the target window to the foreground. Press Ctrl+V to paste.");
                 }
-            }
 
-            var sendResult = SendInputHelper.SendPasteWithResult();
-            if (!sendResult.Success)
+                if (!sendResult.Success)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
+                    return PasteResult.Failed(
+                        PasteFailureReason.InputInjectionBlocked,
+                        sendResult.ErrorMessage ?? "Keyboard input was blocked. Press Ctrl+V to paste.");
+                }
+            }
+            else
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
-                return PasteResult.Failed(
-                    PasteFailureReason.InputInjectionBlocked,
-                    sendResult.ErrorMessage ?? "Keyboard input was blocked. Press Ctrl+V to paste.");
+                // No target window - send to whatever is foreground
+                var sendResult = SendInputHelper.SendPasteWithResult();
+                if (!sendResult.Success)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
+                    return PasteResult.Failed(
+                        PasteFailureReason.InputInjectionBlocked,
+                        sendResult.ErrorMessage ?? "Keyboard input was blocked. Press Ctrl+V to paste.");
+                }
             }
 
             pasted = true;
@@ -248,6 +265,62 @@ public sealed class ClipboardService
     }
 
     // MARK: - Private Methods
+
+    /// <summary>
+    /// Focuses the target window and sends the paste command while maintaining
+    /// thread attachment. This improves reliability by keeping the input queue
+    /// connected during the entire operation.
+    /// </summary>
+    private async Task<(bool FocusOk, SendInputResult SendResult)> FocusAndSendPasteAsync(IntPtr hWnd)
+    {
+        if (GetForegroundWindow() == hWnd)
+        {
+            // Already focused, just send the paste
+            var result = SendInputHelper.SendPasteWithResult();
+            return (true, result);
+        }
+
+        // SetForegroundWindow is restricted for background processes; attaching
+        // to the target window's input thread lifts the restriction.
+        var targetThread = GetWindowThreadProcessId(hWnd, out _);
+        var currentThread = GetCurrentThreadId();
+        var attached = targetThread != 0 && targetThread != currentThread &&
+                       AttachThreadInput(currentThread, targetThread, true);
+
+        try
+        {
+            var requested = SetForegroundWindow(hWnd);
+            if (!requested)
+            {
+                System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: SetForegroundWindow returned false");
+                return (false, SendInputResult.Succeeded);
+            }
+
+            // Wait for focus to settle
+            await Task.Delay(Constants.FocusRestoreDelayMs);
+
+            // Verify focus before sending input
+            var currentForeground = GetForegroundWindow();
+            if (currentForeground != hWnd)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"FocusAndSendPasteAsync: focus shifted to {currentForeground:X}, expected {hWnd:X}");
+                return (false, SendInputResult.Succeeded);
+            }
+
+            // Send paste while still attached to the target's input queue.
+            // This may improve delivery on some systems.
+            var sendResult = SendInputHelper.SendPasteWithResult();
+            return (true, sendResult);
+        }
+        finally
+        {
+            if (attached)
+            {
+                AttachThreadInput(currentThread, targetThread, false);
+            }
+        }
+    }
 
     private async Task<bool> TryFocusWindowAsync(IntPtr hWnd)
     {

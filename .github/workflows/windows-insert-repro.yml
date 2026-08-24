@@ -7,12 +7,14 @@ on:
     paths:
       - '.github/workflows/windows-insert-repro.yml'
       - 'AIDictation.Windows/scripts/repro-insert-failure.ps1'
+      - 'AIDictation.Windows/scripts/repro-insert-diagnostic.ps1'
       - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
       - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
   pull_request:
     paths:
       - '.github/workflows/windows-insert-repro.yml'
       - 'AIDictation.Windows/scripts/repro-insert-failure.ps1'
+      - 'AIDictation.Windows/scripts/repro-insert-diagnostic.ps1'
       - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
       - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
   workflow_dispatch:
@@ -48,10 +50,26 @@ jobs:
         
         exit $result
 
+    - name: Run diagnostic test
+      if: always()
+      shell: pwsh
+      run: |
+        $outDir = Join-Path $env:RUNNER_TEMP "insert-diag"
+        New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+        
+        # Run the diagnostic script
+        try {
+          & AIDictation.Windows/scripts/repro-insert-diagnostic.ps1 -OutDir $outDir
+        } catch {
+          Write-Host "Diagnostic script threw: $_"
+        }
+
     - name: Upload repro artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: insert-repro-artifacts
-        path: ${{ runner.temp }}/insert-repro/
+        path: |
+          ${{ runner.temp }}/insert-repro/
+          ${{ runner.temp }}/insert-diag/
         retention-days: 7

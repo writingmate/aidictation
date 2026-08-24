@@ -334,8 +334,9 @@ class KeyboardViewController: UIInputViewController {
 
     private func handlePrimaryAction() {
         let buttonState = primaryButtonState
-        DebugLog.info("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue)", context: "KEYBOARD_DIAG")
-        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue)")
+        let appReady = KeyboardDictationHandoff.isAppReady()
+        DebugLog.info("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) appReady=\(appReady)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) appReady=\(appReady)")
         switch buttonState {
         case .startRequiresApp:
             startRecording(openAppIfNeeded: true)
@@ -353,7 +354,7 @@ class KeyboardViewController: UIInputViewController {
     private var primaryButtonState: PrimaryButtonState {
         switch keyboardState {
         case .idle:
-            return KeyboardDictationHandoff.isAppReady() ? .startViaReadyApp : .startRequiresApp
+            return .startViaReadyApp
         case .recording, .paused:
             return .finishRecording
         case .processing:
@@ -444,6 +445,8 @@ class KeyboardViewController: UIInputViewController {
 
     private func startAppOpenFallbackTimer(identity: KeyboardDictationHandoff.AttemptIdentity) {
         stopStartFallbackTimer()
+        DebugLog.info("starting 3s app-open fallback timer sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("starting 3s app-open fallback timer sessionID=\(identity.sessionID)")
         let timer = Timer(timeInterval: 3.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self,
@@ -703,6 +706,10 @@ class KeyboardViewController: UIInputViewController {
             armDeadline(for: snapshot)
 
         case .recording:
+            if startFallbackTimer != nil {
+                DebugLog.info("app acknowledged recording; cancelling fallback timer sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
+                KeyboardDictationHandoff.appendDiagnostic("app acknowledged recording; cancelling fallback timer sessionID=\(identity.sessionID)")
+            }
             stopStartFallbackTimer()
             stopHandoffDeadlineTimer()
             setHandoffPhase(.recording, animated: handoffPhase != .recording)

@@ -959,7 +959,15 @@ public enum KeyboardDictationHandoff {
     public static func isAppReady(now: Date = Date()) -> Bool {
         withTransaction(or: false) { defaults in
             let timestamp = defaults.double(forKey: appReadyTimestampKey)
-            return timestamp > 0 && now.timeIntervalSince1970 - timestamp <= appReadyTTL
+            let age = now.timeIntervalSince1970 - timestamp
+            let ready = timestamp > 0 && age <= appReadyTTL
+            if !ready {
+                DebugLog.info(
+                    "isAppReady=false timestamp=\(timestamp) age=\(String(format: "%.2f", age))s ttl=\(appReadyTTL)s",
+                    context: "KEYBOARD_DIAG"
+                )
+            }
+            return ready
         }
     }
 

@@ -38,11 +38,15 @@ jobs:
         Write-Host ""
         
         Write-Host "Sessions:"
-        query session 2>&1
+        $sessions = query session 2>&1
+        Write-Host $sessions
         Write-Host ""
         
         Write-Host "Processes with windows:"
         Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object Id, ProcessName, MainWindowTitle | Format-Table
+        
+        # Don't fail on session query issues
+        exit 0
 
     - name: Install PsExec
       shell: pwsh

@@ -144,12 +144,14 @@ struct ContentView: View {
     }
 
     private func openRecordingSheet() {
+        guard !showKeyboardReturnScreen else { return }
         guard requireMobileAudioRecoveryReady() else { return }
         recordingSheetID = UUID()
         showRecordingSheet = true
     }
 
     private func openSavedRecording(_ recording: Recording) {
+        guard !showKeyboardReturnScreen else { return }
         guard requireMobileAudioRecoveryReady() else { return }
         selectedRecording = recording
     }
@@ -504,6 +506,7 @@ struct ContentView: View {
                 historySearchField
 
                 Button {
+                    guard !showKeyboardReturnScreen else { return }
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape")
@@ -1171,9 +1174,19 @@ struct ContentView: View {
 
         activeKeyboardDictationIdentity = identity
         keepKeyboardBridgeAlive()
+        dismissAllSheetsForKeyboardDictation()
         showKeyboardReturnScreen = true
         inlineRecording.setKeyboardAttemptIdentity(identity)
         handleInlineRecordingTap()
+    }
+
+    private func dismissAllSheetsForKeyboardDictation() {
+        showSettings = false
+        showRecordingSheet = false
+        selectedRecording = nil
+        recordingToShare = nil
+        referralShareItem = nil
+        showLoginSheet = false
     }
 
     private func stopKeyboardDictation(identity: KeyboardDictationHandoff.AttemptIdentity) {
@@ -1185,6 +1198,7 @@ struct ContentView: View {
         }
         DebugLog.info("stopKeyboardDictation attemptID=\(identity.attemptID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
         keepKeyboardBridgeAlive()
+        dismissAllSheetsForKeyboardDictation()
         showKeyboardReturnScreen = true
         inlineRecording.setKeyboardAttemptIdentity(identity)
         if inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing {
@@ -1288,9 +1302,11 @@ struct ContentView: View {
         guard keyboardHostLaunchReady, keyboardCommandPollTask == nil else { return }
 
         DebugLog.info("start command polling", context: "KEYBOARD_DIAG")
+        armQuickDictation()
         keyboardCommandPollTask = Task { @MainActor in
             while !Task.isCancelled {
                 KeyboardDictationHandoff.publishAppReady()
+                refreshQuickDictationHeartbeat()
                 drainKeyboardDiagnostics()
                 consumePendingKeyboardCommandIfNeeded()
                 tearDownExpiredKeyboardBridge()
@@ -1301,6 +1317,23 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// Arms Quick Dictation with a 10-minute window.
+    /// The keyboard checks this availability to decide whether to open the app or dictate in place.
+    private func armQuickDictation() {
+        let availability = KeyboardDictationHandoff.QuickDictationAvailability()
+        KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+        DebugLog.info("armed Quick Dictation until \(availability.expiresAt)", context: "KEYBOARD_DIAG")
+    }
+
+    /// Refreshes the Quick Dictation heartbeat to indicate the app is still actively listening.
+    private func refreshQuickDictationHeartbeat() {
+        guard let current = KeyboardDictationHandoff.loadQuickDictationAvailability(),
+              current.expiresAt > Date()
+        else { return }
+        let refreshed = current.refreshingHeartbeat()
+        KeyboardDictationHandoff.saveQuickDictationAvailability(refreshed)
     }
 
     /// The keyboard refreshes the bridge while it is in use; once it has been
@@ -1323,6 +1356,7 @@ struct ContentView: View {
         keyboardBridgeAliveUntil = Date().addingTimeInterval(120)
         guard keyboardHostLaunchReady else { return }
         KeyboardDictationHandoff.publishAppReady()
+        refreshQuickDictationHeartbeat()
         startKeyboardCommandPolling()
     }
 
@@ -1337,6 +1371,10 @@ struct ContentView: View {
             return
         }
         KeyboardHostLaunchRecoveryGate.attempted = true
+
+        // Clear any stale Quick Dictation availability from a previous process.
+        // A new app launch means we need to re-arm Quick Dictation fresh.
+        KeyboardDictationHandoff.clearQuickDictationAvailability()
 
         do {
             if let abandonedIdentity = try KeyboardDictationHandoff.normalizeAfterHostLaunch() {
@@ -1390,6 +1428,10 @@ struct ContentView: View {
         DebugLog.info("stop command polling", context: "KEYBOARD_DIAG")
         keyboardCommandPollTask?.cancel()
         keyboardCommandPollTask = nil
+        // Note: We intentionally do NOT clear Quick Dictation availability here.
+        // The heartbeat mechanism will let it expire naturally within 6 seconds,
+        // giving the user a short grace period to start dictation even after
+        // the app goes to background.
     }
 
     private func markRecordingAsNew(_ recording: Recording) {

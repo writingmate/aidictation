@@ -334,9 +334,9 @@ class KeyboardViewController: UIInputViewController {
 
     private func handlePrimaryAction() {
         let buttonState = primaryButtonState
-        let appReady = KeyboardDictationHandoff.isAppReady()
-        DebugLog.info("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) appReady=\(appReady)", context: "KEYBOARD_DIAG")
-        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) appReady=\(appReady)")
+        let quickDictationReady = KeyboardDictationHandoff.isQuickDictationReady()
+        DebugLog.info("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) quickDictationReady=\(quickDictationReady)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) quickDictationReady=\(quickDictationReady)")
         switch buttonState {
         case .startRequiresApp:
             startRecording(openAppIfNeeded: true)
@@ -354,7 +354,7 @@ class KeyboardViewController: UIInputViewController {
     private var primaryButtonState: PrimaryButtonState {
         switch keyboardState {
         case .idle:
-            return .startViaReadyApp
+            return KeyboardDictationHandoff.isQuickDictationReady() ? .startViaReadyApp : .startRequiresApp
         case .recording, .paused:
             return .finishRecording
         case .processing:

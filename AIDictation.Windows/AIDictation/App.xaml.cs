@@ -883,11 +883,36 @@ public partial class App : Application
             var result = await AudioProcessingCoordinator.Instance.StopAndTranscribeAsync(duration);
             if (!result.IsSuccess || string.IsNullOrWhiteSpace(result.Text)) return;
 
-            var pasted = await ClipboardService.Instance.PasteTextAsync(result.Text, dictationTargetWindow);
-            if (!pasted)
+            var pasteResult = await ClipboardService.Instance.PasteTextWithResultAsync(
+                result.Text,
+                dictationTargetWindow);
+
+            if (!pasteResult.Success)
             {
                 LogException("StopRecordingAsync",
-                    new InvalidOperationException("Paste was not delivered; transcript left on clipboard"));
+                    new InvalidOperationException($"Paste failed: {pasteResult.FailureReason} - {pasteResult.ErrorMessage}"));
+
+                // Notify the user that the transcript is on the clipboard and they can paste manually.
+                // The transcript was successfully saved to History, so this is a delivery issue only.
+                var userMessage = pasteResult.FailureReason switch
+                {
+                    PasteFailureReason.ElevatedTargetWindow =>
+                        "The target app is running as administrator. Your transcript is on the clipboard — press Ctrl+V to paste.",
+                    PasteFailureReason.InputInjectionBlocked =>
+                        "Paste was blocked by Windows or security software. Your transcript is on the clipboard — press Ctrl+V to paste.",
+                    PasteFailureReason.FocusBlocked =>
+                        "Could not focus the target window. Your transcript is on the clipboard — press Ctrl+V to paste.",
+                    PasteFailureReason.TargetWindowGone =>
+                        "The target window has closed. Your transcript is on the clipboard — press Ctrl+V to paste.",
+                    PasteFailureReason.ClipboardLocked =>
+                        "Could not access the clipboard. Your transcript was saved to History.",
+                    _ =>
+                        "Could not paste automatically. Your transcript is on the clipboard — press Ctrl+V to paste."
+                };
+
+                // Set an error state so the user sees the message. This is not a
+                // transcription error - the transcript succeeded but delivery failed.
+                AppState.Shared.SetError(userMessage);
             }
         }
         catch (OperationCanceledException)

@@ -1,0 +1,132 @@
+name: Windows Insert Repro
+
+# Tests the REAL AIDictation insert path on a GitHub Windows VM.
+# Builds the actual app code and runs it in the logged-on user's session.
+
+on:
+  push:
+    branches:
+      - 'cursor/*'
+    paths:
+      - '.github/workflows/windows-insert-repro.yml'
+      - 'AIDictation.Windows/**'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-insert-repro.yml'
+      - 'AIDictation.Windows/**'
+  workflow_dispatch:
+
+jobs:
+  real-app-insert-test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Session diagnostics
+      shell: pwsh
+      run: |
+        Write-Host "=== Session Diagnostics ==="
+        Write-Host "Username: $env:USERNAME"
+        Write-Host "Computer: $env:COMPUTERNAME"
+        Write-Host "Interactive: $([Environment]::UserInteractive)"
+        Write-Host ""
+        
+        try {
+          $sessions = query session 2>&1
+          Write-Host "Sessions:"
+          Write-Host $sessions
+        } catch {
+          Write-Host "query session not available"
+        }
+        Write-Host ""
+        
+        Write-Host "Processes with windows:"
+        Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | 
+          Select-Object Id, ProcessName, MainWindowTitle | Format-Table
+        
+        # Always succeed
+        exit 0
+
+    - name: Build InsertTest
+      shell: pwsh
+      run: |
+        Write-Host "Building InsertTest (uses real ClipboardService code)..."
+        dotnet build AIDictation.Windows/InsertTest/InsertTest.csproj -c Release
+        
+        $exe = "AIDictation.Windows/InsertTest/bin/Release/net8.0-windows/InsertTest.exe"
+        if (Test-Path $exe) {
+          Write-Host "Build succeeded: $exe"
+        } else {
+          Write-Host "ERROR: Build failed"
+          exit 1
+        }
+
+    - name: Run real app insert test
+      shell: pwsh
+      run: |
+        $outDir = Join-Path $env:RUNNER_TEMP "insert-realapp"
+        New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+        
+        $exe = Resolve-Path "AIDictation.Windows/InsertTest/bin/Release/net8.0-windows/InsertTest.exe"
+        
+        Write-Host "=== Running Real App Insert Test ==="
+        Write-Host "Executable: $exe"
+        Write-Host "Output directory: $outDir"
+        Write-Host ""
+        
+        # Run the test directly in the current session (not via PsExec)
+        # GitHub Actions runs in the logged-on user's session
+        & $exe $outDir
+        $exitCode = $LASTEXITCODE
+        
+        Write-Host ""
+        Write-Host "=== Exit Code: $exitCode ==="
+        Write-Host ""
+        
+        # Show results
+        Write-Host "=== Test Results ==="
+        if (Test-Path "$outDir\test-results.txt") {
+          Get-Content "$outDir\test-results.txt"
+        }
+        
+        Write-Host ""
+        Write-Host "=== Log ==="
+        if (Test-Path "$outDir\log.txt") {
+          Get-Content "$outDir\log.txt"
+        }
+        
+        # Don't fail the job - we want artifacts regardless
+        exit 0
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: insert-test-artifacts
+        path: ${{ runner.temp }}/insert-realapp/
+        retention-days: 7
+
+    - name: Summary
+      if: always()
+      shell: pwsh
+      run: |
+        $resultsFile = Join-Path $env:RUNNER_TEMP "insert-realapp\test-results.txt"
+        
+        if (Test-Path $resultsFile) {
+          $content = Get-Content $resultsFile -Raw
+          if ($content -match "SUCCESS") {
+            Write-Host "::notice::Real app insert path WORKS on GitHub Windows VM"
+          } else {
+            Write-Host "::warning::Real app insert path FAILED - this reproduces Sean's issue"
+          }
+        } else {
+          Write-Host "::warning::No test results found"
+        }

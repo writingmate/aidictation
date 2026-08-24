@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>InsertTest</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Link to the real ClipboardService and SendInputHelper from the main app -->
+  <ItemGroup>
+    <Compile Include="..\AIDictation\Services\ClipboardService.cs" Link="ClipboardService.cs" />
+    <Compile Include="..\AIDictation\Helpers\SendInputHelper.cs" Link="SendInputHelper.cs" />
+  </ItemGroup>
+
+</Project>

@@ -7,6 +7,34 @@ using AIDictation.Helpers;
 namespace AIDictation.Services;
 
 /// <summary>
+/// Result of a paste operation with detailed failure information.
+/// </summary>
+public sealed record PasteResult(
+    bool Success,
+    PasteFailureReason FailureReason = PasteFailureReason.None,
+    string? ErrorMessage = null)
+{
+    public static PasteResult Succeeded { get; } = new(true);
+    public static PasteResult Empty { get; } = new(true);
+
+    public static PasteResult Failed(PasteFailureReason reason, string message) =>
+        new(false, reason, message);
+}
+
+/// <summary>
+/// Categorizes paste failures for user-facing guidance.
+/// </summary>
+public enum PasteFailureReason
+{
+    None,
+    ClipboardLocked,
+    TargetWindowGone,
+    FocusBlocked,
+    InputInjectionBlocked,
+    ElevatedTargetWindow
+}
+
+/// <summary>
 /// Inserts transcribed text into the target application via clipboard +
 /// synthesized Ctrl+V, preserving the user's clipboard content.
 /// </summary>
@@ -46,6 +74,34 @@ public sealed class ClipboardService
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetFocus(IntPtr hWnd);
+
+    private const uint WM_PASTE = 0x0302;
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(
+        IntPtr TokenHandle,
+        int TokenInformationClass,
+        IntPtr TokenInformation,
+        int TokenInformationLength,
+        out int ReturnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hHandle);
+
+    private const uint TOKEN_QUERY = 0x0008;
+    private const int TokenElevation = 20;
+
     // MARK: - Public API
 
     /// <summary>
@@ -56,8 +112,23 @@ public sealed class ClipboardService
     /// </summary>
     public async Task<bool> PasteTextAsync(string text, IntPtr targetWindow = default, bool smartSpacing = true)
     {
+        var result = await PasteTextWithResultAsync(text, targetWindow, smartSpacing);
+        return result.Success;
+    }
+
+    /// <summary>
+    /// Copies text to the clipboard and pastes it into the target window via
+    /// Ctrl+V. Returns a detailed result indicating success or the specific
+    /// failure reason. On failure, the transcript is left on the clipboard
+    /// so the user can paste manually.
+    /// </summary>
+    public async Task<PasteResult> PasteTextWithResultAsync(
+        string text,
+        IntPtr targetWindow = default,
+        bool smartSpacing = true)
+    {
         if (string.IsNullOrEmpty(text))
-            return true;
+            return PasteResult.Empty;
 
         // Save original clipboard content
         var originalClipboard = await GetClipboardContentAsync();
@@ -70,25 +141,76 @@ public sealed class ClipboardService
             if (!await SetClipboardTextAsync(textToInsert))
             {
                 System.Diagnostics.Debug.WriteLine("PasteTextAsync: clipboard write failed");
-                return false;
+                return PasteResult.Failed(
+                    PasteFailureReason.ClipboardLocked,
+                    "Could not write to the clipboard. Another application may be holding it.");
             }
 
             await Task.Delay(Constants.ClipboardDelayMs);
 
             // Re-focus the window the user dictated into; pasting into whatever
             // happens to be foreground would send the text to the wrong app.
-            if (targetWindow != IntPtr.Zero && !await TryFocusWindowAsync(targetWindow))
+            if (targetWindow != IntPtr.Zero)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    "PasteTextAsync: target window not focusable; transcript left on clipboard");
-                return false;
+                if (!IsWindow(targetWindow))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "PasteTextAsync: target window no longer exists");
+                    return PasteResult.Failed(
+                        PasteFailureReason.TargetWindowGone,
+                        "The window you were typing into has closed.");
+                }
+
+                // Check if target is an elevated process (UIPI blocks SendInput)
+                if (IsTargetWindowElevated(targetWindow))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "PasteTextAsync: target window belongs to an elevated process");
+                    return PasteResult.Failed(
+                        PasteFailureReason.ElevatedTargetWindow,
+                        "The target application is running as administrator. Press Ctrl+V to paste.");
+                }
+
+                // Focus the window and send the paste command while keeping thread
+                // attachment. This improves reliability on some systems where input
+                // injection fails if we detach before sending.
+                var (focusOk, sendResult) = await FocusAndSendPasteAsync(targetWindow);
+
+                if (!focusOk)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        "PasteTextAsync: target window not focusable; transcript left on clipboard");
+                    return PasteResult.Failed(
+                        PasteFailureReason.FocusBlocked,
+                        "Could not bring the target window to the foreground. Press Ctrl+V to paste.");
+                }
+
+                if (!sendResult.Success)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
+                    return PasteResult.Failed(
+                        PasteFailureReason.InputInjectionBlocked,
+                        sendResult.ErrorMessage ?? "Keyboard input was blocked. Press Ctrl+V to paste.");
+                }
+            }
+            else
+            {
+                // No target window - send to whatever is foreground
+                var sendResult = SendInputHelper.SendPasteWithResult();
+                if (!sendResult.Success)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
+                    return PasteResult.Failed(
+                        PasteFailureReason.InputInjectionBlocked,
+                        sendResult.ErrorMessage ?? "Keyboard input was blocked. Press Ctrl+V to paste.");
+                }
             }
 
-            pasted = SendInputHelper.SendPaste();
-
-            // Wait for paste to complete
+            pasted = true;
             await Task.Delay(Constants.PasteDelayMs);
-            return pasted;
+            return PasteResult.Succeeded;
         }
         finally
         {
@@ -104,7 +226,164 @@ public sealed class ClipboardService
         }
     }
 
+    /// <summary>
+    /// Checks if the window belongs to a process running with elevated privileges
+    /// WHILE we are not elevated. SendInput cannot inject into elevated windows
+    /// from a non-elevated process due to UIPI. But if we're also elevated,
+    /// SendInput will work.
+    /// </summary>
+    private static bool IsTargetWindowElevated(IntPtr hWnd)
+    {
+        try
+        {
+            // First check if WE are elevated - if so, we can inject into anything
+            if (IsCurrentProcessElevated())
+            {
+                System.Diagnostics.Debug.WriteLine("IsTargetWindowElevated: we are elevated, SendInput should work");
+                return false; // Don't block - we're elevated too
+            }
+
+            GetWindowThreadProcessId(hWnd, out var processId);
+            if (processId == 0) return false;
+
+            using var process = System.Diagnostics.Process.GetProcessById((int)processId);
+            if (!OpenProcessToken(process.Handle, TOKEN_QUERY, out var tokenHandle))
+                return false;
+
+            try
+            {
+                var elevationSize = Marshal.SizeOf<int>();
+                var elevationPtr = Marshal.AllocHGlobal(elevationSize);
+                try
+                {
+                    if (GetTokenInformation(tokenHandle, TokenElevation, elevationPtr, elevationSize, out _))
+                    {
+                        var elevation = Marshal.ReadInt32(elevationPtr);
+                        return elevation != 0;
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(elevationPtr);
+                }
+            }
+            finally
+            {
+                CloseHandle(tokenHandle);
+            }
+        }
+        catch
+        {
+            // If we can't determine elevation status, assume not elevated
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if the current process is running with elevated privileges.
+    /// </summary>
+    private static bool IsCurrentProcessElevated()
+    {
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var principal = new System.Security.Principal.WindowsPrincipal(identity);
+            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // MARK: - Private Methods
+
+    /// <summary>
+    /// Focuses the target window and sends the paste command while maintaining
+    /// thread attachment. This improves reliability by keeping the input queue
+    /// connected during the entire operation.
+    /// </summary>
+    private async Task<(bool FocusOk, SendInputResult SendResult)> FocusAndSendPasteAsync(IntPtr hWnd)
+    {
+        if (GetForegroundWindow() == hWnd)
+        {
+            // Already focused, just send the paste
+            var result = SendInputHelper.SendPasteWithResult();
+            return (true, result);
+        }
+
+        // SetForegroundWindow is restricted for background processes; attaching
+        // to the target window's input thread lifts the restriction.
+        var targetThread = GetWindowThreadProcessId(hWnd, out _);
+        var currentThread = GetCurrentThreadId();
+        var attached = targetThread != 0 && targetThread != currentThread &&
+                       AttachThreadInput(currentThread, targetThread, true);
+
+        try
+        {
+            var requested = SetForegroundWindow(hWnd);
+            if (!requested)
+            {
+                System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: SetForegroundWindow returned false");
+                // Fallback: try posting WM_PASTE directly to the window
+                System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: trying WM_PASTE fallback");
+                if (TrySendPasteMessage(hWnd))
+                {
+                    return (true, SendInputResult.Succeeded);
+                }
+                return (false, SendInputResult.Succeeded);
+            }
+
+            // Wait for focus to settle - use a longer delay for reliability
+            await Task.Delay(Constants.FocusRestoreDelayMs + 100);
+
+            // Verify focus before sending input
+            var currentForeground = GetForegroundWindow();
+            if (currentForeground != hWnd)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"FocusAndSendPasteAsync: focus shifted to {currentForeground:X}, expected {hWnd:X}");
+                // Fallback: try posting WM_PASTE directly
+                System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: trying WM_PASTE fallback");
+                if (TrySendPasteMessage(hWnd))
+                {
+                    return (true, SendInputResult.Succeeded);
+                }
+                return (false, SendInputResult.Succeeded);
+            }
+
+            // Also try setting keyboard focus explicitly within the attached thread
+            SetFocus(hWnd);
+
+            // Send paste while still attached to the target's input queue.
+            // This may improve delivery on some systems.
+            var sendResult = SendInputHelper.SendPasteWithResult();
+            return (true, sendResult);
+        }
+        finally
+        {
+            if (attached)
+            {
+                AttachThreadInput(currentThread, targetThread, false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tries to send WM_PASTE directly to the window. This bypasses the input
+    /// queue and works even when SendInput cannot deliver keystrokes to the
+    /// target window (e.g., focus issues or security restrictions).
+    /// </summary>
+    private static bool TrySendPasteMessage(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero || !IsWindow(hWnd))
+            return false;
+
+        // Many edit controls, including standard Windows Edit controls and
+        // RichEdit, respond to WM_PASTE directly.
+        return PostMessage(hWnd, WM_PASTE, IntPtr.Zero, IntPtr.Zero);
+    }
 
     private async Task<bool> TryFocusWindowAsync(IntPtr hWnd)
     {

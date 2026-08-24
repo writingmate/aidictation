@@ -1,7 +1,7 @@
 name: Windows Insert Repro
 
-# This workflow tests the text insertion path on a GitHub Windows VM.
-# The key is to run in an INTERACTIVE desktop session, not session 0.
+# Tests the REAL AIDictation insert path on a GitHub Windows VM.
+# Builds the actual app code and runs it in the logged-on user's session.
 
 on:
   push:
@@ -9,19 +9,15 @@ on:
       - 'cursor/*'
     paths:
       - '.github/workflows/windows-insert-repro.yml'
-      - 'AIDictation.Windows/scripts/*.ps1'
-      - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
-      - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
+      - 'AIDictation.Windows/**'
   pull_request:
     paths:
       - '.github/workflows/windows-insert-repro.yml'
-      - 'AIDictation.Windows/scripts/*.ps1'
-      - 'AIDictation.Windows/AIDictation/Services/ClipboardService.cs'
-      - 'AIDictation.Windows/AIDictation/Helpers/SendInputHelper.cs'
+      - 'AIDictation.Windows/**'
   workflow_dispatch:
 
 jobs:
-  interactive-insert-test:
+  real-app-insert-test:
     runs-on: windows-latest
     timeout-minutes: 15
 
@@ -29,80 +25,78 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
     - name: Session diagnostics
       shell: pwsh
       run: |
         Write-Host "=== Session Diagnostics ==="
         Write-Host "Username: $env:USERNAME"
         Write-Host "Computer: $env:COMPUTERNAME"
+        Write-Host "Interactive: $([Environment]::UserInteractive)"
         Write-Host ""
         
-        Write-Host "Sessions:"
         $sessions = query session 2>&1
+        Write-Host "Sessions:"
         Write-Host $sessions
         Write-Host ""
         
         Write-Host "Processes with windows:"
-        Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object Id, ProcessName, MainWindowTitle | Format-Table
-        
-        # Don't fail on session query issues
-        exit 0
+        Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | 
+          Select-Object Id, ProcessName, MainWindowTitle | Format-Table
 
-    - name: Install PsExec
+    - name: Build InsertTest
       shell: pwsh
       run: |
-        Write-Host "Downloading PsExec..."
-        $url = "https://download.sysinternals.com/files/PSTools.zip"
-        $zip = Join-Path $env:RUNNER_TEMP "PSTools.zip"
-        $dest = Join-Path $env:RUNNER_TEMP "PSTools"
+        Write-Host "Building InsertTest (uses real ClipboardService code)..."
+        dotnet build AIDictation.Windows/InsertTest/InsertTest.csproj -c Release
         
-        Invoke-WebRequest -Uri $url -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath $dest -Force
-        
-        $psexec = Join-Path $dest "PsExec64.exe"
-        if (Test-Path $psexec) {
-          Write-Host "PsExec installed at: $psexec"
-          # Accept EULA - ignore exit code
-          & $psexec -accepteula 2>&1 | Out-Null
-          Write-Host "PsExec ready"
+        $exe = "AIDictation.Windows/InsertTest/bin/Release/net8.0-windows/InsertTest.exe"
+        if (Test-Path $exe) {
+          Write-Host "Build succeeded: $exe"
         } else {
-          Write-Host "ERROR: PsExec not found"
+          Write-Host "ERROR: Build failed"
+          exit 1
         }
-        # Always succeed - PsExec EULA acceptance has variable exit codes
-        exit 0
 
-    # Skip scheduled task - PsExec approach is more reliable for session targeting
-
-    - name: Run test via PsExec (as runneradmin user)
-      if: always()
+    - name: Run real app insert test
       shell: pwsh
       run: |
-        $outDir = Join-Path $env:RUNNER_TEMP "insert-psexec"
+        $outDir = Join-Path $env:RUNNER_TEMP "insert-realapp"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
         
-        $psexec = Join-Path $env:RUNNER_TEMP "PSTools\PsExec64.exe"
-        $scriptPath = Resolve-Path "AIDictation.Windows/scripts/interactive-insert-test.ps1"
+        $exe = Resolve-Path "AIDictation.Windows/InsertTest/bin/Release/net8.0-windows/InsertTest.exe"
         
-        Write-Host "Running via PsExec as runneradmin (interactive session 2)..."
-        Write-Host "Script: $scriptPath"
-        Write-Host "Output dir: $outDir"
+        Write-Host "=== Running Real App Insert Test ==="
+        Write-Host "Executable: $exe"
+        Write-Host "Output directory: $outDir"
         Write-Host ""
         
-        # -i 2 = interactive session 2 (the console session)
-        # -u runneradmin = run as the console user (not SYSTEM)
-        # -accepteula = auto-accept EULA
-        # Note: runneradmin has no password on GitHub runners
-        & $psexec -accepteula -nobanner -i 2 powershell.exe `
-            -ExecutionPolicy Bypass -NoProfile `
-            -File "$scriptPath" -OutDir "$outDir" 2>&1 | Tee-Object -Variable psexecOutput
+        # Run the test directly in the current session (not via PsExec)
+        # GitHub Actions runs in the logged-on user's session
+        & $exe $outDir
+        $exitCode = $LASTEXITCODE
         
-        $psexecExit = $LASTEXITCODE
         Write-Host ""
-        Write-Host "=== PsExec Exit Code: $psexecExit ==="
-        Write-Host "=== PsExec Output ==="
-        $psexecOutput | ForEach-Object { Write-Host $_ }
+        Write-Host "=== Exit Code: $exitCode ==="
+        Write-Host ""
         
-        # Don't fail the job
+        # Show results
+        Write-Host "=== Test Results ==="
+        if (Test-Path "$outDir\test-results.txt") {
+          Get-Content "$outDir\test-results.txt"
+        }
+        
+        Write-Host ""
+        Write-Host "=== Log ==="
+        if (Test-Path "$outDir\log.txt") {
+          Get-Content "$outDir\log.txt"
+        }
+        
+        # Don't fail the job - we want artifacts regardless
         exit 0
 
     - name: Upload artifacts
@@ -110,22 +104,22 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: insert-test-artifacts
-        path: |
-          ${{ runner.temp }}/insert-interactive/
-          ${{ runner.temp }}/insert-psexec/
+        path: ${{ runner.temp }}/insert-realapp/
         retention-days: 7
 
     - name: Summary
       if: always()
       shell: pwsh
       run: |
-        Write-Host "=== Test Summary ==="
-        Write-Host ""
-        Write-Host "NOTE: PsExec cannot inject input into windows, even with -i 2."
-        Write-Host "SendInput/WM_PASTE/SendKeys all return success but keys don't arrive."
-        Write-Host "This is a PsExec process isolation limitation, not a code bug."
-        Write-Host ""
-        Write-Host "The real AIDictation app runs directly in the user's session"
-        Write-Host "and should not exhibit this behavior."
-        Write-Host ""
-        Write-Host "See PR description for actual fixes and recommendations."
+        $resultsFile = Join-Path $env:RUNNER_TEMP "insert-realapp\test-results.txt"
+        
+        if (Test-Path $resultsFile) {
+          $content = Get-Content $resultsFile -Raw
+          if ($content -match "SUCCESS") {
+            Write-Host "::notice::Real app insert path WORKS on GitHub Windows VM"
+          } else {
+            Write-Host "::warning::Real app insert path FAILED - this reproduces Sean's issue"
+          }
+        } else {
+          Write-Host "::warning::No test results found"
+        }

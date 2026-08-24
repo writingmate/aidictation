@@ -26,3 +26,11 @@
 - Retry transient transport failures only under the shared bounded policy. Do not retry permanent `4xx` responses or fully received malformed responses. Split rejected `413` leaves sequentially without replaying completed chunks.
 - Treat cleanup as optional after complete raw recognition. Cleanup failure or empty output keeps the raw transcript.
 - Delete and Clear must either refuse active work or win durably over it. Never submit audio known to be truncated or unfinalized, and never delete the only recoverable source.
+
+## Cursor Cloud specific instructions
+
+- Cloud Agents run on Linux (x86_64). Only the Android client (`AIDictationAndroid/`) is buildable here; the macOS/iOS (Xcode) and Windows (.NET desktop) targets require their own operating systems.
+- Prepare the machine with `scripts/cloud-agent-android-setup.sh`. It is idempotent and installs JDK 17 plus the Android SDK, pins Gradle to JDK 17, and generates the git-ignored `AIDictationAndroid/local.properties`.
+- Build and test the same way CI does (`.github/workflows/android-build.yml`), from `AIDictationAndroid/`: `./gradlew lint`, `./gradlew testDebugUnitTest`, and `./gradlew assembleDebug`. Config validation: `python3 scripts/validate_client_config.py --allow-missing`.
+- Without transcription/auth secrets the debug build uses public defaults and is unconfigured but valid; supply `TRANSCRIPTION_API_KEY`, `AIDICTATION_POST_PROCESSING_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `AUTH_WEB_URL` (see `AIDictationAndroid/CI.md`) for a fully configured build.
+- The Android emulator does not run here: the host rejects nested hardware virtualization (`kernel BUG ... arch/x86/kvm/x86.c`), so validate via unit tests plus APK inspection (`aapt dump badging`) rather than an emulator.

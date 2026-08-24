@@ -162,8 +162,13 @@ class Program
             var textFound = content.Contains(testText);
             Log($"  Test text found in Notepad: {textFound}");
 
+            // Get session info for results
+            uint currentSessionId, currentConsoleSession;
+            ProcessIdToSessionId(GetCurrentProcessId(), out currentSessionId);
+            currentConsoleSession = WTSGetActiveConsoleSessionId();
+
             // Write results file
-            WriteResults(testText, content, pasteResult, sessionId, consoleSession);
+            WriteResults(testText, content, pasteResult, currentSessionId, currentConsoleSession);
 
             if (textFound)
             {

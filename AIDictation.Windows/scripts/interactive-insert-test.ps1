@@ -384,18 +384,70 @@ try {
         [SessionInfo]::SetFocus($targetHwnd) | Out-Null
         Start-Sleep -Milliseconds 100
         
-        # Try WM_PASTE directly to the window
+        # Try WM_PASTE directly to the main window
         $wmPasteResult = [SessionInfo]::PostMessage($targetHwnd, [SessionInfo]::WM_PASTE, [IntPtr]::Zero, [IntPtr]::Zero)
-        Write-Host "  WM_PASTE result: $wmPasteResult"
+        Write-Host "  WM_PASTE to main window: $wmPasteResult"
         
         Start-Sleep -Milliseconds 500
+        
+        $contentAfterWmPaste = Read-NotepadText
+        Write-Host "  Content after WM_PASTE: '$contentAfterWmPaste'"
+        
+        # If that didn't work, try to find the edit control child window
+        if (-not ($contentAfterWmPaste -match [regex]::Escape($testText))) {
+            Write-Host "  Main window WM_PASTE didn't work, trying to find edit control..."
+            
+            # Get child edit control - use FindWindowEx to find Edit class child
+            Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class ChildFinder {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
+    
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+    
+    public static IntPtr FindEditControl(IntPtr parent) {
+        // Try finding Edit control (old-style notepad)
+        IntPtr edit = FindWindowEx(parent, IntPtr.Zero, "Edit", null);
+        if (edit != IntPtr.Zero) return edit;
+        
+        // Try finding RichEditD2DPT (new Windows 11 notepad)
+        edit = FindWindowEx(parent, IntPtr.Zero, "RichEditD2DPT", null);
+        if (edit != IntPtr.Zero) return edit;
+        
+        // Try RICHEDIT50W
+        edit = FindWindowEx(parent, IntPtr.Zero, "RICHEDIT50W", null);
+        if (edit != IntPtr.Zero) return edit;
+        
+        return IntPtr.Zero;
+    }
+}
+"@
+            
+            $editHwnd = [ChildFinder]::FindEditControl($targetHwnd)
+            Write-Host "  Edit control HWND: $editHwnd"
+            
+            if ($editHwnd -ne [IntPtr]::Zero) {
+                [SessionInfo]::SetFocus($editHwnd) | Out-Null
+                $wmPasteEdit = [SessionInfo]::PostMessage($editHwnd, [SessionInfo]::WM_PASTE, [IntPtr]::Zero, [IntPtr]::Zero)
+                Write-Host "  WM_PASTE to edit control: $wmPasteEdit"
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        
         Take-Screenshot "04a-after-wm-paste"
     }
     
     Write-Host ""
-    Write-Host "[5] Reading Notepad content..."
+    Write-Host "[5] Final content read..."
+    # Re-read content after all attempts
+    Start-Sleep -Milliseconds 300
     $notepadContent = Read-NotepadText
-    Write-Host "  Content: '$notepadContent'"
+    Write-Host "  Final Notepad content: '$notepadContent'"
     
     Take-Screenshot "04-final"
     

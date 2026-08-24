@@ -39,14 +39,21 @@ jobs:
         Write-Host "Interactive: $([Environment]::UserInteractive)"
         Write-Host ""
         
-        $sessions = query session 2>&1
-        Write-Host "Sessions:"
-        Write-Host $sessions
+        try {
+          $sessions = query session 2>&1
+          Write-Host "Sessions:"
+          Write-Host $sessions
+        } catch {
+          Write-Host "query session not available"
+        }
         Write-Host ""
         
         Write-Host "Processes with windows:"
         Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | 
           Select-Object Id, ProcessName, MainWindowTitle | Format-Table
+        
+        # Always succeed
+        exit 0
 
     - name: Build InsertTest
       shell: pwsh

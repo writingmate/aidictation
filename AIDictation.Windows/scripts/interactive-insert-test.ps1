@@ -331,10 +331,34 @@ try {
     Take-Screenshot "02-before-paste"
     
     Write-Host ""
-    Write-Host "[4] Sending Ctrl+V..."
+    Write-Host "[4] Verifying focus and sending Ctrl+V..."
+    
+    # Check focus multiple times with delays
+    $fgBefore = [SessionInfo]::GetForegroundWindow()
+    Write-Host "  Foreground window before send: $fgBefore (target: $targetHwnd)"
+    
+    if ($fgBefore -ne $targetHwnd) {
+        Write-Host "  WARNING: Focus is NOT on Notepad! Trying to restore..."
+        $focusRetry = [SessionInfo]::TryFocusWindow($targetHwnd)
+        Start-Sleep -Milliseconds 300
+        $fgBefore = [SessionInfo]::GetForegroundWindow()
+        Write-Host "  Retry result: $focusRetry, foreground now: $fgBefore"
+    }
+    
+    # Give extra time for focus to settle
+    Write-Host "  Waiting 500ms for focus to settle..."
+    Start-Sleep -Milliseconds 500
+    
+    $fgAtSend = [SessionInfo]::GetForegroundWindow()
+    Write-Host "  Foreground window at send time: $fgAtSend"
+    
     $sendResult = [SessionInfo]::SendPaste()
     $lastError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
     Write-Host "  SendInput result: $sendResult/4 (error: $lastError)"
+    
+    # Check foreground immediately after
+    $fgAfter = [SessionInfo]::GetForegroundWindow()
+    Write-Host "  Foreground window after send: $fgAfter"
     
     Start-Sleep -Milliseconds 500
     Take-Screenshot "03-after-paste"

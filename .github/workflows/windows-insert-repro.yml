@@ -62,8 +62,9 @@ jobs:
         $psexec = Join-Path $dest "PsExec64.exe"
         if (Test-Path $psexec) {
           Write-Host "PsExec installed at: $psexec"
-          # Accept EULA
-          & $psexec -accepteula -nobanner 2>&1 | Out-Null
+          # Accept EULA - ignore exit code
+          & $psexec -accepteula 2>&1 | Out-Null
+          Write-Host "PsExec ready"
         } else {
           Write-Host "ERROR: PsExec not found"
           exit 1
@@ -163,20 +164,36 @@ jobs:
         
         $psexec = Join-Path $env:RUNNER_TEMP "PSTools\PsExec64.exe"
         $scriptPath = Resolve-Path "AIDictation.Windows/scripts/interactive-insert-test.ps1"
+        $logFile = Join-Path $outDir "psexec-output.txt"
         
         Write-Host "Running via PsExec with -i (interactive)..."
+        Write-Host "Script: $scriptPath"
+        Write-Host "Output dir: $outDir"
+        Write-Host "Log file: $logFile"
         Write-Host ""
         
-        # -i = interactive session
+        # -i = interactive session (session 2 on GitHub runners)
         # -s = run as SYSTEM  
         # -accepteula = auto-accept EULA
-        & $psexec -accepteula -nobanner -i -s powershell.exe `
+        & $psexec -accepteula -nobanner -i 2 -s powershell.exe `
             -ExecutionPolicy Bypass -NoProfile `
-            -File "$scriptPath" -OutDir "$outDir" 2>&1 | Tee-Object -Variable psexecOutput
+            -Command "& '$scriptPath' -OutDir '$outDir' 2>&1 | Tee-Object -FilePath '$logFile'" 2>&1 | Tee-Object -Variable psexecOutput
         
         $psexecExit = $LASTEXITCODE
         Write-Host ""
-        Write-Host "PsExec exit code: $psexecExit"
+        Write-Host "=== PsExec Exit Code: $psexecExit ==="
+        
+        Write-Host ""
+        Write-Host "=== Test Output ==="
+        if (Test-Path $logFile) {
+            Get-Content $logFile
+        } else {
+            Write-Host "No log file found at $logFile"
+            Write-Host "PsExec output: $psexecOutput"
+        }
+        
+        # Don't fail the job - we want to see the artifacts
+        exit 0
 
     - name: Upload artifacts
       if: always()

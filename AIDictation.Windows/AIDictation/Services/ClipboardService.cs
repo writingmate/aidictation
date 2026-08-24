@@ -77,6 +77,14 @@ public sealed class ClipboardService
     [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetFocus(IntPtr hWnd);
+
+    private const uint WM_PASTE = 0x0302;
+
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
 
@@ -293,11 +301,17 @@ public sealed class ClipboardService
             if (!requested)
             {
                 System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: SetForegroundWindow returned false");
+                // Fallback: try posting WM_PASTE directly to the window
+                System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: trying WM_PASTE fallback");
+                if (TrySendPasteMessage(hWnd))
+                {
+                    return (true, SendInputResult.Succeeded);
+                }
                 return (false, SendInputResult.Succeeded);
             }
 
-            // Wait for focus to settle
-            await Task.Delay(Constants.FocusRestoreDelayMs);
+            // Wait for focus to settle - use a longer delay for reliability
+            await Task.Delay(Constants.FocusRestoreDelayMs + 100);
 
             // Verify focus before sending input
             var currentForeground = GetForegroundWindow();
@@ -305,8 +319,17 @@ public sealed class ClipboardService
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"FocusAndSendPasteAsync: focus shifted to {currentForeground:X}, expected {hWnd:X}");
+                // Fallback: try posting WM_PASTE directly
+                System.Diagnostics.Debug.WriteLine("FocusAndSendPasteAsync: trying WM_PASTE fallback");
+                if (TrySendPasteMessage(hWnd))
+                {
+                    return (true, SendInputResult.Succeeded);
+                }
                 return (false, SendInputResult.Succeeded);
             }
+
+            // Also try setting keyboard focus explicitly within the attached thread
+            SetFocus(hWnd);
 
             // Send paste while still attached to the target's input queue.
             // This may improve delivery on some systems.
@@ -320,6 +343,21 @@ public sealed class ClipboardService
                 AttachThreadInput(currentThread, targetThread, false);
             }
         }
+    }
+
+    /// <summary>
+    /// Tries to send WM_PASTE directly to the window. This bypasses the input
+    /// queue and works even when SendInput cannot deliver keystrokes to the
+    /// target window (e.g., focus issues or security restrictions).
+    /// </summary>
+    private static bool TrySendPasteMessage(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero || !IsWindow(hWnd))
+            return false;
+
+        // Many edit controls, including standard Windows Edit controls and
+        // RichEdit, respond to WM_PASTE directly.
+        return PostMessage(hWnd, WM_PASTE, IntPtr.Zero, IntPtr.Zero);
     }
 
     private async Task<bool> TryFocusWindowAsync(IntPtr hWnd)

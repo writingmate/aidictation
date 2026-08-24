@@ -66,6 +66,14 @@ public static class SessionInfo {
     public static extern IntPtr GetDesktopWindow();
     
     [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetFocus(IntPtr hWnd);
+    
+    public const uint WM_PASTE = 0x0302;
+    
+    [DllImport("user32.dll")]
     public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
     
     [DllImport("user32.dll")]
@@ -362,6 +370,27 @@ try {
     
     Start-Sleep -Milliseconds 500
     Take-Screenshot "03-after-paste"
+    
+    # Check if paste worked - if not, try WM_PASTE fallback
+    $initialContent = Read-NotepadText
+    Write-Host ""
+    Write-Host "[4b] Checking result and trying WM_PASTE fallback if needed..."
+    Write-Host "  Content after SendInput: '$initialContent'"
+    
+    if (-not ($initialContent -match [regex]::Escape($testText))) {
+        Write-Host "  SendInput didn't work, trying WM_PASTE fallback..."
+        
+        # SetFocus first
+        [SessionInfo]::SetFocus($targetHwnd) | Out-Null
+        Start-Sleep -Milliseconds 100
+        
+        # Try WM_PASTE directly to the window
+        $wmPasteResult = [SessionInfo]::PostMessage($targetHwnd, [SessionInfo]::WM_PASTE, [IntPtr]::Zero, [IntPtr]::Zero)
+        Write-Host "  WM_PASTE result: $wmPasteResult"
+        
+        Start-Sleep -Milliseconds 500
+        Take-Screenshot "04a-after-wm-paste"
+    }
     
     Write-Host ""
     Write-Host "[5] Reading Notepad content..."

@@ -217,26 +217,13 @@ struct KeyboardRecordingView: View {
             .frame(width: 190, height: 82)
             .padding(.horizontal, 28)
 
-            HStack(spacing: 12) {
-                Text(recordTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                if showsCancelAction {
-                    Button("Cancel", action: onCancelAction)
-                        .font(.caption.weight(.semibold))
-                        .buttonStyle(.bordered)
-                        .accessibilityHint("Keeps any recording already saved in the app")
-                }
-            }
-
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var recordButton: some View {
-        Button(action: onPrimaryAction) {
+        Button(action: recordButtonAction) {
             AIDictationMicButtonVisual(
                 state: model.state,
                 audioLevel: model.audioLevel,
@@ -248,8 +235,15 @@ struct KeyboardRecordingView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(model.state == .processing)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func recordButtonAction() {
+        if model.state == .processing {
+            onCancelAction()
+        } else {
+            onPrimaryAction()
+        }
     }
 
     private func letterRow(_ keys: [KeyboardTypingKey]) -> some View {
@@ -264,40 +258,6 @@ struct KeyboardRecordingView: View {
                     action: { onKeyPress(key.label(shifted: isShifted)) }
                 )
             }
-        }
-    }
-
-    private var recordTitle: String {
-        switch handoffPhase {
-        case .preparing:
-            return "Starting recording…"
-        case .recording:
-            return "Recording"
-        case .finalizing:
-            return "Finishing recording…"
-        case .processing:
-            return "Transcribing…"
-        case .succeeded:
-            return "Ready"
-        case .failed:
-            return "Couldn't transcribe"
-        case .cancelled:
-            return "Cancelled"
-        case .none:
-            return "AI Dictation"
-        @unknown default:
-            return "AI Dictation"
-        }
-    }
-
-    private var showsCancelAction: Bool {
-        switch handoffPhase {
-        case .preparing, .finalizing, .processing:
-            return true
-        case .recording, .succeeded, .failed, .cancelled, .none:
-            return false
-        @unknown default:
-            return false
         }
     }
 

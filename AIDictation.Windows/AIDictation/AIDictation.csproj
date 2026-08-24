@@ -10,7 +10,7 @@
     <ApplicationIcon>..\Assets\app.ico</ApplicationIcon>
     <AssemblyName>AIDictation</AssemblyName>
     <RootNamespace>AIDictation</RootNamespace>
-    <Version>0.0.4</Version>
+    <Version>0.0.9</Version>
     <Authors>WritingMate</Authors>
     <Company>WritingMate</Company>
     <Product>AIDictation</Product>

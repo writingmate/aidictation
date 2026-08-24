@@ -227,14 +227,22 @@ public sealed class ClipboardService
     }
 
     /// <summary>
-    /// Checks if the window belongs to a process running with elevated privileges.
-    /// SendInput cannot inject into elevated windows from a non-elevated process
-    /// due to User Interface Privilege Isolation (UIPI).
+    /// Checks if the window belongs to a process running with elevated privileges
+    /// WHILE we are not elevated. SendInput cannot inject into elevated windows
+    /// from a non-elevated process due to UIPI. But if we're also elevated,
+    /// SendInput will work.
     /// </summary>
     private static bool IsTargetWindowElevated(IntPtr hWnd)
     {
         try
         {
+            // First check if WE are elevated - if so, we can inject into anything
+            if (IsCurrentProcessElevated())
+            {
+                System.Diagnostics.Debug.WriteLine("IsTargetWindowElevated: we are elevated, SendInput should work");
+                return false; // Don't block - we're elevated too
+            }
+
             GetWindowThreadProcessId(hWnd, out var processId);
             if (processId == 0) return false;
 
@@ -270,6 +278,23 @@ public sealed class ClipboardService
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Checks if the current process is running with elevated privileges.
+    /// </summary>
+    private static bool IsCurrentProcessElevated()
+    {
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var principal = new System.Security.Principal.WindowsPrincipal(identity);
+            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // MARK: - Private Methods

@@ -346,26 +346,72 @@ try {
     
     Take-Screenshot "04-final"
     
+    # Write results to a text file for easy reading
+    $resultFile = Join-Path $OutDir "test-results.txt"
+    $results = @"
+=== AIDictation Interactive Insert Test Results ===
+Timestamp: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+[Session Info]
+  Current session ID: $currentSession
+  Console session ID: $consoleSession
+  Current desktop: $desktopName
+  Running as: $env:USERNAME
+
+[Test]
+  Test text: $testText
+  Clipboard content: $clipContent
+  Notepad content: '$notepadContent'
+
+[Operations]
+  Focus restore result: $focusResult
+  SendInput events: $sendResult/4
+  Win32 error: $lastError
+
+=== VERDICT ===
+"@
+    
     Write-Host ""
     Write-Host "=== RESULT ==="
     Write-Host "Test text: $testText"
-    Write-Host "Notepad content: $notepadContent"
+    Write-Host "Notepad content: '$notepadContent'"
     
     if ($notepadContent -match [regex]::Escape($testText)) {
         Write-Host ""
         Write-Host "SUCCESS: Text was inserted into Notepad!"
         Write-Host "The insert path works on this GitHub Windows VM."
+        $results += "SUCCESS: Text insertion WORKS on this GitHub Windows VM.`n"
+        $results | Out-File $resultFile -Encoding UTF8
         exit 0
     }
     else {
         Write-Host ""
         Write-Host "FAILURE: Text was NOT inserted into Notepad"
         Write-Host "Clipboard has: $clipContent"
-        Write-Host "Notepad has: $notepadContent"
+        Write-Host "Notepad has: '$notepadContent'"
         Write-Host ""
-        Write-Host "This reproduces Sean's issue - SendInput succeeded but text didn't arrive."
+        Write-Host "REPRODUCED: SendInput returned $sendResult/4 but text didn't arrive."
+        
+        $results += "FAILURE: Text was NOT inserted.`n"
+        $results += "This REPRODUCES Sean's issue - SendInput succeeds but text doesn't arrive.`n`n"
         
         # Additional diagnostics
+        $results += "[Analysis]`n"
+        if ($sendResult -eq 4) {
+            $results += "  SendInput accepted all 4 events - input injection was not blocked.`n"
+            $results += "  But the Ctrl+V keystroke did not trigger paste in Notepad.`n"
+            $results += "  Possible causes:`n"
+            $results += "    - Notepad did not have keyboard focus when keys arrived`n"
+            $results += "    - Input went to wrong window/thread`n"
+            $results += "    - Timing issue between focus and input`n"
+        }
+        else {
+            $results += "  SendInput only sent $sendResult/4 events (Win32 error: $lastError)`n"
+            $results += "  Input injection was partially blocked.`n"
+        }
+        
+        $results | Out-File $resultFile -Encoding UTF8
+        
         Write-Host ""
         Write-Host "[Diagnostics]"
         Write-Host "  Session: $currentSession (console: $consoleSession)"

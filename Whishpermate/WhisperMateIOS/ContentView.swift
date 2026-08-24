@@ -1311,20 +1311,57 @@ struct ContentView: View {
                 consumePendingKeyboardCommandIfNeeded()
                 tearDownExpiredKeyboardBridge()
                 try? await Task.sleep(nanoseconds: 250_000_000)
-                if scenePhase != .active, !shouldKeepKeyboardCommandPolling {
+
+                // Check if we should keep polling
+                let isQuickDictationActive = inlineRecording.audioRecorder.isStandbyActive
+                let hasActiveKeyboardWork = shouldKeepKeyboardCommandPolling
+
+                if scenePhase != .active, !hasActiveKeyboardWork, !isQuickDictationActive {
+                    // App is in background, no active keyboard work, and no Quick Dictation standby
+                    // Stop polling and let iOS suspend the app
+                    DebugLog.info("stopping command polling (background, no standby)", context: "KEYBOARD_DIAG")
+                    clearQuickDictation()
                     keyboardCommandPollTask = nil
                     break
+                }
+
+                // If Quick Dictation is active, check if it has expired
+                if isQuickDictationActive {
+                    if let availability = KeyboardDictationHandoff.loadQuickDictationAvailability(),
+                       availability.expiresAt <= Date() {
+                        // Quick Dictation window expired - stop standby
+                        DebugLog.info("Quick Dictation window expired; stopping standby", context: "KEYBOARD_DIAG")
+                        clearQuickDictation()
+                        if scenePhase != .active, !hasActiveKeyboardWork {
+                            keyboardCommandPollTask = nil
+                            break
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Arms Quick Dictation with a 10-minute window.
-    /// The keyboard checks this availability to decide whether to open the app or dictate in place.
+    /// Arms Quick Dictation with a 10-minute window using audio standby mode.
+    /// The audio standby keeps iOS from suspending the app, enabling in-place dictation.
     private func armQuickDictation() {
-        let availability = KeyboardDictationHandoff.QuickDictationAvailability()
-        KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
-        DebugLog.info("armed Quick Dictation until \(availability.expiresAt)", context: "KEYBOARD_DIAG")
+        guard !inlineRecording.audioRecorder.isStandbyActive else {
+            // Already in standby - just refresh the availability
+            refreshQuickDictationHeartbeat()
+            return
+        }
+
+        do {
+            try inlineRecording.audioRecorder.startStandby()
+            let availability = KeyboardDictationHandoff.QuickDictationAvailability()
+            KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+            DebugLog.info("armed Quick Dictation with audio standby until \(availability.expiresAt)", context: "KEYBOARD_DIAG")
+        } catch {
+            DebugLog.info("failed to arm Quick Dictation: \(error)", context: "KEYBOARD_DIAG")
+            // Fall back to non-standby mode - the heartbeat will expire quickly
+            let availability = KeyboardDictationHandoff.QuickDictationAvailability()
+            KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+        }
     }
 
     /// Refreshes the Quick Dictation heartbeat to indicate the app is still actively listening.
@@ -1334,6 +1371,13 @@ struct ContentView: View {
         else { return }
         let refreshed = current.refreshingHeartbeat()
         KeyboardDictationHandoff.saveQuickDictationAvailability(refreshed)
+    }
+
+    /// Clears Quick Dictation and stops audio standby.
+    private func clearQuickDictation() {
+        inlineRecording.audioRecorder.stopStandby(deactivateAudioSession: true)
+        KeyboardDictationHandoff.clearQuickDictationAvailability()
+        DebugLog.info("cleared Quick Dictation", context: "KEYBOARD_DIAG")
     }
 
     /// The keyboard refreshes the bridge while it is in use; once it has been
@@ -1428,10 +1472,7 @@ struct ContentView: View {
         DebugLog.info("stop command polling", context: "KEYBOARD_DIAG")
         keyboardCommandPollTask?.cancel()
         keyboardCommandPollTask = nil
-        // Note: We intentionally do NOT clear Quick Dictation availability here.
-        // The heartbeat mechanism will let it expire naturally within 6 seconds,
-        // giving the user a short grace period to start dictation even after
-        // the app goes to background.
+        clearQuickDictation()
     }
 
     private func markRecordingAsNew(_ recording: Recording) {
@@ -2381,7 +2422,8 @@ private final class InlineRecordingCoordinator: ObservableObject {
     @Published var completionText: String?
 
     private let audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
-    private var audioRecorder: AudioRecorder { audioRecorderSlot.current }
+    /// Public accessor for the audio recorder, needed for Quick Dictation standby mode.
+    var audioRecorder: AudioRecorder { audioRecorderSlot.current }
     private let processingStore = MobileAudioProcessingStore.shared
     private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared

@@ -57,6 +57,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
 
     private var audioRecorder: AVAudioRecorder?
     private var audioEngine: AVAudioEngine?
+    private var standbyEngine: AVAudioEngine?
     private var recordingURL: URL?
     private var isMonitoringOnly = false
     private var levelTimer: DispatchSourceTimer?
@@ -71,11 +72,22 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     private var activeManagedCaptureGeneration: UInt64?
     #if os(iOS)
         private var isAudioSessionConfigured = false
+        private var isStandbySessionConfigured = false
         private var managedAudioSessionObserverTokens: [NSObjectProtocol] = []
     #endif
 
     // App Group identifier for sharing data between app and keyboard extension
     public static let appGroupIdentifier = "group.com.whispermate.shared"
+
+    /// Returns true if the audio session is in standby mode (ready to record but not recording).
+    /// This keeps iOS from suspending the app, enabling Quick Dictation for ~10 minutes.
+    #if os(iOS)
+    public var isStandbyActive: Bool {
+        standbyEngine?.isRunning == true && !isRecording
+    }
+    #else
+    public var isStandbyActive: Bool { false }
+    #endif
 
     override public init() {
         super.init()
@@ -110,6 +122,64 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
                 isAudioSessionConfigured = false
             } catch {
                 DebugLog.info("Failed to deactivate audio session: \(error)", context: "AudioRecorder LOG")
+            }
+        }
+
+        // MARK: - Audio Standby Mode
+
+        /// Starts audio session standby to keep iOS from suspending the app.
+        /// This enables Quick Dictation for ~10 minutes without opening the app.
+        /// The audio engine runs with a tap but doesn't capture to disk.
+        public func startStandby() throws {
+            guard !isRecording else { return }
+            guard standbyEngine?.isRunning != true else { return }
+
+            DebugLog.info("Starting audio standby mode", context: "AudioRecorder")
+
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
+            )
+            try session.setActive(true)
+
+            let engine = AVAudioEngine()
+            let inputNode = engine.inputNode
+            let format = inputNode.outputFormat(forBus: 0)
+
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                throw ManagedAudioRecordingError.audioSessionUnavailable
+            }
+
+            // Install a tap that discards all samples. This keeps the audio session active.
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { _, _ in
+                // Discard samples - we're just keeping the session alive
+            }
+
+            engine.prepare()
+            try engine.start()
+
+            standbyEngine = engine
+            isStandbySessionConfigured = true
+            DebugLog.info("Audio standby mode active - app will stay alive in background", context: "AudioRecorder")
+        }
+
+        /// Stops audio standby mode and optionally deactivates the audio session.
+        public func stopStandby(deactivateAudioSession: Bool = true) {
+            guard !isRecording else { return }
+            guard let engine = standbyEngine else { return }
+
+            DebugLog.info("Stopping audio standby mode", context: "AudioRecorder")
+
+            engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
+            standbyEngine = nil
+            isStandbySessionConfigured = false
+
+            if deactivateAudioSession {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             }
         }
 

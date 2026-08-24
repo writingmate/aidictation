@@ -399,13 +399,42 @@ class KeyboardViewController: UIInputViewController {
         reconcileHandoff()
 
         if !openAppIfNeeded {
-            DebugLog.info("startRecording using ready app bridge sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
-            KeyboardDictationHandoff.appendDiagnostic("startRecording using ready app bridge sessionID=\(identity.sessionID)")
-            startAppOpenFallbackTimer(identity: identity)
+            // Quick Dictation is ready - the app is running in standby mode.
+            // Wait for the app to pick up the command without opening its UI.
+            // Use a longer fallback (8s) because the app should respond quickly from standby.
+            DebugLog.info("startRecording using Quick Dictation sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("startRecording using Quick Dictation sessionID=\(identity.sessionID)")
+            startQuickDictationFallbackTimer(identity: identity)
             return
         }
 
+        // Quick Dictation not ready (cold start or expired) - must open the app
         openAppForRecording(identity: identity)
+    }
+
+    /// Fallback timer for Quick Dictation mode.
+    /// The app should respond quickly from standby, but if it doesn't within 8 seconds,
+    /// we fall back to opening the app.
+    private func startQuickDictationFallbackTimer(identity: KeyboardDictationHandoff.AttemptIdentity) {
+        stopStartFallbackTimer()
+        let fallbackSeconds: TimeInterval = 8.0
+        DebugLog.info("starting \(Int(fallbackSeconds))s Quick Dictation fallback timer sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
+        KeyboardDictationHandoff.appendDiagnostic("starting \(Int(fallbackSeconds))s Quick Dictation fallback timer sessionID=\(identity.sessionID)")
+        let timer = Timer(timeInterval: fallbackSeconds, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self,
+                      self.handoffPhase == .preparing,
+                      self.activeHandoffIdentity == identity,
+                      KeyboardDictationHandoff.snapshot(for: identity)?.phase == .preparing
+                else { return }
+
+                DebugLog.info("Quick Dictation fallback: app did not respond; opening app sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
+                KeyboardDictationHandoff.appendDiagnostic("Quick Dictation fallback: app did not respond; opening app sessionID=\(identity.sessionID)")
+                self.openAppForRecording(identity: identity)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        startFallbackTimer = timer
     }
 
     private func openAppForRecording(identity: KeyboardDictationHandoff.AttemptIdentity) {
@@ -441,27 +470,6 @@ class KeyboardViewController: UIInputViewController {
             // preparing until the host confirms durable source ownership and recorder readiness.
             self.reconcileHandoff()
         }
-    }
-
-    private func startAppOpenFallbackTimer(identity: KeyboardDictationHandoff.AttemptIdentity) {
-        stopStartFallbackTimer()
-        DebugLog.info("starting 3s app-open fallback timer sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
-        KeyboardDictationHandoff.appendDiagnostic("starting 3s app-open fallback timer sessionID=\(identity.sessionID)")
-        let timer = Timer(timeInterval: 3.0, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self,
-                      self.handoffPhase == .preparing,
-                      self.activeHandoffIdentity == identity,
-                      KeyboardDictationHandoff.snapshot(for: identity)?.phase == .preparing
-                else { return }
-
-                DebugLog.info("ready app bridge did not acknowledge start; opening app sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
-                KeyboardDictationHandoff.appendDiagnostic("ready app bridge did not acknowledge start; opening app sessionID=\(identity.sessionID)")
-                self.openAppForRecording(identity: identity)
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        startFallbackTimer = timer
     }
 
     private func stopStartFallbackTimer() {

@@ -155,7 +155,7 @@ jobs:
             Get-Content "$outDir\error.txt"
         }
 
-    - name: Run test via PsExec (interactive session)
+    - name: Run test via PsExec (as runneradmin user)
       if: always()
       shell: pwsh
       run: |
@@ -164,35 +164,27 @@ jobs:
         
         $psexec = Join-Path $env:RUNNER_TEMP "PSTools\PsExec64.exe"
         $scriptPath = Resolve-Path "AIDictation.Windows/scripts/interactive-insert-test.ps1"
-        $logFile = Join-Path $outDir "psexec-output.txt"
         
-        Write-Host "Running via PsExec with -i (interactive)..."
+        Write-Host "Running via PsExec as runneradmin (interactive session 2)..."
         Write-Host "Script: $scriptPath"
         Write-Host "Output dir: $outDir"
-        Write-Host "Log file: $logFile"
         Write-Host ""
         
-        # -i = interactive session (session 2 on GitHub runners)
-        # -s = run as SYSTEM  
+        # -i 2 = interactive session 2 (the console session)
+        # -u runneradmin = run as the console user (not SYSTEM)
         # -accepteula = auto-accept EULA
-        & $psexec -accepteula -nobanner -i 2 -s powershell.exe `
+        # Note: runneradmin has no password on GitHub runners
+        & $psexec -accepteula -nobanner -i 2 powershell.exe `
             -ExecutionPolicy Bypass -NoProfile `
-            -Command "& '$scriptPath' -OutDir '$outDir' 2>&1 | Tee-Object -FilePath '$logFile'" 2>&1 | Tee-Object -Variable psexecOutput
+            -File "$scriptPath" -OutDir "$outDir" 2>&1 | Tee-Object -Variable psexecOutput
         
         $psexecExit = $LASTEXITCODE
         Write-Host ""
         Write-Host "=== PsExec Exit Code: $psexecExit ==="
+        Write-Host "=== PsExec Output ==="
+        $psexecOutput | ForEach-Object { Write-Host $_ }
         
-        Write-Host ""
-        Write-Host "=== Test Output ==="
-        if (Test-Path $logFile) {
-            Get-Content $logFile
-        } else {
-            Write-Host "No log file found at $logFile"
-            Write-Host "PsExec output: $psexecOutput"
-        }
-        
-        # Don't fail the job - we want to see the artifacts
+        # Don't fail the job
         exit 0
 
     - name: Upload artifacts

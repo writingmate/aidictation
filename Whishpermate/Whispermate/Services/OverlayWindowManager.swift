@@ -80,7 +80,17 @@ class OverlayWindowManager: ObservableObject {
         static let windowSafetyPadding: CGFloat = 10
         static let hoverFrameInset: CGFloat = 4 * overlayScale
         static let frequencyBandCount: Int = 10
-        static let windowResizeAnimationDuration: TimeInterval = 0.25
+        /// The window is one fixed transparent stage sized for the widest state;
+        /// SwiftUI morphs the pill inside it. Resizing the window per state made
+        /// the frame snap (it was always set unanimated) while the content eased
+        /// over 0.26s, so for the length of every morph the window edge and the
+        /// drawn capsule disagreed — which is what rendered as two overlapping
+        /// pills. VoiceInk and Wispr Flow both use a fixed oversized container
+        /// for exactly this reason.
+        static let stageWidth: CGFloat =
+            recordingControlsStateWidth + (recordingControlsPadding * 2)
+        static let stageHeight: CGFloat =
+            activeStateHeight + (verticalPaddingActive * 2) + (edgeMargin * 2)
         static let hoverCollapseResizeDelay: TimeInterval = 0.18
     }
 
@@ -191,7 +201,6 @@ class OverlayWindowManager: ObservableObject {
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
     private var hoverTrackingTimer: Timer?
-    private var frameAnimationTimer: Timer?
     private var hoverCollapseResizeWorkItem: DispatchWorkItem?
     private var audioLevelCancellable: AnyCancellable?
     private var frequencyBandsCancellable: AnyCancellable?
@@ -209,6 +218,20 @@ class OverlayWindowManager: ObservableObject {
     }
 
     // MARK: - Public API
+
+    /// Builds the overlay window ahead of the first recording.
+    ///
+    /// Creating the `NSWindow` and its SwiftUI hosting view costs most of a
+    /// second. Doing it lazily on the first Fn press put that cost directly
+    /// between the key and the bubble appearing. Called once at launch; the
+    /// window is then ordered in and out rather than created and closed.
+    func prewarmWindow() {
+        guard overlayWindow == nil else { return }
+        DebugLog.info("prewarmWindow: building overlay window ahead of first use", context: "OverlayWindowManager")
+        createWindow()
+        positionStage()
+        overlayWindow?.orderOut(nil)
+    }
 
     func show() {
         DebugLog.info("show() called, overlayState=\(overlayState), hideIdleState=\(hideIdleState)", context: "OverlayWindowManager")
@@ -334,64 +357,6 @@ class OverlayWindowManager: ObservableObject {
         }
     }
 
-    private func updateWindowSizeForState(_ state: OverlayState, animated: Bool, preserveAnchor: Bool = false) {
-        guard let window = overlayWindow, let screen = targetScreen() else {
-            DebugLog.warning("updateWindowSizeForState skipped: window or target screen missing", context: "OverlayWindowManager")
-            return
-        }
-
-        let screenFrame = screen.visibleFrame
-        let isActive = state == .recording(isCommandMode: true) ||
-            state == .recording(isCommandMode: false) ||
-            state == .processing(isCommandMode: true) ||
-            state == .processing(isCommandMode: false)
-
-        let (windowWidth, windowHeight): (CGFloat, CGFloat)
-        if case .recording = state {
-            // Use the same invisible max-width stage for hover, Fn-held recording, and
-            // overlay-click recording. The SwiftUI pill draws the smaller no-button
-            // shape inside this stage when controls are hidden.
-            windowWidth = Constants.recordingControlsStateWidth + (Constants.recordingControlsPadding * 2)
-            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
-        } else if case .processing = state {
-            windowWidth = Constants.recordingControlsStateWidth + (Constants.recordingControlsPadding * 2)
-            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
-        } else if isActive {
-            windowWidth = Constants.activeStateWidth + (Constants.activePadding * 2)
-            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
-        } else if isHoverExpanded {
-            windowWidth = Constants.recordingControlsStateWidth + (Constants.recordingControlsPadding * 2)
-            windowHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
-        } else {
-            let maxWidth = Constants.idleStateWidth + (Constants.idlePaddingNormal * 2)
-            windowWidth = maxWidth + Constants.windowSafetyPadding
-            windowHeight = Constants.idleStateHeight + Constants.idleHoverHitSlop + (Constants.verticalPaddingIdle * 2) + (Constants.edgeMargin * 2)
-        }
-
-        let oldFrame = window.frame
-        let newFrame: NSRect
-        if preserveAnchor {
-            let anchorX = oldFrame.midX
-            let verticalAnchor = position == .bottom ? oldFrame.minY : oldFrame.maxY
-            newFrame = NSRect(
-                x: anchorX - (windowWidth / 2),
-                y: position == .bottom ? verticalAnchor : verticalAnchor - windowHeight,
-                width: windowWidth,
-                height: windowHeight
-            )
-        } else {
-            let (xPos, yPos) = calculatePosition(for: position, screenFrame: screenFrame, windowWidth: windowWidth, windowHeight: windowHeight)
-            newFrame = NSRect(x: xPos, y: yPos, width: windowWidth, height: windowHeight)
-        }
-        DebugLog.info(
-            "updateWindowSizeForState state=\(state), animated=\(animated), preserveAnchor=\(preserveAnchor), screen=\(describeScreen(screen)), oldFrame=\(formatRect(oldFrame)), newFrame=\(formatRect(newFrame))",
-            context: "OverlayWindowManager"
-        )
-
-        setWindowFrame(newFrame, animated: false)
-        logWindowState("updateWindowSizeForState-after-setFrame")
-    }
-
     // MARK: - Legacy API (for backward compatibility during migration)
 
     func updateState(isRecording: Bool, isProcessing: Bool) {
@@ -497,63 +462,36 @@ class OverlayWindowManager: ObservableObject {
         DebugLog.info("window[\(reason)] \(describeWindow(overlayWindow))", context: "OverlayWindowManager")
     }
 
-    private func setWindowFrame(_ targetFrame: NSRect, animated: Bool) {
-        guard let window = overlayWindow else { return }
-        frameAnimationTimer?.invalidate()
-        frameAnimationTimer = nil
+    /// Kept so existing call sites read unchanged; geometry no longer depends
+    /// on state or animation. The removed `preserveAnchor` path anchored the new
+    /// frame to the old frame's midX/minY, which permanently pinned the overlay
+    /// to whichever screen it had previously been on.
+    private func updateWindowSizeForState(_ state: OverlayState, animated: Bool, preserveAnchor: Bool = false) {
+        _ = state; _ = animated; _ = preserveAnchor
+        positionStage()
+    }
 
-        guard animated else {
-            window.setFrame(targetFrame, display: true)
+    /// Recomputes the stage frame from the current target screen on every call,
+    /// rather than nudging the previous frame. Cheap and idempotent.
+    private func positionStage() {
+        guard let window = overlayWindow, let screen = targetScreen() else {
+            DebugLog.warning("positionStage skipped: window or target screen missing", context: "OverlayWindowManager")
             return
         }
-
-        let startFrame = window.frame
-        let targetCenterX = targetFrame.midX
-        let targetVerticalAnchor = position == .bottom ? targetFrame.minY : targetFrame.maxY
-        let startedAt = Date.timeIntervalSinceReferenceDate
-        let duration = Constants.windowResizeAnimationDuration
-
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self, weak window] timer in
-            guard let self, let window else {
-                timer.invalidate()
-                return
-            }
-
-            let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
-            let progress = min(1, max(0, elapsed / duration))
-            let eased = self.cssMorphEase(progress)
-            let width = self.interpolate(from: startFrame.width, to: targetFrame.width, progress: eased)
-            let height = self.interpolate(from: startFrame.height, to: targetFrame.height, progress: eased)
-            let centerX = targetCenterX
-            let originY = self.position == .bottom ? targetVerticalAnchor : targetVerticalAnchor - height
-            let frame = NSRect(
-                x: centerX - (width / 2),
-                y: originY,
-                width: width,
-                height: height
-            )
-
-            window.setFrame(frame, display: true)
-
-            if progress >= 1 {
-                timer.invalidate()
-                self.frameAnimationTimer = nil
-                window.setFrame(targetFrame, display: true)
-            }
-        }
-
-        frameAnimationTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func interpolate(from start: CGFloat, to end: CGFloat, progress: Double) -> CGFloat {
-        start + ((end - start) * CGFloat(progress))
-    }
-
-    private func cssMorphEase(_ progress: Double) -> Double {
-        // Approximation of CSS cubic-bezier(.2, .8, .2, 1).
-        let clamped = min(1, max(0, progress))
-        return 1 - pow(1 - clamped, 4)
+        let (xPos, yPos) = calculatePosition(
+            for: position,
+            screenFrame: screen.visibleFrame,
+            windowWidth: Constants.stageWidth,
+            windowHeight: Constants.stageHeight
+        )
+        let newFrame = NSRect(x: xPos, y: yPos, width: Constants.stageWidth, height: Constants.stageHeight)
+        guard window.frame != newFrame else { return }
+        DebugLog.info(
+            "positionStage screen=\(describeScreen(screen)) frame=\(formatRect(newFrame))",
+            context: "OverlayWindowManager"
+        )
+        window.setFrame(newFrame, display: true)
+        logWindowState("positionStage-after-setFrame")
     }
 
     private func setupAudioObservers() {
@@ -619,7 +557,10 @@ class OverlayWindowManager: ObservableObject {
         )
 
         // Keep overlay visible above normal windows.
-        window.level = NSWindow.Level.screenSaver
+        // .screenSaver sits above the menu bar and system alerts — more
+        // aggressive than a dictation pill needs, and it interacts badly with
+        // fullscreen and secure input. VoiceInk uses .floating / .statusBar + 3.
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 3)
         window.isOpaque = false
         window.backgroundColor = NSColor.clear
         window.hasShadow = false
@@ -628,7 +569,10 @@ class OverlayWindowManager: ObservableObject {
         var collectionBehavior: NSWindow.CollectionBehavior = [
             NSWindow.CollectionBehavior.canJoinAllSpaces,
             NSWindow.CollectionBehavior.fullScreenAuxiliary,
-            NSWindow.CollectionBehavior.ignoresCycle
+            NSWindow.CollectionBehavior.ignoresCycle,
+            // Keeps Mission Control from sweeping the pill away with the other
+            // windows during a Space switch.
+            NSWindow.CollectionBehavior.stationary
         ]
         if #available(macOS 13.0, *) {
             // Required for overlay/panel windows that must follow other apps' fullscreen spaces.
@@ -758,12 +702,24 @@ class OverlayWindowManager: ObservableObject {
         setHoverExpanded(isMouseInside)
     }
 
+    /// The rect the user can actually see and click, centred in the stage.
+    ///
+    /// This previously returned the whole window frame when collapsed, which was
+    /// fine while the window was sized per state. With one fixed stage it would
+    /// make the idle hover target as wide as the widest state, expanding the
+    /// pill from well outside itself.
     private func idleInteractionFrame(for window: NSWindow) -> NSRect {
-        guard isHoverExpanded else { return window.frame }
-
-        let visibleWidth = Constants.activeStateWidth + (Constants.activePadding * 2)
-        let visibleHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2) + (Constants.edgeMargin * 2)
-
+        let visibleWidth: CGFloat
+        let visibleHeight: CGFloat
+        if isHoverExpanded {
+            visibleWidth = Constants.activeStateWidth + (Constants.activePadding * 2)
+            visibleHeight = Constants.activeStateHeight + (Constants.verticalPaddingActive * 2)
+                + (Constants.edgeMargin * 2)
+        } else {
+            visibleWidth = Constants.idleStateWidth + (Constants.idlePaddingNormal * 2)
+            visibleHeight = Constants.idleStateHeight + Constants.idleHoverHitSlop
+                + (Constants.verticalPaddingIdle * 2) + (Constants.edgeMargin * 2)
+        }
         let x = window.frame.midX - (visibleWidth / 2)
         let y = position == .bottom ? window.frame.minY : window.frame.maxY - visibleHeight
         return NSRect(x: x, y: y, width: visibleWidth, height: visibleHeight)
@@ -855,19 +811,17 @@ class OverlayWindowManager: ObservableObject {
                 context: "OverlayWindowManager"
             )
 
+            // Re-order rather than recreate: the window sets canJoinAllSpaces,
+            // so bringing it forward moves it to the active Space. Rebuilding it
+            // costs ~1s and undoes prewarmWindow.
             let currentState = overlayState
-            window.orderOut(nil)
-            window.close()
-            overlayWindow = nil
-
-            createWindow()
-            updateWindowSizeForState(currentState, animated: false)
             if case .hidden = currentState {
-                overlayWindow?.orderOut(nil)
+                window.orderOut(nil)
             } else {
-                overlayWindow?.orderFrontRegardless()
+                window.orderFrontRegardless()
+                positionStage()
             }
-            logWindowState("ensureWindowOnActiveSpace-after-recreate")
+            logWindowState("ensureWindowOnActiveSpace-after-reorder")
         }
     }
 
@@ -903,7 +857,6 @@ class OverlayWindowManager: ObservableObject {
             NSEvent.removeMonitor(monitor)
         }
         hoverCollapseResizeWorkItem?.cancel()
-        frameAnimationTimer?.invalidate()
         hoverTrackingTimer?.invalidate()
         overlayWindow?.close()
     }

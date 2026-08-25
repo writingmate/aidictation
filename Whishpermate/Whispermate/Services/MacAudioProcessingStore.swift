@@ -230,6 +230,25 @@ actor MacAudioProcessingStore {
     private nonisolated let testHooks: TestHooks
     private nonisolated let transientRoot: MacTransientWorkspaceRoot?
     private nonisolated let processID: UUID
+    /// How hard a journal write is pushed toward the platter.
+    ///
+    /// `F_FULLFSYNC` asks the drive to flush its own write cache and waits for
+    /// the hardware to confirm. It is the only thing that survives a power cut,
+    /// and it costs 10s–100s of ms per call. Measured on a real dictation, the
+    /// store's transitions were spending ~4s of user-visible latency on it.
+    ///
+    /// `.hard` is kept wherever a power cut could lose the user's audio: the
+    /// identity that lets recovery find an orphaned recording, and the handoff
+    /// that publishes the closed container. `.ordered` is used once the audio
+    /// is already durable and the remaining transitions only track progress —
+    /// those still write-then-rename through `fsync`, so they survive an app or
+    /// OS crash, and a power cut merely rewinds them to a state recovery
+    /// already knows how to resolve from the audio on disk.
+    enum Durability {
+        case hard
+        case ordered
+    }
+
     private nonisolated let persistenceWorker = MacStorePersistenceWorker()
     private nonisolated let cleanupWorker = MacStorePersistenceWorker(
         label: "ai.writingmate.audio-processing-cleanup"
@@ -1095,11 +1114,14 @@ actor MacAudioProcessingStore {
             }
         }
 
+        // A partial checkpoint. The audio is already durable, so a power cut
+        // here costs a re-run, not the recording.
         return try await transition(
             lease,
             from: .recognizing,
             to: .recognizing,
-            rawText: normalized
+            rawText: normalized,
+            durability: .ordered
         )
     }
 
@@ -1115,16 +1137,20 @@ actor MacAudioProcessingStore {
                 throw StoreError.invalidTransition
             }
         }
+        // Recoverable from the durable audio by transcribing again; nothing
+        // irreversible has happened yet.
         return try await transition(
             lease,
             from: .recognizing,
             to: .rawResultReady,
-            rawText: rawText
+            rawText: rawText,
+            durability: .ordered
         )
     }
 
     func beginCleanup(_ lease: Lease) async throws -> Mutation {
-        try await transition(lease, from: .rawResultReady, to: .cleaning)
+        // Pure progress marker between two states that are both reconstructible.
+        try await transition(lease, from: .rawResultReady, to: .cleaning, durability: .ordered)
     }
 
     /// Empty or whitespace-only cleanup output falls back to the complete raw
@@ -1613,7 +1639,8 @@ actor MacAudioProcessingStore {
         deadline: Date? = nil,
         permitsExpiredCurrentDeadline: Bool = false,
         pendingUsageWordCount: Int? = nil,
-        resetsUsageClaim: Bool = false
+        resetsUsageClaim: Bool = false,
+        durability: Durability = .hard
     ) async throws -> Mutation {
         try requireWritable()
         let current = try currentRecord(for: lease)
@@ -1663,7 +1690,7 @@ actor MacAudioProcessingStore {
         }
         proposed.records[index].failureMessage = failureMessage
         proposed.records[index].updatedAt = Date()
-        try await commit(proposed)
+        try await commit(proposed, durability: durability)
         return mutation(for: proposed.records[index])
     }
 
@@ -1726,6 +1753,7 @@ actor MacAudioProcessingStore {
 
     private func commit(
         _ proposed: Journal,
+        durability: Durability = .hard,
         beforePersistWhileLocked: (@Sendable (Date) throws -> Void)? = nil,
         afterPersistWhileLocked: (@Sendable (Date) -> Void)? = nil
     ) async throws {
@@ -1770,7 +1798,8 @@ actor MacAudioProcessingStore {
                         proposed,
                         to: journalURL,
                         deadline: persistenceDeadline,
-                        testHooks: testHooks
+                        testHooks: testHooks,
+                        durability: durability
                     )
                     afterPersistWhileLocked?(persistenceDeadline)
                 }
@@ -2046,7 +2075,8 @@ actor MacAudioProcessingStore {
         _ journal: Journal,
         to journalURL: URL,
         deadline: Date,
-        testHooks: TestHooks
+        testHooks: TestHooks,
+        durability: Durability = .hard
     ) throws {
         try checkPersistenceDeadline(deadline)
         let data = try makeEncoder().encode(journal)
@@ -2098,7 +2128,8 @@ actor MacAudioProcessingStore {
                 descriptor,
                 operation: .journalFileSync,
                 deadline: deadline,
-                testHooks: testHooks
+                testHooks: testHooks,
+                durability: durability
             )
             guard Darwin.close(descriptor) == 0 else {
                 descriptor = -1
@@ -2144,7 +2175,8 @@ actor MacAudioProcessingStore {
         at url: URL,
         operation: TestOperation,
         deadline: Date,
-        testHooks: TestHooks
+        testHooks: TestHooks,
+        durability: Durability = .hard
     ) throws {
         try checkPersistenceDeadline(deadline)
         let descriptor = url.path.withCString {
@@ -2162,7 +2194,8 @@ actor MacAudioProcessingStore {
             descriptor,
             operation: operation,
             deadline: deadline,
-            testHooks: testHooks
+            testHooks: testHooks,
+            durability: durability
         )
     }
 
@@ -2170,10 +2203,11 @@ actor MacAudioProcessingStore {
         _ descriptor: Int32,
         operation: TestOperation,
         deadline: Date,
-        testHooks: TestHooks
+        testHooks: TestHooks,
+        durability: Durability = .hard
     ) throws {
         try runHook(operation, deadline: deadline, testHooks: testHooks)
-        if Darwin.fcntl(descriptor, F_FULLFSYNC) == 0 {
+        if durability == .hard, Darwin.fcntl(descriptor, F_FULLFSYNC) == 0 {
             try checkPersistenceDeadline(deadline)
             return
         }
@@ -2670,7 +2704,7 @@ actor MacAudioProcessingStore {
             try await withCheckedThrowingContinuation { continuation in
                 gate.install(continuation)
 
-                Task.detached(priority: .utility) {
+                Task.detached(priority: .userInitiated) {
                     do {
                         try testHooks.before(.deepAudioValidation)
                         let integrity = try validateClosedAudio(at: url)
@@ -3308,7 +3342,12 @@ private nonisolated final class MacStorePersistenceWorker: @unchecked Sendable {
     private let queue: DispatchQueue
 
     init(label: String = "ai.writingmate.audio-processing-persistence") {
-        queue = DispatchQueue(label: label, qos: .utility)
+        // .userInitiated, not .utility: every journal write is on the path
+        // between the user releasing the hotkey and the transcript coming back.
+        // A profile showed ~12ms of real work taking 2-4s of wall clock, with
+        // every dispatch worker thread parked in __workq_kernreturn — the work
+        // was queued and simply not scheduled.
+        queue = DispatchQueue(label: label, qos: .userInitiated)
     }
 
     func submit(_ operation: @escaping @Sendable () -> Void) {

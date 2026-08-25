@@ -391,6 +391,17 @@ class AudioDeviceManager: ObservableObject {
     }
 
     func setDefaultInputDevice(deviceID: AudioDeviceID) -> Bool {
+        // Writing the system default input is a slow Core Audio property set,
+        // and it ran on every recording even when the device was already the
+        // one we wanted. Skip the write when it would be a no-op.
+        if let current = getDefaultInputDevice(), current.id == deviceID {
+            DebugLog.info(
+                "Default input already ID: \(deviceID); skipping redundant set",
+                context: "AudioDeviceManager"
+            )
+            return true
+        }
+
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,

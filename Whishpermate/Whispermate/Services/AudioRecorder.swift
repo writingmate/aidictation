@@ -13,6 +13,14 @@ class AudioRecorder: NSObject, ObservableObject {
         static let recordingBufferStallThreshold: TimeInterval = 2.5
         static let recordingPreparationTimeout: TimeInterval = 5.0
         static let recordingFinalizationTimeout: TimeInterval = 5.0
+
+        /// Every speech model downsamples to 16 kHz before it looks at the audio,
+        /// so capturing above that only inflates the upload. Encoding at the rate
+        /// the model wants makes the payload ~9x smaller with no accuracy cost.
+        static let transcriptionSampleRate: Double = 16_000
+
+        /// AAC at 24 kbps is transparent for 16 kHz mono speech.
+        static let transcriptionBitRate: Int = 24_000
     }
 
     enum StopDisposition: Equatable {
@@ -58,6 +66,21 @@ class AudioRecorder: NSObject, ObservableObject {
     private let realtimeHandlerLock = NSLock()
     private var storedRealtimeAudioChunkHandler: ((Data) -> Void)?
     private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
+    /// Whether the process-wide CoreAudio input path has been warmed once.
+    ///
+    /// The first `inputNode.outputFormat(forBus:)` in a process costs 180–622ms
+    /// (measured) because it instantiates the CoreAudio IO unit; later engines
+    /// are cheaper. Doing that once at launch takes the worst case off the first
+    /// recording.
+    ///
+    /// We deliberately do NOT keep a prepared engine around for the recording to
+    /// adopt. That was tried and it silently produced zero-sample recordings:
+    /// `prepare()` configures the render chain, and a tap installed afterwards
+    /// does not reconfigure the input unit, so capture ran and delivered nothing.
+    /// Correct audio outranks the remaining ~200ms.
+    private var didWarmCoreAudio = false
+
+
     private let realtimeOutputFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16,
         sampleRate: 24_000,
@@ -87,6 +110,23 @@ class AudioRecorder: NSObject, ObservableObject {
         // Build the AVAudioEngine only for active recording sessions. Keeping an idle
         // engine registered with Core Audio makes Bluetooth route-change bursts more
         // likely to hit AVAudioIOUnit's hardware-format callbacks.
+    }
+
+    /// Warms the process-wide CoreAudio input path. Does not retain an engine.
+    func prewarmEngine() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.prewarmEngine() }
+            return
+        }
+        guard !didWarmCoreAudio, !isRecording, pendingPreparation == nil else { return }
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+
+        // Build, touch the input node to force IO-unit instantiation, discard.
+        // Never prepared, never started, never reused for a recording.
+        let probe = AVAudioEngine()
+        _ = probe.inputNode.outputFormat(forBus: 0)
+        didWarmCoreAudio = true
+        DebugLog.info("CoreAudio input path warmed", context: "AudioRecorder LOG")
     }
 
     @objc private func handleAudioDeviceChanged(_ notification: Notification) {
@@ -408,7 +448,7 @@ class AudioRecorder: NSObject, ObservableObject {
         guard inputFormat.channelCount > 0,
               let outputFormat = AVAudioFormat(
                   commonFormat: .pcmFormatFloat32,
-                  sampleRate: 44_100,
+                  sampleRate: Constants.transcriptionSampleRate,
                   channels: 1,
                   interleaved: false
               )
@@ -424,9 +464,9 @@ class AudioRecorder: NSObject, ObservableObject {
                 forWriting: recordingURL,
                 settings: [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
-                    AVSampleRateKey: 44_100.0,
+                    AVSampleRateKey: Constants.transcriptionSampleRate,
                     AVNumberOfChannelsKey: 1,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+                    AVEncoderBitRateKey: Constants.transcriptionBitRate,
                 ]
             )
             let session = MacCaptureSession(
@@ -487,10 +527,7 @@ class AudioRecorder: NSObject, ObservableObject {
                 let bufferFormat = buffer.format
                 if bufferFormat.sampleRate != session.outputFormat.sampleRate
                     || bufferFormat.channelCount != session.outputFormat.channelCount,
-                    let converter = AVAudioConverter(
-                        from: bufferFormat,
-                        to: session.outputFormat
-                    )
+                    let converter = session.converter(from: bufferFormat)
                 {
                     let ratio = session.outputFormat.sampleRate / bufferFormat.sampleRate
                     guard let convertedBuffer = AVAudioPCMBuffer(
@@ -659,6 +696,7 @@ class AudioRecorder: NSObject, ObservableObject {
         }
 
         DebugLog.info("✅ Recording started", context: "AudioRecorder LOG")
+        DictationStopwatch.mark("mic capturing")
     }
 
     private func resetFailedStart() {
@@ -883,6 +921,11 @@ class AudioRecorder: NSObject, ObservableObject {
         audioLevel = 0.0
         frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
         DebugLog.info("Recording finalization started", context: "AudioRecorder LOG")
+        DictationStopwatch.mark("finalization started")
+        // Only now that capture has stopped — playing it on the key-release path
+        // recorded an 85ms tone into the tail of every dictation and sent it to
+        // the transcriber.
+        SoundEffectManager.shared.playStop()
 
         finalization.queue.async { [weak self, finalization] in
             guard let self else { return }
@@ -908,6 +951,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
             DispatchQueue.main.async { [weak self, weak finalization] in
                 guard let self, let finalization else { return }
+                DictationStopwatch.mark("recorder finalization resolved")
                 self.finishFinalization(finalization, terminal: terminal)
             }
         }
@@ -944,6 +988,7 @@ class AudioRecorder: NSObject, ObservableObject {
                 "Recording file ready name=\(url.lastPathComponent) bytes=\(byteCount)",
                 context: "DictationFlow"
             )
+            DictationStopwatch.mark("container closed on disk")
             return byteCount < 1_000 ? "No speech was captured. Please try again." : nil
         } catch {
             DebugLog.info("Recording file validation failed: \(error)", context: "AudioRecorder")
@@ -1130,6 +1175,31 @@ private final class MacCaptureSession: @unchecked Sendable {
     private var wroteBuffer = false
     private var failureMessage: String?
     private var failureDeliveryClaimed = false
+
+    // Resampling to 16 kHz is now the normal path rather than the exception, so
+    // the converter has to outlive a single buffer: rebuilding it per callback
+    // throws away the resampler's filter state and rings at every seam.
+    private let converterLock = NSLock()
+    private var cachedConverter: AVAudioConverter?
+    private var cachedConverterInputFormat: AVAudioFormat?
+
+    /// Returns a converter from `inputFormat` to `outputFormat`, reusing the
+    /// previous one whenever the device keeps handing us the same format.
+    func converter(from inputFormat: AVAudioFormat) -> AVAudioConverter? {
+        converterLock.lock()
+        defer { converterLock.unlock() }
+
+        if let cachedConverter, cachedConverterInputFormat == inputFormat {
+            return cachedConverter
+        }
+
+        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+            return nil
+        }
+        cachedConverter = converter
+        cachedConverterInputFormat = inputFormat
+        return converter
+    }
 
     init(
         recordingID: UUID,

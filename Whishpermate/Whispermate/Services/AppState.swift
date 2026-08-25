@@ -174,6 +174,32 @@ class AppState: ObservableObject {
         errorMessage = ""
         transcriptionText = ""
 
+        // Show the recording bubble before anything else. None of the work below
+        // — context capture, screen OCR, CoreAudio engine start — is needed to
+        // draw it, and putting it last is what made the overlay lag the key
+        // press by ~2s. Audio starts behind the UI, not in front of it.
+        DictationActivityAssertion.acquire()
+        DictationStopwatch.begin()
+        // Before the mic starts, so the cue cannot bleed into the recording.
+        SoundEffectManager.shared.playStart()
+        if overlayManager.isOverlayMode {
+            let isCommand = recordingMode == .command
+            overlayManager.setRecordingControlsVisible(shouldShowOverlayControls && !isCommand)
+            if !shouldShowOverlayControls {
+                overlayManager.setHoverExpanded(true)
+            }
+            overlayManager.transition(to: .recording(isCommandMode: isCommand))
+        }
+        DictationStopwatch.mark("overlay visible")
+
+        // Open the connection to the transcription host now, while the user is
+        // still speaking, so the upload at key-release skips the handshake.
+        // Local models have no endpoint and need no warming.
+        let prewarmEndpoint = transcriptionProviderManager.effectiveEndpoint
+        if !prewarmEndpoint.isEmpty {
+            TranscriptionPrewarmer.shared.prewarm(endpoint: prewarmEndpoint)
+        }
+
         // Capture screen context if enabled
         if screenCaptureManager.includeScreenContext {
             Task {
@@ -204,14 +230,14 @@ class AppState: ObservableObject {
     }
 
     private func beginAttemptContextCapture() -> Task<MacCapturedAttemptContext?, Never> {
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .userInitiated) {
             let operation = MacBoundedNativeOperation<MacCapturedAttemptContext?>(
                 cancelNative: {}
             )
             return try? await operation.run(
                 timeoutNanoseconds: 1_000_000_000
             ) { completion in
-                DispatchQueue.global(qos: .utility).async {
+                DispatchQueue.global(qos: .userInitiated).async {
                     let context = AppContextHelper.getCurrentAppContext()
                     completion(.success(context.map {
                         MacCapturedAttemptContext(
@@ -395,7 +421,11 @@ class AppState: ObservableObject {
                 NotificationCenter.default.post(name: .recordingStarted, object: nil)
 
                 DebugLog.info("✅ Recording started successfully", context: "AppState")
-                if overlayManager.isOverlayMode {
+                DictationStopwatch.mark("capture pipeline ready (store lease + context)")
+                // The bubble was already shown at key-press. Only transition here
+                // if that early call was skipped, so a late overlay-mode switch
+                // still lands in the right state.
+                if overlayManager.isOverlayMode, overlayManager.overlayState != .recording(isCommandMode: recordingMode == .command) {
                     let isCommand = recordingMode == .command
                     overlayManager.setRecordingControlsVisible(shouldShowOverlayControls && !isCommand)
                     if !shouldShowOverlayControls {
@@ -780,10 +810,12 @@ class AppState: ObservableObject {
             do {
                 // AudioRecorder delivers `.finalized` only after the exact
                 // session has drained writes and released its AVAudioFile.
+                DictationStopwatch.mark("proveClosedAudio start")
                 let proof = try await store.proveClosedAudio(
                     lease,
                     nativeCloseAttestation: nativeCloseAttestation
                 )
+                DictationStopwatch.mark("proveClosedAudio done")
                 guard ownsProcessingAttempt(
                     recordingID: recordingID,
                     attemptID: attemptID
@@ -792,6 +824,7 @@ class AppState: ObservableObject {
                     return
                 }
                 let checkpoint = try await store.checkpointClosedAudio(lease, proof: proof)
+                DictationStopwatch.mark("checkpointClosedAudio done")
                 guard ownsProcessingAttempt(
                     recordingID: recordingID,
                     attemptID: attemptID
@@ -802,6 +835,7 @@ class AppState: ObservableObject {
                 closedAudioWasCheckpointed = true
                 activeCaptureLease = checkpoint.lease
                 let ready = try await store.finishFinalization(checkpoint.lease, proof: proof)
+                DictationStopwatch.mark("finishFinalization done")
                 guard ownsProcessingAttempt(
                     recordingID: recordingID,
                     attemptID: attemptID
@@ -1062,6 +1096,7 @@ class AppState: ObservableObject {
         message: String?,
         removeMetadata: Bool = false
     ) {
+        DictationActivityAssertion.release()
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         var metadataRemovalFailed = false
@@ -2034,6 +2069,7 @@ class AppState: ObservableObject {
         defer { realtimeClient?.close() }
         do {
             try Task.checkCancellation()
+            DictationStopwatch.mark("transcription attempt entered")
             let (canTranscribe, reason) = SubscriptionManager.shared.checkCanTranscribe()
             guard canTranscribe else {
                 throw NSError(
@@ -2127,7 +2163,9 @@ class AppState: ObservableObject {
                 attemptID: attemptID,
                 isLiveRecording: isLiveRecording
             ) else { return }
+            DictationStopwatch.mark("recognition returned")
             let resultReady = try await session.finishCleanup(result)
+            DictationStopwatch.mark("store finishCleanup")
             let durableText = resultReady.record.resultText ?? resultReady.record.rawText ?? result
             await commitTranscriptionSuccess(
                 recording: recording,
@@ -2163,7 +2201,24 @@ class AppState: ObservableObject {
         ) else { return }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else {
+            // Recognition succeeded and returned nothing — the normal result for
+            // a silent recording that VAD let through (VAD fails open on error
+            // or timeout). This used to return here, which left the attempt
+            // half-finished: no message, the overlay stuck in processing, the
+            // recording still owned, and the App Nap assertion still held. Treat
+            // it as a terminal outcome instead. The audio stays on disk and the
+            // store record stays recoverable, so a retry can still use it.
+            DebugLog.info(
+                "Recognition returned an empty transcript; ending the attempt",
+                context: "DictationFlow"
+            )
+            finishEmptyTranscription(
+                recordingID: recording.id,
+                isLiveRecording: isLiveRecording
+            )
+            return
+        }
         var success = recording
         let store = await MacAudioProcessingStoreProvider.shared()
         guard isCurrentAttempt(
@@ -2177,28 +2232,41 @@ class AppState: ObservableObject {
         success.errorMessage = storeRecord.failureMessage
         success.wordCount = trimmed.split(separator: " ").count
         success.sourceIntegrity = .complete
+            DictationStopwatch.mark("commit entered")
         let historyWasPersisted = historyManager.upsertRecording(success)
+        DictationStopwatch.mark("history upsert")
         if !historyWasPersisted {
             historyManager.showUnsavedTerminalState(success)
             errorMessage = "The transcript is safe, but History couldn’t be updated."
         }
 
-        var claimedUsageWordCount: Int?
+        // Usage accounting is deliberately not awaited here. The claim writes a
+        // journal entry with full power-loss durability before touching the
+        // non-idempotent billing sink, which is correct but cost ~1.6s measured
+        // — all of it spent after the transcript was already in hand, with the
+        // user waiting on a billing write before their text could paste.
+        //
+        // The ordering guarantee that matters is claim-before-sink, and that is
+        // preserved: both still happen inside this task, in the same order. Only
+        // the paste no longer waits on them. A crash in the window loses the
+        // usage claim, never the transcript, and startup recovery re-resolves
+        // the record from the store.
+        let usageWordCount = success.wordCount ?? 0
         if historyWasPersisted {
-            do {
-                claimedUsageWordCount = try await session.markSucceededAndClaimUsage(
-                    wordCount: success.wordCount ?? 0
-                )
-            } catch {
-                guard isCurrentAttempt(
-                    recordingID: recording.id,
-                    attemptID: attemptID,
-                    isLiveRecording: isLiveRecording
-                ) else { return }
-                // History already contains the transcript and the store remains
-                // result-ready for startup recovery. Never report usage until
-                // both durable publications have succeeded.
-                errorMessage = "The transcript is safe, but its recovery status couldn’t be finalized."
+            Task { [weak self] in
+                do {
+                    if let claimed = try await session.markSucceededAndClaimUsage(
+                        wordCount: usageWordCount
+                    ) {
+                        DictationStopwatch.mark("usage claimed (off critical path)")
+                        await SubscriptionManager.shared.recordWords(claimed)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self?.errorMessage =
+                            "The transcript is safe, but its recovery status couldn’t be finalized."
+                    }
+                }
             }
         }
 
@@ -2235,11 +2303,31 @@ class AppState: ObservableObject {
             finalizedRecordingDuration = nil
         }
 
-        // The durable store claim happens only after History accepted the
-        // terminal transcript. Claim-before-sink prevents duplicate charging.
-        if let claimedUsageWordCount {
-            await SubscriptionManager.shared.recordWords(claimedUsageWordCount)
+    }
+
+    /// Ends an attempt that recognized successfully but produced no text.
+    ///
+    /// Mirrors the tail of `commitTranscriptionSuccess` without publishing a
+    /// transcript: return the UI to idle, drop ownership, and release the
+    /// activity assertion so the process can nap again.
+    private func finishEmptyTranscription(recordingID: UUID, isLiveRecording: Bool) {
+        errorMessage = "No speech was detected. Your recording is saved."
+        isProcessing = false
+        transcriptionTasks.removeValue(forKey: recordingID)
+        if isLiveRecording {
+            releaseActiveRecordingOwnership(recordingID)
+            recordingState = .idle
+            finishOverlayAfterRecording()
+            recordingMode = .dictation
+            shouldAutoPaste = false
+            recordingStartTime = nil
+            finalizedRecordingDuration = nil
+        } else {
+            retranscriptionAttemptIDs.removeValue(forKey: recordingID)
+            historyManager.unregisterActiveRecording(id: recordingID)
         }
+        DictationActivityAssertion.release()
+        AudioRecorder.shared.prewarmEngine()
     }
 
     private func finishStoredTranscriptionFailure(
@@ -2307,6 +2395,7 @@ class AppState: ObservableObject {
         failed.status = .failed
         failed.errorMessage = message
         if !historyManager.upsertRecording(failed) {
+        DictationActivityAssertion.release()
             historyManager.showUnsavedTerminalState(failed)
             errorMessage = "The recording is safe, but History couldn’t be updated."
         }
@@ -2334,6 +2423,7 @@ class AppState: ObservableObject {
         audioURL: URL,
         message: String
     ) {
+        DictationActivityAssertion.release()
         guard activeRecordingID == recordingID else { return }
 
         let recording = persistActiveRecording(
@@ -3200,6 +3290,9 @@ class AppState: ObservableObject {
 
     /// Process dictation result: update state and paste transcribed text
     private func processDictationResult(transcription: String) async {
+        DictationStopwatch.mark("transcript received")
+        DictationActivityAssertion.release()
+        AudioRecorder.shared.prewarmEngine()
         DebugLog.info("Processing dictation result...", context: "AppState")
         DebugLog.info(
             "Dictation result metadata length=\(transcription.count) autoPaste=\(shouldAutoPaste) overlayMode=\(overlayManager.isOverlayMode)",

@@ -87,6 +87,12 @@ struct RecordingOverlayView: View {
     private let collapseDuration: TimeInterval = 0.15
     private let contentRevealDelay: TimeInterval = 0.26
     private let contentFadeDuration: TimeInterval = 0.14
+
+    /// Content leaves faster than it arrives. The pill collapse runs for
+    /// `collapseDuration`; fading the dots on the same clock (and with
+    /// easeInOut, which holds opacity high through the first half) left them
+    /// visibly sitting in a pill that had already shrunk away.
+    private let contentHideDuration: TimeInterval = 0.06
     private let buttonRevealDelay: TimeInterval = 0.09
 
     private var morphAnimation: Animation {
@@ -126,8 +132,11 @@ struct RecordingOverlayView: View {
                 expansionWorkItem = nil
                 contentWorkItem = nil
 
-                // Hide content immediately, then collapse
-                shouldShowContent = false
+                // Drop the dots on their own short curve so they are gone
+                // before the pill finishes collapsing around them.
+                withAnimation(.easeOut(duration: contentHideDuration)) {
+                    shouldShowContent = false
+                }
                 withAnimation(.easeOut(duration: collapseDuration)) {
                     shouldShowExpandedPill = false
                 }
@@ -155,8 +164,11 @@ struct RecordingOverlayView: View {
                 expansionWorkItem = nil
                 contentWorkItem = nil
 
-                // Hide content immediately, then collapse
-                shouldShowContent = false
+                // Drop the dots on their own short curve so they are gone
+                // before the pill finishes collapsing around them.
+                withAnimation(.easeOut(duration: contentHideDuration)) {
+                    shouldShowContent = false
+                }
                 withAnimation(.easeOut(duration: collapseDuration)) {
                     shouldShowExpandedPill = false
                 }
@@ -285,7 +297,12 @@ struct RecordingOverlayView: View {
         .animation(morphAnimation, value: shouldShowExpandedPill)
         .animation(morphAnimation, value: manager.isRecording)
         .animation(morphAnimation, value: manager.showsRecordingControls)
-        .animation(.easeInOut(duration: contentFadeDuration), value: shouldShowContent)
+        .animation(
+            shouldShowContent
+                ? .easeOut(duration: contentFadeDuration)
+                : .easeOut(duration: contentHideDuration),
+            value: shouldShowContent
+        )
     }
 
     private func centeredWaveContent<Wave: View>(
@@ -300,7 +317,12 @@ struct RecordingOverlayView: View {
             Spacer(minLength: 0)
         }
         .frame(width: targetWidth, height: targetHeight)
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        .transition(
+            .asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.96)),
+                removal: .opacity
+            )
+        )
     }
 
     private var cancelButton: some View {

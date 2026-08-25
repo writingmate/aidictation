@@ -463,6 +463,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         DebugLog.info("Hotkey callbacks configured!", context: "AppDelegate")
+
+        // Build the overlay window now so the first Fn press only has to show
+        // it. Creating it lazily put ~1s of NSWindow + SwiftUI setup between
+        // the key press and the bubble appearing.
+        OverlayWindowManager.shared.prewarmWindow()
+
+        // Same reasoning as the overlay: build the audio engine before the first
+        // hotkey rather than after it. ~400ms of CoreAudio setup measured.
+        AudioRecorder.shared.prewarmEngine()
+        SoundEffectManager.shared.prepare()
     }
 }
 

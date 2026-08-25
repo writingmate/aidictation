@@ -88,6 +88,15 @@ actor SileroVAD {
         }
 
         let chunkSize = 576 // Silero VAD v6 expects 576 samples
+        // 576 samples at 16kHz is 36ms, so a single window is a very weak signal:
+        // a 10s recording gives ~278 independent chances to cross the threshold,
+        // which is why long silences were being classified as speech and handed
+        // to the transcriber (which then hallucinates "Thank you." on empty
+        // audio). Silero's own reference requires min_speech_duration_ms=250;
+        // requiring a sustained run makes a false positive p^n instead of p.
+        let requiredSpeechRun = 6 // ~216ms
+        var consecutiveSpeechChunks = 0
+        var longestSpeechRun = 0
         var hiddenState = try MLMultiArray(shape: [1, 128], dataType: .float32)
         for i in 0 ..< 128 {
             hiddenState[i] = 0.0
@@ -170,14 +179,20 @@ actor SileroVAD {
                 ) {
                     analyzedChunks += 1
                     maximumProbability = max(maximumProbability, probability)
-                    // VAD is a rejection optimization. One positive window is
-                    // sufficient and lets long recordings stop decoding early.
                     if probability >= threshold {
-                        DebugLog.info(
-                            "VAD detected speech after \(analyzedChunks) streamed chunks",
-                            context: "SileroVAD"
-                        )
-                        return true
+                        consecutiveSpeechChunks += 1
+                        longestSpeechRun = max(longestSpeechRun, consecutiveSpeechChunks)
+                        // Still early-exits, just on a sustained run rather than
+                        // a single window.
+                        if consecutiveSpeechChunks >= requiredSpeechRun {
+                            DebugLog.info(
+                                "VAD detected speech after \(analyzedChunks) streamed chunks (run=\(consecutiveSpeechChunks))",
+                                context: "SileroVAD"
+                            )
+                            return true
+                        }
+                    } else {
+                        consecutiveSpeechChunks = 0
                     }
                 }
             }
@@ -195,12 +210,16 @@ actor SileroVAD {
             ) {
                 analyzedChunks += 1
                 maximumProbability = max(maximumProbability, probability)
-                if probability >= threshold { return true }
+                if probability >= threshold {
+                    consecutiveSpeechChunks += 1
+                    longestSpeechRun = max(longestSpeechRun, consecutiveSpeechChunks)
+                    if consecutiveSpeechChunks >= requiredSpeechRun { return true }
+                }
             }
         }
 
         DebugLog.info(
-            "VAD found no speech in \(analyzedChunks) streamed chunks; max=\(String(format: "%.3f", maximumProbability))",
+            "VAD found no speech in \(analyzedChunks) streamed chunks; max=\(String(format: "%.3f", maximumProbability)) longestRun=\(longestSpeechRun)/\(requiredSpeechRun)",
             context: "SileroVAD"
         )
         return false

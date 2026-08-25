@@ -113,6 +113,7 @@ struct SettingsView: View {
     @State private var pendingTranscriptionMode: TranscriptionMode?
     @State private var pendingCloudLanguage: Language?
     @State private var showMenuBarIcon = StatusBarManager.isMenuBarIconVisible
+    @State private var soundEffectsEnabled = SoundEffectManager.shared.isEnabled
     @State private var isPreparingReferral = false
     @State private var isRedeemingReferral = false
     @State private var referralCodeToRedeem = ""
@@ -905,6 +906,34 @@ struct SettingsView: View {
                         Toggle("", isOn: Binding(
                             get: { !overlayManager.hideIdleState },
                             set: { overlayManager.hideIdleState = !$0 }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
+
+                    Divider()
+
+                    // Recording Sounds
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Recording Sounds")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Play a short thump when recording starts and stops")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { soundEffectsEnabled },
+                            set: { newValue in
+                                soundEffectsEnabled = newValue
+                                SoundEffectManager.shared.isEnabled = newValue
+                                // Play the cue on enable so the choice is audible.
+                                if newValue { SoundEffectManager.shared.playStart() }
+                            }
                         ))
                         .toggleStyle(.switch)
                         .controlSize(.mini)

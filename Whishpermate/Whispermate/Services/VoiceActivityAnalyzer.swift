@@ -11,7 +11,6 @@ actor VoiceActivityAnalyzer {
         threshold: Float = 0.3,
         minSpeechRatio _: Float = 0.1
     ) async throws -> Bool {
-        DictationStopwatch.mark("VAD start")
         DebugLog.info("🎤 Analyzing audio for speech...", context: "VAD")
 
         let hasSpeech = try await sileroVAD.analyzeAudio(url: audioURL, threshold: threshold)

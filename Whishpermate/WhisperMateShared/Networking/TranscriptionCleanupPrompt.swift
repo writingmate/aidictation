@@ -56,18 +56,34 @@ public enum TranscriptionCleanupPrompt {
             CRITICAL RULES:
             1. Process the complete source text from its first token through its final token.
             2. Fix only transcription errors, casing, punctuation, spacing, and light grammar.
-            3. Preserve every supported clause from beginning to end, along with the speaker's intended meaning.
-            4. Do not summarize, shorten, continue, or complete the source text.
-            5. Do not add information, opinions, apologies, explanations, labels, speakers, or assistant responses.
-            6. Never append invented words, tokens, or phrases after the source text ends.
-            7. Never create repeated-token or repeated-phrase loops unless that repetition is already present in the source text.
-            8. Treat personal vocabulary as canonical spelling reference. When source words plausibly match a listed term, use that term's exact spelling, capitalization, and spacing.
-            9. Apply explicit replacements, expansions, and formatting transformations when their source trigger is present.
-            10. Never copy a term, list, category name, or instruction from formatting context into the result unless the corresponding source words or requested transformation support it.
-            11. Preserve the intended language, dialect, script, and regional spelling when language context is provided.
-            12. If uncertain, preserve the original source text rather than inventing or deleting content.
-            13. For non-empty source text, always return non-empty corrected text. If no correction is needed, reproduce the complete source text.
-            14. Output only the corrected text, with no wrapper tags or preamble.
+            3. Remove filler sounds ("um", "uh", "er"), accidentally repeated words, and
+               explicit spoken self-corrections, keeping the corrected version.
+               "um I can meet Tuesday sorry Wednesday at three thirty PM" -> "I can meet Wednesday at 3:30 PM."
+               Also remove conversational padding that carries no information:
+               a leading "yeah", "so", "like", "I mean", "you know", and a trailing
+               "and stuff", "or whatever", "or something like that".
+               "yeah I kind of think maybe that's fine and stuff" -> "I think that's fine."
+               When hedges are stacked, keep one and drop the rest: "I kind of think maybe
+               that's fine" -> "I think that's fine". A single hedge stays, because it changes
+               the claim: "I think we should wait" and "we should wait" are not the same
+               statement, so do not strip that "I think".
+               Never delete part of the message to make the rest read as a tidier sentence,
+               and never drop an opening phrase that reads like a title or a label.
+            4. Preserve every supported clause from beginning to end, along with the speaker's intended meaning.
+               Keep the speaker's tone, uncertainty, slang, and emotional intensity, and never
+               soften or remove profanity.
+            5. Do not summarize, shorten, continue, or complete the source text.
+            6. Do not add information, opinions, apologies, explanations, labels, speakers, or assistant responses.
+            7. Never append invented words, tokens, or phrases after the source text ends.
+            8. Never create repeated-token or repeated-phrase loops unless that repetition is already present in the source text.
+            9. Treat personal vocabulary as canonical spelling reference. When source words plausibly match a listed term, use that term's exact spelling, capitalization, and spacing.
+            10. Apply explicit replacements, expansions, and formatting transformations when their source trigger is present.
+            11. Never copy a term, list, category name, or instruction from formatting context into the result unless the corresponding source words or requested transformation support it.
+            12. Preserve the intended language, dialect, script, and regional spelling when language context is provided.
+            13. If uncertain, preserve the original source text rather than inventing or deleting content.
+                This defers to rule 3: remove a filler or self-correction only when it is unambiguous.
+            14. For non-empty source text, always return non-empty corrected text. If no correction is needed, reproduce the complete source text.
+            15. Output only the corrected text, with no wrapper tags or preamble.
             """
 
         if hasSelectedContent {

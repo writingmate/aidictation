@@ -5,9 +5,9 @@
 	<key>ATSApplicationFontsPath</key>
 	<string>.</string>
 	<key>CFBundleDisplayName</key>
-	<string>AIDictation</string>
+	<string>AI Dictation</string>
 	<key>CFBundleName</key>
-	<string>AIDictation</string>
+	<string>AI Dictation</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/writingmate/aidictation/main/appcast.xml</string>
 	<key>NSMicrophoneUsageDescription</key>

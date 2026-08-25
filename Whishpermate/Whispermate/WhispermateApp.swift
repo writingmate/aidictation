@@ -491,7 +491,7 @@ private func isMainSettingsWindowCandidate(_ window: NSWindow) -> Bool {
         return true
     }
 
-    return window.title == "AIDictation"
+    return window.title == AppNaming.displayName
 }
 
 private func mainSettingsWindowCandidates() -> [NSWindow] {
@@ -640,7 +640,7 @@ enum WindowBridge {
         if id == "main" {
             let window = retainedWindows[id]
                 ?? findMainWindow()
-                ?? NSApplication.shared.windows.first(where: { $0.title == "AIDictation" })
+                ?? NSApplication.shared.windows.first(where: { $0.title == AppNaming.displayName })
                 ?? makeMainSettingsWindow()
 
             retainedWindows[id] = window
@@ -709,7 +709,7 @@ enum WindowBridge {
         DebugLog.info("openLegacyWindow: creating main Settings window on demand", context: "WindowManagement")
         return makeWindow(
             id: WindowIdentifiers.main,
-            title: "AIDictation",
+            title: AppNaming.displayName,
             size: AppWindowDefaults.mainFrameSize,
             rootView: AnyView(SettingsWindowView())
         )
@@ -741,7 +741,7 @@ private struct ModernAppScenes: Scene {
         let _ = { WindowBridge.openWindow = { [openWindow] id in openWindow(id: id) } }()
 
         // Main window is now Settings
-        Window("AIDictation", id: "main") {
+        Window(AppNaming.displayName, id: "main") {
             SettingsWindowView()
                 .windowIdentifier(WindowIdentifiers.main)
         }
@@ -800,7 +800,7 @@ private struct LegacyAppScenes: Scene {
     var body: some Scene {
         let _ = { WindowBridge.openWindow = { id in WindowBridge.openLegacyWindow(id: id) } }()
 
-        WindowGroup("AIDictation") {
+        WindowGroup(AppNaming.displayName) {
             SettingsWindowView()
                 .windowIdentifier(WindowIdentifiers.main)
         }

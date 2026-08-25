@@ -1,4 +1,15 @@
 import AppKit
+
+/// The user-visible application name.
+///
+/// The main window is titled with this, and several lookups find that window by
+/// comparing against it, so both sides must come from one place. Distinct from
+/// `PRODUCT_NAME`, which stays `AIDictation`: that controls the executable and
+/// the .app filename, and renaming it would change the install path, strand the
+/// old bundle beside the new one and break the Sparkle update path.
+enum AppNaming {
+    static let displayName = "AI Dictation"
+}
 import SwiftUI
 import WhisperMateShared
 
@@ -25,7 +36,7 @@ func findMainWindow() -> NSWindow? {
         return window
     }
     // 3. Try by title while SwiftUI is still attaching the identifier
-    if let window = NSApplication.shared.windows.first(where: { $0.level == .normal && $0.title == "AIDictation" }) {
+    if let window = NSApplication.shared.windows.first(where: { $0.level == .normal && $0.title == AppNaming.displayName }) {
         DebugLog.info("findMainWindow: found by title", context: "WindowManagement")
         return window
     }
@@ -37,7 +48,7 @@ func findMainWindow() -> NSWindow? {
             && $0.identifier != WindowIdentifiers.authPresentation
             && $0.title != "History"
             && !$0.title.hasPrefix("Welcome")
-            && $0.title == "AIDictation"
+            && $0.title == AppNaming.displayName
     })
     if fallback != nil {
         DebugLog.info("findMainWindow: found by .normal level fallback", context: "WindowManagement")
@@ -130,7 +141,7 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         } else {
             // Fallback to SF Symbol
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-            button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "AIDictation")?.withSymbolConfiguration(config)
+            button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: AppNaming.displayName)?.withSymbolConfiguration(config)
         }
 
         // Create menu

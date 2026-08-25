@@ -103,7 +103,7 @@ enum PostProcessingProvider: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .aidictation: return "AIDictation"
+        case .aidictation: return "AI Dictation"
         case .customLLM: return "Custom LLM"
         }
     }

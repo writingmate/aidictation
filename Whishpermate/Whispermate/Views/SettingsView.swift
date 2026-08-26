@@ -33,10 +33,11 @@ struct SettingsCard<Content: View>: View {
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general = "General"
+    case overlay = "Overlay"
     case account = "Account"
     case permissions = "Permissions"
     // case transcription = "Transcription" // Hidden for now
-    case audio = "Audio"
+    case audio = "Sound"
     case language = "Language"
     case dictionary = "Dictionary"
     case contextRules = "Context Rules"
@@ -73,7 +74,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         var sections: [SettingsSection] {
             switch self {
             case .primary: return [.general, .history]
-            case .dictation: return [.audio, .language]
+            case .dictation: return [.overlay, .audio, .language]
             case .text: return [.dictionary, .shortcuts, .contextRules]
             case .system: return [.permissions]
             }
@@ -83,6 +84,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gear"
+        case .overlay: return "rectangle.bottomthird.inset.filled"
         case .account: return "person.circle"
         case .history: return "clock.arrow.circlepath"
         case .permissions: return "lock.shield"
@@ -95,14 +97,16 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         }
     }
 
+
     var description: String {
         switch self {
-        case .general: return "Hotkey, overlay, and startup settings"
+        case .general: return "Hotkey, transcription, and app settings"
+        case .overlay: return "Recording indicator appearance"
         case .account: return "Subscription and account management"
         case .history: return "View and manage transcription history"
         case .permissions: return "Microphone, accessibility, and screen recording"
         // case .transcription: return "Transcription provider and model settings"
-        case .audio: return "Input device and audio settings"
+        case .audio: return "Microphone, and recording sounds"
         case .language: return "Transcription language preferences"
         case .dictionary: return "Custom word replacements and corrections"
         case .contextRules: return "App-specific formatting rules"
@@ -245,7 +249,7 @@ struct SettingsView: View {
                     showHistoryWindow()
                 } label: {
                     HStack {
-                        Label(section.rawValue, systemImage: section.icon)
+                        sidebarLabel(for: section)
                         Spacer()
                         Image(systemName: "arrow.up.forward.square")
                             .font(.caption)
@@ -255,7 +259,7 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Label(section.rawValue, systemImage: section.icon)
+                sidebarLabel(for: section)
                     .tag(section)
             }
         }
@@ -273,7 +277,7 @@ struct SettingsView: View {
                         }
                     }) {
                         HStack {
-                            Label(section.rawValue, systemImage: section.icon)
+                            sidebarLabel(for: section)
                             Spacer()
                             if section == .history {
                                 Image(systemName: "arrow.up.forward.square")
@@ -314,11 +318,19 @@ struct SettingsView: View {
         }
     }
 
+    private func sidebarLabel(for section: SettingsSection) -> some View {
+        // Plain SF Symbol, rendered by .listStyle(.sidebar) itself: secondary
+        // when idle, accent-tinted when selected — the Finder/Mail treatment.
+        Label(section.rawValue, systemImage: section.icon)
+    }
+
     private var settingsDetailContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch selectedSection {
             case .general:
                 generalSection
+            case .overlay:
+                overlaySection
             case .account:
                 accountSection
             case .history:
@@ -372,6 +384,7 @@ struct SettingsView: View {
                         }
 
                         Divider()
+                            .padding(.vertical, 6)
 
                         // Subscription Status
                         HStack(spacing: 12) {
@@ -783,8 +796,20 @@ struct SettingsView: View {
 
     // MARK: - General Section
 
+    /// A small secondary header above a card group, as System Settings and
+    /// Superwhisper label theirs ("Recording", "Application", ...).
+    private func groupHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+            .padding(.top, 2)
+    }
+
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            groupHeader("Hotkey")
+
             // Recording Hotkey Settings Group
             SettingsCard {
                 VStack(spacing: 0) {
@@ -807,7 +832,7 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(Color.dsWarning)
-                            Text("Fn hotkey requires Accessibility permission to work. Grant access in Permissions below.")
+                            Text("Fn hotkey requires Accessibility permission to work. Grant access in the Permissions section.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                             Spacer()
@@ -862,6 +887,8 @@ struct SettingsView: View {
             }
 
             // Transcription Mode
+            groupHeader("Transcription")
+
             SettingsCard {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
@@ -942,110 +969,7 @@ struct SettingsView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: transcriptionProviderManager.transcriptionMode)
 
-            // Overlay Settings Group
-            SettingsCard {
-                VStack(spacing: 0) {
-                    // Show Overlay When Idle
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show Overlay When Idle")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text("Display the overlay even when not recording")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { !overlayManager.hideIdleState },
-                            set: { overlayManager.hideIdleState = !$0 }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .labelsHidden()
-                    }
-                    .padding(.vertical, 2)
-
-                    Divider()
-
-                    // Recording Sounds
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Recording Sounds")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text("Play a short thump when recording starts and stops")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { soundEffectsEnabled },
-                            set: { newValue in
-                                soundEffectsEnabled = newValue
-                                SoundEffectManager.shared.isEnabled = newValue
-                                // Play the cue on enable so the choice is audible.
-                                if newValue { SoundEffectManager.shared.playStart() }
-                            }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .labelsHidden()
-                    }
-                    .padding(.vertical, 2)
-
-                    Divider()
-                        .padding(.vertical, 6)
-
-                    // Overlay Color
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Overlay Color")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text("Accent color for the recording overlay")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { overlayManager.colorTheme },
-                            set: { overlayManager.setColorThemeFromMenu($0) }
-                        )) {
-                            ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
-                                Text(theme.displayName).tag(theme)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .fixedSize()
-                    }
-                    .padding(.vertical, 2)
-
-                    Divider()
-                        .padding(.vertical, 6)
-
-                    // Overlay Position
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Overlay Position")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text("Where the recording indicator appears")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                        Spacer()
-                        Picker("", selection: $overlayManager.position) {
-                            ForEach(OverlayPosition.allCases, id: \.self) { position in
-                                Text(position.rawValue).tag(position)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .fixedSize()
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
+            groupHeader("Application")
 
             // Startup Group
             SettingsCard {
@@ -1166,6 +1090,91 @@ struct SettingsView: View {
             }
         }
     }
+
+    // MARK: - Overlay Section
+
+    private var overlaySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Overlay Settings Group
+            SettingsCard {
+                VStack(spacing: 0) {
+                    // Show Overlay When Idle
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show When Idle")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Keep the overlay visible when not recording")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { !overlayManager.hideIdleState },
+                            set: { overlayManager.hideIdleState = !$0 }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
+
+                                        Divider()
+                        .padding(.vertical, 6)
+
+                    // Overlay Color
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Color")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Accent color for the recording overlay")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { overlayManager.colorTheme },
+                            set: { overlayManager.setColorThemeFromMenu($0) }
+                        )) {
+                            ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
+                                Text(theme.displayName).tag(theme)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                    }
+                    .padding(.vertical, 2)
+
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    // Overlay Position
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Position")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Where the recording indicator appears")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Picker("", selection: $overlayManager.position) {
+                            ForEach(OverlayPosition.allCases, id: \.self) { position in
+                                Text(position.rawValue).tag(position)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
+        }
+    }
+
 
     // MARK: - Permissions Section
 
@@ -1451,6 +1460,7 @@ struct SettingsView: View {
 
                         if transcriptionProviderManager.enableLLMPostProcessing {
                             Divider()
+                                .padding(.vertical, 6)
 
                             // Post-processing provider picker
                             HStack(spacing: 12) {
@@ -1607,6 +1617,8 @@ struct SettingsView: View {
 
     private var audioSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            groupHeader("Recording")
+
             // Audio Settings Group
             SettingsCard {
                 VStack(spacing: 0) {
@@ -1649,6 +1661,38 @@ struct SettingsView: View {
                         Toggle("", isOn: Binding(
                             get: { AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true },
                             set: { AppDefaults.shared.set($0, forKey: "muteAudioWhenRecording") }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
+            groupHeader("Sound Effects")
+
+            SettingsCard {
+                VStack(spacing: 0) {
+                    // Recording Sounds
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Recording Sounds")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Play a short thump when recording starts and stops")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { soundEffectsEnabled },
+                            set: { newValue in
+                                soundEffectsEnabled = newValue
+                                SoundEffectManager.shared.isEnabled = newValue
+                                // Play the cue on enable so the choice is audible.
+                                if newValue { SoundEffectManager.shared.playStart() }
+                            }
                         ))
                         .toggleStyle(.switch)
                         .controlSize(.mini)

@@ -44,14 +44,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .parakeet: return "parakeet-tdt-0.6b-v3" // Multilingual
         case .groq: return "whisper-large-v3-turbo"
         case .openai: return "whisper-1"
-        // Parakeet TDT is non-autoregressive, so latency is nearly flat in audio
-        // length instead of proportional to decoded tokens. Benchmarked against
-        // real recordings through the same proxy: p50 330ms / p90 467ms, versus
-        // 683/1277 for groq/whisper-large-v3-turbo — and the Groq figures are
-        // server-side only while these include the upload. It is also natively
-        // multilingual, where Whisper silently translated Russian dictation into
-        // English.
-        case .custom: return "together/nvidia/parakeet-tdt-0.6b-v3"
+        case .custom: return "groq/whisper-large-v3-turbo"
         }
     }
 
@@ -364,8 +357,7 @@ class TranscriptionProviderManager: ObservableObject {
         }
 
         switch trimmedModel {
-        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
-             "groq/whisper-large-v3-turbo", "whisper-large-v3-turbo":
+        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
             DebugLog.warning("Replacing stale shipped transcription model \(model) with \(TranscriptionProvider.custom.defaultModel)", context: "TranscriptionProviderManager")
             return TranscriptionProvider.custom.defaultModel
         default:

@@ -677,7 +677,7 @@ final class OpenAIClient: @unchecked Sendable {
     }
 
     /// Apply formatting rules to transcription using chat completion
-    func applyFormattingRules(transcription: String, rules: [String], languageCodes: String? = nil, appContext: String? = nil, clipboardContent: String? = nil) async throws -> String {
+    func applyFormattingRules(transcription: String, rules: [String], languageCodes: String? = nil, appContext: String? = nil, screenContext: String? = nil, clipboardContent: String? = nil) async throws -> String {
         // Check if transcription is empty or whitespace-only
         let trimmedTranscription = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscription.isEmpty else {
@@ -690,6 +690,7 @@ final class OpenAIClient: @unchecked Sendable {
             formattingContext: rules,
             languageContext: languageCodes,
             appContext: appContext,
+            screenContext: screenContext,
             hasSelectedContent: hasClipboardContent
         )
         let userMessage = TranscriptionCleanupPrompt.userMessage(

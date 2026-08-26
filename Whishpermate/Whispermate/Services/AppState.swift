@@ -2997,6 +2997,7 @@ class AppState: ObservableObject {
                                 rules: promptComponents,
                                 languageCodes: snapshot.languageCode,
                                 appContext: snapshot.appContext,
+                                screenContext: snapshot.screenContext,
                                 clipboardContent: nil
                             )
                         case .notes:
@@ -3170,6 +3171,7 @@ class AppState: ObservableObject {
                     rules: promptComponents,
                     languageCodes: snapshot.languageCode,
                     appContext: snapshot.appContext,
+                    screenContext: snapshot.screenContext,
                     clipboardContent: nil
                 )
             }
@@ -3198,6 +3200,7 @@ class AppState: ObservableObject {
                     rules: promptComponents,
                     languageCodes: snapshot.languageCode,
                     appContext: snapshot.appContext,
+                    screenContext: snapshot.screenContext,
                     clipboardContent: nil
                 )
             }

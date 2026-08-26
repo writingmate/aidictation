@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WhisperMateShared
 
 // MARK: - Hotkey Type
 
@@ -573,7 +574,7 @@ struct HotkeyRecorderView: View {
                     showConflictHelpPopover.toggle()
                 } label: {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.dsWarning)
                 }
                 .buttonStyle(.plain)
                 .help("This hotkey may conflict with macOS. Hover to view setup steps.")
@@ -627,7 +628,7 @@ private struct HotkeyConflictPopoverContent: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.dsWarning)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(help.title)
                         .font(.headline)

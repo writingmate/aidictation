@@ -50,6 +50,36 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         allCases.filter { $0 != .account }
     }
 
+    /// A sidebar group, in the order Finder uses: a few ungrouped rows at the
+    /// top, then titled groups. The leading group has no header, which is why
+    /// `title` is optional rather than every group carrying a label.
+    enum SidebarGroup: Int, CaseIterable, Identifiable {
+        case primary
+        case dictation
+        case text
+        case system
+
+        var id: Int { rawValue }
+
+        var title: String? {
+            switch self {
+            case .primary: return nil
+            case .dictation: return "Dictation"
+            case .text: return "Text"
+            case .system: return "System"
+            }
+        }
+
+        var sections: [SettingsSection] {
+            switch self {
+            case .primary: return [.general, .history]
+            case .dictation: return [.audio, .language]
+            case .text: return [.dictionary, .shortcuts, .contextRules]
+            case .system: return [.permissions]
+            }
+        }
+    }
+
     var icon: String {
         switch self {
         case .general: return "gear"
@@ -182,29 +212,52 @@ struct SettingsView: View {
     @available(macOS 13.0, *)
     private var modernSettingsSidebar: some View {
         VStack(spacing: 0) {
-            List(SettingsSection.sidebarCases, selection: $selectedSection) { section in
-                if section == .history {
-                    Button(action: {
-                        showHistoryWindow()
-                    }) {
-                        HStack {
-                            Label(section.rawValue, systemImage: section.icon)
-                            Spacer()
-                            Image(systemName: "arrow.up.forward.square")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+            // Grouped like Finder's sidebar. The selected-row treatment — the
+            // rounded fill with an accent-tinted icon and label — comes from
+            // .listStyle(.sidebar) itself, so it matches the system and follows
+            // the user's accent colour rather than being redrawn here.
+            List(selection: $selectedSection) {
+                ForEach(SettingsSection.SidebarGroup.allCases) { group in
+                    if let title = group.title {
+                        Section(title) {
+                            sidebarRows(for: group)
                         }
-                        .contentShape(Rectangle())
+                    } else {
+                        Section {
+                            sidebarRows(for: group)
+                        }
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    Label(section.rawValue, systemImage: section.icon)
-                        .tag(section)
                 }
             }
             .listStyle(.sidebar)
 
             settingsSidebarFooter
+        }
+    }
+
+    @ViewBuilder
+    private func sidebarRows(for group: SettingsSection.SidebarGroup) -> some View {
+        ForEach(group.sections) { section in
+            if section == .history {
+                // Opens its own window rather than swapping the detail pane, so
+                // it is a button and never takes the selected state.
+                Button {
+                    showHistoryWindow()
+                } label: {
+                    HStack {
+                        Label(section.rawValue, systemImage: section.icon)
+                        Spacer()
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Label(section.rawValue, systemImage: section.icon)
+                    .tag(section)
+            }
         }
     }
 
@@ -371,7 +424,7 @@ struct SettingsView: View {
                                 if remaining == 0 {
                                     Text("You've used all \(limit) free words this month")
                                         .dsFont(.label)
-                                        .foregroundStyle(Color.orange)
+                                        .foregroundStyle(Color.dsWarning)
                                 } else {
                                     Text("\(used) of \(limit) words used this month")
                                         .dsFont(.label)
@@ -390,7 +443,7 @@ struct SettingsView: View {
                                     .frame(height: 8)
 
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(percentage >= 1.0 ? Color.orange : Color.dsPrimary)
+                                    .fill(percentage >= 1.0 ? Color.dsWarning : Color.dsPrimary)
                                     .frame(width: geo.size.width * min(percentage, 1.0), height: 8)
                             }
                         }
@@ -753,7 +806,7 @@ struct SettingsView: View {
                     if hotkeyManager.isFnHotkeyDegraded {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(Color.orange)
+                                .foregroundStyle(Color.dsWarning)
                             Text("Fn hotkey requires Accessibility permission to work. Grant access in Permissions below.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
@@ -761,7 +814,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
-                        .background(Color.orange.opacity(0.1))
+                        .background(Color.dsWarning.opacity(0.1))
                         .cornerRadius(6)
                         .padding(.top, 4)
                     }
@@ -1914,7 +1967,7 @@ struct SidebarAccountStatusView: View {
 
                         Text("\(limit - used) words left")
                             .font(.caption2)
-                            .foregroundStyle(percentage >= 0.9 ? .orange : .secondary)
+                            .foregroundStyle(percentage >= 0.9 ? Color.dsWarning : Color.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())

@@ -321,7 +321,7 @@ struct HistorySidebarRow: View {
                     .foregroundStyle(.secondary)
             } else if recording.status == .failed {
                 Label("Transcription stopped", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.dsWarning)
                 if let errorMessage = recording.errorMessage {
                     Text(errorMessage)
                         .dsFont(.caption)
@@ -403,7 +403,7 @@ struct RecordingDetailView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Transcription stopped")
                                 .dsFont(.headline)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Color.dsWarning)
                             if let errorMessage = recording.errorMessage {
                                 Text(errorMessage)
                                     .dsFont(.body)
@@ -457,7 +457,7 @@ struct RecordingDetailView: View {
                 // Status indicator for failed recordings
                 if recording.status == .failed {
                     Label("Failed", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.dsWarning)
                 }
 
                 // Play button

@@ -306,21 +306,28 @@ public extension Color {
     static var dsRing: Color { dsPrimary }
 
     // Destructive
+    /// Caution states: permission missing, quota exhausted, attempt stopped.
+    ///
+    /// Deliberately the system warning colour rather than dsPrimary. The brand
+    /// accent is also orange, so tinting warnings with it would make a caution
+    /// look identical to an ordinary accent and lose the signal entirely.
+    static var dsWarning: Color { .orange }
+
     static var dsDestructive: Color { .red }
     static var dsDestructiveForeground: Color { .white }
 
     // Sidebar - use system sidebar colors
     static var dsSidebarBackground: Color { dsSystemControlBackground }
     static var dsSidebarForeground: Color { dsSystemForeground }
-    static var dsSidebarPrimary: Color { .orange }
+    static var dsSidebarPrimary: Color { dsPrimary }
     static var dsSidebarPrimaryForeground: Color { .white }
-    static var dsSidebarAccent: Color { .orange }
+    static var dsSidebarAccent: Color { dsPrimary }
     static var dsSidebarAccentForeground: Color { .white }
     static var dsSidebarBorder: Color { dsSystemSeparator }
-    static var dsSidebarRing: Color { .orange }
+    static var dsSidebarRing: Color { dsPrimary }
 
     // Charts - use standard SwiftUI colors
-    static var dsChart1: Color { .orange }
+    static var dsChart1: Color { dsPrimary }
     static var dsChart2: Color { .blue }
     static var dsChart3: Color { .green }
     static var dsChart4: Color { .purple }
@@ -380,7 +387,7 @@ public extension View {
 
 public extension LinearGradient {
     static func dsPrimaryGradient(for _: ColorScheme) -> LinearGradient {
-        LinearGradient(colors: [.orange, .orange.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
+        LinearGradient(colors: [Color.dsPrimary, Color.dsPrimary.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
     }
 
     static func dsSecondaryGradient(for _: ColorScheme) -> LinearGradient {

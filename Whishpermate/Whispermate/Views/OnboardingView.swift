@@ -545,7 +545,7 @@ struct OnboardingView: View {
             case .error(let message):
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.dsWarning)
                     Text("Failed: \(message)")
                         .font(.callout)
                         .foregroundStyle(.secondary)

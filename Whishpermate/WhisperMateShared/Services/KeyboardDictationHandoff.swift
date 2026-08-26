@@ -120,6 +120,69 @@ public enum KeyboardDictationHandoff {
     public static let openAppNotification = Notification.Name("KeyboardDictationHandoffOpenApp")
     public static let stopAppNotification = Notification.Name("KeyboardDictationHandoffStopApp")
 
+    // MARK: - Quick Dictation Availability
+
+    /// Quick Dictation availability model with heartbeat mechanism.
+    /// The app arms Quick Dictation for up to 10 minutes, publishing heartbeats every few seconds.
+    /// The keyboard checks both the expiry window AND heartbeat freshness before attempting
+    /// in-place dictation without opening the app.
+    public struct QuickDictationAvailability: Codable, Equatable, Sendable {
+        public static let schemaVersion = 1
+        public static let heartbeatInterval: TimeInterval = 2
+        public static let heartbeatMaximumAge: TimeInterval = 6
+        public static let quickDictationWindowSeconds: TimeInterval = 10 * 60
+        public static let launchFallbackSeconds: TimeInterval = 1.5
+        public static let claimedLaunchDeadlineSeconds: TimeInterval = 8
+
+        public let schemaVersion: Int
+        public let activatedAt: Date
+        public let expiresAt: Date
+        public let heartbeatAt: Date?
+
+        public init(
+            activatedAt: Date = Date(),
+            expiresAt: Date? = nil,
+            heartbeatAt: Date? = nil
+        ) {
+            self.schemaVersion = Self.schemaVersion
+            let normalizedActivatedAt = Self.normalizedTimestamp(activatedAt)
+            self.activatedAt = normalizedActivatedAt
+            self.expiresAt = Self.normalizedTimestamp(expiresAt ?? activatedAt.addingTimeInterval(Self.quickDictationWindowSeconds))
+            self.heartbeatAt = Self.normalizedTimestamp(heartbeatAt) ?? normalizedActivatedAt
+        }
+
+        public func isReady(at date: Date = Date()) -> Bool {
+            guard schemaVersion == Self.schemaVersion,
+                  expiresAt > date,
+                  let heartbeatAt
+            else { return false }
+            let heartbeatAge = date.timeIntervalSince(heartbeatAt)
+            return heartbeatAge >= -1 && heartbeatAge <= Self.heartbeatMaximumAge
+        }
+
+        public func refreshingHeartbeat(at date: Date = Date()) -> QuickDictationAvailability {
+            QuickDictationAvailability(
+                activatedAt: activatedAt,
+                expiresAt: expiresAt,
+                heartbeatAt: date
+            )
+        }
+
+        public func acceptsRequest(createdAt: Date, grace: TimeInterval = 2) -> Bool {
+            createdAt >= activatedAt.addingTimeInterval(-grace) && createdAt < expiresAt
+        }
+
+        private static func normalizedTimestamp(_ date: Date?) -> Date? {
+            date.map { Self.normalizedTimestamp($0) }
+        }
+
+        private static func normalizedTimestamp(_ date: Date) -> Date {
+            Date(timeIntervalSince1970: date.timeIntervalSince1970.rounded(.down))
+        }
+    }
+
+    private static let quickDictationAvailabilityKey = "keyboardDictation.quickDictationAvailability"
+
     /// The keyboard uses these deadlines to guarantee that every visible busy state ends.
     public static let startAcknowledgementTimeout: TimeInterval = 12
     public static let stopAcknowledgementTimeout: TimeInterval = 15
@@ -959,8 +1022,66 @@ public enum KeyboardDictationHandoff {
     public static func isAppReady(now: Date = Date()) -> Bool {
         withTransaction(or: false) { defaults in
             let timestamp = defaults.double(forKey: appReadyTimestampKey)
-            return timestamp > 0 && now.timeIntervalSince1970 - timestamp <= appReadyTTL
+            let age = now.timeIntervalSince1970 - timestamp
+            let ready = timestamp > 0 && age <= appReadyTTL
+            if !ready {
+                DebugLog.info(
+                    "isAppReady=false timestamp=\(timestamp) age=\(String(format: "%.2f", age))s ttl=\(appReadyTTL)s",
+                    context: "KEYBOARD_DIAG"
+                )
+            }
+            return ready
         }
+    }
+
+    // MARK: - Quick Dictation Availability Storage
+
+    public static func saveQuickDictationAvailability(_ availability: QuickDictationAvailability) {
+        withTransaction(or: ()) { defaults in
+            if let encoded = try? JSONEncoder().encode(availability) {
+                defaults.set(encoded, forKey: quickDictationAvailabilityKey)
+                defaults.synchronize()
+                DebugLog.info(
+                    "saved quick dictation availability expiresAt=\(availability.expiresAt) heartbeat=\(availability.heartbeatAt?.description ?? "nil")",
+                    context: "KEYBOARD_DIAG"
+                )
+            }
+        }
+    }
+
+    public static func loadQuickDictationAvailability() -> QuickDictationAvailability? {
+        withTransaction(or: nil) { defaults in
+            guard let data = defaults.data(forKey: quickDictationAvailabilityKey),
+                  let availability = try? JSONDecoder().decode(QuickDictationAvailability.self, from: data)
+            else { return nil }
+            return availability
+        }
+    }
+
+    public static func clearQuickDictationAvailability() {
+        withTransaction(or: ()) { defaults in
+            defaults.removeObject(forKey: quickDictationAvailabilityKey)
+            defaults.synchronize()
+            DebugLog.info("cleared quick dictation availability", context: "KEYBOARD_DIAG")
+        }
+    }
+
+    /// Checks if Quick Dictation is ready for in-place dictation.
+    /// Returns true only if the availability is valid, not expired, and has a fresh heartbeat.
+    public static func isQuickDictationReady(now: Date = Date()) -> Bool {
+        guard let availability = loadQuickDictationAvailability() else {
+            DebugLog.info("isQuickDictationReady=false reason=no_availability", context: "KEYBOARD_DIAG")
+            return false
+        }
+        let ready = availability.isReady(at: now)
+        if !ready {
+            let heartbeatAge = availability.heartbeatAt.map { now.timeIntervalSince($0) } ?? -1
+            DebugLog.info(
+                "isQuickDictationReady=false expires=\(availability.expiresAt) heartbeatAge=\(String(format: "%.1f", heartbeatAge))s",
+                context: "KEYBOARD_DIAG"
+            )
+        }
+        return ready
     }
 
     // MARK: - Compatibility text bridge

@@ -144,12 +144,14 @@ struct ContentView: View {
     }
 
     private func openRecordingSheet() {
+        guard !showKeyboardReturnScreen else { return }
         guard requireMobileAudioRecoveryReady() else { return }
         recordingSheetID = UUID()
         showRecordingSheet = true
     }
 
     private func openSavedRecording(_ recording: Recording) {
+        guard !showKeyboardReturnScreen else { return }
         guard requireMobileAudioRecoveryReady() else { return }
         selectedRecording = recording
     }
@@ -208,7 +210,7 @@ struct ContentView: View {
         ZStack {
             historyView
 
-            if inlineRecording.isPanelVisible {
+            if inlineRecording.isPanelVisible, !showKeyboardReturnScreen {
                 GeometryReader { proxy in
                     let sheetBaseHeight = max(proxy.size.height, UIScreen.main.bounds.height)
                     let isCompleting = inlineRecording.state == .completing
@@ -257,25 +259,27 @@ struct ContentView: View {
                     .zIndex(3)
             }
 
-            VStack {
-                Spacer()
-                Button(action: handleInlineRecordingTap) {
-                    AIDictationMicButtonVisual(
-                        state: inlineRecording.visualState,
-                        audioLevel: inlineRecording.audioLevel,
-                        frequencyBands: inlineRecording.frequencyBands,
-                        size: 64
-                    )
-                    .shadow(color: .black.opacity(inlineRecording.isActive ? 0.28 : 0.2), radius: inlineRecording.isActive ? 10 : 4, x: 0, y: inlineRecording.isActive ? 5 : 2)
+            if !showKeyboardReturnScreen {
+                VStack {
+                    Spacer()
+                    Button(action: handleInlineRecordingTap) {
+                        AIDictationMicButtonVisual(
+                            state: inlineRecording.visualState,
+                            audioLevel: inlineRecording.audioLevel,
+                            frequencyBands: inlineRecording.frequencyBands,
+                            size: 64
+                        )
+                        .shadow(color: .black.opacity(inlineRecording.isActive ? 0.28 : 0.2), radius: inlineRecording.isActive ? 10 : 4, x: 0, y: inlineRecording.isActive ? 5 : 2)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inlineRecording.state == .processing || inlineRecording.state == .completing)
+                    .opacity(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0 : 1)
+                    .scaleEffect(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0.82 : 1)
+                    .accessibilityLabel(inlineRecording.isActive ? "Stop recording" : "Start recording")
+                    .padding(.bottom, 28)
                 }
-                .buttonStyle(.plain)
-                .disabled(inlineRecording.state == .processing || inlineRecording.state == .completing)
-                .opacity(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0 : 1)
-                .scaleEffect(inlineRecording.state == .processing || inlineRecording.state == .completing ? 0.82 : 1)
-                .accessibilityLabel(inlineRecording.isActive ? "Stop recording" : "Start recording")
-                .padding(.bottom, 28)
+                .zIndex(2)
             }
-            .zIndex(2)
         }
         .animation(.spring(response: 0.42, dampingFraction: 0.86, blendDuration: 0.08), value: inlineRecording.state)
         .animation(.easeInOut(duration: 0.2), value: inlineRecording.errorMessage)
@@ -502,6 +506,7 @@ struct ContentView: View {
                 historySearchField
 
                 Button {
+                    guard !showKeyboardReturnScreen else { return }
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape")
@@ -1169,9 +1174,19 @@ struct ContentView: View {
 
         activeKeyboardDictationIdentity = identity
         keepKeyboardBridgeAlive()
+        dismissAllSheetsForKeyboardDictation()
         showKeyboardReturnScreen = true
         inlineRecording.setKeyboardAttemptIdentity(identity)
         handleInlineRecordingTap()
+    }
+
+    private func dismissAllSheetsForKeyboardDictation() {
+        showSettings = false
+        showRecordingSheet = false
+        selectedRecording = nil
+        recordingToShare = nil
+        referralShareItem = nil
+        showLoginSheet = false
     }
 
     private func stopKeyboardDictation(identity: KeyboardDictationHandoff.AttemptIdentity) {
@@ -1183,6 +1198,7 @@ struct ContentView: View {
         }
         DebugLog.info("stopKeyboardDictation attemptID=\(identity.attemptID) inlineState=\(inlineRecording.state)", context: "KEYBOARD_DIAG")
         keepKeyboardBridgeAlive()
+        dismissAllSheetsForKeyboardDictation()
         showKeyboardReturnScreen = true
         inlineRecording.setKeyboardAttemptIdentity(identity)
         if inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing {
@@ -1286,19 +1302,82 @@ struct ContentView: View {
         guard keyboardHostLaunchReady, keyboardCommandPollTask == nil else { return }
 
         DebugLog.info("start command polling", context: "KEYBOARD_DIAG")
+        armQuickDictation()
         keyboardCommandPollTask = Task { @MainActor in
             while !Task.isCancelled {
                 KeyboardDictationHandoff.publishAppReady()
+                refreshQuickDictationHeartbeat()
                 drainKeyboardDiagnostics()
                 consumePendingKeyboardCommandIfNeeded()
                 tearDownExpiredKeyboardBridge()
                 try? await Task.sleep(nanoseconds: 250_000_000)
-                if scenePhase != .active, !shouldKeepKeyboardCommandPolling {
+
+                // Check if we should keep polling
+                let isQuickDictationActive = inlineRecording.audioRecorder.isStandbyActive
+                let hasActiveKeyboardWork = shouldKeepKeyboardCommandPolling
+
+                if scenePhase != .active, !hasActiveKeyboardWork, !isQuickDictationActive {
+                    // App is in background, no active keyboard work, and no Quick Dictation standby
+                    // Stop polling and let iOS suspend the app
+                    DebugLog.info("stopping command polling (background, no standby)", context: "KEYBOARD_DIAG")
+                    clearQuickDictation()
                     keyboardCommandPollTask = nil
                     break
                 }
+
+                // If Quick Dictation is active, check if it has expired
+                if isQuickDictationActive {
+                    if let availability = KeyboardDictationHandoff.loadQuickDictationAvailability(),
+                       availability.expiresAt <= Date() {
+                        // Quick Dictation window expired - stop standby
+                        DebugLog.info("Quick Dictation window expired; stopping standby", context: "KEYBOARD_DIAG")
+                        clearQuickDictation()
+                        if scenePhase != .active, !hasActiveKeyboardWork {
+                            keyboardCommandPollTask = nil
+                            break
+                        }
+                    }
+                }
             }
         }
+    }
+
+    /// Arms Quick Dictation with a 10-minute window using audio standby mode.
+    /// The audio standby keeps iOS from suspending the app, enabling in-place dictation.
+    private func armQuickDictation() {
+        guard !inlineRecording.audioRecorder.isStandbyActive else {
+            // Already in standby - just refresh the availability
+            refreshQuickDictationHeartbeat()
+            return
+        }
+
+        do {
+            try inlineRecording.audioRecorder.startStandby()
+            let availability = KeyboardDictationHandoff.QuickDictationAvailability()
+            KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+            DebugLog.info("armed Quick Dictation with audio standby until \(availability.expiresAt)", context: "KEYBOARD_DIAG")
+        } catch {
+            DebugLog.info("failed to arm Quick Dictation: \(error)", context: "KEYBOARD_DIAG")
+            // Fall back to non-standby mode - the heartbeat will expire quickly
+            let availability = KeyboardDictationHandoff.QuickDictationAvailability()
+            KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+        }
+    }
+
+    /// Refreshes the Quick Dictation heartbeat to indicate the app is still actively listening.
+    private func refreshQuickDictationHeartbeat() {
+        guard let current = KeyboardDictationHandoff.loadQuickDictationAvailability(),
+              current.expiresAt > Date()
+        else { return }
+        let refreshed = current.refreshingHeartbeat()
+        KeyboardDictationHandoff.saveQuickDictationAvailability(refreshed)
+    }
+
+    /// Clears Quick Dictation and stops audio standby.
+    private func clearQuickDictation() {
+        inlineRecording.audioRecorder.stopStandby(deactivateAudioSession: true)
+        KeyboardDictationHandoff.clearQuickDictationAvailability()
+        DebugLog.info("cleared Quick Dictation", context: "KEYBOARD_DIAG")
     }
 
     /// The keyboard refreshes the bridge while it is in use; once it has been
@@ -1321,6 +1400,7 @@ struct ContentView: View {
         keyboardBridgeAliveUntil = Date().addingTimeInterval(120)
         guard keyboardHostLaunchReady else { return }
         KeyboardDictationHandoff.publishAppReady()
+        refreshQuickDictationHeartbeat()
         startKeyboardCommandPolling()
     }
 
@@ -1335,6 +1415,10 @@ struct ContentView: View {
             return
         }
         KeyboardHostLaunchRecoveryGate.attempted = true
+
+        // Clear any stale Quick Dictation availability from a previous process.
+        // A new app launch means we need to re-arm Quick Dictation fresh.
+        KeyboardDictationHandoff.clearQuickDictationAvailability()
 
         do {
             if let abandonedIdentity = try KeyboardDictationHandoff.normalizeAfterHostLaunch() {
@@ -1388,6 +1472,7 @@ struct ContentView: View {
         DebugLog.info("stop command polling", context: "KEYBOARD_DIAG")
         keyboardCommandPollTask?.cancel()
         keyboardCommandPollTask = nil
+        clearQuickDictation()
     }
 
     private func markRecordingAsNew(_ recording: Recording) {
@@ -2337,7 +2422,8 @@ private final class InlineRecordingCoordinator: ObservableObject {
     @Published var completionText: String?
 
     private let audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
-    private var audioRecorder: AudioRecorder { audioRecorderSlot.current }
+    /// Public accessor for the audio recorder, needed for Quick Dictation standby mode.
+    var audioRecorder: AudioRecorder { audioRecorderSlot.current }
     private let processingStore = MobileAudioProcessingStore.shared
     private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared
@@ -2937,6 +3023,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     guard KeyboardDictationHandoff.snapshot(for: keyboardIdentity)?.phase == .preparing else {
                         throw CancellationError()
                     }
+                    guard KeyboardDictationHandoff.publishHostPhase(
+                        .recording,
+                        identity: keyboardIdentity,
+                        recordingID: prepared.recordingID.uuidString
+                    ) else {
+                        throw CancellationError()
+                    }
                 }
 
                 _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
@@ -2952,16 +3045,6 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 )
                 guard activeAttempt == prepared, !Task.isCancelled else {
                     throw CancellationError()
-                }
-
-                if let keyboardIdentity {
-                    guard KeyboardDictationHandoff.publishHostPhase(
-                        .recording,
-                        identity: keyboardIdentity,
-                        recordingID: prepared.recordingID.uuidString
-                    ) else {
-                        throw CancellationError()
-                    }
                 }
 
                 recordingStartTime = Date()

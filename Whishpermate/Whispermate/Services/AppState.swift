@@ -74,6 +74,11 @@ class AppState: ObservableObject {
     private var terminationFinalizationTask: Task<Bool, Never>?
     private let processingAttemptFence = MacProcessingAttemptFence()
     private var realtimeTranscriptionClient: OpenAIRealtimeTranscriptionClient?
+    private var activeRealtimeFinishRequest: (
+        recordingID: UUID,
+        attemptID: UUID,
+        request: RealtimeTranscriptionFinishRequest
+    )?
     private var realtimeTranscript: String = ""
     private let diarizationTimeoutSeconds: UInt64 = 75
     private let llmPostProcessingTimeoutSeconds: UInt64 = 45
@@ -332,6 +337,14 @@ class AppState: ObservableObject {
 
             activeCaptureLease = prepared.lease
             overlayManager.initializeAudioObservers()
+            // Install realtime delivery before native capture starts. The
+            // preparation buffer that proves the recorder is ready must be in
+            // both the durable source and the realtime stream.
+            startRealtimeTranscriptionIfAvailable(
+                recordingID: recordingID,
+                attemptID: attemptID,
+                snapshot: resolvedAttemptSnapshot
+            )
             audioRecorder.startRecording(
                 recordingID: attemptID,
                 recordingURL: store.partialURL(for: recordingID)
@@ -413,11 +426,6 @@ class AppState: ObservableObject {
                 )
                 activeTranscriptionSnapshot = snapshot
                 scheduleCaptureDeadline(recordingID: recordingID, attemptID: attemptID)
-                startRealtimeTranscriptionIfAvailable(
-                    recordingID: recordingID,
-                    attemptID: attemptID,
-                    snapshot: snapshot
-                )
                 NotificationCenter.default.post(name: .recordingStarted, object: nil)
 
                 DebugLog.info("✅ Recording started successfully", context: "AppState")
@@ -447,6 +455,7 @@ class AppState: ObservableObject {
             }
 
         case .failed(let message):
+            closeLiveRealtimeTranscription()
             _ = try? await store.tombstone(recordingID: recordingID)
             guard ownsProcessingAttempt(
                 recordingID: recordingID,
@@ -454,6 +463,7 @@ class AppState: ObservableObject {
             ) else { return }
             finishRecordingStart(recordingID: recordingID, terminalMessage: message)
         case .timedOut:
+            closeLiveRealtimeTranscription()
             _ = try? await store.tombstone(recordingID: recordingID)
             guard ownsProcessingAttempt(
                 recordingID: recordingID,
@@ -464,6 +474,7 @@ class AppState: ObservableObject {
                 terminalMessage: "Recording didn’t start. Check your microphone and try again."
             )
         case .invalidated:
+            closeLiveRealtimeTranscription()
             _ = try? await store.tombstone(recordingID: recordingID)
             guard ownsProcessingAttempt(
                 recordingID: recordingID,
@@ -474,6 +485,7 @@ class AppState: ObservableObject {
                 terminalMessage: "Your microphone changed before recording started. Please try again."
             )
         case .cancelled:
+            closeLiveRealtimeTranscription()
             _ = try? await store.tombstone(recordingID: recordingID)
             guard ownsProcessingAttempt(
                 recordingID: recordingID,
@@ -481,6 +493,7 @@ class AppState: ObservableObject {
             ) else { return }
             finishRecordingStart(recordingID: recordingID, terminalMessage: nil)
         @unknown default:
+            closeLiveRealtimeTranscription()
             _ = try? await store.tombstone(recordingID: recordingID)
             guard ownsProcessingAttempt(
                 recordingID: recordingID,
@@ -500,6 +513,7 @@ class AppState: ObservableObject {
         message: String
     ) async {
         let lease = activeCaptureLease
+        closeLiveRealtimeTranscription()
         audioRecorder.stopRecording(disposition: .submitIfValid) { _ in }
         if let lease {
             _ = try? await store.fail(lease, message: message)
@@ -605,6 +619,7 @@ class AppState: ObservableObject {
               let attemptID = recordingAttemptID
         else { return }
         recordingState = .finalizing
+        closeLiveRealtimeTranscription()
         Task { [weak self] in
             guard let self else { return }
             let store = await MacAudioProcessingStoreProvider.shared()
@@ -649,11 +664,45 @@ class AppState: ObservableObject {
                 to: .processing(isCommandMode: recordingMode == .command)
             )
         }
-        let realtimeClient = stopRealtimeTranscription()
+        let snapshot = activeTranscriptionSnapshot
+        let shouldFinishRealtime = disposition == .submitIfValid
+            && terminalMessage == nil
+            && snapshot?.outputMode == .dictation
+            && snapshot?.transcriptionOptions.diarization == false
+            && snapshot?.transport == .realtime
+        let realtimeFinishTimeout = snapshot?.provider == .custom
+            ? 6.0
+            : 2.0
+        let realtimeFinishRequest = takeRealtimeTranscription(
+            recordingID: recordingID,
+            attemptID: attemptID,
+            drainDeadline: shouldFinishRealtime ? realtimeFinishTimeout : nil
+        )
+        if !shouldFinishRealtime {
+            audioRecorder.detachRealtimeAudioChunkHandlerAndDrain {}
+            realtimeFinishRequest?.close()
+        }
         DebugLog.info(
-            "Realtime client captured on stop: \(realtimeClient != nil)",
+            "Realtime finish requested on stop: \(realtimeFinishRequest != nil && shouldFinishRealtime)",
             context: "DictationFlow"
         )
+        let afterRealtimeAudioDrained: (@Sendable (Bool) -> Void)?
+        if shouldFinishRealtime {
+            afterRealtimeAudioDrained = { [realtimeFinishRequest] coverageIsComplete in
+                if coverageIsComplete {
+                    realtimeFinishRequest?.requestFinish(
+                        timeout: realtimeFinishTimeout
+                    )
+                } else {
+                    // The durable source contains audio the realtime stream
+                    // could not encode. Close the speculative result and let
+                    // the proven finalized file use batch recognition.
+                    realtimeFinishRequest?.close()
+                }
+            }
+        } else {
+            afterRealtimeAudioDrained = nil
+        }
 
         Task { [weak self] in
             guard let self else { return }
@@ -662,7 +711,7 @@ class AppState: ObservableObject {
                 recordingID: recordingID,
                 attemptID: attemptID
             ) else {
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 return
             }
             do {
@@ -672,7 +721,7 @@ class AppState: ObservableObject {
                         recordingID: recordingID,
                         attemptID: attemptID
                     ) else {
-                        realtimeClient?.close()
+                        realtimeFinishRequest?.close()
                         return
                     }
                 } else {
@@ -687,7 +736,10 @@ class AppState: ObservableObject {
                               attemptID: attemptID
                           ),
                           self.recordingState == .finalizing
-                    else { return }
+                    else {
+                        realtimeFinishRequest?.close()
+                        return
+                    }
                     self.activeCaptureLease = finalizing.lease
                 }
 
@@ -696,8 +748,14 @@ class AppState: ObservableObject {
                           attemptID: attemptID
                       ),
                       self.recordingState == .finalizing
-                else { return }
-                self.audioRecorder.stopRecording(disposition: disposition) { [weak self] terminal in
+                else {
+                    realtimeFinishRequest?.close()
+                    return
+                }
+                self.audioRecorder.stopRecording(
+                    disposition: disposition,
+                    afterRealtimeAudioDrained: afterRealtimeAudioDrained
+                ) { [weak self] terminal in
                     Task { @MainActor [weak self] in
                         await self?.handleRecorderFinalizationTerminal(
                             terminal,
@@ -706,7 +764,7 @@ class AppState: ObservableObject {
                             attemptID: attemptID,
                             disposition: disposition,
                             terminalMessage: terminalMessage,
-                            realtimeClient: realtimeClient
+                            realtimeFinishRequest: realtimeFinishRequest
                         )
                     }
                 }
@@ -715,7 +773,7 @@ class AppState: ObservableObject {
                     recordingID: recordingID,
                     attemptID: attemptID
                 ) else {
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     return
                 }
                 self.audioRecorder.stopRecording(disposition: .submitIfValid) { _ in }
@@ -729,10 +787,10 @@ class AppState: ObservableObject {
                     recordingID: recordingID,
                     attemptID: attemptID
                 ) else {
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     return
                 }
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 _ = self.persistActiveRecording(
                     recordingID: recordingID,
                     audioURL: store.partialURL(for: recordingID),
@@ -755,12 +813,12 @@ class AppState: ObservableObject {
         attemptID: UUID,
         disposition: AudioRecorder.StopDisposition,
         terminalMessage: String?,
-        realtimeClient: OpenAIRealtimeTranscriptionClient?
+        realtimeFinishRequest: RealtimeTranscriptionFinishRequest?
     ) async {
         guard ownsProcessingAttempt(recordingID: recordingID, attemptID: attemptID),
               recordingState == .finalizing
         else {
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             return
         }
 
@@ -769,7 +827,7 @@ class AppState: ObservableObject {
             guard case .confirmed(let nativeCloseAttestation) =
                 audioRecorder.nativeCloseState(recordingID: attemptID)
             else {
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 let message =
                     "Recording is still finishing. The available audio was kept for recovery."
                 if let lease = activeCaptureLease {
@@ -799,7 +857,7 @@ class AppState: ObservableObject {
             }
             audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
             guard let lease = activeCaptureLease else {
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 finishRecordingWithoutTranscription(
                     recordingID: recordingID,
                     message: "Recording ownership could not be confirmed. The available audio was kept."
@@ -820,7 +878,7 @@ class AppState: ObservableObject {
                     recordingID: recordingID,
                     attemptID: attemptID
                 ) else {
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     return
                 }
                 let checkpoint = try await store.checkpointClosedAudio(lease, proof: proof)
@@ -829,7 +887,7 @@ class AppState: ObservableObject {
                     recordingID: recordingID,
                     attemptID: attemptID
                 ) else {
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     return
                 }
                 closedAudioWasCheckpointed = true
@@ -840,7 +898,7 @@ class AppState: ObservableObject {
                     recordingID: recordingID,
                     attemptID: attemptID
                 ) else {
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     return
                 }
                 activeCaptureLease = ready.lease
@@ -852,7 +910,7 @@ class AppState: ObservableObject {
                         recordingID: recordingID,
                         attemptID: attemptID
                     ) else {
-                        realtimeClient?.close()
+                        realtimeFinishRequest?.close()
                         return
                     }
                     activeCaptureLease = failed.lease
@@ -863,7 +921,7 @@ class AppState: ObservableObject {
                         errorMessage: terminalMessage,
                         sourceIntegrity: .complete
                     )
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     finishRecordingWithoutTranscription(
                         recordingID: recordingID,
                         message: terminalMessage
@@ -883,10 +941,10 @@ class AppState: ObservableObject {
                     ready: ready,
                     recordingID: recordingID,
                     captureAttemptID: attemptID,
-                    realtimeClient: realtimeClient
+                    realtimeFinishRequest: realtimeFinishRequest
                 )
             } catch {
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 guard ownsProcessingAttempt(
                     recordingID: recordingID,
                     attemptID: attemptID
@@ -931,7 +989,7 @@ class AppState: ObservableObject {
 
         case .failed(let message, let recoverableURL):
             audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             let displayedMessage = terminalMessage ?? message
             if let lease = activeCaptureLease {
                 _ = try? await store.fail(lease, message: displayedMessage)
@@ -950,7 +1008,7 @@ class AppState: ObservableObject {
             finishRecordingWithoutTranscription(recordingID: recordingID, message: displayedMessage)
 
         case .timedOut(let recoverableURL):
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             scheduleLateNativeCloseReconciliation(
                 store: store,
                 recordingID: recordingID,
@@ -985,7 +1043,7 @@ class AppState: ObservableObject {
 
         case .discarded:
             audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             _ = historyManager.removeRecordingMetadata(id: recordingID)
             finishRecordingWithoutTranscription(recordingID: recordingID, message: terminalMessage)
 
@@ -994,7 +1052,7 @@ class AppState: ObservableObject {
             // retain and acknowledge its proof instead of treating that gap as
             // evidence that the writer was never closed.
             audioRecorder.acknowledgeConfirmedClose(recordingID: attemptID)
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             if disposition == .discard {
                 scheduleLateNativeCloseReconciliation(
                     store: store,
@@ -1026,7 +1084,7 @@ class AppState: ObservableObject {
             finishRecordingWithoutTranscription(recordingID: recordingID, message: displayedMessage)
 
         @unknown default:
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             let message = terminalMessage ?? "Recording couldn’t be saved. Please try again."
             if let lease = activeCaptureLease {
                 _ = try? await store.fail(lease, message: message)
@@ -1097,6 +1155,8 @@ class AppState: ObservableObject {
         removeMetadata: Bool = false
     ) {
         DictationActivityAssertion.release()
+        closeLiveRealtimeTranscription()
+        closeActiveRealtimeFinishRequest(recordingID: recordingID)
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         var metadataRemovalFailed = false
@@ -1131,8 +1191,8 @@ class AppState: ObservableObject {
     private func finishRecordingStart(recordingID: UUID, terminalMessage: String?) {
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
-        let realtimeClient = stopRealtimeTranscription()
-        realtimeClient?.close()
+        closeLiveRealtimeTranscription()
+        closeActiveRealtimeFinishRequest(recordingID: recordingID)
         let removedMetadata = historyManager.removeRecordingMetadata(id: recordingID)
         historyManager.unregisterActiveRecording(id: recordingID)
         if activeRecordingID == recordingID {
@@ -1424,7 +1484,7 @@ class AppState: ObservableObject {
                 audioURL: finalURL,
                 transientWorkspace: transientWorkspace,
                 snapshot: snapshot,
-                realtimeClient: nil,
+                realtimeFinishRequest: nil,
                 isLiveRecording: false
             )
         } catch {
@@ -1468,6 +1528,7 @@ class AppState: ObservableObject {
             recordingAttemptID = nil
             activeCaptureLease = nil
             activeTranscriptionSnapshot = nil
+            closeActiveRealtimeFinishRequest(recordingID: recording.id)
             let realtime = stopRealtimeTranscription()
             realtime?.close()
             if recordingState == .starting {
@@ -1536,6 +1597,7 @@ class AppState: ObservableObject {
         recordingAttemptID = nil
         activeCaptureLease = nil
         activeTranscriptionSnapshot = nil
+        closeActiveRealtimeFinishRequest()
         let realtime = stopRealtimeTranscription()
         realtime?.close()
         if recordingState == .starting {
@@ -1722,6 +1784,7 @@ class AppState: ObservableObject {
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         for task in transcriptionTasks.values { task.cancel() }
+        closeActiveRealtimeFinishRequest()
         let realtime = stopRealtimeTranscription()
         realtime?.close()
 
@@ -1954,13 +2017,13 @@ class AppState: ObservableObject {
         ready: MacAudioProcessingStore.Mutation,
         recordingID: UUID,
         captureAttemptID: UUID,
-        realtimeClient: OpenAIRealtimeTranscriptionClient?
+        realtimeFinishRequest: RealtimeTranscriptionFinishRequest?
     ) async {
         guard ownsProcessingAttempt(
             recordingID: recordingID,
             attemptID: captureAttemptID
         ) else {
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             return
         }
 
@@ -1984,7 +2047,7 @@ class AppState: ObservableObject {
                 recordingID: recordingID,
                 attemptID: captureAttemptID
             ) else {
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 return
             }
             let transientWorkspace = try await store.makeTransientWorkspace(
@@ -1995,7 +2058,7 @@ class AppState: ObservableObject {
                 attemptID: captureAttemptID
             ) else {
                 transientWorkspace.cleanup()
-                realtimeClient?.close()
+                realtimeFinishRequest?.close()
                 return
             }
             recordingAttemptID = recognitionAttemptID
@@ -2031,13 +2094,13 @@ class AppState: ObservableObject {
                     audioURL: store.finalURL(for: recordingID),
                     transientWorkspace: transientWorkspace,
                     snapshot: snapshot,
-                    realtimeClient: realtimeClient,
+                    realtimeFinishRequest: realtimeFinishRequest,
                     isLiveRecording: true
                 )
             }
             transcriptionTasks[recordingID] = task
         } catch {
-            realtimeClient?.close()
+            realtimeFinishRequest?.close()
             guard ownsProcessingAttempt(
                 recordingID: recordingID,
                 attemptID: captureAttemptID
@@ -2062,11 +2125,11 @@ class AppState: ObservableObject {
         audioURL: URL,
         transientWorkspace: MacTransientWorkspace,
         snapshot: MacTranscriptionAttemptSnapshot,
-        realtimeClient: OpenAIRealtimeTranscriptionClient? = nil,
+        realtimeFinishRequest: RealtimeTranscriptionFinishRequest? = nil,
         isLiveRecording: Bool
     ) async {
         defer { transientWorkspace.cleanup() }
-        defer { realtimeClient?.close() }
+        defer { finishRealtimeRequest(realtimeFinishRequest) }
         do {
             try Task.checkCancellation()
             DictationStopwatch.mark("transcription attempt entered")
@@ -2087,13 +2150,12 @@ class AppState: ObservableObject {
 
             let realtimeResult: String?
             if isLiveRecording, activeTransport == .realtime {
-                let finishTimeout = snapshot.provider == .custom ? 6.0 : 2.0
-                let result = await realtimeClient?.finish(timeout: finishTimeout)?
+                let result = await realtimeFinishRequest?.finish()?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if result?.isEmpty == false {
                     realtimeResult = result
                 } else {
-                    realtimeClient?.close()
+                    realtimeFinishRequest?.close()
                     realtimeResult = nil
                 }
             } else {
@@ -2425,6 +2487,7 @@ class AppState: ObservableObject {
     ) {
         DictationActivityAssertion.release()
         guard activeRecordingID == recordingID else { return }
+        closeActiveRealtimeFinishRequest(recordingID: recordingID)
 
         let recording = persistActiveRecording(
             recordingID: recordingID,
@@ -2499,8 +2562,11 @@ class AppState: ObservableObject {
         let provider = snapshot.provider
         let transport = snapshot.transport
 
-        if snapshot.transcriptionOptions.diarization {
-            DebugLog.info("Skipping realtime start because speaker labels require batch transcription", context: "AppState")
+        if snapshot.outputMode != .dictation || snapshot.transcriptionOptions.diarization {
+            DebugLog.info(
+                "Skipping realtime start because this output requires batch transcription",
+                context: "AppState"
+            )
             return
         }
 
@@ -2607,10 +2673,10 @@ class AppState: ObservableObject {
         }
 
         realtimeTranscriptionClient = client
+        client.start()
         audioRecorder.realtimeAudioChunkHandler = { [weak client] chunk in
             client?.sendAudio(chunk)
         }
-        client.start()
         DebugLog.info("Started realtime transcription stream for \(provider.displayName)", context: "AppState")
     }
 
@@ -2690,11 +2756,58 @@ class AppState: ObservableObject {
         return model
     }
 
-    private func stopRealtimeTranscription() -> OpenAIRealtimeTranscriptionClient? {
-        audioRecorder.realtimeAudioChunkHandler = nil
+    /// Removes AppState's live client ownership without sealing audio delivery.
+    /// The normal key-up path carries this request to AudioRecorder, which owns
+    /// the only safe durable-write/realtime-admission cutoff.
+    private func takeRealtimeTranscription(
+        recordingID: UUID? = nil,
+        attemptID: UUID? = nil,
+        drainDeadline: TimeInterval? = nil
+    ) -> RealtimeTranscriptionFinishRequest? {
         let client = realtimeTranscriptionClient
         realtimeTranscriptionClient = nil
-        return client
+        let request = client.map(RealtimeTranscriptionFinishRequest.init(client:))
+
+        if let recordingID, let attemptID, let request {
+            activeRealtimeFinishRequest?.request.close()
+            activeRealtimeFinishRequest = (recordingID, attemptID, request)
+        }
+        if let request, let drainDeadline {
+            request.armDrainDeadline(timeout: drainDeadline)
+        }
+        return request
+    }
+
+    private func stopRealtimeTranscription() -> RealtimeTranscriptionFinishRequest? {
+        let request = takeRealtimeTranscription()
+        audioRecorder.detachRealtimeAudioChunkHandlerAndDrain {}
+        return request
+    }
+
+    private func closeLiveRealtimeTranscription() {
+        let request = stopRealtimeTranscription()
+        request?.close()
+    }
+
+    private func closeActiveRealtimeFinishRequest(recordingID: UUID? = nil) {
+        guard let activeRealtimeFinishRequest else { return }
+        if let recordingID,
+           activeRealtimeFinishRequest.recordingID != recordingID
+        {
+            return
+        }
+        self.activeRealtimeFinishRequest = nil
+        activeRealtimeFinishRequest.request.close()
+    }
+
+    private func finishRealtimeRequest(
+        _ request: RealtimeTranscriptionFinishRequest?
+    ) {
+        guard let request else { return }
+        if activeRealtimeFinishRequest?.request === request {
+            activeRealtimeFinishRequest = nil
+        }
+        request.close()
     }
 
     private func handleRealtimePartial(

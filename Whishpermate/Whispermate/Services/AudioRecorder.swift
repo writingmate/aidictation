@@ -37,17 +37,9 @@ class AudioRecorder: NSObject, ObservableObject {
     @Published var isRecording = false
     @Published var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount) // Frequency spectrum data
-    var realtimeAudioChunkHandler: ((Data) -> Void)? {
-        get {
-            realtimeHandlerLock.lock()
-            defer { realtimeHandlerLock.unlock() }
-            return storedRealtimeAudioChunkHandler
-        }
-        set {
-            realtimeHandlerLock.lock()
-            storedRealtimeAudioChunkHandler = newValue
-            realtimeHandlerLock.unlock()
-        }
+    var realtimeAudioChunkHandler: (@Sendable (Data) -> Void)? {
+        get { realtimeAudioDelivery.handler }
+        set { realtimeAudioDelivery.handler = newValue }
     }
     var captureFailureHandler: ((String) -> Void)?
 
@@ -63,9 +55,7 @@ class AudioRecorder: NSObject, ObservableObject {
         [UUID: MacAudioProcessingStore.NativeWriterCloseAttestation] = [:]
     private var nativeRecordingURLs: [UUID: URL] = [:]
     private var terminationCloseRequested = false
-    private let realtimeHandlerLock = NSLock()
-    private var storedRealtimeAudioChunkHandler: ((Data) -> Void)?
-    private let realtimeAudioQueue = DispatchQueue(label: "ai.writingmate.realtime-audio")
+    private let realtimeAudioDelivery = RealtimeAudioDeliveryQueue()
     /// Whether the process-wide CoreAudio input path has been warmed once.
     ///
     /// The first `inputNode.outputFormat(forBus:)` in a process costs 180–622ms
@@ -516,6 +506,12 @@ class AudioRecorder: NSObject, ObservableObject {
         session: MacCaptureSession,
         preparation: MacCapturePreparation
     ) {
+        // Reserve realtime delivery before any file/conversion work. Native
+        // stop seals this generation after retiring write admission and waits
+        // for every reservation, so no written head or tail buffer is omitted.
+        let realtimeDeliveryLease = realtimeAudioDelivery.beginDelivery()
+        defer { realtimeDeliveryLease?.discard() }
+
         // Keep every callback-local AVAudioFile reference inside this lexical
         // scope. It must be released before finishWrite decrements activeWrites;
         // cleanup is then free to nil the session's final reference and attest
@@ -607,21 +603,37 @@ class AudioRecorder: NSObject, ObservableObject {
             }
         }
 
-        guard session.isActive else { return }
-        let bands = frequencyAnalyzer.analyze(buffer: buffer)
-        let level = calculateAudioLevel(from: buffer)
-        DispatchQueue.main.async { [weak self, weak session] in
-            guard let self, let session, self.activeCapture === session else { return }
-            self.lastAudioBufferAt = Date()
-            self.frequencyBands = bands
-            self.audioLevel = level
-        }
-
-        if let chunk = realtimePCMChunk(from: buffer), let handler = realtimeAudioChunkHandler {
-            realtimeAudioQueue.async {
-                handler(chunk)
+        // Meter updates are only useful while capture remains active. Realtime
+        // delivery is intentionally not gated by this later state check: a
+        // lease acquired before key-up still corresponds to audio that was
+        // successfully written above and must reach the final commit.
+        if session.isActive {
+            let bands = frequencyAnalyzer.analyze(buffer: buffer)
+            let level = calculateAudioLevel(from: buffer)
+            DispatchQueue.main.async { [weak self, weak session] in
+                guard let self, let session, self.activeCapture === session else { return }
+                self.lastAudioBufferAt = Date()
+                self.frequencyBands = bands
+                self.audioLevel = level
             }
         }
+
+        if let realtimeDeliveryLease {
+            if let chunk = realtimePCMChunk(from: buffer) {
+                realtimeDeliveryLease.deliver(chunk)
+            } else {
+                realtimeDeliveryLease.failCoverage()
+            }
+        }
+    }
+
+    /// Stops admitting realtime chunks and runs `completion` after every chunk
+    /// admitted by the old handler has been delivered. This is the only safe
+    /// point to commit the final realtime audio buffer.
+    func detachRealtimeAudioChunkHandlerAndDrain(
+        _ completion: @escaping @Sendable () -> Void
+    ) {
+        realtimeAudioDelivery.detachAndDrain { _ in completion() }
     }
 
     private func signalPreparationReady(_ preparation: MacCapturePreparation, session: MacCaptureSession) {
@@ -862,11 +874,16 @@ class AudioRecorder: NSObject, ObservableObject {
 
     func stopRecording(
         disposition: StopDisposition = .submitIfValid,
+        afterRealtimeAudioDrained: (@Sendable (Bool) -> Void)? = nil,
         completion: @escaping (RecordingFinalizationAttempt.Terminal) -> Void
     ) {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in
-                self?.stopRecording(disposition: disposition, completion: completion)
+                self?.stopRecording(
+                    disposition: disposition,
+                    afterRealtimeAudioDrained: afterRealtimeAudioDrained,
+                    completion: completion
+                )
             }
             return
         }
@@ -876,16 +893,19 @@ class AudioRecorder: NSObject, ObservableObject {
 
         if pendingPreparation != nil {
             cancelPendingRecordingStart()
+            realtimeAudioDelivery.detachAndDrain { _ in }
             completion(.discarded)
             return
         }
 
         stopRecordingWatchdog()
         guard pendingFinalization == nil else {
+            realtimeAudioDelivery.detachAndDrain { _ in }
             completion(.unavailable("Recording is already being saved."))
             return
         }
         guard let session = activeCapture else {
+            realtimeAudioDelivery.detachAndDrain { _ in }
             resetFailedStart()
             let closedCandidates = nativeCloseProofs.compactMap { recordingID, proof in
                 proof.isConfirmedClosed
@@ -902,7 +922,14 @@ class AudioRecorder: NSObject, ObservableObject {
         }
         activeCapture = nil
         isRecording = false
+        // Retiring the exact capture session closes durable write admission.
+        // Only after that cutoff may realtime admission be sealed. A callback
+        // that acquired both leases before retirement can finish both; one
+        // arriving afterwards can enter neither pipeline.
         session.retire()
+        realtimeAudioDelivery.detachAndDrain { coverageIsComplete in
+            afterRealtimeAudioDrained?(coverageIsComplete)
+        }
         let finalization = MacCaptureFinalization(
             session: session,
             deletesFile: disposition == .discard,

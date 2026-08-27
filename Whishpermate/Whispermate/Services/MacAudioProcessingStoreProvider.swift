@@ -4,29 +4,35 @@ import Foundation
 /// share the same actor, while the journal's file lock still fences another
 /// process or a stale store instance.
 enum MacAudioProcessingStoreProvider {
-    private static let rootDirectory: URL = {
+    nonisolated private static var applicationDirectoryName: String {
+        Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
+            ? "WhisperMate-Dev"
+            : "WhisperMate"
+    }
+
+    nonisolated private static let rootDirectory: URL = {
         let applicationSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first!
         return applicationSupport.appendingPathComponent(
-            "WhisperMate",
+            applicationDirectoryName,
             isDirectory: true
         )
     }()
 
-    private static let storeTask = Task.detached(priority: .utility) {
+    nonisolated private static let storeTask = Task.detached(priority: .utility) {
         let store = MacAudioProcessingStore(rootDirectory: rootDirectory)
         Task.detached(priority: .utility) {
             _ = await store.retryDeletedSourceCleanup()
         }
         return store
     }
-    private static let unavailableStore = MacAudioProcessingStore(
+    nonisolated private static let unavailableStore = MacAudioProcessingStore(
         unavailableRootDirectory: rootDirectory
     )
 
-    static func shared() async -> MacAudioProcessingStore {
+    nonisolated static func shared() async -> MacAudioProcessingStore {
         let gate = MacStoreProviderGate()
         return await withCheckedContinuation { continuation in
             gate.install(continuation)
@@ -41,7 +47,7 @@ enum MacAudioProcessingStoreProvider {
     }
 }
 
-private final class MacStoreProviderGate: @unchecked Sendable {
+private nonisolated final class MacStoreProviderGate: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<MacAudioProcessingStore, Never>?
     private var resolved = false

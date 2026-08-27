@@ -762,7 +762,7 @@
 			);
 			inputPaths = (
 				"$(PROJECT_DIR)/../ci_scripts/write_secrets_plist.sh",
-				"$(PROJECT_DIR)/Whispermate/Secrets.plist",
+				"$(AIDICTATION_LOCAL_SECRETS_PLIST)",
 			);
 			name = "Copy Secrets.plist";
 			outputFileListPaths = (
@@ -772,7 +772,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "SECRETS_SRC=\"${PROJECT_DIR}/Whispermate/Secrets.plist\"\nSECRETS_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Secrets.plist\"\nSECRETS_WRITER=\"${PROJECT_DIR}/../ci_scripts/write_secrets_plist.sh\"\nif [ -x \"${SECRETS_WRITER}\" ]; then\n  \"${SECRETS_WRITER}\" \"${SECRETS_DST}\" \"${SECRETS_SRC}\"\nelse\n  echo \"warning: Secrets writer not found at ${SECRETS_WRITER}\"\nfi\n";
+			shellScript = "SECRETS_SRC=\"${AIDICTATION_LOCAL_SECRETS_PLIST}\"\nSECRETS_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Secrets.plist\"\nSECRETS_WRITER=\"${PROJECT_DIR}/../ci_scripts/write_secrets_plist.sh\"\nif [ -x \"${SECRETS_WRITER}\" ]; then\n  \"${SECRETS_WRITER}\" \"${SECRETS_DST}\" \"${SECRETS_SRC}\"\nelse\n  echo \"warning: Secrets writer not found at ${SECRETS_WRITER}\"\nfi\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -1155,6 +1155,11 @@
 		C18566DF2EA0D31100B46F55 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				AIDICTATION_DISPLAY_NAME = "AI Dictation";
+				AIDICTATION_LOCAL_SECRETS_PLIST = "$(PROJECT_DIR)/Whispermate/Secrets.plist";
+				AIDICTATION_MACOS_BUNDLE_ID = com.whispermate.macos;
+				AIDICTATION_MACOS_PRODUCT_NAME = AIDictation;
+				AIDICTATION_URL_SCHEME = aidictation;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Whispermate/Whispermate.entitlements;
@@ -1179,8 +1184,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.0.110;
-				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
-				PRODUCT_NAME = AIDictation;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(AIDICTATION_MACOS_BUNDLE_ID)";
+				PRODUCT_NAME = "$(AIDICTATION_MACOS_PRODUCT_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -1194,6 +1199,11 @@
 		C18566E02EA0D31100B46F55 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				AIDICTATION_DISPLAY_NAME = "AI Dictation";
+				AIDICTATION_LOCAL_SECRETS_PLIST = "$(PROJECT_DIR)/Whispermate/Secrets.plist";
+				AIDICTATION_MACOS_BUNDLE_ID = com.whispermate.macos;
+				AIDICTATION_MACOS_PRODUCT_NAME = AIDictation;
+				AIDICTATION_URL_SCHEME = aidictation;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Whispermate/Whispermate.entitlements;
@@ -1220,8 +1230,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.0.110;
-				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.macos;
-				PRODUCT_NAME = AIDictation;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(AIDICTATION_MACOS_BUNDLE_ID)";
+				PRODUCT_NAME = "$(AIDICTATION_MACOS_PRODUCT_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

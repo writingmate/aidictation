@@ -29,7 +29,8 @@ private enum AppWindowDefaults {
 }
 
 private func isAuthCallbackURL(_ url: URL) -> Bool {
-    url.scheme == "aidictation" && (url.host == "auth-callback" || url.host == "auth")
+    url.scheme == AuthManager.applicationURLScheme
+        && (url.host == "auth-callback" || url.host == "auth")
 }
 
 private enum AuthCallbackGate {
@@ -271,13 +272,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         // Handle payment success callback
-        else if url.scheme == "aidictation", url.host == "payment", url.path == "/success" {
+        else if url.scheme == AuthManager.applicationURLScheme,
+                url.host == "payment",
+                url.path == "/success"
+        {
             Task {
                 await subscriptionManager.handlePaymentSuccess()
             }
         }
         // Handle payment cancel callback
-        else if url.scheme == "aidictation", url.host == "payment", url.path == "/cancel" {
+        else if url.scheme == AuthManager.applicationURLScheme,
+                url.host == "payment",
+                url.path == "/cancel"
+        {
             subscriptionManager.handlePaymentCancel()
         }
     }

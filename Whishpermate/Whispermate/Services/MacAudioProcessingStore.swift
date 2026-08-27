@@ -1002,6 +1002,7 @@ actor MacAudioProcessingStore {
         guard current.revision == expectedRevision else { throw StoreError.staleLease }
         guard current.stage == .readyForRecognition
                 || current.stage == .failed
+                || current.stage == .resultReady
                 || current.stage == .succeeded
         else {
             throw StoreError.invalidTransition

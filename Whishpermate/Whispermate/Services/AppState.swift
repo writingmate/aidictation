@@ -73,7 +73,7 @@ class AppState: ObservableObject {
     private var terminationOwnedNativeIDs: Set<UUID> = []
     private var terminationFinalizationTask: Task<Bool, Never>?
     private let processingAttemptFence = MacProcessingAttemptFence()
-    private var realtimeTranscriptionClient: OpenAIRealtimeTranscriptionClient?
+    private var realtimeTranscriptionClient: (any RealtimeTranscriptionStreaming)?
     private var activeRealtimeFinishRequest: (
         recordingID: UUID,
         attemptID: UUID,
@@ -675,7 +675,7 @@ class AppState: ObservableObject {
             && snapshot?.outputMode == .dictation
             && snapshot?.transcriptionOptions.diarization == false
             && snapshot?.transport == .realtime
-        let realtimeFinishTimeout = snapshot?.provider == .custom
+        let realtimeFinishTimeout = snapshot?.provider == .aidictation
             ? 6.0
             : 2.0
         let realtimeFinishRequest = takeRealtimeTranscription(
@@ -1284,7 +1284,11 @@ class AppState: ObservableObject {
     }
 
     /// Re-transcribe a recording from its saved audio file
-    func retranscribe(recording: Recording) {
+    func retranscribe(
+        recording: Recording,
+        mode: TranscriptionMode? = nil,
+        onlineProvider: TranscriptionProvider? = nil
+    ) {
         DebugLog.info("🔄 AppState.retranscribe(id: \(recording.id))", context: "AppState")
 
         guard recordingState == .idle,
@@ -1306,7 +1310,10 @@ class AppState: ObservableObject {
             transcriptionOptions: retrying.transcriptionOptions,
             appContext: nil,
             screenContext: nil,
-            usesContextRules: false
+            usesContextRules: false,
+            modeOverride: mode,
+            onlineProviderOverride: onlineProvider,
+            isRetranscription: true
         )
 
         let task = Task { [weak self] in
@@ -2167,6 +2174,20 @@ class AppState: ObservableObject {
                 realtimeResult = nil
             }
 
+            if snapshot.transport == .realtime,
+               (snapshot.mode != .auto || snapshot.networkWasConnected),
+               realtimeResult == nil
+            {
+                throw NSError(
+                    domain: "AppState",
+                    code: -9,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Realtime transcription did not complete. Your recording is saved."
+                    ]
+                )
+            }
+
             let result = try await withTimeout(
                 seconds: recognitionTimeoutSeconds(for: recording.duration)
             ) {
@@ -2202,11 +2223,14 @@ class AppState: ObservableObject {
                     try await session.checkpoint(realtimeResult)
                     try await session.markRawResultReady(realtimeResult)
                     try await session.beginCleanup()
-                    return try await self.applyLLMPassWithFallback(
-                        rawText: realtimeResult,
-                        client: OpenAIClient(config: .init()),
-                        snapshot: snapshot
-                    )
+                    if snapshot.provider == .aidictation {
+                        return try await self.applyLLMPassWithFallback(
+                            rawText: realtimeResult,
+                            client: OpenAIClient(config: .init()),
+                            snapshot: snapshot
+                        )
+                    }
+                    return realtimeResult
                 }
                 return try await self.performTranscription(
                     audioURL: audioURL,
@@ -2299,12 +2323,28 @@ class AppState: ObservableObject {
         success.errorMessage = storeRecord.failureMessage
         success.wordCount = trimmed.split(separator: " ").count
         success.sourceIntegrity = .complete
-            DictationStopwatch.mark("commit entered")
+        let usageWordCount = success.wordCount ?? 0
+        DictationStopwatch.mark("commit entered")
         let historyWasPersisted = historyManager.upsertRecording(success)
         DictationStopwatch.mark("history upsert")
         if !historyWasPersisted {
             historyManager.showUnsavedTerminalState(success)
             errorMessage = "The transcript is safe, but History couldn’t be updated."
+        }
+
+        if historyWasPersisted, !isLiveRecording {
+            do {
+                if let claimed = try await session.markSucceededAndClaimUsage(
+                    wordCount: usageWordCount
+                ) {
+                    Task {
+                        await SubscriptionManager.shared.recordWords(claimed)
+                    }
+                }
+            } catch {
+                errorMessage = "The transcript is safe, but its retry status couldn’t be finalized."
+                return
+            }
         }
 
         // Usage accounting is deliberately not awaited here. The claim writes a
@@ -2318,8 +2358,7 @@ class AppState: ObservableObject {
         // the paste no longer waits on them. A crash in the window loses the
         // usage claim, never the transcript, and startup recovery re-resolves
         // the record from the store.
-        let usageWordCount = success.wordCount ?? 0
-        if historyWasPersisted {
+        if historyWasPersisted, isLiveRecording {
             Task { [weak self] in
                 do {
                     if let claimed = try await session.markSucceededAndClaimUsage(
@@ -2584,32 +2623,29 @@ class AppState: ObservableObject {
             return
         }
 
-        let prompt = snapshot.sttHintPrompt
-        let realtimePrompt = prompt.isEmpty ? nil : prompt
+        let realtimePrompt = snapshot.recordingPrompt
         let languageCode = snapshot.languageCode
-        let client: OpenAIRealtimeTranscriptionClient
+        let client: any RealtimeTranscriptionStreaming
 
         switch provider {
-        case .openai:
-            guard let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty else {
-                return
-            }
-            client = OpenAIRealtimeTranscriptionClient(
-                apiKey: apiKey,
-                language: languageCode,
-                prompt: realtimePrompt,
-                onPartialTranscript: { [weak self] partial in
-                    self?.handleRealtimePartial(
-                        partial,
-                        recordingID: recordingID,
-                        attemptID: attemptID
-                    )
+        case .codex:
+            client = CodexRealtimeTranscriptionClient(
+                onTranscript: { [weak self] transcript in
+                    Task { @MainActor [weak self] in
+                        self?.handleRealtimePartial(
+                            transcript,
+                            recordingID: recordingID,
+                            attemptID: attemptID
+                        )
+                    }
                 },
                 onError: { message in
-                    DebugLog.warning(message, context: "AppState")
+                    Task { @MainActor in
+                        DebugLog.warning(message, context: "CodexRealtime")
+                    }
                 }
             )
-        case .custom:
+        case .aidictation:
             let realtimeModel = resolvedRealtimeTranscriptionModel(
                 configuredModel: snapshot.transcriptionModel,
                 overrideModel: snapshot.customRealtimeModel
@@ -2627,6 +2663,8 @@ class AppState: ObservableObject {
                     webSocketURL: webSocketURL,
                     transcriptionModel: realtimeModel,
                     language: languageCode,
+                    keywords: snapshot.transcriptionKeywords,
+                    languages: snapshot.languageCodes,
                     prompt: realtimePrompt,
                     onPartialTranscript: { [weak self] partial in
                         self?.handleRealtimePartial(
@@ -2665,12 +2703,16 @@ class AppState: ObservableObject {
                             apiKey: token,
                             model: realtimeModel,
                             prompt: realtimePrompt,
-                            language: languageCode
+                            language: languageCode,
+                            keywords: snapshot.transcriptionKeywords,
+                            languages: snapshot.languageCodes
                         )
                     },
                     prompt: realtimePrompt,
                     transcriptionModel: realtimeModel,
                     language: languageCode,
+                    keywords: snapshot.transcriptionKeywords,
+                    languages: snapshot.languageCodes,
                     onPartialTranscript: { [weak self] partial in
                         self?.handleRealtimePartial(
                             partial,
@@ -2683,7 +2725,7 @@ class AppState: ObservableObject {
                     }
                 )
             }
-        case .groq, .parakeet:
+        case .parakeet:
             return
         }
 
@@ -2771,7 +2813,7 @@ class AppState: ObservableObject {
         let model = configuredModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty,
               !model.contains("/"),
-              model != TranscriptionProvider.custom.defaultModel
+              model != TranscriptionProvider.aidictation.defaultModel
         else {
             return OpenAIRealtimeTranscriptionClient.defaultTranscriptionModel
         }
@@ -2872,9 +2914,34 @@ class AppState: ObservableObject {
         transcriptionOptions: TranscriptionOptions,
         appContext: String?,
         screenContext: String?,
-        usesContextRules: Bool
+        usesContextRules: Bool,
+        modeOverride: TranscriptionMode? = nil,
+        onlineProviderOverride: TranscriptionProvider? = nil,
+        isRetranscription: Bool = false
     ) -> MacTranscriptionAttemptSnapshot {
-        let provider = transcriptionProviderManager.selectedProvider
+        let mode = modeOverride ?? transcriptionProviderManager.transcriptionMode
+        let onlineProvider = onlineProviderOverride
+            ?? transcriptionProviderManager.selectedOnlineProvider
+        let provider: TranscriptionProvider = mode == .local ? .parakeet : onlineProvider
+        let endpoint: String
+        let model: String
+        let transport: TranscriptionTransport
+        if provider == .aidictation {
+            endpoint = SecretsLoader.customTranscriptionEndpoint()
+                ?? provider.defaultEndpoint
+            model = isRetranscription
+                ? "gpt-transcribe"
+                : (SecretsLoader.customTranscriptionRealtimeModel() ?? "gpt-live-transcribe")
+            transport = isRetranscription ? .batch : .realtime
+        } else if provider == .codex, isRetranscription {
+            endpoint = CodexTranscriptionSupport.batchEndpoint.absoluteString
+            model = ""
+            transport = .batch
+        } else {
+            endpoint = provider.defaultEndpoint
+            model = provider.defaultModel
+            transport = provider.defaultTransport
+        }
         let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
         let cleanupComponents = buildTranscriptionPromptComponents()
         let contextRules = contextRulesManager.rules.map { rule in
@@ -2890,12 +2957,12 @@ class AppState: ObservableObject {
         return MacTranscriptionAttemptSnapshot(
             outputMode: outputMode,
             transcriptionOptions: transcriptionOptions,
-            mode: transcriptionProviderManager.transcriptionMode,
+            mode: mode,
             provider: provider,
-            transport: transcriptionProviderManager.effectiveTransport,
-            transcriptionEndpoint: transcriptionProviderManager.effectiveEndpoint,
-            transcriptionModel: transcriptionProviderManager.effectiveModel,
-            transcriptionAPIKey: resolvedTranscriptionApiKey(),
+            transport: transport,
+            transcriptionEndpoint: endpoint,
+            transcriptionModel: model,
+            transcriptionAPIKey: resolvedTranscriptionApiKey(for: provider),
             customRealtimeEndpoint: configuredCustomRealtimeEndpoint(),
             customRealtimeModel: configuredCustomRealtimeModel(),
             llmPostProcessingEnabled: transcriptionProviderManager.enableLLMPostProcessing,
@@ -2906,6 +2973,12 @@ class AppState: ObservableObject {
             aidictationPostProcessingEndpoint: SecretsLoader.aidictationPostProcessingEndpoint(),
             aidictationPostProcessingKey: SecretsLoader.aidictationPostProcessingKey(),
             languageCode: singleAPILanguageCode(),
+            languageCodes: languageManager.apiLanguageCodes,
+            transcriptionKeywords: Array(Set(
+                dictionaryManager.transcriptionKeywords
+                    + shortcutManager.transcriptionKeywords
+            )).sorted(),
+            recordingPrompt: appContext?.trimmingCharacters(in: .whitespacesAndNewlines),
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: cleanupComponents,
             baseCleanupPromptComponents: cleanupComponents,
@@ -2945,6 +3018,12 @@ class AppState: ObservableObject {
         }
         if !shortcutManager.transcriptionHints.isEmpty {
             promptComponents.append(shortcutManager.transcriptionHints)
+        }
+        if let instructions = dictionaryManager.formattingInstructions {
+            promptComponents.append(instructions)
+        }
+        if let instructions = shortcutManager.formattingInstructions {
+            promptComponents.append(instructions)
         }
 
         return promptComponents
@@ -3082,7 +3161,7 @@ class AppState: ObservableObject {
             let chatCompletionEndpoint: String
             let chatCompletionModel: String
             let chatCompletionApiKey: String?
-            if provider == .custom {
+            if provider == .aidictation {
                 chatCompletionEndpoint = snapshot.aidictationPostProcessingEndpoint ?? ""
                 chatCompletionModel = PostProcessingProvider.aidictationModel
                 chatCompletionApiKey = snapshot.aidictationPostProcessingKey ?? transcriptionApiKey
@@ -3109,7 +3188,7 @@ class AppState: ObservableObject {
                     try await milestones.checkpoint(text)
                 }
             )
-            let customCleanupPrompt = provider == .custom
+            let customCleanupPrompt = provider == .aidictation
                 ? providerPostProcessingPrompt(
                     outputMode: outputMode,
                     basePrompt: postProcessingPrompt,
@@ -3118,7 +3197,7 @@ class AppState: ObservableObject {
                 )
                 : nil
             let mergedCleanup: ((String) async throws -> String)?
-            if provider == .custom {
+            if provider == .aidictation {
                 mergedCleanup = { mergedRaw in
                     try await milestones.beginCleanup()
                     return try await self.cleanupWithRawFallback(
@@ -3160,11 +3239,19 @@ class AppState: ObservableObject {
 
             let rawText = try await client.transcribe(
                 audioURL: audioURL,
-                prompt: sttHintPrompt.isEmpty ? nil : sttHintPrompt,
+                prompt: snapshot.transcriptionModel == "gpt-transcribe"
+                    ? snapshot.recordingPrompt
+                    : (sttHintPrompt.isEmpty ? nil : sttHintPrompt),
                 language: snapshot.languageCode,
-                sttPrompt: provider == .custom && !sttHintPrompt.isEmpty ? sttHintPrompt : nil,
+                keywords: snapshot.transcriptionKeywords,
+                languages: snapshot.languageCodes,
+                sttPrompt: provider == .aidictation
+                    && snapshot.transcriptionModel != "gpt-transcribe"
+                    && !sttHintPrompt.isEmpty
+                        ? sttHintPrompt
+                        : nil,
                 postProcessingPrompt: customCleanupPrompt,
-                serverPostProcessingEnabledByDefault: provider == .custom,
+                serverPostProcessingEnabledByDefault: provider == .aidictation,
                 transientWorkspace: transientWorkspace,
                 onChunkCheckpoint: { completedLeafIndex, transcript in
                     try await checkpointAccumulator.accept(
@@ -3195,7 +3282,7 @@ class AppState: ObservableObject {
             // The custom one-request/chunked client has already applied its
             // cleanup/output-mode prompt after checkpointing the complete raw
             // merge. Do not replace that result with the raw checkpoint.
-            if provider == .custom {
+            if provider == .aidictation {
                 let oneStageResult = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
                 return oneStageResult.isEmpty ? durableRaw : oneStageResult
             }
@@ -3383,41 +3470,16 @@ class AppState: ObservableObject {
         }
     }
 
-    private func resolvedTranscriptionApiKey() -> String? {
-        let provider = transcriptionProviderManager.selectedProvider
-
+    private func resolvedTranscriptionApiKey(
+        for provider: TranscriptionProvider? = nil
+    ) -> String? {
+        let provider = provider ?? transcriptionProviderManager.selectedProvider
         // Check Secrets.plist first
         if let secretKey = SecretsLoader.transcriptionKey(for: provider), !secretKey.isEmpty {
             return secretKey
         }
 
-        if provider == .custom,
-           URL(string: transcriptionProviderManager.effectiveEndpoint)?.host?.lowercased() == "api.openai.com"
-        {
-            if let openAISecretKey = SecretsLoader.transcriptionKey(for: .openai), !openAISecretKey.isEmpty {
-                return openAISecretKey
-            }
-            if let openAIStoredKey = KeychainHelper.get(key: TranscriptionProvider.openai.apiKeyName), !openAIStoredKey.isEmpty {
-                return openAIStoredKey
-            }
-        }
-
-        if !provider.requiresAPIKey {
-            return "not-needed"
-        }
-
-        // Then check keychain
-        if let storedKey = KeychainHelper.get(key: provider.apiKeyName), !storedKey.isEmpty {
-            return storedKey
-        }
-
-        // Fallback: try legacy "openai_api_key" for backward compatibility
-        if let legacyKey = KeychainHelper.get(key: "openai_api_key"), !legacyKey.isEmpty {
-            DebugLog.info("Using legacy openai_api_key", context: "AppState")
-            return legacyKey
-        }
-
-        return nil
+        return "not-needed"
     }
 
     private func resolvedLLMApiKey() -> String? {

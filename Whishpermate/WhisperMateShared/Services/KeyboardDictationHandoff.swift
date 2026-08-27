@@ -253,11 +253,23 @@ public enum KeyboardDictationHandoff {
     }
 
     public static func makeDictationURL(sessionID: String) -> URL? {
-        URL(string: "aidictation://keyboard-dictation?session=\(sessionID)")
+        URL(string: "\(applicationURLScheme)://keyboard-dictation?session=\(sessionID)")
     }
 
     public static func makeStopDictationURL(sessionID: String) -> URL? {
-        URL(string: "aidictation://keyboard-dictation-stop?session=\(sessionID)")
+        URL(string: "\(applicationURLScheme)://keyboard-dictation-stop?session=\(sessionID)")
+    }
+
+    private static var applicationURLScheme: String {
+        let configured = Bundle.main.object(
+            forInfoDictionaryKey: "AIDictationURLScheme"
+        ) as? String
+        if let trimmed = configured?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty
+        {
+            return trimmed
+        }
+        return "aidictation"
     }
 
     /// Persists a new attempt before any deep link, command, recorder, or network work starts.

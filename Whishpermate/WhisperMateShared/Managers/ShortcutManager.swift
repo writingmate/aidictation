@@ -91,6 +91,14 @@ public class ShortcutManager: ObservableObject {
         return hints
     }
 
+    public var transcriptionKeywords: [String] {
+        shortcuts
+            .filter(\.isEnabled)
+            .flatMap { [$0.voiceTrigger, $0.expansion] }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     /// Expand shortcuts in transcribed text
     public func expandShortcuts(in text: String) -> String {
         var result = text

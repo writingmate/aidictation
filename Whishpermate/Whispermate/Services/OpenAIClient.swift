@@ -28,6 +28,197 @@ enum OpenAIError: Error, LocalizedError {
     }
 }
 
+actor CodexTranscriptionAuthentication {
+    struct Credentials: Sendable {
+        let accessToken: String
+        let accountID: String?
+    }
+
+    enum AuthenticationError: Error, LocalizedError {
+        case appUnavailable
+        case refreshFailed
+        case signInRequired
+
+        var errorDescription: String? {
+            switch self {
+            case .appUnavailable:
+                return "Install ChatGPT to use this transcription option."
+            case .refreshFailed:
+                return "ChatGPT could not refresh your sign-in. Open ChatGPT and try again."
+            case .signInRequired:
+                return "Sign in to ChatGPT to use transcription."
+            }
+        }
+    }
+
+    private struct AuthFile: Decodable {
+        struct Tokens: Decodable {
+            let accessToken: String
+            let accountID: String?
+
+            enum CodingKeys: String, CodingKey {
+                case accessToken = "access_token"
+                case accountID = "account_id"
+            }
+        }
+
+        let authMode: String?
+        let tokens: Tokens?
+
+        enum CodingKeys: String, CodingKey {
+            case authMode = "auth_mode"
+            case tokens
+        }
+    }
+
+    private final class RefreshResult: @unchecked Sendable {
+        let semaphore = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var bufferedData = Data()
+        private var resolved = false
+        private(set) var succeeded = false
+
+        func append(_ data: Data) {
+            lock.lock()
+            guard !resolved else {
+                lock.unlock()
+                return
+            }
+            bufferedData.append(data)
+
+            while let newline = bufferedData.firstIndex(of: 0x0A) {
+                let line = bufferedData.prefix(upTo: newline)
+                bufferedData.removeSubrange(...newline)
+                if let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                   (object["id"] as? NSNumber)?.intValue == 2
+                {
+                    let result = object["result"] as? [String: Any]
+                    let account = result?["account"] as? [String: Any]
+                    succeeded = account?["type"] as? String == "chatgpt"
+                    resolved = true
+                    lock.unlock()
+                    semaphore.signal()
+                    return
+                }
+            }
+            lock.unlock()
+        }
+
+        func processExited() {
+            lock.lock()
+            guard !resolved else {
+                lock.unlock()
+                return
+            }
+            resolved = true
+            lock.unlock()
+            semaphore.signal()
+        }
+    }
+
+    static let shared = CodexTranscriptionAuthentication()
+
+    private var cachedCredentials: Credentials?
+    private var cachedAt: Date?
+
+    func credentials() async throws -> Credentials {
+        if let cachedCredentials,
+           let cachedAt,
+           Date().timeIntervalSince(cachedAt) < 240
+        {
+            return cachedCredentials
+        }
+
+        guard let executableURL = CodexTranscriptionSupport.executableURL else {
+            throw AuthenticationError.appUnavailable
+        }
+
+        let refreshed = await Task.detached(priority: .utility) {
+            Self.refreshCodexAuthentication(using: executableURL)
+        }.value
+        guard refreshed else { throw AuthenticationError.refreshFailed }
+
+        let authURL = Self.codexHomeURL()
+            .appendingPathComponent("auth.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: authURL),
+              let auth = try? JSONDecoder().decode(AuthFile.self, from: data),
+              auth.authMode == nil || auth.authMode == "chatgpt",
+              let tokens = auth.tokens,
+              !tokens.accessToken.isEmpty
+        else {
+            throw AuthenticationError.signInRequired
+        }
+
+        let credentials = Credentials(
+            accessToken: tokens.accessToken,
+            accountID: tokens.accountID
+        )
+        cachedCredentials = credentials
+        cachedAt = Date()
+        return credentials
+    }
+
+    nonisolated private static func codexHomeURL() -> URL {
+        if let configured = ProcessInfo.processInfo.environment["CODEX_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty
+        {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+    }
+
+    nonisolated private static func refreshCodexAuthentication(
+        using executableURL: URL
+    ) -> Bool {
+        let process = Process()
+        let input = Pipe()
+        let output = Pipe()
+        let result = RefreshResult()
+
+        process.executableURL = executableURL
+        process.arguments = ["app-server", "--listen", "stdio://"]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                result.processExited()
+            } else {
+                result.append(data)
+            }
+        }
+        process.terminationHandler = { _ in result.processExited() }
+
+        do {
+            try process.run()
+            let messages = [
+                "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"aidictation\",\"version\":\"1\"},\"capabilities\":{}}}",
+                "{\"method\":\"initialized\",\"params\":{}}",
+                "{\"id\":2,\"method\":\"account/read\",\"params\":{\"refreshToken\":true}}",
+            ].joined(separator: "\n") + "\n"
+            try input.fileHandleForWriting.write(contentsOf: Data(messages.utf8))
+
+            let waitResult = result.semaphore.wait(timeout: .now() + 15)
+            try? input.fileHandleForWriting.close()
+            output.fileHandleForReading.readabilityHandler = nil
+            if process.isRunning {
+                process.terminate()
+            }
+            return waitResult == .success && result.succeeded
+        } catch {
+            try? input.fileHandleForWriting.close()
+            output.fileHandleForReading.readabilityHandler = nil
+            if process.isRunning {
+                process.terminate()
+            }
+            return false
+        }
+    }
+}
+
 /// Unified OpenAI-compatible client that works with Groq, OpenAI, and any OpenAI-compatible API
 /// Single client configured once and used everywhere
 final class OpenAIClient: @unchecked Sendable {
@@ -105,6 +296,8 @@ final class OpenAIClient: @unchecked Sendable {
         prompt: String? = nil,
         model: String? = nil,
         language: String? = nil,
+        keywords: [String] = [],
+        languages: [String] = [],
         sttPrompt: String? = nil,
         postProcessingPrompt: String? = nil,
         serverPostProcessingEnabledByDefault: Bool = false,
@@ -142,9 +335,16 @@ final class OpenAIClient: @unchecked Sendable {
             defer { Self.cleanup(initialChunks, in: transientWorkspace) }
 
             let useWritingmateChunkFields = Self.shouldUseChunkedUpload(for: url)
-            let recognitionHint = sttPrompt ?? prompt
-            let chunkPrompt = useWritingmateChunkFields ? nil : recognitionHint
-            let chunkSTTPrompt = useWritingmateChunkFields ? recognitionHint : nil
+            let usesModernContext = Self.usesModernTranscriptionContext(
+                model: effectiveModel
+            )
+            let recognitionHint = usesModernContext ? prompt : (sttPrompt ?? prompt)
+            let chunkPrompt = usesModernContext
+                ? recognitionHint
+                : (useWritingmateChunkFields ? nil : recognitionHint)
+            let chunkSTTPrompt = usesModernContext
+                ? nil
+                : (useWritingmateChunkFields ? recognitionHint : nil)
             let endpointHasServerCleanup = useWritingmateChunkFields || serverPostProcessingEnabledByDefault ||
                 !(postProcessingPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
 
@@ -157,6 +357,8 @@ final class OpenAIClient: @unchecked Sendable {
                         effectiveModel: effectiveModel,
                         prompt: chunk.usesChunkFields ? chunkPrompt : prompt,
                         language: language,
+                        keywords: keywords,
+                        languages: languages,
                         sttPrompt: chunk.usesChunkFields ? chunkSTTPrompt : sttPrompt,
                         postProcessingPrompt: chunk.usesChunkFields ? nil : postProcessingPrompt,
                         postProcessingEnabled: !(chunk.usesChunkFields && endpointHasServerCleanup)
@@ -225,6 +427,8 @@ final class OpenAIClient: @unchecked Sendable {
         effectiveModel: String,
         prompt: String? = nil,
         language: String? = nil,
+        keywords: [String] = [],
+        languages: [String] = [],
         sttPrompt: String? = nil,
         postProcessingPrompt: String? = nil,
         postProcessingEnabled: Bool = true
@@ -238,7 +442,19 @@ final class OpenAIClient: @unchecked Sendable {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        if !config.apiKey.isEmpty, config.apiKey != "not-needed" {
+        let isChatGPTBatch = Self.isChatGPTBatchEndpoint(url)
+        if isChatGPTBatch {
+            let credentials = try await CodexTranscriptionAuthentication.shared.credentials()
+            request.setValue(
+                "Bearer \(credentials.accessToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+            if let accountID = credentials.accountID, !accountID.isEmpty {
+                request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+            }
+            request.setValue("Codex Desktop", forHTTPHeaderField: "OpenAI-Intent")
+            request.setValue("Codex Desktop/AIDictation", forHTTPHeaderField: "User-Agent")
+        } else if !config.apiKey.isEmpty, config.apiKey != "not-needed" {
             request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         }
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -268,35 +484,48 @@ final class OpenAIClient: @unchecked Sendable {
         body.append(audioData)
         body.append("\r\n".data(using: .utf8)!)
 
-        // Add model parameter (required)
-        appendFormField(name: "model", value: effectiveModel)
+        if isChatGPTBatch {
+            if let language, !language.isEmpty {
+                appendFormField(name: "language", value: language)
+            }
+        } else {
+            appendFormField(name: "model", value: effectiveModel)
+            appendFormField(name: "temperature", value: "0")
 
-        // Add temperature parameter (optional - set to 0 for deterministic results)
-        appendFormField(name: "temperature", value: "0")
+            if Self.usesModernTranscriptionContext(model: effectiveModel) {
+                if let prompt, !prompt.isEmpty {
+                    appendFormField(name: "prompt", value: prompt)
+                }
+                if !keywords.isEmpty,
+                   let encoded = Self.jsonArrayString(keywords)
+                {
+                    appendFormField(name: "keywords", value: encoded)
+                }
+                if !languages.isEmpty,
+                   let encoded = Self.jsonArrayString(languages)
+                {
+                    appendFormField(name: "languages", value: encoded)
+                }
+            } else {
+                if let language, !language.isEmpty {
+                    appendFormField(name: "language", value: language)
+                }
+                if let prompt, !prompt.isEmpty {
+                    appendFormField(name: "prompt", value: prompt)
+                }
+                if let sttPrompt, !sttPrompt.isEmpty {
+                    appendFormField(name: "stt_prompt", value: sttPrompt)
+                }
+            }
 
-        if let language, !language.isEmpty {
-            appendFormField(name: "language", value: language)
+            if let postProcessingPrompt, !postProcessingPrompt.isEmpty {
+                appendFormField(name: "post_processing_prompt", value: postProcessingPrompt)
+            }
+            if !postProcessingEnabled {
+                appendFormField(name: "post_processing", value: "false")
+            }
+            appendFormField(name: "response_format", value: "text")
         }
-
-        // Add prompt parameter (optional)
-        if let prompt = prompt, !prompt.isEmpty {
-            appendFormField(name: "prompt", value: prompt)
-        }
-
-        if let sttPrompt = sttPrompt, !sttPrompt.isEmpty {
-            appendFormField(name: "stt_prompt", value: sttPrompt)
-        }
-
-        if let postProcessingPrompt = postProcessingPrompt, !postProcessingPrompt.isEmpty {
-            appendFormField(name: "post_processing_prompt", value: postProcessingPrompt)
-        }
-
-        if !postProcessingEnabled {
-            appendFormField(name: "post_processing", value: "false")
-        }
-
-        // Add response_format parameter (optional, default is json)
-        appendFormField(name: "response_format", value: "text")
 
         // End boundary
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
@@ -313,7 +542,21 @@ final class OpenAIClient: @unchecked Sendable {
             if proxyRequestId != nil || proxyTotalMs != nil {
                 DebugLog.info("Proxy timing: requestId=\(proxyRequestId ?? "n/a"), totalMs=\(proxyTotalMs ?? "n/a")", context: "OpenAIClient")
             }
-            return response
+            guard isChatGPTBatch,
+                  response.statusCode == 200,
+                  let object = try? JSONSerialization.jsonObject(with: response.body)
+                    as? [String: Any],
+                  let transcript = object["text"] as? String,
+                  let normalized = try? JSONSerialization.data(
+                    withJSONObject: ["text": transcript]
+                  )
+            else { return response }
+
+            return AppleAudioHTTPRecovery.Response(
+                statusCode: response.statusCode,
+                headers: ["content-type": "application/json"],
+                body: normalized
+            )
         }
 
         let duration = CFAbsoluteTimeGetCurrent() - startTime
@@ -485,6 +728,23 @@ final class OpenAIClient: @unchecked Sendable {
     private static func shouldUseChunkedUpload(for url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
         return host == "writingmate.ai" || host.hasSuffix(".writingmate.ai")
+    }
+
+    private static func usesModernTranscriptionContext(model: String) -> Bool {
+        model == "gpt-transcribe" || model == "gpt-live-transcribe"
+    }
+
+    private static func jsonArrayString(_ values: [String]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: values) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func isChatGPTBatchEndpoint(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
+            && url.host?.lowercased() == "chatgpt.com"
+            && url.path == "/backend-api/transcribe"
     }
 
     private static func contentType(for url: URL) -> String {

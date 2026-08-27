@@ -66,6 +66,9 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         aidictationPostProcessingEndpoint: "https://before.example/cleanup",
         aidictationPostProcessingKey: "before-cleanup-key",
         languageCode: settings.language,
+        languageCodes: [settings.language],
+        transcriptionKeywords: ["Before vocabulary"],
+        recordingPrompt: "Before recording context",
         sttHintPrompt: "Before hint",
         cleanupPromptComponents: settings.prompt,
         baseCleanupPromptComponents: settings.prompt,
@@ -195,7 +198,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(attemptSource.contains(
             "let mergedCleanup: ((String) async throws -> String)?"
         ))
-        precondition(attemptSource.contains("if provider == .custom {\n                mergedCleanup ="))
+        precondition(attemptSource.contains("if provider == .aidictation {\n                mergedCleanup ="))
         precondition(attemptSource.contains("cleanupMergedTranscript: mergedCleanup"))
         precondition(!attemptSource.contains("cleanupMergedTranscript: {"))
         precondition(!attemptSource.contains("guard let customCleanupPrompt else"))
@@ -204,7 +207,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             "Durable raw transcript still passes through destructive output filtering"
         )
         precondition(attemptSource.contains(
-            "serverPostProcessingEnabledByDefault: provider == .custom"
+            "serverPostProcessingEnabledByDefault: provider == .aidictation"
         ))
 
         guard let realtimeStart = source.range(
@@ -236,9 +239,9 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(source.contains("try await session.checkpoint(realtimeResult)"))
         precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))
-        precondition(source.contains(
-            "rawText: realtimeResult,\n                        client: OpenAIClient(config: .init())"
-        ))
+        precondition(source.contains("if snapshot.provider == .aidictation"))
+        precondition(source.contains("rawText: realtimeResult,"))
+        precondition(source.contains("client: OpenAIClient(config: .init()),"))
         precondition(
             !source.contains("applyReplacements(to:"),
             "Recognizer text is being transformed before the durable raw checkpoint"

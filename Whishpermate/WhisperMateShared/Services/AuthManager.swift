@@ -55,11 +55,26 @@ public struct AuthCallbackOutcome: Sendable {
 public class AuthManager: ObservableObject {
     public static let shared = AuthManager()
 
+    public static var applicationURLScheme: String {
+        let configured = Bundle.main.object(
+            forInfoDictionaryKey: "AIDictationURLScheme"
+        ) as? String
+        let trimmed = configured?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            return trimmed
+        }
+        return "aidictation"
+    }
+
     // MARK: - Constants
 
     private enum Constants {
-        static let authCallbackScheme = "aidictation://auth-callback"
-        static let authCallbackURLScheme = "aidictation"
+        static var authCallbackScheme: String {
+            "\(AuthManager.applicationURLScheme)://auth-callback"
+        }
+        static var authCallbackURLScheme: String {
+            AuthManager.applicationURLScheme
+        }
         static let userAuthChangedNotification = "UserAuthenticationChanged"
     }
 

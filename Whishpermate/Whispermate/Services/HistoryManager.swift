@@ -17,7 +17,11 @@ class HistoryManager: ObservableObject {
     // MARK: - Private Properties
 
     private enum Constants {
-        static let appDirectoryName = "WhisperMate"
+        static var appDirectoryName: String {
+            Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
+                ? "WhisperMate-Dev"
+                : "WhisperMate"
+        }
         static let recordingsDirectoryName = "Recordings"
         static let historyFileName = "history.json"
     }

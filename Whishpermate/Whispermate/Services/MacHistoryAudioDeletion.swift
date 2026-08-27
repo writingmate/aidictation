@@ -29,7 +29,7 @@ nonisolated enum MacHistoryAudioDeletion {
             return .refused
         }
         let expectedURL = applicationSupport
-            .appendingPathComponent("WhisperMate", isDirectory: true)
+            .appendingPathComponent(applicationDirectoryName, isDirectory: true)
             .appendingPathComponent("Recordings", isDirectory: true)
             .appendingPathComponent(candidateName, isDirectory: false)
             .standardizedFileURL
@@ -46,7 +46,7 @@ nonisolated enum MacHistoryAudioDeletion {
         defer { _ = Darwin.close(supportDescriptor) }
 
         guard let appDescriptor = openDirectory(
-            named: "WhisperMate",
+            named: applicationDirectoryName,
             relativeTo: supportDescriptor
         ) else {
             return errno == ENOENT ? .absent : .refused
@@ -84,6 +84,12 @@ nonisolated enum MacHistoryAudioDeletion {
             return errno == ENOENT ? .absent : .failed
         }
         return .removed
+    }
+
+    private static var applicationDirectoryName: String {
+        Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true
+            ? "WhisperMate-Dev"
+            : "WhisperMate"
     }
 
     private static func openDirectory(

@@ -835,7 +835,10 @@ private func validateClientBulkSourceContract() throws {
             "\(path) still gates safe-size splitting on a provider hostname"
         )
         try require(
-            source.contains("let recognitionHint = sttPrompt ?? prompt"),
+            source.contains("let recognitionHint = sttPrompt ?? prompt")
+                || source.contains(
+                    "let recognitionHint = usesModernContext ? prompt : (sttPrompt ?? prompt)"
+                ),
             "\(path) does not route recognition-only hints to split leaves"
         )
         try require(

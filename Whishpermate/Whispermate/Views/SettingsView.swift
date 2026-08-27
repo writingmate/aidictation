@@ -36,7 +36,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case overlay = "Overlay"
     case account = "Account"
     case permissions = "Permissions"
-    // case transcription = "Transcription" // Hidden for now
+    case transcription = "Transcription"
     case audio = "Sound"
     case language = "Language"
     case dictionary = "Dictionary"
@@ -74,7 +74,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         var sections: [SettingsSection] {
             switch self {
             case .primary: return [.general, .history]
-            case .dictation: return [.overlay, .audio, .language]
+            case .dictation: return [.transcription, .overlay, .audio, .language]
             case .text: return [.dictionary, .shortcuts, .contextRules]
             case .system: return [.permissions]
             }
@@ -88,7 +88,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .account: return "person.circle"
         case .history: return "clock.arrow.circlepath"
         case .permissions: return "lock.shield"
-        // case .transcription: return "text.bubble"
+        case .transcription: return "text.bubble"
         case .audio: return "waveform"
         case .language: return "globe"
         case .dictionary: return "book.closed"
@@ -105,7 +105,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .account: return "Subscription and account management"
         case .history: return "View and manage transcription history"
         case .permissions: return "Microphone, accessibility, and screen recording"
-        // case .transcription: return "Transcription provider and model settings"
+        case .transcription: return "Cloud service, model, and cleanup settings"
         case .audio: return "Microphone, and recording sounds"
         case .language: return "Transcription language preferences"
         case .dictionary: return "Custom word replacements and corrections"
@@ -337,6 +337,8 @@ struct SettingsView: View {
                 EmptyView()
             case .permissions:
                 permissionsSection
+            case .transcription:
+                transcriptionSection
             case .audio:
                 audioSection
             case .language:
@@ -886,89 +888,6 @@ struct SettingsView: View {
                 }
             }
 
-            // Transcription Mode
-            groupHeader("Transcription")
-
-            SettingsCard {
-                VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Transcription Mode")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text(transcriptionProviderManager.transcriptionMode.description)
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { transcriptionProviderManager.transcriptionMode },
-                            set: { newMode in
-                                pendingTranscriptionMode = transcriptionProviderManager.requestTranscriptionMode(newMode, parakeetService: parakeetService)
-                            }
-                        )) {
-                            ForEach(TranscriptionMode.allCases, id: \.self) { mode in
-                                Text(mode.displayName).tag(mode)
-                                    .disabled(!mode.isAvailable)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .fixedSize()
-                        .onChange(of: parakeetService.state.isReady) { ready in
-                            if ready, let pending = pendingTranscriptionMode {
-                                transcriptionProviderManager.setTranscriptionMode(pending)
-                                pendingTranscriptionMode = nil
-                            }
-                        }
-                    }
-                    .padding(.vertical, 2)
-
-                    // Parakeet model status (only when local or auto mode)
-                    if transcriptionProviderManager.transcriptionMode != .cloud {
-                        Divider()
-                            .padding(.vertical, 6)
-
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Local Model")
-                                    .dsFont(.body)
-                                    .foregroundStyle(Color.dsForeground)
-                                Text(parakeetStatusText)
-                                    .dsFont(.label)
-                                    .foregroundStyle(parakeetStatusColor)
-                            }
-                            Spacer()
-
-                            switch parakeetService.state {
-                            case .notInitialized:
-                                Button("Download Model") {
-                                    Task {
-                                        try? await parakeetService.initialize()
-                                    }
-                                }
-                                .controlSize(.small)
-                            case .downloading, .initializing:
-                                ProgressView()
-                                    .controlSize(.small)
-                            case .ready, .transcribing:
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            case .error:
-                                Button("Retry") {
-                                    parakeetService.cleanup()
-                                    Task {
-                                        try? await parakeetService.initialize()
-                                    }
-                                }
-                                .controlSize(.small)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: transcriptionProviderManager.transcriptionMode)
-
             groupHeader("Application")
 
             // Startup Group
@@ -1280,35 +1199,40 @@ struct SettingsView: View {
 
     private var transcriptionSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Provider Selection
             SettingsCard {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Transcription Provider")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text("Choose how your voice is transcribed")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
+                        Text("Transcription Mode")
+                            .dsFont(.body)
+                            .foregroundStyle(Color.dsForeground)
                         Spacer()
                         Picker("", selection: Binding(
-                            get: { transcriptionProviderManager.selectedProvider },
-                            set: { transcriptionProviderManager.setProvider($0) }
+                            get: { transcriptionProviderManager.transcriptionMode },
+                            set: { mode in
+                                pendingTranscriptionMode = transcriptionProviderManager.requestTranscriptionMode(
+                                    mode,
+                                    parakeetService: parakeetService
+                                )
+                            }
                         )) {
-                            ForEach(TranscriptionProvider.availableProviders) { provider in
-                                Text(provider.displayName).tag(provider)
+                            ForEach(TranscriptionMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                                    .disabled(!mode.isAvailable)
                             }
                         }
                         .pickerStyle(.menu)
                         .fixedSize()
+                        .onChange(of: parakeetService.state.isReady) { ready in
+                            if ready, let pending = pendingTranscriptionMode {
+                                transcriptionProviderManager.setTranscriptionMode(pending)
+                                pendingTranscriptionMode = nil
+                            }
+                        }
                     }
                     .padding(.vertical, 2)
 
-                    // Provider description
                     HStack {
-                        Text(transcriptionProviderManager.selectedProvider.description)
+                        Text(transcriptionProviderManager.transcriptionMode.description)
                             .dsFont(.label)
                             .foregroundStyle(Color.dsMutedForeground)
                         Spacer()
@@ -1317,268 +1241,151 @@ struct SettingsView: View {
                 }
             }
 
-            // On-Device Model Settings (shown when Parakeet is selected)
-            if transcriptionProviderManager.selectedProvider == .parakeet {
-                SettingsCard {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Model Status")
-                                    .dsFont(.body)
-                                    .foregroundStyle(Color.dsForeground)
-                                Text(parakeetStatusText)
-                                    .dsFont(.label)
-                                    .foregroundStyle(parakeetStatusColor)
-                            }
-                            Spacer()
-
-                            switch parakeetService.state {
-                            case .notInitialized:
-                                Button("Download Model (~500 MB)") {
-                                    Task {
-                                        try? await parakeetService.initialize()
-                                    }
-                                }
-                                .controlSize(.small)
-                            case .downloading, .initializing:
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .opacity(0) // Placeholder to maintain layout
-                            case .ready, .transcribing:
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            case .error:
-                                Button("Retry") {
-                                    parakeetService.cleanup()
-                                    Task {
-                                        try? await parakeetService.initialize()
-                                    }
-                                }
-                                .controlSize(.small)
+            SettingsCard {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        Text("Cloud Model")
+                            .dsFont(.body)
+                            .foregroundStyle(Color.dsForeground)
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { transcriptionProviderManager.selectedOnlineProvider },
+                            set: { transcriptionProviderManager.setProvider($0) }
+                        )) {
+                            ForEach(TranscriptionProvider.availableOnlineProviders) { provider in
+                                cloudModelLabel(for: provider)
+                                    .tag(provider)
                             }
                         }
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                        .accessibilityLabel("Cloud Model")
+                    }
+                    .padding(.vertical, 2)
 
-                        Text("Multilingual model supporting 25 European languages")
+                    HStack {
+                        Text(transcriptionProviderManager.selectedOnlineProvider.description)
                             .dsFont(.label)
                             .foregroundStyle(Color.dsMutedForeground)
-
-                        // Progress bar for downloading/initializing states
-                        if case .downloading = parakeetService.state {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ProgressView()
-                                    .progressViewStyle(.linear)
-                                Text("Downloading model from Hugging Face...")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            }
-                        } else if case .initializing = parakeetService.state {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ProgressView()
-                                    .progressViewStyle(.linear)
-                                Text("Loading model into memory...")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            }
-                        }
+                        Spacer()
                     }
+                    .padding(.top, 4)
+
                 }
             }
+            .disabled(transcriptionProviderManager.transcriptionMode == .local)
+            .opacity(transcriptionProviderManager.transcriptionMode == .local ? 0.55 : 1)
 
-            // API Key (shown for cloud providers except Custom which uses Secrets.plist)
-            if transcriptionProviderManager.selectedProvider.requiresAPIKey && transcriptionProviderManager.selectedProvider != .custom {
-                SettingsCard {
-                    VStack(spacing: 12) {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("API Key")
-                                    .dsFont(.body)
-                                    .foregroundStyle(Color.dsForeground)
-                                Text("Your \(transcriptionProviderManager.selectedProvider.displayName) API key")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            }
-                            Spacer()
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Offline Model")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text(parakeetStatusText)
+                                .dsFont(.label)
+                                .foregroundStyle(parakeetStatusColor)
                         }
+                        Spacer()
 
-                        HStack {
-                            SecureField("Enter API key", text: $transcriptionApiKey)
-                                .textFieldStyle(.roundedBorder)
-
-                            Button("Save") {
-                                KeychainHelper.save(
-                                    key: transcriptionProviderManager.selectedProvider.apiKeyName,
-                                    value: transcriptionApiKey
-                                )
-                                showingTranscriptionKeySaved = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                    showingTranscriptionKeySaved = false
+                        switch parakeetService.state {
+                        case .notInitialized:
+                            Button("Download Model (~500 MB)") {
+                                Task {
+                                    try? await parakeetService.initialize()
                                 }
                             }
                             .controlSize(.small)
-
-                            if showingTranscriptionKeySaved {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
+                        case .downloading, .initializing:
+                            ProgressView()
+                                .controlSize(.small)
+                        case .ready, .transcribing:
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        case .error:
+                            Button("Retry") {
+                                parakeetService.cleanup()
+                                Task {
+                                    try? await parakeetService.initialize()
+                                }
                             }
+                            .controlSize(.small)
                         }
                     }
-                }
-                .onAppear {
-                    transcriptionApiKey = KeychainHelper.get(
-                        key: transcriptionProviderManager.selectedProvider.apiKeyName
-                    ) ?? ""
-                }
-                .onChange(of: transcriptionProviderManager.selectedProvider) { _ in
-                    transcriptionApiKey = KeychainHelper.get(
-                        key: transcriptionProviderManager.selectedProvider.apiKeyName
-                    ) ?? ""
-                }
-            }
 
-            // LLM Post-Processing toggle (shown for all providers except Custom)
-            if transcriptionProviderManager.selectedProvider != .custom {
-                SettingsCard {
-                    VStack(spacing: 12) {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("LLM Post-Processing")
-                                    .dsFont(.body)
-                                    .foregroundStyle(Color.dsForeground)
-                                Text("Apply dictionary, shortcuts, and context rules")
-                                    .dsFont(.label)
-                                    .foregroundStyle(Color.dsMutedForeground)
-                            }
-                            Spacer()
-                            Toggle("", isOn: Binding(
-                                get: { transcriptionProviderManager.enableLLMPostProcessing },
-                                set: { transcriptionProviderManager.setLLMPostProcessing($0) }
-                            ))
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            .labelsHidden()
+                    if case .downloading = parakeetService.state {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView()
+                                .progressViewStyle(.linear)
+                            Text("Downloading offline model...")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
                         }
-
-                        if transcriptionProviderManager.enableLLMPostProcessing {
-                            Divider()
-                                .padding(.vertical, 6)
-
-                            // Post-processing provider picker
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Post-Processing")
-                                        .dsFont(.body)
-                                        .foregroundStyle(Color.dsForeground)
-                                }
-                                Spacer()
-                                Picker("", selection: Binding(
-                                    get: { transcriptionProviderManager.postProcessingProvider },
-                                    set: { transcriptionProviderManager.setPostProcessingProvider($0) }
-                                )) {
-                                    ForEach(PostProcessingProvider.allCases) { provider in
-                                        Text(provider.displayName).tag(provider)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .fixedSize()
-                            }
-
-                            // Show LLM settings only when Custom LLM is selected
-                            if transcriptionProviderManager.postProcessingProvider == .customLLM {
-                                let requiresApiKey = llmProviderManager.requiresAPIKeyEntry
-
-                                // LLM Provider picker
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("LLM Provider")
-                                            .dsFont(.body)
-                                            .foregroundStyle(Color.dsForeground)
-                                    }
-                                    Spacer()
-                                    Picker("", selection: Binding(
-                                        get: { llmProviderManager.selectedProvider },
-                                        set: { llmProviderManager.setProvider($0) }
-                                    )) {
-                                        ForEach(LLMProvider.allCases) { provider in
-                                            Text(provider.displayName).tag(provider)
-                                        }
-                                    }
-                                    .pickerStyle(.menu)
-                                    .fixedSize()
-                                }
-
-                                if llmProviderManager.selectedProvider == .custom {
-                                    HStack {
-                                        TextField("LLM endpoint", text: $customEndpoint)
-                                            .textFieldStyle(.roundedBorder)
-                                    }
-
-                                    HStack {
-                                        TextField("LLM model", text: $customModel)
-                                            .textFieldStyle(.roundedBorder)
-
-                                        Button("Save") {
-                                            llmProviderManager.saveCustomSettings(
-                                                endpoint: customEndpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                model: customModel.trimmingCharacters(in: .whitespacesAndNewlines)
-                                            )
-                                        }
-                                    }
-                                } else if llmProviderManager.selectedProvider == .lfm25 {
-                                    Text("Uses Ollama at http://localhost:11434/v1/chat/completions with model hf.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF.")
-                                        .dsFont(.label)
-                                        .foregroundStyle(Color.dsMutedForeground)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-
-                                if requiresApiKey {
-                                    // LLM API Key
-                                    HStack {
-                                        SecureField("Enter LLM API key", text: $llmApiKey)
-                                            .textFieldStyle(.roundedBorder)
-
-                                        Button("Save") {
-                                            KeychainHelper.save(
-                                                key: llmProviderManager.selectedProvider.apiKeyName,
-                                                value: llmApiKey
-                                            )
-                                            showingLLMKeySaved = true
-                                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                                showingLLMKeySaved = false
-                                            }
-                                        }
-                                        .controlSize(.small)
-
-                                        if showingLLMKeySaved {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(.green)
-                                        }
-                                    }
-                                } else {
-                                    Text("No API key needed for local LLM endpoints.")
-                                        .dsFont(.label)
-                                        .foregroundStyle(Color.dsMutedForeground)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            } // end if customLLM
+                    } else if case .initializing = parakeetService.state {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView()
+                                .progressViewStyle(.linear)
+                            Text("Loading offline model...")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
                         }
+                    } else {
+                        Text(TranscriptionProvider.parakeet.description)
+                            .dsFont(.label)
+                            .foregroundStyle(Color.dsMutedForeground)
                     }
                 }
-                .onAppear {
-                    customEndpoint = llmProviderManager.customEndpoint
-                    customModel = llmProviderManager.customModel
-                    llmApiKey = KeychainHelper.get(
-                        key: llmProviderManager.selectedProvider.apiKeyName
-                    ) ?? ""
-                }
-                .onChange(of: llmProviderManager.selectedProvider) { _ in
-                    customEndpoint = llmProviderManager.customEndpoint
-                    customModel = llmProviderManager.customModel
-                    llmApiKey = KeychainHelper.get(
-                        key: llmProviderManager.selectedProvider.apiKeyName
-                    ) ?? ""
-                }
             }
+            .disabled(transcriptionProviderManager.transcriptionMode == .cloud)
+            .opacity(transcriptionProviderManager.transcriptionMode == .cloud ? 0.55 : 1)
+
+            // Cleanup is product-defined and intentionally has no user-facing controls.
         }
+    }
+
+    private func cloudModelLabel(
+        for provider: TranscriptionProvider
+    ) -> some View {
+        HStack(spacing: 7) {
+            Image(nsImage: cloudModelIcon(for: provider))
+                .frame(width: 16, height: 16)
+            Text(provider.onlineServiceName)
+        }
+    }
+
+    private func cloudModelIcon(
+        for provider: TranscriptionProvider
+    ) -> NSImage {
+        switch provider {
+        case .aidictation, .parakeet:
+            return resizedMenuIcon(NSApplication.shared.applicationIconImage)
+        case .codex:
+            if let appURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.openai.codex"
+            ) {
+                return resizedMenuIcon(NSWorkspace.shared.icon(forFile: appURL.path))
+            }
+            return resizedMenuIcon(
+                NSImage(named: NSImage.applicationIconName)
+                    ?? NSApplication.shared.applicationIconImage
+            )
+        }
+    }
+
+    private func resizedMenuIcon(_ source: NSImage) -> NSImage {
+        let size = NSSize(width: 16, height: 16)
+        let icon = NSImage(size: size)
+        icon.lockFocus()
+        source.draw(
+            in: NSRect(origin: .zero, size: size),
+            from: NSRect(origin: .zero, size: source.size),
+            operation: .sourceOver,
+            fraction: 1
+        )
+        icon.unlockFocus()
+        icon.isTemplate = false
+        return icon
     }
 
     private var parakeetStatusText: String {

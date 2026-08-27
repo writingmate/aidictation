@@ -275,7 +275,7 @@ private func testProductionIntegrationContracts() throws {
         range: startRecordingStart..<appState.endIndex
     )!.lowerBound
     let startRecordingBody = appState[startRecordingStart..<startRecordingEnd]
-    let retranscribeStart = appState.range(of: "func retranscribe(recording: Recording)")!.lowerBound
+    let retranscribeStart = appState.range(of: "func retranscribe(")!.lowerBound
     let retranscribeEnd = appState.range(
         of: "private func runRetranscription(",
         range: retranscribeStart..<appState.endIndex

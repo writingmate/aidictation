@@ -216,6 +216,14 @@ public class LanguageManager: ObservableObject {
         return languageCodes.isEmpty ? nil : languageCodes.joined(separator: ",")
     }
 
+    public var apiLanguageCodes: [String] {
+        guard !selectedLanguages.contains(.auto) else { return [] }
+        return selectedLanguages
+            .filter { $0 != .auto }
+            .map(\.rawValue)
+            .sorted()
+    }
+
     private static func defaultLanguages() -> Set<Language> {
         #if os(macOS)
         let keyboardLanguages = systemKeyboardLanguages()

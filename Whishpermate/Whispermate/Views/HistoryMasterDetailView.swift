@@ -40,6 +40,53 @@ enum AIApp: String, CaseIterable, Identifiable {
     }
 }
 
+private struct RetranscriptionRouteMenu<LabelContent: View>: View {
+    let recording: Recording
+    let label: () -> LabelContent
+
+    var body: some View {
+        Menu {
+            Button("Offline") {
+                retry(mode: .local, provider: .parakeet)
+            }
+            .disabled(!TranscriptionMode.local.isAvailable)
+
+            Menu("Online") {
+                Button("AI Dictation") {
+                    retry(mode: .cloud, provider: .aidictation)
+                }
+                Button("ChatGPT") {
+                    retry(mode: .cloud, provider: .codex)
+                }
+            }
+
+            Menu("Auto") {
+                Button("AI Dictation") {
+                    retry(mode: .auto, provider: .aidictation)
+                }
+                .disabled(!TranscriptionMode.auto.isAvailable)
+                Button("ChatGPT") {
+                    retry(mode: .auto, provider: .codex)
+                }
+                .disabled(!TranscriptionMode.auto.isAvailable)
+            }
+        } label: {
+            label()
+        }
+    }
+
+    private func retry(
+        mode: TranscriptionMode,
+        provider: TranscriptionProvider
+    ) {
+        AppState.shared.retranscribe(
+            recording: recording,
+            mode: mode,
+            onlineProvider: provider
+        )
+    }
+}
+
 /// Master-detail view that combines history list with recording interface
 struct HistoryMasterDetailView: View {
     var body: some View {
@@ -224,9 +271,7 @@ struct HistorySidebarView: View {
                     }
                     .disabled(recording.transcription == nil)
 
-                    Button {
-                        retryTranscription(recording)
-                    } label: {
+                    RetranscriptionRouteMenu(recording: recording) {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     }
                     .disabled(
@@ -254,10 +299,6 @@ struct HistorySidebarView: View {
         guard let transcription = recording.transcription else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(transcription, forType: .string)
-    }
-
-    private func retryTranscription(_ recording: Recording) {
-        AppState.shared.retranscribe(recording: recording)
     }
 
     private func revealInFinder(_ recording: Recording) {
@@ -474,7 +515,7 @@ struct RecordingDetailView: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Button(action: retryTranscription) {
+                    RetranscriptionRouteMenu(recording: recording) {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     }
                     .disabled(
@@ -534,10 +575,6 @@ struct RecordingDetailView: View {
         } else {
             audioPlayer.play(url: recording.audioFileURL)
         }
-    }
-
-    private func retryTranscription() {
-        AppState.shared.retranscribe(recording: recording)
     }
 
     private func deleteRecording() {

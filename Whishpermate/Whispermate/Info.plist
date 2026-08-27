@@ -4,10 +4,12 @@
 <dict>
 	<key>ATSApplicationFontsPath</key>
 	<string>.</string>
+	<key>AIDictationURLScheme</key>
+	<string>$(AIDICTATION_URL_SCHEME)</string>
 	<key>CFBundleDisplayName</key>
-	<string>AI Dictation</string>
+	<string>$(AIDICTATION_DISPLAY_NAME)</string>
 	<key>CFBundleName</key>
-	<string>AI Dictation</string>
+	<string>$(AIDICTATION_DISPLAY_NAME)</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/writingmate/aidictation/main/appcast.xml</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -18,10 +20,10 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>ai.writingmate.aidictation</string>
+			<string>$(AIDICTATION_MACOS_BUNDLE_ID)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>aidictation</string>
+				<string>$(AIDICTATION_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>

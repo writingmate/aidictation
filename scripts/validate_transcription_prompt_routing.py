@@ -138,6 +138,11 @@ require(
     "macOS recognition lost vocabulary or phrase hints",
 )
 require(
+    "dictionaryManager.formattingInstructions" in stt_builder
+    and "shortcutManager.formattingInstructions" in stt_builder,
+    "macOS recognition lost replacements or phrase expansions",
+)
+require(
     '"Vocabulary:' not in stt_builder and '"Phrases:' not in stt_builder,
     "macOS recognition prompt contains cleanup-only labels",
 )
@@ -151,6 +156,22 @@ require(
     "buildSTTHintPromptComponents()" in realtime_builder,
     "realtime recognition is not using recognition-only hints",
 )
+require(
+    "dictionaryManager.transcriptionKeywords" in app_state_source
+    and "shortcutManager.transcriptionKeywords" in app_state_source,
+    "modern transcription requests lost literal keyword hints",
+)
+require(
+    "languageManager.apiLanguageCodes" in app_state_source,
+    "modern transcription requests lost multiple language hints",
+)
+for field in ('transcription["keywords"]', 'transcription["languages"]'):
+    require(
+        field in (ROOT / "Whishpermate/Whispermate/Services/OpenAIRealtimeTranscriptionClient.swift").read_text(),
+        f"realtime request mapping lost {field}",
+    )
+for field in ('name: "keywords"', 'name: "languages"'):
+    require(field in mac_client_source, f"batch request mapping lost {field}")
 
 command_context = function_body(
     app_state_source,

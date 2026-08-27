@@ -96,6 +96,16 @@ public class DictionaryManager: ObservableObject {
         return hints
     }
 
+    public var transcriptionKeywords: [String] {
+        entries
+            .filter(\.isEnabled)
+            .flatMap { entry in
+                [entry.trigger, entry.replacement]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }
+    }
+
     /// Apply dictionary replacements to transcribed text (only for entries with replacements)
     public func applyReplacements(to text: String) -> String {
         var result = text

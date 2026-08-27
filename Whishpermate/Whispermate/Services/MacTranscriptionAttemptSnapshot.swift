@@ -83,6 +83,9 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
     let aidictationPostProcessingEndpoint: String?
     let aidictationPostProcessingKey: String?
     let languageCode: String?
+    let languageCodes: [String]
+    let transcriptionKeywords: [String]
+    let recordingPrompt: String?
     let sttHintPrompt: String
     let cleanupPromptComponents: [String]
     let baseCleanupPromptComponents: [String]
@@ -125,6 +128,8 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
         if !contextInstructions.isEmpty {
             resolvedCleanupComponents.append(contextInstructions)
         }
+        let resolvedRecordingPrompt = appContext?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return MacTranscriptionAttemptSnapshot(
             outputMode: resolvedOutputMode,
             transcriptionOptions: resolvedOptions,
@@ -144,6 +149,11 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
             aidictationPostProcessingEndpoint: aidictationPostProcessingEndpoint,
             aidictationPostProcessingKey: aidictationPostProcessingKey,
             languageCode: languageCode,
+            languageCodes: languageCodes,
+            transcriptionKeywords: transcriptionKeywords,
+            recordingPrompt: resolvedRecordingPrompt?.isEmpty == false
+                ? resolvedRecordingPrompt
+                : recordingPrompt,
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: resolvedCleanupComponents,
             baseCleanupPromptComponents: baseCleanupPromptComponents,

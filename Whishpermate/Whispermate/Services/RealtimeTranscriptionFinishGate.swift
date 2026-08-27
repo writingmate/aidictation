@@ -33,6 +33,11 @@ nonisolated protocol RealtimeTranscriptionFinalizing: AnyObject, Sendable {
     func close()
 }
 
+nonisolated protocol RealtimeTranscriptionStreaming: RealtimeTranscriptionFinalizing {
+    func start()
+    func sendAudio(_ audioData: Data)
+}
+
 /// Attempt-scoped owner for one realtime stream finalization. It keeps the
 /// transport alive after the recorder drops its weak audio handler and gives
 /// every cancellation path one idempotent close operation.

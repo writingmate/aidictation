@@ -5,46 +5,41 @@ internal import Combine
 // MARK: - Transcription Provider
 
 enum TranscriptionProvider: String, CaseIterable, Identifiable {
-    case parakeet // On-device (first for prominence)
-    case groq
-    case openai
-    case custom
+    case parakeet
+    case aidictation = "custom"
+    case codex
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .parakeet: return "Offline (Parakeet)"
-        case .groq: return "Cloud (Groq)"
-        case .openai: return "Cloud (OpenAI)"
-        case .custom: return "Cloud (AIDictation)"
+        case .parakeet: return "Offline"
+        case .aidictation: return "AI Dictation"
+        case .codex: return "Codex"
         }
     }
 
     var description: String {
         switch self {
-        case .parakeet: return "Private, offline, fast"
-        case .groq: return "Whisper Large V3"
-        case .openai: return "Whisper API"
-        case .custom: return "Enhanced Whisper + LLM"
+        case .parakeet: return "Keeps recordings and transcription on this Mac"
+        case .aidictation: return "Produces polished, ready-to-use text"
+        case .codex: return "Uses transcription from your ChatGPT account"
         }
     }
 
     var defaultEndpoint: String {
         switch self {
-        case .parakeet: return "" // On-device, no endpoint
-        case .groq: return "https://api.groq.com/openai/v1/audio/transcriptions"
-        case .openai: return "https://api.openai.com/v1/audio/transcriptions"
-        case .custom: return "https://writingmate.ai/api/openai/v1/audio/transcriptions"
+        case .parakeet: return ""
+        case .aidictation: return "https://writingmate.ai/api/openai/v1/audio/transcriptions"
+        case .codex: return CodexTranscriptionSupport.webSocketEndpoint.absoluteString
         }
     }
 
     var defaultModel: String {
         switch self {
-        case .parakeet: return "parakeet-tdt-0.6b-v3" // Multilingual
-        case .groq: return "whisper-large-v3-turbo"
-        case .openai: return "whisper-1"
-        case .custom: return "groq/whisper-large-v3-turbo"
+        case .parakeet: return "parakeet-tdt-0.6b-v3"
+        case .aidictation: return "groq/whisper-large-v3-turbo"
+        case .codex: return ""
         }
     }
 
@@ -52,35 +47,56 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet:
             return .local
-        case .groq, .openai, .custom:
+        case .codex:
+            return .realtime
+        case .aidictation:
             return .batch
         }
-    }
-
-    var apiKeyName: String {
-        return "\(rawValue)_transcription_api_key"
     }
 
     var isOnDevice: Bool {
         return self == .parakeet
     }
 
-    var requiresAPIKey: Bool {
+    static var availableOnlineProviders: [TranscriptionProvider] {
+        var providers: [TranscriptionProvider] = [.aidictation]
+        if CodexTranscriptionSupport.isInstalled {
+            providers.append(.codex)
+        }
+        return providers
+    }
+
+    var onlineServiceName: String {
         switch self {
-        case .groq, .openai:
-            return true
-        case .parakeet, .custom:
-            return false
+        case .aidictation: return "AI Dictation"
+        case .codex: return "ChatGPT"
+        case .parakeet: return "Offline"
         }
     }
 
-    /// Returns all available providers
-    static var availableProviders: [TranscriptionProvider] {
-        if ParakeetTranscriptionService.isRuntimeSupported {
-            return allCases
-        }
-        return allCases.filter { $0 != .parakeet }
+}
+
+nonisolated enum CodexTranscriptionSupport {
+    static let webSocketEndpoint = URL(
+        string: "wss://chatgpt.com/backend-api/dictation/stream"
+    )!
+    static let batchEndpoint = URL(
+        string: "https://chatgpt.com/backend-api/transcribe"
+    )!
+
+    static var executableURL: URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
+            home.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex"),
+            home.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex"),
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
+
+    static var isInstalled: Bool { executableURL != nil }
+
 }
 
 /// Runtime transport used by the Mac app. Server-side model/provider choices are
@@ -128,16 +144,16 @@ enum TranscriptionMode: String, CaseIterable {
     var displayName: String {
         switch self {
         case .auto: return "Auto"
-        case .cloud: return "Cloud"
-        case .local: return "Local"
+        case .cloud: return "Online"
+        case .local: return "Offline"
         }
     }
 
     var description: String {
         switch self {
-        case .auto: return "Cloud when online, local when offline"
-        case .cloud: return "Cloud-based, slower response, excellent quality"
-        case .local: return "On-device, instant response, good quality"
+        case .auto: return "Online when connected, offline when disconnected"
+        case .cloud: return "Send recordings to your selected online service"
+        case .local: return "Keep speech recognition on this Mac"
         }
     }
 
@@ -158,7 +174,8 @@ enum TranscriptionMode: String, CaseIterable {
 class TranscriptionProviderManager: ObservableObject {
     static let shared = TranscriptionProviderManager()
 
-    @Published var selectedProvider: TranscriptionProvider = .custom
+    @Published var selectedProvider: TranscriptionProvider = .aidictation
+    @Published private(set) var selectedOnlineProvider: TranscriptionProvider = .aidictation
     @Published var transcriptionMode: TranscriptionMode = .auto
     @Published var customEndpoint: String = ""
     @Published var customModel: String = ""
@@ -168,6 +185,7 @@ class TranscriptionProviderManager: ObservableObject {
 
     private enum Keys {
         static let selectedProvider = "transcriptionProvider"
+        static let selectedOnlineProvider = "onlineTranscriptionProvider"
         static let transcriptionMode = "transcriptionMode"
         static let customTransport = "customTranscriptionTransport"
     }
@@ -186,7 +204,7 @@ class TranscriptionProviderManager: ObservableObject {
         {
             selectedProvider = provider
         } else {
-            selectedProvider = .custom
+            selectedProvider = .aidictation
         }
 
         if let savedMode = AppDefaults.shared.string(forKey: Keys.transcriptionMode),
@@ -198,16 +216,26 @@ class TranscriptionProviderManager: ObservableObject {
             transcriptionMode = selectedProvider == .parakeet ? .local : .cloud
         }
 
+        let savedOnlineProvider = AppDefaults.shared
+            .string(forKey: Keys.selectedOnlineProvider)
+            .flatMap(TranscriptionProvider.init(rawValue:))
+        selectedOnlineProvider = normalizedOnlineProvider(
+            savedOnlineProvider ?? (selectedProvider.isOnDevice ? .aidictation : selectedProvider)
+        )
+        selectedProvider = transcriptionMode == .local
+            ? .parakeet
+            : selectedOnlineProvider
+
         if !ParakeetTranscriptionService.isRuntimeSupported {
-            if selectedProvider == .parakeet {
-                selectedProvider = .custom
-                AppDefaults.shared.set(TranscriptionProvider.custom.rawValue, forKey: Keys.selectedProvider)
-            }
             if transcriptionMode == .local || transcriptionMode == .auto {
                 transcriptionMode = .cloud
                 AppDefaults.shared.set(TranscriptionMode.cloud.rawValue, forKey: Keys.transcriptionMode)
             }
+            selectedProvider = selectedOnlineProvider
         }
+
+        AppDefaults.shared.set(selectedOnlineProvider.rawValue, forKey: Keys.selectedOnlineProvider)
+        AppDefaults.shared.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
 
         enableLLMPostProcessing = false
         postProcessingProvider = .aidictation
@@ -236,10 +264,8 @@ class TranscriptionProviderManager: ObservableObject {
             LanguageManager.shared.restrictToParakeetSupported()
             AppDefaults.shared.set(TranscriptionProvider.parakeet.rawValue, forKey: Keys.selectedProvider)
         case .cloud, .auto:
-            if selectedProvider == .parakeet {
-                selectedProvider = .custom
-                AppDefaults.shared.set(TranscriptionProvider.custom.rawValue, forKey: Keys.selectedProvider)
-            }
+            selectedProvider = selectedOnlineProvider
+            AppDefaults.shared.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
         }
         DebugLog.info("Set mode: \(mode.displayName), provider: \(selectedProvider.displayName)", context: "TranscriptionProviderManager")
     }
@@ -279,9 +305,31 @@ class TranscriptionProviderManager: ObservableObject {
     }
 
     func setProvider(_ provider: TranscriptionProvider) {
-        selectedProvider = provider
-        AppDefaults.shared.set(provider.rawValue, forKey: Keys.selectedProvider)
-        DebugLog.info("Set provider: \(provider.displayName)", context: "TranscriptionProviderManager")
+        guard !provider.isOnDevice else {
+            setTranscriptionMode(.local)
+            return
+        }
+        let onlineProvider = normalizedOnlineProvider(provider)
+        selectedOnlineProvider = onlineProvider
+        if transcriptionMode != .local {
+            selectedProvider = onlineProvider
+            AppDefaults.shared.set(onlineProvider.rawValue, forKey: Keys.selectedProvider)
+        }
+        AppDefaults.shared.set(onlineProvider.rawValue, forKey: Keys.selectedOnlineProvider)
+        DebugLog.info("Set online provider: \(onlineProvider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    private func normalizedOnlineProvider(
+        _ provider: TranscriptionProvider
+    ) -> TranscriptionProvider {
+        switch provider {
+        case .codex where CodexTranscriptionSupport.isInstalled:
+            return .codex
+        case .aidictation:
+            return .aidictation
+        default:
+            return .aidictation
+        }
     }
 
     func setLLMPostProcessing(_ enabled: Bool) {
@@ -306,92 +354,37 @@ class TranscriptionProviderManager: ObservableObject {
     }
 
     var effectiveEndpoint: String {
-        // For custom provider, check Secrets.plist first
-        if selectedProvider == .custom {
+        if selectedProvider == .aidictation {
             if let secretEndpoint = SecretsLoader.customTranscriptionEndpoint(), !secretEndpoint.isEmpty {
-                return normalizedCustomEndpoint(secretEndpoint)
+                return secretEndpoint
             }
         }
 
         if !customEndpoint.isEmpty {
-            return normalizedCustomEndpoint(customEndpoint)
+            return customEndpoint
         }
         return selectedProvider.defaultEndpoint
     }
 
     var effectiveModel: String {
-        // For custom provider, check Secrets.plist first
-        let endpoint = effectiveEndpoint
-        if selectedProvider == .custom {
+        if selectedProvider == .aidictation {
             if let secretModel = SecretsLoader.customTranscriptionModel(), !secretModel.isEmpty {
-                return normalizedCustomModel(secretModel, endpoint: endpoint)
+                return secretModel
             }
         }
 
         if !customModel.isEmpty {
-            return normalizedCustomModel(customModel, endpoint: endpoint)
+            return customModel
         }
         return selectedProvider.defaultModel
     }
 
-    private func normalizedCustomModel(_ model: String, endpoint: String) -> String {
-        guard selectedProvider == .custom,
-              let url = URL(string: endpoint),
-              let host = url.host?.lowercased()
-        else {
-            return model
-        }
-
-        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if host == "api.openai.com",
-           url.path == "/v1/audio/transcriptions",
-           trimmedModel == "gpt-realtime-whisper"
-        {
-            DebugLog.warning("Replacing realtime transcription model \(model) with \(TranscriptionProvider.openai.defaultModel) for HTTP batch transcription", context: "TranscriptionProviderManager")
-            return TranscriptionProvider.openai.defaultModel
-        }
-
-        guard host.contains("writingmate") || host.contains("aidictation") else {
-            return model
-        }
-
-        switch trimmedModel {
-        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
-            DebugLog.warning("Replacing stale shipped transcription model \(model) with \(TranscriptionProvider.custom.defaultModel)", context: "TranscriptionProviderManager")
-            return TranscriptionProvider.custom.defaultModel
-        default:
-            return model
-        }
-    }
-
-    private func normalizedCustomEndpoint(_ endpoint: String) -> String {
-        let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmedEndpoint),
-              let host = url.host?.lowercased(),
-              host == "api.openai.com"
-        else {
-            return endpoint
-        }
-
-        let scheme = url.scheme?.lowercased()
-        if scheme == "ws" || scheme == "wss" || url.path == "/v1/realtime" {
-            DebugLog.warning("Replacing OpenAI realtime endpoint with HTTP batch transcription endpoint", context: "TranscriptionProviderManager")
-            return TranscriptionProvider.openai.defaultEndpoint
-        }
-
-        return endpoint
-    }
-
     var effectiveTransport: TranscriptionTransport {
-        if selectedProvider == .custom {
+        if selectedProvider == .aidictation {
             if let secretTransport = SecretsLoader.getValue(for: "CustomTranscriptionTransport")?.lowercased(),
                let transport = TranscriptionTransport(rawValue: secretTransport)
             {
                 return transport
-            }
-            if URL(string: effectiveEndpoint)?.host?.lowercased() == "api.openai.com" {
-                return .batch
             }
             return customTransport
         }
@@ -554,16 +547,5 @@ class LLMProviderManager: ObservableObject {
 
     var requiresAPIKeyEntry: Bool {
         return selectedProvider.requiresAPIKey && !isLoopbackEndpoint
-    }
-}
-
-// MARK: - Legacy API Provider (for backwards compatibility during migration)
-
-class APIProviderManager: ObservableObject {
-    @Published var selectedProvider: TranscriptionProvider = .groq
-
-    init() {
-        // This is now just a wrapper for backwards compatibility
-        selectedProvider = .groq
     }
 }

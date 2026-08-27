@@ -133,6 +133,11 @@ class AppState: ObservableObject {
             return
         }
 
+        guard !overlayManager.showMissingPermissionIfNeeded() else {
+            DebugLog.info("Recording blocked by missing system permission", context: "AppState")
+            return
+        }
+
         // Reset recording mode - command mode is only active when explicitly requested
         if !isCommandMode {
             recordingMode = .dictation
@@ -2605,9 +2610,6 @@ class AppState: ObservableObject {
                 }
             )
         case .custom:
-            guard let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty else {
-                return
-            }
             let realtimeModel = resolvedRealtimeTranscriptionModel(
                 configuredModel: snapshot.transcriptionModel,
                 overrideModel: snapshot.customRealtimeModel
@@ -2617,6 +2619,9 @@ class AppState: ObservableObject {
                 configuredEndpoint: snapshot.transcriptionEndpoint,
                 overrideEndpoint: snapshot.customRealtimeEndpoint
             ) {
+                guard let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty else {
+                    return
+                }
                 client = OpenAIRealtimeTranscriptionClient(
                     apiKey: apiKey,
                     webSocketURL: webSocketURL,
@@ -2645,9 +2650,19 @@ class AppState: ObservableObject {
 
                 client = OpenAIRealtimeTranscriptionClient(
                     authorizationProvider: {
-                        try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
+                        let token: String
+                        if Self.isWritingmateRealtimeSessionEndpoint(endpoint) {
+                            token = try await AuthManager.shared.accessToken()
+                        } else if let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty {
+                            token = apiKey
+                        } else {
+                            throw OpenAIRealtimeTranscriptionClientError.clientSecretRequestFailed(
+                                "Cloud transcription credentials are unavailable"
+                            )
+                        }
+                        return try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
                             endpoint: endpoint,
-                            apiKey: apiKey,
+                            apiKey: token,
                             model: realtimeModel,
                             prompt: realtimePrompt,
                             language: languageCode
@@ -2693,6 +2708,13 @@ class AppState: ObservableObject {
         return WritingmateRealtimeClientSecretProvider.endpoint(
             from: configuredEndpoint
         )
+    }
+
+    private static func isWritingmateRealtimeSessionEndpoint(_ endpoint: URL) -> Bool {
+        let host = endpoint.host?.lowercased()
+        return endpoint.scheme?.lowercased() == "https"
+            && (host == "writingmate.ai" || host == "www.writingmate.ai")
+            && endpoint.path == "/api/openai/v1/realtime/client_secrets"
     }
 
     private func customRealtimeWebSocketURL(

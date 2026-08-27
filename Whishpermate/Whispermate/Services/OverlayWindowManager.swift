@@ -1,8 +1,38 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 import WhisperMateShared
 internal import Combine
 import AVFoundation
+
+enum OverlayPermissionIssue: Equatable {
+    case microphone
+    case accessibility
+
+    var message: String {
+        switch self {
+        case .microphone:
+            return "Microphone access is off"
+        case .accessibility:
+            return "Accessibility access is off"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .microphone:
+            return "mic.slash.fill"
+        case .accessibility:
+            return "hand.raised.fill"
+        }
+    }
+}
+
+enum OverlayPermissionCalloutMetrics {
+    static let width: CGFloat = 250
+    static let height: CGFloat = 36
+    static let spacing: CGFloat = 8
+}
 
 enum OverlayPosition: String, CaseIterable, Codable {
     case top = "Top"
@@ -98,6 +128,7 @@ class OverlayWindowManager: ObservableObject {
 
     @Published var isRecording = false
     @Published var isProcessing = false
+    @Published private(set) var permissionIssue: OverlayPermissionIssue?
 
     @Published var audioLevel: Float = 0.0 {
         didSet {
@@ -350,6 +381,98 @@ class OverlayWindowManager: ObservableObject {
         transition(to: .idle)
     }
 
+    /// Returns true when capture should remain idle while the user fixes a
+    /// missing system permission. The issue is rendered beside the overlay.
+    @discardableResult
+    func showMissingPermissionIfNeeded() -> Bool {
+        if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+            showPermissionIssue(.microphone)
+            return true
+        }
+
+        if !AXIsProcessTrusted() {
+            showPermissionIssue(.accessibility)
+            return true
+        }
+
+        clearPermissionIssue()
+        return false
+    }
+
+    func setUpPermission() {
+        guard let permissionIssue else { return }
+
+        switch permissionIssue {
+        case .microphone:
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if granted {
+                            self.initializeAudioObservers()
+                            self.refreshPermissionIssue()
+                        }
+                    }
+                }
+            case .denied, .restricted:
+                PrivacyPermissionFlowManager.shared.open(.microphone)
+            case .authorized:
+                initializeAudioObservers()
+                refreshPermissionIssue()
+            @unknown default:
+                PrivacyPermissionFlowManager.shared.open(.microphone)
+            }
+
+        case .accessibility:
+            PrivacyPermissionFlowManager.shared.open(
+                .accessibility,
+                promptForAccessibilityTrust: true,
+                permissionGranted: { AXIsProcessTrusted() }
+            )
+        }
+    }
+
+    private func showPermissionIssue(_ issue: OverlayPermissionIssue) {
+        guard permissionIssue != issue else {
+            ensureWindowExists()
+            overlayWindow?.orderFrontRegardless()
+            return
+        }
+
+        permissionIssue = issue
+        hoverCollapseResizeWorkItem?.cancel()
+        keepIdleVisibleAfterCollapse = true
+        ensureWindowExists()
+        positionStage()
+        overlayWindow?.orderFrontRegardless()
+    }
+
+    private func clearPermissionIssue() {
+        guard permissionIssue != nil else { return }
+        permissionIssue = nil
+        positionStage()
+        if overlayState == .idle, hideIdleState {
+            overlayWindow?.orderOut(nil)
+        }
+    }
+
+    private func refreshPermissionIssue() {
+        guard let permissionIssue else { return }
+
+        let isGranted: Bool
+        switch permissionIssue {
+        case .microphone:
+            isGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        case .accessibility:
+            isGranted = AXIsProcessTrusted()
+        }
+
+        if isGranted {
+            clearPermissionIssue()
+        }
+    }
+
     private func ensureWindowExists() {
         if overlayWindow == nil {
             DebugLog.info("ensureWindowExists: creating window", context: "OverlayWindowManager")
@@ -432,7 +555,7 @@ class OverlayWindowManager: ObservableObject {
         guard overlayState == .idle else { return }
         DebugLog.info("onCollapseAnimationComplete", context: "OverlayWindowManager")
         updateWindowSizeForState(.idle, animated: false, preserveAnchor: true)
-        let shouldHideIdle = hideIdleState && !keepIdleVisibleAfterCollapse
+        let shouldHideIdle = hideIdleState && permissionIssue == nil && !keepIdleVisibleAfterCollapse
         keepIdleVisibleAfterCollapse = false
         if shouldHideIdle {
             overlayWindow?.orderOut(nil)
@@ -478,13 +601,19 @@ class OverlayWindowManager: ObservableObject {
             DebugLog.warning("positionStage skipped: window or target screen missing", context: "OverlayWindowManager")
             return
         }
+        let stageWidth = permissionIssue == nil
+            ? Constants.stageWidth
+            : Constants.stageWidth + 2 * (OverlayPermissionCalloutMetrics.width + OverlayPermissionCalloutMetrics.spacing)
+        let stageHeight = permissionIssue == nil
+            ? Constants.stageHeight
+            : max(Constants.stageHeight, OverlayPermissionCalloutMetrics.height + (Constants.edgeMargin * 2))
         let (xPos, yPos) = calculatePosition(
             for: position,
             screenFrame: screen.visibleFrame,
-            windowWidth: Constants.stageWidth,
-            windowHeight: Constants.stageHeight
+            windowWidth: stageWidth,
+            windowHeight: stageHeight
         )
-        let newFrame = NSRect(x: xPos, y: yPos, width: Constants.stageWidth, height: Constants.stageHeight)
+        let newFrame = NSRect(x: xPos, y: yPos, width: stageWidth, height: stageHeight)
         guard window.frame != newFrame else { return }
         DebugLog.info(
             "positionStage screen=\(describeScreen(screen)) frame=\(formatRect(newFrame))",
@@ -644,6 +773,7 @@ class OverlayWindowManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             DebugLog.info("Frontmost app changed, repositioning overlay", context: "OverlayWindowManager")
+            self?.refreshPermissionIssue()
             self?.logWindowState("observer-activate-before")
             self?.repositionWindow()
             guard let self else { return }

@@ -484,6 +484,12 @@ nonisolated final class OpenAIRealtimeTranscriptionClient: @unchecked Sendable, 
     }
 
     private func commitAudioBufferIfNeeded(reason: String) {
+        // gpt-live-transcribe emits deltas while audio is appended. Committing
+        // every ~0.8 seconds incorrectly turns one dictation into dozens of
+        // tiny, independently finalized utterances. Keep the legacy cadence
+        // only for the older realtime-whisper contract; live transcription is
+        // committed once after the recorder's delivery queue drains.
+        guard transcriptionModel == Self.defaultTranscriptionModel else { return }
         guard uncommittedAudioByteCount >= Self.liveCommitByteThreshold else { return }
         commitAudioBuffer(reason: reason)
     }

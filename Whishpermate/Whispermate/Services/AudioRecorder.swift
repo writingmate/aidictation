@@ -619,7 +619,12 @@ class AudioRecorder: NSObject, ObservableObject {
         }
 
         if let realtimeDeliveryLease {
-            if let chunk = realtimePCMChunk(from: buffer) {
+            if let realtimeOutputFormat,
+               let chunk = session.realtimePCMChunk(
+                   from: buffer,
+                   outputFormat: realtimeOutputFormat
+               )
+            {
                 realtimeDeliveryLease.deliver(chunk)
             } else {
                 realtimeDeliveryLease.failCoverage()
@@ -831,45 +836,6 @@ class AudioRecorder: NSObject, ObservableObject {
 
         guard sampleCount > 0 else { return nil }
         return sqrt(sumSquares / Float(sampleCount))
-    }
-
-    private func realtimePCMChunk(from buffer: AVAudioPCMBuffer) -> Data? {
-        guard let realtimeOutputFormat else { return nil }
-
-        let inputFormat = buffer.format
-        guard let converter = AVAudioConverter(from: inputFormat, to: realtimeOutputFormat) else {
-            return nil
-        }
-
-        let ratio = realtimeOutputFormat.sampleRate / inputFormat.sampleRate
-        let frameCapacity = AVAudioFrameCount(max(1, ceil(Double(buffer.frameLength) * ratio)))
-        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: realtimeOutputFormat, frameCapacity: frameCapacity) else {
-            return nil
-        }
-
-        var conversionError: NSError?
-        var didProvideInput = false
-        converter.convert(to: convertedBuffer, error: &conversionError) { _, outStatus in
-            if didProvideInput {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-
-            didProvideInput = true
-            outStatus.pointee = .haveData
-            return buffer
-        }
-
-        if let conversionError {
-            DebugLog.info("Realtime audio conversion failed: \(conversionError)", context: "AudioRecorder")
-            return nil
-        }
-
-        guard let channelData = convertedBuffer.int16ChannelData else { return nil }
-        let byteCount = Int(convertedBuffer.frameLength) * MemoryLayout<Int16>.size
-        guard byteCount > 0 else { return nil }
-
-        return Data(bytes: channelData.pointee, count: byteCount)
     }
 
     func stopRecording(
@@ -1210,6 +1176,15 @@ private final class MacCaptureSession: @unchecked Sendable {
     private var cachedConverter: AVAudioConverter?
     private var cachedConverterInputFormat: AVAudioFormat?
 
+    // Realtime audio has its own 24 kHz PCM target. This converter must also
+    // outlive individual tap callbacks: rebuilding it for every 2,048-frame
+    // buffer repeatedly discards the resampler's priming/filter state and
+    // produces discontinuities in the bytes sent over the WebSocket.
+    private let realtimeConverterLock = NSLock()
+    private var cachedRealtimeConverter: AVAudioConverter?
+    private var cachedRealtimeConverterInputFormat: AVAudioFormat?
+    private var cachedRealtimeConverterOutputFormat: AVAudioFormat?
+
     /// Returns a converter from `inputFormat` to `outputFormat`, reusing the
     /// previous one whenever the device keeps handing us the same format.
     func converter(from inputFormat: AVAudioFormat) -> AVAudioConverter? {
@@ -1226,6 +1201,77 @@ private final class MacCaptureSession: @unchecked Sendable {
         cachedConverter = converter
         cachedConverterInputFormat = inputFormat
         return converter
+    }
+
+    func realtimePCMChunk(
+        from buffer: AVAudioPCMBuffer,
+        outputFormat: AVAudioFormat
+    ) -> Data? {
+        realtimeConverterLock.lock()
+        defer { realtimeConverterLock.unlock() }
+
+        let inputFormat = buffer.format
+        let converter: AVAudioConverter
+        if let cachedRealtimeConverter,
+           cachedRealtimeConverterInputFormat == inputFormat,
+           cachedRealtimeConverterOutputFormat == outputFormat
+        {
+            converter = cachedRealtimeConverter
+        } else {
+            guard let newConverter = AVAudioConverter(
+                from: inputFormat,
+                to: outputFormat
+            ) else { return nil }
+            cachedRealtimeConverter = newConverter
+            cachedRealtimeConverterInputFormat = inputFormat
+            cachedRealtimeConverterOutputFormat = outputFormat
+            converter = newConverter
+        }
+
+        let ratio = outputFormat.sampleRate / inputFormat.sampleRate
+        // Leave room for stateful resampler output that crosses a callback
+        // boundary instead of truncating it to this callback's ideal ratio.
+        let frameCapacity = AVAudioFrameCount(
+            max(1, ceil(Double(buffer.frameLength) * ratio) + 64)
+        )
+        guard let convertedBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: frameCapacity
+        ) else { return nil }
+
+        var conversionError: NSError?
+        var didProvideInput = false
+        let status = converter.convert(
+            to: convertedBuffer,
+            error: &conversionError
+        ) { _, outStatus in
+            if didProvideInput {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            didProvideInput = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        if let conversionError {
+            DebugLog.info(
+                "Realtime audio conversion failed: \(conversionError)",
+                context: "AudioRecorder"
+            )
+            return nil
+        }
+        guard status != .error else { return nil }
+        return Self.int16PCMData(from: convertedBuffer)
+    }
+
+    private static func int16PCMData(
+        from buffer: AVAudioPCMBuffer
+    ) -> Data? {
+        guard let channelData = buffer.int16ChannelData else { return nil }
+        let byteCount = Int(buffer.frameLength) * MemoryLayout<Int16>.size
+        guard byteCount > 0 else { return nil }
+        return Data(bytes: channelData.pointee, count: byteCount)
     }
 
     init(

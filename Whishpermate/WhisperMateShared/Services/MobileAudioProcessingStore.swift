@@ -1228,6 +1228,39 @@ public actor MobileAudioProcessingStore {
         }
     }
 
+    /// Removes the quarantine flag and resets the store to allow recovery from a locked state.
+    /// This is a last-resort recovery option that clears all pending attempts and quarantine state.
+    /// Call this when the store is permanently locked and no other recovery is possible.
+    public func forceResetQuarantine() throws {
+        let fm = FileManager.default
+
+        if fm.fileExists(atPath: quarantineURL.path) {
+            try fm.removeItem(at: quarantineURL)
+        }
+
+        if fm.fileExists(atPath: attemptsDirectory.path) {
+            let contents = try fm.contentsOfDirectory(atPath: attemptsDirectory.path)
+            for item in contents {
+                let itemPath = attemptsDirectory.appendingPathComponent(item).path
+                try? fm.removeItem(atPath: itemPath)
+            }
+        }
+
+        if fm.fileExists(atPath: chunkWorkspacesDirectory.path) {
+            let contents = try fm.contentsOfDirectory(atPath: chunkWorkspacesDirectory.path)
+            for item in contents {
+                let itemPath = chunkWorkspacesDirectory.appendingPathComponent(item).path
+                try? fm.removeItem(atPath: itemPath)
+            }
+        }
+
+        if fm.fileExists(atPath: metadataURL.path) {
+            try? fm.removeItem(at: metadataURL)
+        }
+
+        initializationFailed = false
+    }
+
     /// The legacy history IDs and global generation advance in one atomic metadata replacement.
     /// A crash during later manifest/history cleanup therefore cannot resurrect an old row or lease.
     public func clearAll(recordingIDs: [UUID] = []) throws {

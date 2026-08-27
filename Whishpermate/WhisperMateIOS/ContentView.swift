@@ -112,6 +112,11 @@ struct ContentView: View {
                         prepareOfflineModel()
                     }
                 }
+                if canResetOfflineModelFromAlert {
+                    Button("Reset & Retry") {
+                        resetAndRetryOfflineModel()
+                    }
+                }
                 if canSwitchToCloudFromOfflineModelAlert {
                     Button("Use Cloud") {
                         switchToCloudTranscription()
@@ -137,6 +142,11 @@ struct ContentView: View {
                 get: { historyActionMessage != nil },
                 set: { if !$0 { historyActionMessage = nil } }
             )) {
+                if !mobileAudioRecoveryReady {
+                    Button("Reset Recording State") {
+                        forceResetRecordingState()
+                    }
+                }
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(historyActionMessage ?? "")
@@ -950,6 +960,18 @@ struct ContentView: View {
         transcriptionProviderManager.transcriptionMode != .cloud
     }
 
+    private var canResetOfflineModelFromAlert: Bool {
+        guard SharedParakeetTranscriptionService.isRuntimeSupported, !offlineModelIsBusy else {
+            return false
+        }
+        switch parakeetService.state {
+        case .error:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func switchToCloudTranscription() {
         guard CloudTranscriptionConsent.isGranted else {
             showCloudTranscriptionConsent = true
@@ -979,6 +1001,25 @@ struct ContentView: View {
                     offlineModelMessage = error.localizedDescription
                     showOfflineModelAlert = true
                 }
+            }
+        }
+    }
+
+    private func resetAndRetryOfflineModel() {
+        parakeetService.clearModelCacheAndReset()
+        prepareOfflineModel()
+    }
+
+    private func forceResetRecordingState() {
+        Task { @MainActor in
+            do {
+                try await MobileAudioProcessingStore.shared.forceResetQuarantine()
+                parakeetService.clearModelCacheAndReset()
+                mobileAudioRecoveryReady = false
+                historyActionMessage = nil
+                await recoverMobileAudioProcessingIfNeeded()
+            } catch {
+                historyActionMessage = "Could not reset recording state: \(error.localizedDescription)"
             }
         }
     }
@@ -1541,7 +1582,7 @@ struct ContentView: View {
 
     private func requireMobileAudioRecoveryReady() -> Bool {
         guard mobileAudioRecoveryReady else {
-            historyActionMessage = "Saved recordings are still being checked. Try again in a moment."
+            historyActionMessage = "Recording is temporarily unavailable. If this keeps happening, use Reset Recording State to recover."
             // A previous pass may have failed or is still running; make sure another one is
             // under way so the next tap can succeed.
             Task { @MainActor in await recoverMobileAudioProcessingIfNeeded() }
@@ -1579,7 +1620,7 @@ struct ContentView: View {
 
         mobileAudioRecoveryReady = succeeded
         if !succeeded {
-            historyActionMessage = "Saved recordings need attention. Try again in a moment."
+            historyActionMessage = "Recording is temporarily unavailable. If this keeps happening, use Reset Recording State to recover."
         }
     }
 

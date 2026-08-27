@@ -239,6 +239,12 @@ public final class ParakeetRuntimeBridge: NSObject {
         }
     }
 
+    @objc(clearModelCache)
+    public func clearModelCache() {
+        cleanupRuntime()
+        DownloadUtils.clearAllModelCaches()
+    }
+
     private enum TranscriptionReservation {
         case manager(AsrManager)
         case cancelled

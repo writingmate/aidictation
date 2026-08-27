@@ -108,8 +108,8 @@ struct ContentView: View {
             }
             .alert("Offline Model", isPresented: $showOfflineModelAlert) {
                 if canDownloadOfflineModelFromAlert {
-                    Button("Download") {
-                        prepareOfflineModel()
+                    Button("Try Again") {
+                        prepareOfflineModelWithRetry()
                     }
                 }
                 if canSwitchToCloudFromOfflineModelAlert {
@@ -976,11 +976,16 @@ struct ContentView: View {
                 try await parakeetService.initialize()
             } catch {
                 await MainActor.run {
-                    offlineModelMessage = error.localizedDescription
+                    offlineModelMessage = "Couldn't download the offline model. Try again."
                     showOfflineModelAlert = true
                 }
             }
         }
+    }
+
+    private func prepareOfflineModelWithRetry() {
+        parakeetService.clearModelCacheAndReset()
+        prepareOfflineModel()
     }
 
     private func prepareOfflineRuntimeForSelectedModeIfNeeded() {

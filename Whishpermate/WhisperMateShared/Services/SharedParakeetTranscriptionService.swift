@@ -230,6 +230,40 @@ public final class SharedParakeetTranscriptionService: ObservableObject {
         }
     }
 
+    /// Clears cached model files and resets the service state, allowing a fresh download on next initialization.
+    /// Use this to recover from a failed or corrupt model download.
+    @MainActor
+    public func clearModelCacheAndReset() {
+        let invalidation = runtimeBridgeSlot.invalidateAndTake()
+
+        _ = runtimePublicationFence.invalidate(invalidation.generation)
+        state = .notInitialized
+        isModelDownloaded = false
+        initializationTask = nil
+
+        if let bridge = invalidation.bridge {
+            callVoidSelector("clearModelCache", on: bridge)
+        } else {
+            clearModelCacheFallback()
+        }
+    }
+
+    private func clearModelCacheFallback() {
+        let fm = FileManager.default
+
+        #if os(iOS)
+            if let cacheDir = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                let ttsCache = cacheDir.appendingPathComponent("fluidaudio/Models")
+                try? fm.removeItem(at: ttsCache)
+            }
+        #endif
+
+        if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let modelsDir = appSupport.appendingPathComponent("FluidAudio/Models")
+            try? fm.removeItem(at: modelsDir)
+        }
+    }
+
     @MainActor
     private func registerRuntimeGeneration(
         _ generation: UInt64,

@@ -375,11 +375,13 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let window = appWindow ?? findMainWindow()
 
         if let window = window {
-            if window.isVisible {
+            if window.isVisible, window.isKeyWindow, NSApplication.shared.isActive {
                 window.orderOut(nil)
             } else {
                 NSApplication.shared.activate(ignoringOtherApps: true)
+                window.setIsVisible(true)
                 window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
             }
         } else {
             showMainSettingsWindow()

@@ -148,6 +148,17 @@ private func waitForSignal(
 @main
 struct ValidateMacOSRealtimeFinalization {
     static func main() async throws {
+        var recovery = MacCaptureRecoveryPolicy()
+        precondition(recovery.begin(maximumAttempts: 2) == 1)
+        precondition(recovery.begin(maximumAttempts: 2) == nil)
+        recovery.finish()
+        precondition(recovery.begin(maximumAttempts: 2) == 2)
+        recovery.finish()
+        precondition(recovery.isExhausted(maximumAttempts: 2))
+        recovery.noteHealthyBuffer()
+        precondition(recovery.begin(maximumAttempts: 2) == 1)
+        recovery.finish()
+
         let queue = DispatchQueue(label: "realtime-finish-validator")
         let gate = RealtimeTranscriptionFinishGate(queue: queue)
 
@@ -511,6 +522,10 @@ struct ValidateMacOSRealtimeFinalization {
                 && retirePosition! < recorderDrainPosition!
         )
         precondition(recorderSource.contains("realtimeDeliveryLease.failCoverage()"))
+        precondition(recorderSource.contains("captureRecoveryDelays: [TimeInterval] = [0.15, 0.5]"))
+        precondition(recorderSource.contains("session.replaceEngine(engine)"))
+        precondition(recorderSource.contains("session.accepts(engine: engine, generation: replacement.generation)"))
+        precondition(recorderSource.contains("self.attemptCaptureRecovery(session, reason: \"recovery start failed\")"))
 
         print("macOS realtime finalization covers the durable stream, starts once, and fails closed")
     }

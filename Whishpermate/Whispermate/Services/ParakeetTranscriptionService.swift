@@ -237,7 +237,6 @@ class ParakeetTranscriptionService: ObservableObject {
         _ = runtimePublicationFence.invalidate(invalidation.generation)
         state = .notInitialized
         isModelDownloaded = false
-        initializationTask = nil
 
         if let bridge = invalidation.bridge {
             callVoidSelector("clearModelCache", on: bridge)

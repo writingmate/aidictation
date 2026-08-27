@@ -11,6 +11,7 @@ class AudioRecorder: NSObject, ObservableObject {
     private enum Constants {
         static let recordingWatchdogInterval: TimeInterval = 1.0
         static let recordingBufferStallThreshold: TimeInterval = 2.5
+        static let captureRecoveryDelays: [TimeInterval] = [0.15, 0.5]
         static let recordingPreparationTimeout: TimeInterval = 5.0
         static let recordingFinalizationTimeout: TimeInterval = 5.0
 
@@ -142,10 +143,9 @@ class AudioRecorder: NSObject, ObservableObject {
             if changedDeviceUID == session.deviceResolution.device.uniqueID {
                 return
             }
-            session.retire()
-            reportCaptureFailure(
-                "The microphone changed while recording. Please record again.",
-                session: session
+            attemptCaptureRecovery(
+                session,
+                reason: "input device changed"
             )
         }
     }
@@ -166,12 +166,12 @@ class AudioRecorder: NSObject, ObservableObject {
             invalidatePendingPreparation(
                 message: "The microphone changed before recording started. Please try again."
             )
-        } else if isRecording, let session = activeCapture, session.engine === changedEngine {
-            session.retire()
-            reportCaptureFailure(
-                "The microphone changed while recording. Please record again.",
-                session: session
-            )
+        } else if isRecording,
+                  let session = activeCapture,
+                  session.owns(engine: changedEngine),
+                  !changedEngine.isRunning
+        {
+            attemptCaptureRecovery(session, reason: "audio configuration changed")
         }
     }
 
@@ -470,9 +470,19 @@ class AudioRecorder: NSObject, ObservableObject {
             )
             preparation.setSession(session)
 
-            inputNode.installTap(onBus: bus, bufferSize: 2048, format: nil) { [weak self, preparation, weak session] buffer, _ in
+            let generation = session.currentEngineGeneration
+            inputNode.installTap(onBus: bus, bufferSize: 2048, format: nil) { [weak self, preparation, weak session, weak engine] buffer, _ in
                 guard let self, let session else { return }
-                self.processCaptureBuffer(buffer, session: session, preparation: preparation)
+                guard let engine,
+                      session.accepts(engine: engine, generation: generation)
+                else { return }
+                self.processCaptureBuffer(
+                    buffer,
+                    session: session,
+                    preparation: preparation,
+                    engine: engine,
+                    generation: generation
+                )
             }
 
             guard preparation.attempt.isPending else {
@@ -504,7 +514,9 @@ class AudioRecorder: NSObject, ObservableObject {
     private func processCaptureBuffer(
         _ buffer: AVAudioPCMBuffer,
         session: MacCaptureSession,
-        preparation: MacCapturePreparation
+        preparation: MacCapturePreparation?,
+        engine: AVAudioEngine,
+        generation: UInt64
     ) {
         // Reserve realtime delivery before any file/conversion work. Native
         // stop seals this generation after retiring write admission and waits
@@ -580,11 +592,13 @@ class AudioRecorder: NSObject, ObservableObject {
 
             switch outcome {
             case .preparationFailed:
-                failPreparation(
-                    preparation,
-                    message: "The recording could not be saved. Please try again."
-                )
-                preparation.scheduleCleanup(deleteFile: true)
+                if let preparation {
+                    failPreparation(
+                        preparation,
+                        message: "The recording could not be saved. Please try again."
+                    )
+                    preparation.scheduleCleanup(deleteFile: true)
+                }
             case .activeFailed:
                 reportCaptureFailure(
                     "The recording could not be saved completely. Please record again.",
@@ -599,7 +613,9 @@ class AudioRecorder: NSObject, ObservableObject {
                 succeeded: true,
                 lease: writeResult.lease
             ) == .becameReady {
-                signalPreparationReady(preparation, session: session)
+                if let preparation {
+                    signalPreparationReady(preparation, session: session)
+                }
             }
         }
 
@@ -607,7 +623,10 @@ class AudioRecorder: NSObject, ObservableObject {
         // delivery is intentionally not gated by this later state check: a
         // lease acquired before key-up still corresponds to audio that was
         // successfully written above and must reach the final commit.
-        if session.isActive {
+        if session.isActive,
+           session.accepts(engine: engine, generation: generation)
+        {
+            session.noteHealthyBuffer()
             let bands = frequencyAnalyzer.analyze(buffer: buffer)
             let level = calculateAudioLevel(from: buffer)
             DispatchQueue.main.async { [weak self, weak session] in
@@ -619,7 +638,12 @@ class AudioRecorder: NSObject, ObservableObject {
         }
 
         if let realtimeDeliveryLease {
-            if let chunk = realtimePCMChunk(from: buffer) {
+            if let realtimeOutputFormat,
+               let chunk = session.realtimePCMChunk(
+                   from: buffer,
+                   outputFormat: realtimeOutputFormat
+               )
+            {
                 realtimeDeliveryLease.deliver(chunk)
             } else {
                 realtimeDeliveryLease.failCoverage()
@@ -741,25 +765,118 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
-        guard let session = activeCapture, session.engine.isRunning else {
-            if let session = activeCapture {
+        guard let session = activeCapture else { return }
+        guard session.engine.isRunning else {
+            attemptCaptureRecovery(session, reason: "audio engine stopped")
+            return
+        }
+
+        guard let lastAudioBufferAt else { return }
+        if Date().timeIntervalSince(lastAudioBufferAt) > Constants.recordingBufferStallThreshold {
+            attemptCaptureRecovery(session, reason: "audio buffers stalled")
+        }
+    }
+
+    private func attemptCaptureRecovery(
+        _ session: MacCaptureSession,
+        reason: String
+    ) {
+        precondition(Thread.isMainThread)
+        guard activeCapture === session, isRecording else { return }
+        guard let recoveryAttempt = session.beginRecovery(
+            maximumAttempts: Constants.captureRecoveryDelays.count
+        ) else {
+            if session.recoveryAttemptsExhausted(
+                maximumAttempts: Constants.captureRecoveryDelays.count
+            ) {
                 session.retire()
                 reportCaptureFailure(
-                    "The microphone stopped responding. Please record again.",
+                    "The microphone stopped responding. AIDictation tried to reconnect automatically. Please try again.",
                     session: session
                 )
             }
             return
         }
 
-        guard let lastAudioBufferAt else { return }
-        if Date().timeIntervalSince(lastAudioBufferAt) > Constants.recordingBufferStallThreshold {
-            session.retire()
-            reportCaptureFailure(
-                "The microphone stopped responding. Please record again.",
-                session: session
+        stopRecordingWatchdog()
+        let delay = Constants.captureRecoveryDelays[recoveryAttempt - 1]
+        DebugLog.warning(
+            "Recovering microphone capture attempt=\(recoveryAttempt) reason=\(reason)",
+            context: "AudioRecorder LOG"
+        )
+        SentryTelemetry.recordAudioEngineEvent("capture_recovery_started")
+
+        session.recoveryQueue.asyncAfter(deadline: .now() + delay) { [weak self, weak session] in
+            guard let self, let session else { return }
+            let result = self.rebuildCaptureEngine(session)
+            DispatchQueue.main.async { [weak self, weak session] in
+                guard let self, let session, self.activeCapture === session, self.isRecording else {
+                    session?.finishRecovery(engineStarted: false)
+                    return
+                }
+
+                session.finishRecovery(engineStarted: result == nil)
+                if let result {
+                    DebugLog.warning(
+                        "Microphone recovery attempt failed: \(result)",
+                        context: "AudioRecorder LOG"
+                    )
+                    self.attemptCaptureRecovery(session, reason: "recovery start failed")
+                    return
+                }
+
+                self.lastAudioBufferAt = Date()
+                self.startRecordingWatchdog()
+                SentryTelemetry.recordAudioEngineEvent("capture_recovery_engine_started")
+            }
+        }
+    }
+
+    /// Replaces only the failed CoreAudio graph. The session's open audio file,
+    /// durable recording identity, and realtime delivery owner survive.
+    private func rebuildCaptureEngine(_ session: MacCaptureSession) -> String? {
+        guard session.isActive else { return "recording is no longer active" }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.channelCount > 0 else {
+            return "microphone format is unavailable"
+        }
+
+        guard let replacement = session.replaceEngine(engine) else {
+            return "recording is no longer active"
+        }
+        teardownCaptureEngine(replacement.oldEngine)
+
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) {
+            [weak self, weak session, weak engine] buffer, _ in
+            guard let self, let session, let engine,
+                  session.accepts(engine: engine, generation: replacement.generation)
+            else { return }
+            self.processCaptureBuffer(
+                buffer,
+                session: session,
+                preparation: nil,
+                engine: engine,
+                generation: replacement.generation
             )
         }
+
+        do {
+            engine.prepare()
+            try engine.start()
+            return nil
+        } catch {
+            teardownCaptureEngine(engine)
+            return error.localizedDescription
+        }
+    }
+
+    private func teardownCaptureEngine(_ engine: AVAudioEngine) {
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        engine.reset()
     }
 
     private func reportCaptureFailure(_ message: String, session: MacCaptureSession) {
@@ -831,45 +948,6 @@ class AudioRecorder: NSObject, ObservableObject {
 
         guard sampleCount > 0 else { return nil }
         return sqrt(sumSquares / Float(sampleCount))
-    }
-
-    private func realtimePCMChunk(from buffer: AVAudioPCMBuffer) -> Data? {
-        guard let realtimeOutputFormat else { return nil }
-
-        let inputFormat = buffer.format
-        guard let converter = AVAudioConverter(from: inputFormat, to: realtimeOutputFormat) else {
-            return nil
-        }
-
-        let ratio = realtimeOutputFormat.sampleRate / inputFormat.sampleRate
-        let frameCapacity = AVAudioFrameCount(max(1, ceil(Double(buffer.frameLength) * ratio)))
-        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: realtimeOutputFormat, frameCapacity: frameCapacity) else {
-            return nil
-        }
-
-        var conversionError: NSError?
-        var didProvideInput = false
-        converter.convert(to: convertedBuffer, error: &conversionError) { _, outStatus in
-            if didProvideInput {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-
-            didProvideInput = true
-            outStatus.pointee = .haveData
-            return buffer
-        }
-
-        if let conversionError {
-            DebugLog.info("Realtime audio conversion failed: \(conversionError)", context: "AudioRecorder")
-            return nil
-        }
-
-        guard let channelData = convertedBuffer.int16ChannelData else { return nil }
-        let byteCount = Int(convertedBuffer.frameLength) * MemoryLayout<Int16>.size
-        guard byteCount > 0 else { return nil }
-
-        return Data(bytes: channelData.pointee, count: byteCount)
     }
 
     func stopRecording(
@@ -1166,6 +1244,10 @@ private final class MacCaptureFinalization: @unchecked Sendable {
 }
 
 private final class MacCaptureSession: @unchecked Sendable {
+    struct EngineReplacement {
+        let oldEngine: AVAudioEngine
+        let generation: UInt64
+    }
     enum WriteLease {
         case preparation
         case active
@@ -1187,7 +1269,6 @@ private final class MacCaptureSession: @unchecked Sendable {
     }
 
     let recordingID: UUID
-    let engine: AVAudioEngine
     let recordingURL: URL
     let outputFormat: AVAudioFormat
     let deviceResolution: AudioDeviceManager.CaptureDeviceResolution
@@ -1196,12 +1277,19 @@ private final class MacCaptureSession: @unchecked Sendable {
     private let condition = NSCondition()
     private let cleanupClaim = RecordingPreparationCleanupClaim()
     private var phase: Phase = .preparing
+    private var engineStorage: AVAudioEngine
+    private var engineGeneration: UInt64 = 1
+    private var recoveryPolicy = MacCaptureRecoveryPolicy()
     private var audioFile: AVAudioFile?
     private var activeWrites = 0
     private var engineStarted = false
     private var wroteBuffer = false
     private var failureMessage: String?
     private var failureDeliveryClaimed = false
+    let recoveryQueue = DispatchQueue(
+        label: "ai.writingmate.audio-capture-recovery.\(UUID().uuidString)",
+        qos: .userInitiated
+    )
 
     // Resampling to 16 kHz is now the normal path rather than the exception, so
     // the converter has to outlive a single buffer: rebuilding it per callback
@@ -1209,6 +1297,15 @@ private final class MacCaptureSession: @unchecked Sendable {
     private let converterLock = NSLock()
     private var cachedConverter: AVAudioConverter?
     private var cachedConverterInputFormat: AVAudioFormat?
+
+    // Realtime audio has its own 24 kHz PCM target. This converter must also
+    // outlive individual tap callbacks: rebuilding it for every 2,048-frame
+    // buffer repeatedly discards the resampler's priming/filter state and
+    // produces discontinuities in the bytes sent over the WebSocket.
+    private let realtimeConverterLock = NSLock()
+    private var cachedRealtimeConverter: AVAudioConverter?
+    private var cachedRealtimeConverterInputFormat: AVAudioFormat?
+    private var cachedRealtimeConverterOutputFormat: AVAudioFormat?
 
     /// Returns a converter from `inputFormat` to `outputFormat`, reusing the
     /// previous one whenever the device keeps handing us the same format.
@@ -1228,6 +1325,77 @@ private final class MacCaptureSession: @unchecked Sendable {
         return converter
     }
 
+    func realtimePCMChunk(
+        from buffer: AVAudioPCMBuffer,
+        outputFormat: AVAudioFormat
+    ) -> Data? {
+        realtimeConverterLock.lock()
+        defer { realtimeConverterLock.unlock() }
+
+        let inputFormat = buffer.format
+        let converter: AVAudioConverter
+        if let cachedRealtimeConverter,
+           cachedRealtimeConverterInputFormat == inputFormat,
+           cachedRealtimeConverterOutputFormat == outputFormat
+        {
+            converter = cachedRealtimeConverter
+        } else {
+            guard let newConverter = AVAudioConverter(
+                from: inputFormat,
+                to: outputFormat
+            ) else { return nil }
+            cachedRealtimeConverter = newConverter
+            cachedRealtimeConverterInputFormat = inputFormat
+            cachedRealtimeConverterOutputFormat = outputFormat
+            converter = newConverter
+        }
+
+        let ratio = outputFormat.sampleRate / inputFormat.sampleRate
+        // Leave room for stateful resampler output that crosses a callback
+        // boundary instead of truncating it to this callback's ideal ratio.
+        let frameCapacity = AVAudioFrameCount(
+            max(1, ceil(Double(buffer.frameLength) * ratio) + 64)
+        )
+        guard let convertedBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat,
+            frameCapacity: frameCapacity
+        ) else { return nil }
+
+        var conversionError: NSError?
+        var didProvideInput = false
+        let status = converter.convert(
+            to: convertedBuffer,
+            error: &conversionError
+        ) { _, outStatus in
+            if didProvideInput {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            didProvideInput = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        if let conversionError {
+            DebugLog.info(
+                "Realtime audio conversion failed: \(conversionError)",
+                context: "AudioRecorder"
+            )
+            return nil
+        }
+        guard status != .error else { return nil }
+        return Self.int16PCMData(from: convertedBuffer)
+    }
+
+    private static func int16PCMData(
+        from buffer: AVAudioPCMBuffer
+    ) -> Data? {
+        guard let channelData = buffer.int16ChannelData else { return nil }
+        let byteCount = Int(buffer.frameLength) * MemoryLayout<Int16>.size
+        guard byteCount > 0 else { return nil }
+        return Data(bytes: channelData.pointee, count: byteCount)
+    }
+
     init(
         recordingID: UUID,
         engine: AVAudioEngine,
@@ -1238,7 +1406,7 @@ private final class MacCaptureSession: @unchecked Sendable {
         closeProof: MacNativeRecorderCloseProof
     ) {
         self.recordingID = recordingID
-        self.engine = engine
+        engineStorage = engine
         self.audioFile = audioFile
         self.recordingURL = recordingURL
         self.outputFormat = outputFormat
@@ -1250,6 +1418,90 @@ private final class MacCaptureSession: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         return phase == .active
+    }
+
+    var engine: AVAudioEngine {
+        condition.lock()
+        defer { condition.unlock() }
+        return engineStorage
+    }
+
+    var currentEngineGeneration: UInt64 {
+        condition.lock()
+        defer { condition.unlock() }
+        return engineGeneration
+    }
+
+    func owns(engine: AVAudioEngine) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return phase != .retired && engineStorage === engine
+    }
+
+    func accepts(engine: AVAudioEngine, generation: UInt64) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return phase != .retired
+            && engineStorage === engine
+            && engineGeneration == generation
+    }
+
+    func replaceEngine(_ engine: AVAudioEngine) -> EngineReplacement? {
+        condition.lock()
+        guard phase == .active else {
+            condition.unlock()
+            return nil
+        }
+        let oldEngine = engineStorage
+        engineGeneration &+= 1
+        engineStorage = engine
+        let replacement = EngineReplacement(
+            oldEngine: oldEngine,
+            generation: engineGeneration
+        )
+        condition.unlock()
+
+        converterLock.lock()
+        cachedConverter = nil
+        cachedConverterInputFormat = nil
+        converterLock.unlock()
+        realtimeConverterLock.lock()
+        cachedRealtimeConverter = nil
+        cachedRealtimeConverterInputFormat = nil
+        cachedRealtimeConverterOutputFormat = nil
+        realtimeConverterLock.unlock()
+        return replacement
+    }
+
+    func beginRecovery(maximumAttempts: Int) -> Int? {
+        condition.lock()
+        defer { condition.unlock() }
+        guard phase == .active,
+              let attempt = recoveryPolicy.begin(maximumAttempts: maximumAttempts)
+        else { return nil }
+        return attempt
+    }
+
+    func finishRecovery(engineStarted: Bool) {
+        condition.lock()
+        recoveryPolicy.finish()
+        if !engineStarted, phase == .active {
+            condition.broadcast()
+        }
+        condition.unlock()
+    }
+
+    func recoveryAttemptsExhausted(maximumAttempts: Int) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return phase == .active
+            && recoveryPolicy.isExhausted(maximumAttempts: maximumAttempts)
+    }
+
+    func noteHealthyBuffer() {
+        condition.lock()
+        recoveryPolicy.noteHealthyBuffer()
+        condition.unlock()
     }
 
     func markEngineStarted() -> Bool {
@@ -1350,6 +1602,7 @@ private final class MacCaptureSession: @unchecked Sendable {
         guard cleanupClaim.claim() else { return }
 
         retire()
+        let engine = self.engine
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning {
             engine.stop()

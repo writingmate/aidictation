@@ -50,11 +50,11 @@ struct OnboardingView: View {
         }
     }
 
-    // Gradient colors
+    // Keep the existing onboarding artwork, but use the exact same primary
+    // action color as Settings for every prominent button and selected control.
     private let gradientStart = Color(red: 1.0, green: 0.494, blue: 0.78) // #FF7EC7
     private let gradientEnd = Color(red: 1.0, green: 0.929, blue: 0.275) // #FFED46
-
-    private let accentColor = Color(red: 0.945, green: 0.431, blue: 0.0) // #F16E00
+    private let accentColor = Color.dsPrimary
     private var isAccountSignedIn: Bool {
         authManager.isAuthenticated && authManager.currentUser != nil
     }

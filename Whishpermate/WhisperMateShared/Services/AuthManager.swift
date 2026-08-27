@@ -252,6 +252,22 @@ public class AuthManager: ObservableObject {
         return authURL
     }
 
+    /// Returns a fresh first-party access token for protected Writingmate APIs.
+    /// The Supabase session and refresh token remain in the app's Keychain-backed
+    /// auth storage; callers should use the returned token only for the request
+    /// they are about to make.
+    public func accessToken() async throws -> String {
+        guard await ensureValidSession(), let client = supabase.client else {
+            throw NSError(
+                domain: "AuthManager",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "Sign in to use cloud transcription."]
+            )
+        }
+
+        return try await client.auth.session.accessToken
+    }
+
     public func openSignUp() {
         guard Thread.isMainThread else {
             DispatchQueue.main.async { [weak self] in

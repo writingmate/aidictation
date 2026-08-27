@@ -222,10 +222,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             mainWindow?.orderOut(nil)
             return
         }
-        let state = AppState.shared
-        if state.recordingState != .idle || state.isProcessing {
-            mainWindow?.orderOut(nil)
-        }
+        // Activation can be the direct result of the user choosing Settings.
+        // Never hide an explicitly presented window merely because a recording
+        // is finishing in the background.
     }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
@@ -566,8 +565,20 @@ extension View {
 
 /// Global function to show main window - can be called from anywhere
 func showMainSettingsWindow(retryCount: Int = 0) {
+    precondition(Thread.isMainThread)
+    DebugLog.info(
+        "showMainSettingsWindow requested attempt=\(retryCount)",
+        context: "WindowManagement"
+    )
+
     // Don't show settings while onboarding is active
     if OnboardingManager.shared.showOnboarding {
+        DebugLog.info(
+            "Settings requested during onboarding; presenting onboarding",
+            context: "WindowManagement"
+        )
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        WindowBridge.openLegacyWindow(id: "onboarding")
         return
     }
 
@@ -596,21 +607,16 @@ func showMainSettingsWindow(retryCount: Int = 0) {
         return
     }
 
-    // Window doesn't exist yet — ask SwiftUI to create it, then retry
-    if retryCount < 3 {
-        if MainSettingsWindowOpenState.shouldRequestCreation() {
-            DebugLog.info("showMainSettingsWindow: window not found, requesting creation (attempt \(retryCount + 1))", context: "WindowManagement")
-            WindowBridge.openWindow?("main")
-        } else {
-            DebugLog.info("showMainSettingsWindow: creation already in progress (attempt \(retryCount + 1))", context: "WindowManagement")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            showMainSettingsWindow(retryCount: retryCount + 1)
-        }
-    } else {
-        MainSettingsWindowOpenState.resolve()
-        DebugLog.info("showMainSettingsWindow: failed to find/create window after 3 attempts", context: "WindowManagement")
-    }
+    // SwiftUI's openWindow action is not guaranteed to have materialized its
+    // scene while a menu-bar-only app is inactive. Create the same hosted view
+    // synchronously through AppKit so a Settings request always has an actual
+    // window to raise.
+    MainSettingsWindowOpenState.resolve()
+    DebugLog.info(
+        "showMainSettingsWindow: creating synchronous AppKit fallback",
+        context: "WindowManagement"
+    )
+    WindowBridge.openLegacyWindow(id: "main")
 }
 
 /// Global function to show history window - can be called from anywhere

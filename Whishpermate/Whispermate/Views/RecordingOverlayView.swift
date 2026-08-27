@@ -192,8 +192,24 @@ struct RecordingOverlayView: View {
 
     @ViewBuilder
     private func overlayContent(geometry _: GeometryProxy) -> some View {
-        // Horizontal layout for top/bottom positions
-        contentView
+        Group {
+            if let permissionIssue = manager.permissionIssue {
+                HStack(spacing: OverlayPermissionCalloutMetrics.spacing) {
+                    Color.clear
+                        .frame(
+                            width: OverlayPermissionCalloutMetrics.width,
+                            height: OverlayPermissionCalloutMetrics.height
+                        )
+                        .allowsHitTesting(false)
+
+                    contentView
+
+                    permissionCallout(permissionIssue)
+                }
+            } else {
+                contentView
+            }
+        }
         .padding(.top, idleHoverTopHitPadding)
         .fixedSize()
         .contentShape(Rectangle())
@@ -219,6 +235,45 @@ struct RecordingOverlayView: View {
                 collapseIdleHover()
             }
         }
+    }
+
+    private func permissionCallout(_ issue: OverlayPermissionIssue) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: issue.iconName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.orange)
+
+            Text(issue.message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            Button("Set Up") {
+                updateHoverCursor(isActive: false)
+                manager.setUpPermission()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(Color.orange)
+            .accessibilityLabel("Set up \(issue.message.lowercased())")
+        }
+        .padding(.horizontal, 10)
+        .frame(
+            width: OverlayPermissionCalloutMetrics.width,
+            height: OverlayPermissionCalloutMetrics.height
+        )
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.86))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 0.75)
+                }
+        }
+        .shadow(color: .black.opacity(0.16), radius: 5, y: 2)
+        .transition(.opacity.combined(with: .move(edge: .trailing)))
     }
 
     // MARK: - Subviews

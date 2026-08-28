@@ -30,12 +30,14 @@ private struct ValidateTranscriptionCleanupPrompt {
             "<language_context>",
             "<app_context>",
             "first token through its final token",
-            "Do not summarize, shorten, continue, or complete",
+            "Do not summarize, paraphrase, shorten, reorder, continue, complete, or answer",
+            "Preserve language switching",
+            "Never translate, transliterate, or normalize the transcript into one language",
             "Never append invented words",
             "Never create repeated-token or repeated-phrase loops",
-            "personal vocabulary as canonical spelling reference",
+            "Treat personal vocabulary and visible terms as canonical spelling reference",
             "exact spelling, capitalization, and spacing",
-            "Never copy a term, list, category name, or instruction",
+            "Never copy unsupported reference content",
             "If uncertain, preserve the original source text",
             "always return non-empty corrected text",
         ] {
@@ -45,6 +47,29 @@ private struct ValidateTranscriptionCleanupPrompt {
         for context in [vocabulary, replacements, phrases, expansions] {
             require(prompt.contains(context), "cleanup prompt lost context: \(context)")
         }
+
+        let recognitionPrompt = TranscriptionCleanupPrompt.speechRecognitionPrompt(
+            hints: ["NovaFlow", "q b r"]
+        )
+        for requirement in [
+            "Produce polished dictation text",
+            "including language switching within a sentence",
+            "Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\"",
+            "Remove false starts, stutters, accidental word repetitions, and explicit self-corrections",
+            "Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses",
+            "Output only the transcript",
+            "NovaFlow",
+            "q b r",
+        ] {
+            require(
+                recognitionPrompt.contains(requirement),
+                "recognition prompt lost contract: \(requirement)"
+            )
+        }
+        require(
+            !recognitionPrompt.contains("Vocabulary:"),
+            "recognition prompt added a cleanup-only vocabulary label"
+        )
         let formattingStart = prompt.range(of: "<formatting_context>")!.lowerBound
         let formattingEnd = prompt.range(of: "</formatting_context>")!.lowerBound
         for context in [vocabulary, replacements, phrases, expansions] {
@@ -192,8 +217,12 @@ private struct ValidateTranscriptionCleanupPrompt {
             "personal phrases do not reach shared cleanup"
         )
         require(
-            sharedService.contains("postProcessingPrompt: cloud.isOneStage ? request.serverPostProcessingPrompt : nil"),
-            "one-stage requests do not receive the shared cleanup prompt"
+            sharedService.contains("TranscriptionCleanupPrompt.speechRecognitionPrompt("),
+            "one-stage recognition is not using the shared fidelity contract"
+        )
+        require(
+            sharedService.contains("postProcessingEnabled: !cloud.isOneStage"),
+            "AI Dictation requests still enable separate server cleanup"
         )
         require(
             sharedClient.contains("TranscriptionCleanupPrompt.systemPrompt("),

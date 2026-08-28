@@ -48,7 +48,7 @@ PAYMENT_CONFIG_NAMES = (
 
 DEFAULTS = {
     "TRANSCRIPTION_ENDPOINT": "https://writingmate.ai/api/openai/v1/audio/transcriptions",
-    "TRANSCRIPTION_MODEL": "groq/whisper-large-v3-turbo",
+    "TRANSCRIPTION_MODEL": "openai/gpt-transcribe",
     "AIDICTATION_POST_PROCESSING_ENDPOINT": "https://writingmate.ai/api/openai/v1/chat/completions",
     "AIDICTATION_POST_PROCESSING_MODEL": "openai/gpt-oss-20b",
 }

@@ -2223,13 +2223,6 @@ class AppState: ObservableObject {
                     try await session.checkpoint(realtimeResult)
                     try await session.markRawResultReady(realtimeResult)
                     try await session.beginCleanup()
-                    if snapshot.provider == .aidictation {
-                        return try await self.applyLLMPassWithFallback(
-                            rawText: realtimeResult,
-                            client: OpenAIClient(config: .init()),
-                            snapshot: snapshot
-                        )
-                    }
                     return realtimeResult
                 }
                 return try await self.performTranscription(
@@ -2944,6 +2937,14 @@ class AppState: ObservableObject {
         }
         let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
         let cleanupComponents = buildTranscriptionPromptComponents()
+        let trimmedAppContext = appContext?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let appContextPrompt = trimmedAppContext.flatMap {
+            $0.isEmpty ? nil : "Application context: \($0)"
+        }
+        let recordingPrompt = [
+            sttHintPrompt,
+            appContextPrompt,
+        ].compactMap { $0 }.joined(separator: "\n\n")
         let contextRules = contextRulesManager.rules.map { rule in
             MacTranscriptionAttemptSnapshot.ContextRuleSnapshot(
                 name: rule.name,
@@ -2978,7 +2979,7 @@ class AppState: ObservableObject {
                 dictionaryManager.transcriptionKeywords
                     + shortcutManager.transcriptionKeywords
             )).sorted(),
-            recordingPrompt: appContext?.trimmingCharacters(in: .whitespacesAndNewlines),
+            recordingPrompt: recordingPrompt,
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: cleanupComponents,
             baseCleanupPromptComponents: cleanupComponents,
@@ -3011,22 +3012,22 @@ class AppState: ObservableObject {
     }
 
     private func buildSTTHintPromptComponents() -> [String] {
-        var promptComponents: [String] = []
+        var hints: [String] = []
 
         if !dictionaryManager.transcriptionHints.isEmpty {
-            promptComponents.append(dictionaryManager.transcriptionHints)
+            hints.append(dictionaryManager.transcriptionHints)
         }
         if !shortcutManager.transcriptionHints.isEmpty {
-            promptComponents.append(shortcutManager.transcriptionHints)
+            hints.append(shortcutManager.transcriptionHints)
         }
         if let instructions = dictionaryManager.formattingInstructions {
-            promptComponents.append(instructions)
+            hints.append(instructions)
         }
         if let instructions = shortcutManager.formattingInstructions {
-            promptComponents.append(instructions)
+            hints.append(instructions)
         }
 
-        return promptComponents
+        return [TranscriptionCleanupPrompt.speechRecognitionPrompt(hints: hints)]
     }
 
     private func buildRealtimePrompt() -> String {
@@ -3053,9 +3054,6 @@ class AppState: ObservableObject {
         onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
     ) async throws -> String {
         let sttHintPrompt = snapshot.sttHintPrompt
-        let promptComponents = snapshot.cleanupPromptComponents
-        let postProcessingPrompt = promptComponents.joined(separator: "\n")
-        let outputMode = snapshot.outputMode
         let transcriptionOptions = snapshot.transcriptionOptions
         let milestones = TranscriptionMilestoneForwarder(
             onCheckpoint: onRecognitionCheckpoint,
@@ -3188,55 +3186,6 @@ class AppState: ObservableObject {
                     try await milestones.checkpoint(text)
                 }
             )
-            let customCleanupPrompt = provider == .aidictation
-                ? providerPostProcessingPrompt(
-                    outputMode: outputMode,
-                    basePrompt: postProcessingPrompt,
-                    languageContext: snapshot.languageCode,
-                    appContext: snapshot.appContext
-                )
-                : nil
-            let mergedCleanup: ((String) async throws -> String)?
-            if provider == .aidictation {
-                mergedCleanup = { mergedRaw in
-                    try await milestones.beginCleanup()
-                    return try await self.cleanupWithRawFallback(
-                        rawText: mergedRaw,
-                        label: "Transcription cleanup"
-                    ) {
-                        switch outputMode {
-                        case .dictation:
-                            return try await client.applyFormattingRules(
-                                transcription: mergedRaw,
-                                rules: promptComponents,
-                                languageCodes: snapshot.languageCode,
-                                appContext: snapshot.appContext,
-                                screenContext: snapshot.screenContext,
-                                clipboardContent: nil
-                            )
-                        case .notes:
-                            return try await client.applyNotesFormatting(
-                                transcription: mergedRaw,
-                                rules: promptComponents,
-                                languageCodes: snapshot.languageCode,
-                                appContext: snapshot.appContext
-                            )
-                        case .meetings:
-                            return try await client.applyMeetingFormatting(
-                                transcription: mergedRaw,
-                                rules: promptComponents,
-                                languageCodes: snapshot.languageCode,
-                                appContext: snapshot.appContext
-                            )
-                        @unknown default:
-                            return mergedRaw
-                        }
-                    }
-                }
-            } else {
-                mergedCleanup = nil
-            }
-
             let rawText = try await client.transcribe(
                 audioURL: audioURL,
                 prompt: snapshot.transcriptionModel == "gpt-transcribe"
@@ -3250,8 +3199,9 @@ class AppState: ObservableObject {
                     && !sttHintPrompt.isEmpty
                         ? sttHintPrompt
                         : nil,
-                postProcessingPrompt: customCleanupPrompt,
-                serverPostProcessingEnabledByDefault: provider == .aidictation,
+                postProcessingPrompt: nil,
+                serverPostProcessingEnabledByDefault: false,
+                postProcessingEnabled: provider != .aidictation,
                 transientWorkspace: transientWorkspace,
                 onChunkCheckpoint: { completedLeafIndex, transcript in
                     try await checkpointAccumulator.accept(
@@ -3262,7 +3212,7 @@ class AppState: ObservableObject {
                 onMergedRawTranscript: { mergedRaw in
                     try await milestones.acceptRaw(mergedRaw)
                 },
-                cleanupMergedTranscript: mergedCleanup
+                cleanupMergedTranscript: nil
             )
 
             let checkpointedRaw = await checkpointAccumulator.latestText
@@ -3279,12 +3229,8 @@ class AppState: ObservableObject {
             try await milestones.acceptRaw(durableRaw)
             try await milestones.beginCleanup()
 
-            // The custom one-request/chunked client has already applied its
-            // cleanup/output-mode prompt after checkpointing the complete raw
-            // merge. Do not replace that result with the raw checkpoint.
             if provider == .aidictation {
-                let oneStageResult = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-                return oneStageResult.isEmpty ? durableRaw : oneStageResult
+                return durableRaw
             }
 
             return try await applyLLMPassWithFallback(

@@ -173,8 +173,8 @@ class TranscriptionRepository @Inject constructor(
                 prompt = transcriptionPrompt,
                 language = null,
                 sttPrompt = transcriptionPrompt,
-                postProcessingPrompt = configuration.postProcessingPrompt,
-                oneStageCleanup = true,
+                postProcessingPrompt = null,
+                oneStageCleanup = false,
                 requestSnapshot = configuration.requestSnapshot,
                 checkpoint = checkpoint,
                 rawComplete = rawComplete

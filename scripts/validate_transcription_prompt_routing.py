@@ -103,8 +103,9 @@ shared_cloud = function_body(
     "private static func captureCleanupConfiguration(",
 )
 require(
-    "postProcessingPrompt: cloud.isOneStage ? request.serverPostProcessingPrompt : nil" in shared_cloud,
-    "shared one-request transcription lost cleanup context",
+    "postProcessingPrompt: nil" in shared_cloud
+    and "postProcessingEnabled: !cloud.isOneStage" in shared_cloud,
+    "shared AI Dictation transcription still enables separate cleanup",
 )
 require(
     "cleanupMergedTranscript:" in shared_cloud and "applyLLMPassIfAvailable(" in shared_cloud,
@@ -195,22 +196,17 @@ mac_pipeline = function_body(
     "private func providerPostProcessingPrompt(",
 )
 require(
-    "postProcessingPrompt: customCleanupPrompt" in mac_pipeline,
-    "macOS one-request transcription lost cleanup context",
+    "postProcessingPrompt: nil" in mac_pipeline,
+    "AI Dictation batch transcription still sends a separate cleanup prompt",
 )
 require(
-    "cleanupMergedTranscript: mergedCleanup" in mac_pipeline,
-    "macOS chunked transcription lost merged cleanup",
+    "postProcessingEnabled: provider != .aidictation" in mac_pipeline,
+    "AI Dictation batch transcription still enables server cleanup",
 )
-for method in ("applyFormattingRules", "applyNotesFormatting", "applyMeetingFormatting"):
-    require(
-        re.search(
-            rf"client\.{method}\(\s*transcription: mergedRaw,\s*rules: promptComponents,",
-            mac_pipeline,
-        )
-        is not None,
-        f"macOS merged cleanup lost {method} mode routing",
-    )
+require(
+    "cleanupMergedTranscript: nil" in mac_pipeline,
+    "AI Dictation chunked transcription still schedules client cleanup",
+)
 
 mac_server_prompt = function_body(
     app_state_source,

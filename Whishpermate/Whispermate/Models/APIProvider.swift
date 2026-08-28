@@ -38,7 +38,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     var defaultModel: String {
         switch self {
         case .parakeet: return "parakeet-tdt-0.6b-v3"
-        case .aidictation: return "groq/whisper-large-v3-turbo"
+        case .aidictation: return "openai/gpt-transcribe"
         case .codex: return ""
         }
     }
@@ -369,16 +369,27 @@ class TranscriptionProviderManager: ObservableObject {
     var effectiveModel: String {
         if selectedProvider == .aidictation {
             if let secretModel = SecretsLoader.customTranscriptionModel(), !secretModel.isEmpty {
-                return secretModel
+                return normalizedAIDictationModel(secretModel)
             }
         }
 
         if !customModel.isEmpty {
-            return customModel
+            return normalizedAIDictationModel(customModel)
         }
         return selectedProvider.defaultModel
     }
 
+    private func normalizedAIDictationModel(_ model: String) -> String {
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmedModel {
+        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
+             "groq/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo":
+            DebugLog.warning("Replacing stale shipped transcription model \(model) with \(TranscriptionProvider.aidictation.defaultModel)", context: "TranscriptionProviderManager")
+            return TranscriptionProvider.aidictation.defaultModel
+        default:
+            return trimmedModel
+        }
+    }
     var effectiveTransport: TranscriptionTransport {
         if selectedProvider == .aidictation {
             if let secretTransport = SecretsLoader.getValue(for: "CustomTranscriptionTransport")?.lowercased(),

@@ -11,7 +11,7 @@ sdk.dir=/absolute/path/to/Android/Sdk
 # Writingmate transcription configuration
 TRANSCRIPTION_API_KEY=
 TRANSCRIPTION_ENDPOINT=https://writingmate.ai/api/openai/v1/audio/transcriptions
-TRANSCRIPTION_MODEL=groq/whisper-large-v3-turbo
+TRANSCRIPTION_MODEL=openai/gpt-transcribe
 
 # Optional local Parakeet runtime. Leave empty for cloud transcription.
 # Use `litert` only with converted `.tflite` files in parakeetpack.

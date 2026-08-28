@@ -35,7 +35,10 @@ enum SecretsLoader {
     }
 
     static func customTranscriptionRealtimeModel() -> String? {
-        return secretsDictionary?["CustomTranscriptionRealtimeModel"] as? String
+        guard let model = secretsDictionary?["CustomTranscriptionRealtimeModel"] as? String else {
+            return nil
+        }
+        return normalizedCustomTranscriptionRealtimeModel(model)
     }
 
     static func aidictationPostProcessingEndpoint() -> String? {
@@ -68,10 +71,22 @@ enum SecretsLoader {
         }
 
         switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
-            return "groq/whisper-large-v3-turbo"
+        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
+             "groq/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo":
+            return "openai/gpt-transcribe"
         default:
             return model
         }
+    }
+
+    private static func normalizedCustomTranscriptionRealtimeModel(_ model: String) -> String {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = customTranscriptionRealtimeEndpoint() ?? customTranscriptionEndpoint()
+        guard let host = endpoint.flatMap({ URL(string: $0)?.host?.lowercased() }),
+              host.contains("writingmate") || host.contains("aidictation")
+        else {
+            return trimmed
+        }
+        return "gpt-live-transcribe"
     }
 }

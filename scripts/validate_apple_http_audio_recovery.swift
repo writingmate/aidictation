@@ -846,8 +846,9 @@ private func validateClientBulkSourceContract() throws {
             "\(path) sends cleanup context to split recognition leaves"
         )
         try require(
-            source.contains("postProcessingEnabled: !(chunk.usesChunkFields && endpointHasServerCleanup)"),
-            "\(path) does not disable server cleanup for split leaves"
+            source.contains("postProcessingEnabled: postProcessingEnabled")
+                && source.contains("&& !(chunk.usesChunkFields && endpointHasServerCleanup)"),
+            "\(path) does not preserve the caller cleanup policy or disable server cleanup for split leaves"
         )
         try require(
             source.contains("serverPostProcessingEnabledByDefault: Bool = false"),
@@ -882,11 +883,14 @@ private func validateSharedRequestSnapshotAndCleanupContract() throws {
         "public static func capture(",
         "request: RequestSnapshot",
         "cleanup: captureCleanupConfiguration()",
-        "serverPostProcessingEnabledByDefault: cloud.isOneStage",
+        "serverPostProcessingEnabledByDefault: false",
+        "postProcessingEnabled: !cloud.isOneStage",
         "onMergedRawTranscript: { mergedRaw in",
         "try await onRawTranscript(durableRaw)",
         "try await onCleanupStarted()",
-        "cleanupMergedTranscript: { mergedRaw in",
+        "if cloud.isOneStage {",
+        "mergedCleanup = nil",
+        "cleanupMergedTranscript: mergedCleanup",
         "let rules = postProcessingPrompt.isEmpty ? [] : [postProcessingPrompt]",
         "rawCallbacksCompleted: true",
         "return nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult",
@@ -902,14 +906,10 @@ private func validateSharedRequestSnapshotAndCleanupContract() throws {
         "Shared cleanup still mutates successful or raw-fallback text after the LLM decision"
     )
 
-    guard let rawCallbackRange = source.range(of: "try await onRawTranscript(durableRaw)"),
-          let mergedCleanupRange = source.range(of: "cleanupMergedTranscript: { mergedRaw in")
-    else {
-        throw ValidationError.failed("Shared raw/cleanup ordering markers are missing")
-    }
     try require(
-        rawCallbackRange.lowerBound < mergedCleanupRange.lowerBound,
-        "Merged cleanup starts before the durable raw callback"
+        source.contains("onMergedRawTranscript: { mergedRaw in")
+            && source.contains("cleanupMergedTranscript: mergedCleanup"),
+        "Shared raw capture and merged cleanup ownership markers are missing"
     )
 }
 

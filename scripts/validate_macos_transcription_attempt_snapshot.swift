@@ -195,19 +195,15 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             )
         }
 
-        precondition(attemptSource.contains(
-            "let mergedCleanup: ((String) async throws -> String)?"
-        ))
-        precondition(attemptSource.contains("if provider == .aidictation {\n                mergedCleanup ="))
-        precondition(attemptSource.contains("cleanupMergedTranscript: mergedCleanup"))
-        precondition(!attemptSource.contains("cleanupMergedTranscript: {"))
-        precondition(!attemptSource.contains("guard let customCleanupPrompt else"))
+        precondition(attemptSource.contains("postProcessingPrompt: nil"))
+        precondition(attemptSource.contains("postProcessingEnabled: provider != .aidictation"))
+        precondition(attemptSource.contains("cleanupMergedTranscript: nil"))
         precondition(
             !attemptSource.contains("TranscriptionOutputFilter.filter"),
             "Durable raw transcript still passes through destructive output filtering"
         )
         precondition(attemptSource.contains(
-            "serverPostProcessingEnabledByDefault: provider == .aidictation"
+            "serverPostProcessingEnabledByDefault: false"
         ))
 
         guard let realtimeStart = source.range(
@@ -239,9 +235,8 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(source.contains("try await session.checkpoint(realtimeResult)"))
         precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))
-        precondition(source.contains("if snapshot.provider == .aidictation"))
-        precondition(source.contains("rawText: realtimeResult,"))
-        precondition(source.contains("client: OpenAIClient(config: .init()),"))
+        precondition(source.contains("return realtimeResult"))
+        precondition(!source.contains("rawText: realtimeResult,"))
         precondition(
             !source.contains("applyReplacements(to:"),
             "Recognizer text is being transformed before the durable raw checkpoint"

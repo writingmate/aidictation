@@ -515,9 +515,9 @@ private extension String {
 }
 
 nonisolated final class OpenAIRealtimeTranscriptionClient: @unchecked Sendable, RealtimeTranscriptionStreaming {
-    static let defaultTranscriptionModel = "gpt-realtime-whisper"
+    static let defaultTranscriptionModel = "gpt-live-transcribe"
     private static let realtimeBytesPerSecond = 24_000 * MemoryLayout<Int16>.size
-    private static let liveCommitByteThreshold = Int(Double(realtimeBytesPerSecond) * 0.8)
+    private static let realtimeCommitByteThreshold = Int(Double(realtimeBytesPerSecond) * 0.8)
 
     static func webSocketURL() -> URL? {
         var components = URLComponents()
@@ -642,7 +642,7 @@ nonisolated final class OpenAIRealtimeTranscriptionClient: @unchecked Sendable, 
             self.failedMessage = nil
             self.didRequestFinish = false
             DebugLog.info(
-                "Realtime start requested model=\(self.transcriptionModel) language=\(self.language ?? "auto") promptIncluded=\(self.supportsPromptSteering && self.prompt?.isEmpty == false)",
+                "Realtime start requested model=\(self.transcriptionModel) language=\(self.language ?? "auto") promptIncluded=\(self.prompt?.isEmpty == false)",
                 context: "OpenAIRealtime"
             )
             self.authorizationTask = Task { [weak self] in
@@ -788,7 +788,6 @@ nonisolated final class OpenAIRealtimeTranscriptionClient: @unchecked Sendable, 
     private func sessionUpdateEvent() -> [String: Any] {
         var transcription: [String: Any] = [
             "model": transcriptionModel,
-            "delay": "low",
         ]
         if usesModernTranscriptionContext {
             if !keywords.isEmpty {
@@ -821,23 +820,17 @@ nonisolated final class OpenAIRealtimeTranscriptionClient: @unchecked Sendable, 
         ]
     }
 
-    private var supportsPromptSteering: Bool {
-        transcriptionModel != Self.defaultTranscriptionModel
-    }
-
     private var usesModernTranscriptionContext: Bool {
         transcriptionModel == "gpt-live-transcribe"
             || transcriptionModel == "gpt-transcribe"
     }
-
     private func commitAudioBufferIfNeeded(reason: String) {
         // gpt-live-transcribe emits deltas while audio is appended. Committing
-        // every ~0.8 seconds incorrectly turns one dictation into dozens of
-        // tiny, independently finalized utterances. Keep the legacy cadence
-        // only for the older realtime-whisper contract; live transcription is
-        // committed once after the recorder's delivery queue drains.
-        guard transcriptionModel == Self.defaultTranscriptionModel else { return }
-        guard uncommittedAudioByteCount >= Self.liveCommitByteThreshold else { return }
+        // every 0.8 seconds turns one dictation into unrelated short turns and
+        // destroys sentence-level punctuation and word context. Commit it once,
+        // after the recorder's delivery queue drains in beginFinishOnQueue.
+        guard transcriptionModel != Self.defaultTranscriptionModel else { return }
+        guard uncommittedAudioByteCount >= Self.realtimeCommitByteThreshold else { return }
         commitAudioBuffer(reason: reason)
     }
 

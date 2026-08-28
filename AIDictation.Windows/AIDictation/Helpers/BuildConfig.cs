@@ -16,7 +16,7 @@ public static class BuildConfig
     private static class Defaults
     {
         public const string TranscriptionEndpoint = "https://writingmate.ai/api/openai/v1/audio/transcriptions";
-        public const string TranscriptionModel = "groq/whisper-large-v3-turbo";
+        public const string TranscriptionModel = "openai/gpt-transcribe";
         public const string PostProcessingEndpoint = "https://writingmate.ai/api/openai/v1/chat/completions";
         public const string PostProcessingModel = "openai/gpt-oss-20b";
 

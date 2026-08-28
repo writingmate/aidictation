@@ -1751,12 +1751,17 @@ static class Contract
             "attempt freezes phrase expansions before the first await");
         True(snapshot.RecognitionPrompt?.Contains("WhisperMate", StringComparison.Ordinal) == true &&
              snapshot.RecognitionPrompt.Contains("whisper mate", StringComparison.Ordinal) &&
-             snapshot.RecognitionPrompt.Contains("ship it", StringComparison.Ordinal),
-            "one-stage recognition receives bare speech hints from the captured context");
+             snapshot.RecognitionPrompt.Contains("ship it", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("Transcribe the audio faithfully", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("including language switching within a sentence", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("Do not translate, paraphrase", StringComparison.Ordinal),
+            "one-stage recognition receives the shared fidelity contract and bare speech hints");
         True(snapshot.PostProcessingPrompt?.Contains("REFERENCE_CONTEXT_JSON_LINES", StringComparison.Ordinal) == true &&
              snapshot.PostProcessingPrompt.Contains("WhisperMate", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("ship the verified build", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("Use sentence case.", StringComparison.Ordinal),
+             snapshot.PostProcessingPrompt.Contains("Use sentence case.", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Preserve language switching", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("never translate, transliterate", StringComparison.Ordinal),
             "one-stage cleanup receives vocabulary, mappings, expansions, and rules");
         True(snapshot.CleanupReferenceBlock?.Contains("MUTATED", StringComparison.Ordinal) == false,
             "later settings mutation cannot change an in-flight cleanup prompt");

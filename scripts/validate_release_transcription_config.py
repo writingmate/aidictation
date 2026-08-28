@@ -23,11 +23,13 @@ from typing import Any
 from urllib import error, parse, request
 
 
-EXPECTED_WRITINGMATE_MODEL = "groq/whisper-large-v3-turbo"
+EXPECTED_WRITINGMATE_MODEL = "openai/gpt-transcribe"
 RELEASE_VALIDATOR_USER_AGENT = "AIDictation-Release-Validator/1.0"
 STALE_TRANSCRIPTION_MODELS = {
     "gpt-4o-transcribe",
     "gpt-4o-mini-transcribe",
+    "groq/whisper-large-v3-turbo",
+    "openai/whisper-large-v3-turbo",
 }
 
 

@@ -42,8 +42,8 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .onDevice: return "apple-on-device"
         case .groq: return "whisper-large-v3-turbo"
-        case .openai: return "whisper-1"
-        case .custom: return "groq/whisper-large-v3-turbo"
+        case .openai: return "gpt-transcribe"
+        case .custom: return "openai/gpt-transcribe"
         }
     }
 

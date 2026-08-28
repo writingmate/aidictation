@@ -39,7 +39,10 @@ public enum SecretsLoader {
     }
 
     public static func customTranscriptionRealtimeModel() -> String? {
-        return sanitizedSecret("CustomTranscriptionRealtimeModel")
+        guard let model = sanitizedSecret("CustomTranscriptionRealtimeModel") else {
+            return nil
+        }
+        return normalizedCustomTranscriptionRealtimeModel(model)
     }
 
     public static func llmKey(for provider: LLMProvider) -> String? {
@@ -90,10 +93,21 @@ public enum SecretsLoader {
         }
 
         switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe":
-            return "groq/whisper-large-v3-turbo"
+        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
+             "groq/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo":
+            return "openai/gpt-transcribe"
         default:
             return model
         }
+    }
+
+    private static func normalizedCustomTranscriptionRealtimeModel(_ model: String) -> String {
+        let endpoint = customTranscriptionRealtimeEndpoint() ?? customTranscriptionEndpoint()
+        guard let host = endpoint.flatMap({ URL(string: $0)?.host?.lowercased() }),
+              host.contains("writingmate") || host.contains("aidictation")
+        else {
+            return model
+        }
+        return "gpt-live-transcribe"
     }
 }

@@ -116,6 +116,7 @@ public class OpenAIClient {
         sttPrompt: String? = nil,
         postProcessingPrompt: String? = nil,
         serverPostProcessingEnabledByDefault: Bool = false,
+        postProcessingEnabled: Bool = true,
         chunkWorkspace: MobileAudioProcessingStore.ChunkWorkspace? = nil,
         onChunkCheckpoint: AppleAudioHTTPRecovery.Checkpoint? = nil,
         onMergedRawTranscript: ((String) async throws -> Void)? = nil,
@@ -168,7 +169,8 @@ public class OpenAIClient {
                         language: language,
                         sttPrompt: chunk.usesChunkFields ? chunkSTTPrompt : sttPrompt,
                         postProcessingPrompt: chunk.usesChunkFields ? nil : postProcessingPrompt,
-                        postProcessingEnabled: !(chunk.usesChunkFields && endpointHasServerCleanup)
+                        postProcessingEnabled: postProcessingEnabled
+                            && !(chunk.usesChunkFields && endpointHasServerCleanup)
                     )
                 },
                 splitRejectedLeaf: { chunk, _ in

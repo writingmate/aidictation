@@ -50,13 +50,15 @@ class TranscriptionCleanupPromptTest {
 
         listOf(
             "first token through its final token",
-            "Do not summarize, shorten, continue, complete, or repeat",
+            "Do not summarize, paraphrase, shorten, reorder, continue, complete, or answer",
+            "Preserve language switching",
+            "Never translate, transliterate, or normalize the transcript into one language",
             "Never append invented words",
             "repeated-token or repeated-phrase loops",
             "canonical spelling reference",
             "only when source words plausibly support them",
             "only when their source trigger is present",
-            "Never copy an unsupported term",
+            "Never copy unsupported reference content",
             "always return non-empty corrected text",
             "<personal_vocabulary>\nNovaFlow\n</personal_vocabulary>",
             "<personal_phrases>\nKestrel Works\n</personal_phrases>",
@@ -83,11 +85,27 @@ class TranscriptionCleanupPromptTest {
     fun recognitionHintsAreBareAndExcludeRulesAndExpansions() {
         val hints = TranscriptionCleanupPrompt.speechRecognitionHints(fullContext()).orEmpty()
 
-        assertEquals("NovaFlow, Kestrel Works, nova flow, q b r", hints)
-        assertFalse(hints.contains("Use short paragraphs"))
-        assertFalse(hints.contains("quarterly business review"))
-        assertFalse(hints.contains("→"))
+        assertTrue(hints.contains("Produce polished dictation text"))
+        assertTrue(hints.contains("including language switching within a sentence"))
+        assertTrue(hints.contains("Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\""))
+        assertTrue(hints.contains("Add natural punctuation, capitalization, paragraph breaks, and spacing"))
+        assertTrue(hints.contains("British English"))
+        assertTrue(hints.contains("NovaFlow, Kestrel Works, nova flow → NovaFlow"))
+        assertTrue(hints.contains("q b r → quarterly business review"))
+        assertTrue(hints.contains("Use short paragraphs"))
+        assertTrue(hints.contains("→"))
         assertFalse(hints.contains("Vocabulary:"))
+    }
+
+    @Test
+    fun recognitionContractIsPresentWithoutPersonalHints() {
+        val prompt = TranscriptionCleanupPrompt.speechRecognitionHints(
+            CapturedTranscriptionCleanupContext.EMPTY
+        ).orEmpty()
+
+        assertTrue(prompt.contains("Produce polished dictation text"))
+        assertTrue(prompt.contains("including language switching within a sentence"))
+        assertTrue(prompt.contains("Output only the transcript"))
     }
 
     @Test

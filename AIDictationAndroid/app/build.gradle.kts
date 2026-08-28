@@ -63,7 +63,7 @@ fun buildConfigString(value: String): String {
 fun normalizedTranscriptionModel(value: String): String {
     return value.takeUnless {
         it.isBlank() || it.lowercase().contains("gpt-4o-transcribe")
-    } ?: "groq/whisper-large-v3-turbo"
+    } ?: "openai/gpt-transcribe"
 }
 
 fun normalizedAuthWebUrl(value: String): String {

@@ -424,6 +424,17 @@ struct ValidateMacOSRealtimeFinalization {
         precondition(clientSource.contains("failOnQueue(\"Realtime commit acknowledgement was missing its item ID\")"))
         precondition(clientSource.contains("self.fail(\"OpenAI Realtime send failed:"))
         precondition(!clientSource.contains("finalTranscript ?? currentTranscript"))
+        precondition(clientSource.contains("static let defaultTranscriptionModel = \"gpt-live-transcribe\""))
+        precondition(clientSource.contains("transcription[\"prompt\"] = prompt"))
+        precondition(clientSource.contains("guard transcriptionModel != Self.defaultTranscriptionModel else { return }"))
+        precondition(!clientSource.contains("gpt-realtime-whisper"))
+
+        let secretsSource = try String(
+            contentsOfFile: "Whishpermate/Whispermate/Services/SecretsLoader.swift",
+            encoding: .utf8
+        )
+        precondition(secretsSource.contains("normalizedCustomTranscriptionRealtimeModel"))
+        precondition(secretsSource.contains("return \"gpt-live-transcribe\""))
 
         let recorderSource = try String(
             contentsOfFile: "Whishpermate/Whispermate/Services/AudioRecorder.swift",

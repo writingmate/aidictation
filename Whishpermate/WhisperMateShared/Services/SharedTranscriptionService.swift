@@ -259,19 +259,24 @@ public enum SharedTranscriptionService {
         }
 
         if let instructions = dictionaryManager.formattingInstructions {
+            sttPromptComponents.append(instructions)
             postProcessingPromptComponents.append(instructions)
         }
 
         if let instructions = shortcutManager.formattingInstructions {
+            sttPromptComponents.append(instructions)
             postProcessingPromptComponents.append(instructions)
         }
 
         if let selectedPreset, !selectedPreset.isNotesModeRule, !selectedPreset.isMeetingsModeRule {
+            sttPromptComponents.append("\(selectedPreset.name): \(selectedPreset.instructions)")
             postProcessingPromptComponents.append("\(selectedPreset.name): \(selectedPreset.instructions)")
         }
 
         return (
-            stt: sttPromptComponents.joined(separator: "\n"),
+            stt: TranscriptionCleanupPrompt.speechRecognitionPrompt(
+                hints: sttPromptComponents
+            ),
             postProcessing: postProcessingPromptComponents.joined(separator: "\n")
         )
     }
@@ -386,12 +391,28 @@ public enum SharedTranscriptionService {
 
         let openAIClient = OpenAIClient(config: config)
         let mergedCapture = MergedRawCapture()
+        let mergedCleanup: ((String) async throws -> String)?
+        if cloud.isOneStage {
+            mergedCleanup = nil
+        } else {
+            mergedCleanup = { mergedRaw in
+                try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
+                    try await applyLLMPassIfAvailable(
+                        transcript: mergedRaw,
+                        outputMode: request.outputMode,
+                        postProcessingPrompt: request.postProcessingPrompt,
+                        cleanupConfiguration: request.cleanup
+                    )
+                }
+            }
+        }
         let transcript = try await openAIClient.transcribe(
             audioURL: audioURL,
             prompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
             sttPrompt: request.sttPrompt.isEmpty ? nil : request.sttPrompt,
-            postProcessingPrompt: cloud.isOneStage ? request.serverPostProcessingPrompt : nil,
-            serverPostProcessingEnabledByDefault: cloud.isOneStage,
+            postProcessingPrompt: nil,
+            serverPostProcessingEnabledByDefault: false,
+            postProcessingEnabled: !cloud.isOneStage,
             chunkWorkspace: chunkWorkspace,
             onChunkCheckpoint: { completedLeafIndex, transcript in
                 try await checkpointForwarder.checkpointLeaf(
@@ -412,16 +433,7 @@ public enum SharedTranscriptionService {
                 try Task.checkCancellation()
                 await mergedCapture.store(durableRaw)
             },
-            cleanupMergedTranscript: { mergedRaw in
-                try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
-                    try await applyLLMPassIfAvailable(
-                        transcript: mergedRaw,
-                        outputMode: request.outputMode,
-                        postProcessingPrompt: request.postProcessingPrompt,
-                        cleanupConfiguration: request.cleanup
-                    )
-                }
-            }
+            cleanupMergedTranscript: mergedCleanup
         )
 
         if let mergedRaw = await mergedCapture.value() {
@@ -433,8 +445,6 @@ public enum SharedTranscriptionService {
         }
 
         if cloud.isOneStage {
-            // A one-stage endpoint exposes only its final transcription. It is
-            // both the recoverable text and the already-cleaned candidate.
             return RecognitionResult(
                 rawTranscript: transcript,
                 cleanedTranscript: transcript

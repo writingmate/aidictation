@@ -301,6 +301,7 @@ final class OpenAIClient: @unchecked Sendable {
         sttPrompt: String? = nil,
         postProcessingPrompt: String? = nil,
         serverPostProcessingEnabledByDefault: Bool = false,
+        postProcessingEnabled: Bool = true,
         transientWorkspace: MacTransientWorkspace,
         onChunkCheckpoint: AppleAudioHTTPRecovery.Checkpoint? = nil,
         onMergedRawTranscript: ((String) async throws -> Void)? = nil,
@@ -361,7 +362,8 @@ final class OpenAIClient: @unchecked Sendable {
                         languages: languages,
                         sttPrompt: chunk.usesChunkFields ? chunkSTTPrompt : sttPrompt,
                         postProcessingPrompt: chunk.usesChunkFields ? nil : postProcessingPrompt,
-                        postProcessingEnabled: !(chunk.usesChunkFields && endpointHasServerCleanup)
+                        postProcessingEnabled: postProcessingEnabled
+                            && !(chunk.usesChunkFields && endpointHasServerCleanup)
                     )
                 },
                 splitRejectedLeaf: { chunk, _ in

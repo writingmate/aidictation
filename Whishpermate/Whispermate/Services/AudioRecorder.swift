@@ -131,22 +131,30 @@ class AudioRecorder: NSObject, ObservableObject {
         DebugLog.info("Audio input device changed", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("input_device_changed")
 
-        let changedDeviceUID = notification.object as? String
-        if let pendingPreparation {
-            if !pendingPreparation.shouldInvalidate(forChangedDeviceUID: changedDeviceUID) {
-                return
-            }
-            invalidatePendingPreparation(
-                message: "The microphone changed before recording started. Please try again."
+        // Device is pinned for the duration of preparation and recording.
+        // Ignore device-change notifications to prevent source-change crashes
+        // that occur when Core Audio reconfigures mid-start. The selected
+        // device continues to be used; any format issues are caught by the
+        // normal preparation/watchdog paths without tearing down the session.
+        if pendingPreparation != nil {
+            DebugLog.info(
+                "Ignoring device change during preparation - device is pinned",
+                context: "AudioRecorder LOG"
             )
-        } else if isRecording, let session = activeCapture {
-            if changedDeviceUID == session.deviceResolution.device.uniqueID {
-                return
-            }
-            attemptCaptureRecovery(
-                session,
-                reason: "input device changed"
+            SentryTelemetry.recordAudioEngineEvent(
+                "device_change_ignored_preparation"
             )
+            return
+        }
+        if isRecording, activeCapture != nil {
+            DebugLog.info(
+                "Ignoring device change during recording - device is pinned",
+                context: "AudioRecorder LOG"
+            )
+            SentryTelemetry.recordAudioEngineEvent(
+                "device_change_ignored_recording"
+            )
+            return
         }
     }
 
@@ -162,16 +170,34 @@ class AudioRecorder: NSObject, ObservableObject {
         SentryTelemetry.recordAudioEngineEvent("configuration_changed")
 
         guard let changedEngine = notification.object as? AVAudioEngine else { return }
+
+        // Engine configuration changes are ignored during preparation and
+        // active recording. Reacting to them mid-start caused source-change
+        // crashes: Core Audio was reconfiguring the IO unit while we tried to
+        // tear down or rebuild the engine. The pinned device continues to be
+        // used; if the engine actually stops, the watchdog will catch it.
         if let pendingPreparation, pendingPreparation.owns(engine: changedEngine) {
-            invalidatePendingPreparation(
-                message: "The microphone changed before recording started. Please try again."
+            DebugLog.info(
+                "Ignoring engine configuration change during preparation - device is pinned",
+                context: "AudioRecorder LOG"
             )
-        } else if isRecording,
-                  let session = activeCapture,
-                  session.owns(engine: changedEngine),
-                  !changedEngine.isRunning
+            SentryTelemetry.recordAudioEngineEvent(
+                "config_change_ignored_preparation"
+            )
+            return
+        }
+        if isRecording,
+           let session = activeCapture,
+           session.owns(engine: changedEngine)
         {
-            attemptCaptureRecovery(session, reason: "audio configuration changed")
+            DebugLog.info(
+                "Ignoring engine configuration change during recording - device is pinned",
+                context: "AudioRecorder LOG"
+            )
+            SentryTelemetry.recordAudioEngineEvent(
+                "config_change_ignored_recording"
+            )
+            return
         }
     }
 

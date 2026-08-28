@@ -575,6 +575,11 @@ class AudioDeviceManager: ObservableObject {
             || shouldPreferExternalInputOverBuiltIn(availableDevices: availableDevices)
     }
 
+    /// Returns whether the device is a built-in microphone.
+    func isBuiltInDevice(_ device: AudioDevice) -> Bool {
+        isBuiltInInputDevice(device.id)
+    }
+
     private func isBuiltInInputDevice(_ deviceID: AudioDeviceID) -> Bool {
         if let transportType = getDeviceTransportType(deviceID: deviceID),
            transportType == kAudioDeviceTransportTypeBuiltIn

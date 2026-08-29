@@ -3046,10 +3046,11 @@ class AppState: ObservableObject {
         if let languageCode = snapshot.languageCode, !languageCode.isEmpty {
             return languageCode
         }
-        if snapshot.languageCodes.isEmpty {
-            return nil
+        if !snapshot.languageCodes.isEmpty {
+            return snapshot.languageCodes.joined(separator: ",")
         }
-        return snapshot.languageCodes.joined(separator: ",")
+        let autoCodes = languageManager.appleSpeechLanguageCodes
+        return autoCodes.isEmpty ? nil : autoCodes.joined(separator: ",")
     }
 
     private func resolvedAutoOfflineProvider(

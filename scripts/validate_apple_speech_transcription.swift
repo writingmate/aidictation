@@ -74,6 +74,22 @@ private enum AppleSpeechTranscriptionValidator {
             "DictationTranscriber supportedLocale lookups must be awaited"
         )
         try require(
+            appleService.contains("resolveLanes"),
+            "multiple selected languages must each get their own Apple speech lane"
+        )
+        try require(
+            appleService.contains("withThrowingTaskGroup"),
+            "Apple speech lanes must run in parallel after recording stops"
+        )
+        try require(
+            appleService.contains("mergeLaneTranscripts") && appleService.contains("mergeTimedSegments") && appleService.contains("mergeScriptStretches"),
+            "multi-language Apple results must merge by time or script, not pick one winner"
+        )
+        try require(
+            appleService.contains("Skipping Apple speech lane"),
+            "unsupported locales must skip that lane instead of failing the others"
+        )
+        try require(
             appleService.contains("Apple speech doesn't support this language yet"),
             "unsupported locales must surface a plain error instead of English"
         )
@@ -101,6 +117,10 @@ private enum AppleSpeechTranscriptionValidator {
         try require(
             appState.contains("appleSpeechLocaleIdentifier(from: snapshot)"),
             "Apple speech must honor the app language setting"
+        )
+        try require(
+            appState.contains("languageManager.appleSpeechLanguageCodes"),
+            "auto-detect must expand to keyboard languages instead of one locale"
         )
         try require(
             appState.contains("effectiveOfflineProvider"),

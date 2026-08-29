@@ -224,6 +224,29 @@ public class LanguageManager: ObservableObject {
             .sorted()
     }
 
+    /// Locales to ask Apple speech for. Auto-detect uses keyboard languages
+    /// when available so a mixed dictation is not reduced to one locale.
+    public var appleSpeechLanguageCodes: [String] {
+        if !selectedLanguages.contains(.auto) {
+            return apiLanguageCodes
+        }
+        #if os(macOS)
+        let keyboardCodes = Self.systemKeyboardLanguages()
+            .filter { $0 != .auto }
+            .map(\.rawValue)
+            .sorted()
+        if !keyboardCodes.isEmpty {
+            return keyboardCodes
+        }
+        #endif
+        let fallback = Locale.current.identifier
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .first
+            .map { String($0).lowercased() }
+        return fallback.map { [$0] } ?? []
+    }
+
     private static func defaultLanguages() -> Set<Language> {
         #if os(macOS)
         let keyboardLanguages = systemKeyboardLanguages()

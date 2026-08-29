@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 import Speech
 internal import Combine
@@ -6,10 +7,11 @@ import WhisperMateShared
 
 /// On-device transcription using Apple speech recognition.
 ///
-/// Uses SpeechAnalyzer with SpeechTranscriber when that engine supports the
-/// requested language. If it does not, uses DictationTranscriber (system
-/// dictation) for languages such as Russian. Locale models are installed
-/// through AssetInventory. Recording start never waits on this service.
+/// Uses SpeechAnalyzer with one locale lane per selected language.
+/// SpeechTranscriber is used when that engine has a model; otherwise
+/// DictationTranscriber is used. Multiple lanes run in parallel after
+/// recording stops and are merged so a dictation can contain more than
+/// one language. Recording start never waits on this service.
 class AppleSpeechTranscriptionService: ObservableObject {
     static let shared = AppleSpeechTranscriptionService()
 
@@ -205,34 +207,99 @@ class AppleSpeechTranscriptionService: ObservableObject {
 
     @available(macOS 26.0, *)
     private func installLocaleAssetsIfNeeded(localeIdentifier: String?) async throws {
-        switch try await resolveEngine(localeIdentifier: localeIdentifier) {
-        case let .speechTranscriber(locale):
-            try await installAssets(
-                supporting: SpeechTranscriber(locale: locale, preset: .transcription)
-            )
-        case let .dictationTranscriber(locale):
-            try await installAssets(
-                supporting: DictationTranscriber(locale: locale, preset: .longDictation)
-            )
+        let lanes = try await resolveLanes(localeIdentifier: localeIdentifier)
+        for lane in lanes {
+            try await installAssets(for: lane, duration: 0)
         }
     }
 
     @available(macOS 26.0, *)
     private func transcribeFile(_ audioURL: URL, localeIdentifier: String?) async throws -> String {
+        let duration = try audioDuration(at: audioURL)
+        let lanes = try await resolveLanes(localeIdentifier: localeIdentifier)
+        for lane in lanes {
+            try await installAssets(for: lane, duration: duration, showDownloadProgress: true)
+        }
+        await publish(state: .transcribing, isModelDownloaded: true)
+
+        var laneSegments: [[AppleSpeechLaneSegment]] = []
+        try await withThrowingTaskGroup(of: [AppleSpeechLaneSegment].self) { group in
+            for lane in lanes {
+                group.addTask {
+                    do {
+                        return try await self.transcribeLane(
+                            audioURL: audioURL,
+                            lane: lane,
+                            duration: duration
+                        )
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        DebugLog.error(
+                            "Apple speech lane failed: \(error.localizedDescription)",
+                            context: "AppleSpeechTranscriptionService"
+                        )
+                        return []
+                    }
+                }
+            }
+            for try await segments in group {
+                if !segments.isEmpty {
+                    laneSegments.append(segments)
+                }
+            }
+        }
+
+        let merged = mergeLaneTranscripts(laneSegments)
+        return try finishedTranscript(merged)
+    }
+
+    @available(macOS 26.0, *)
+    private func transcribeLane(
+        audioURL: URL,
+        lane: AppleSpeechEngine,
+        duration: TimeInterval
+    ) async throws -> [AppleSpeechLaneSegment] {
         let file = try AVAudioFile(forReading: audioURL)
-        let duration = file.fileFormat.sampleRate > 0
-            ? Double(file.length) / file.fileFormat.sampleRate
-            : 0
-        switch try await resolveEngine(localeIdentifier: localeIdentifier) {
+        switch lane {
         case let .speechTranscriber(locale):
-            let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
-            try await installAssetsIfNeeded(supporting: transcriber, showDownloadProgress: true)
-            return try await analyzeFile(file, transcriber: transcriber)
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: [],
+                reportingOptions: [],
+                attributeOptions: [.audioTimeRange]
+            )
+            return try await analyzeSpeechFile(file, transcriber: transcriber, locale: locale)
         case let .dictationTranscriber(locale):
             let preset: DictationTranscriber.Preset = duration >= 30 ? .longDictation : .shortDictation
             let transcriber = DictationTranscriber(locale: locale, preset: preset)
-            try await installAssetsIfNeeded(supporting: transcriber, showDownloadProgress: true)
-            return try await analyzeFile(file, transcriber: transcriber)
+            return try await analyzeDictationFile(file, transcriber: transcriber, locale: locale)
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private func installAssets(
+        for lane: AppleSpeechEngine,
+        duration: TimeInterval,
+        showDownloadProgress: Bool = false
+    ) async throws {
+        switch lane {
+        case let .speechTranscriber(locale):
+            try await installAssetsIfNeeded(
+                supporting: SpeechTranscriber(
+                    locale: locale,
+                    transcriptionOptions: [],
+                    reportingOptions: [],
+                    attributeOptions: [.audioTimeRange]
+                ),
+                showDownloadProgress: showDownloadProgress
+            )
+        case let .dictationTranscriber(locale):
+            let preset: DictationTranscriber.Preset = duration >= 30 ? .longDictation : .shortDictation
+            try await installAssetsIfNeeded(
+                supporting: DictationTranscriber(locale: locale, preset: preset),
+                showDownloadProgress: showDownloadProgress
+            )
         }
     }
 
@@ -271,19 +338,13 @@ class AppleSpeechTranscriptionService: ObservableObject {
     }
 
     @available(macOS 26.0, *)
-    private func installAssets(supporting transcriber: SpeechTranscriber) async throws {
-        try await installAssetsIfNeeded(supporting: transcriber, showDownloadProgress: false)
-    }
-
-    @available(macOS 26.0, *)
-    private func installAssets(supporting transcriber: DictationTranscriber) async throws {
-        try await installAssetsIfNeeded(supporting: transcriber, showDownloadProgress: false)
-    }
-
-    @available(macOS 26.0, *)
-    private func analyzeFile(_ file: AVAudioFile, transcriber: SpeechTranscriber) async throws -> String {
+    private func analyzeSpeechFile(
+        _ file: AVAudioFile,
+        transcriber: SpeechTranscriber,
+        locale: Locale
+    ) async throws -> [AppleSpeechLaneSegment] {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
-        async let collected = collectSpeechTranscript(from: transcriber)
+        async let collected = collectSpeechSegments(from: transcriber, locale: locale)
         if let lastSample = try await analyzer.analyzeSequence(from: file) {
             try await analyzer.finalizeAndFinish(through: lastSample)
         } else {
@@ -293,9 +354,13 @@ class AppleSpeechTranscriptionService: ObservableObject {
     }
 
     @available(macOS 26.0, *)
-    private func analyzeFile(_ file: AVAudioFile, transcriber: DictationTranscriber) async throws -> String {
+    private func analyzeDictationFile(
+        _ file: AVAudioFile,
+        transcriber: DictationTranscriber,
+        locale: Locale
+    ) async throws -> [AppleSpeechLaneSegment] {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
-        async let collected = collectDictationTranscript(from: transcriber)
+        async let collected = collectDictationSegments(from: transcriber, locale: locale)
         if let lastSample = try await analyzer.analyzeSequence(from: file) {
             try await analyzer.finalizeAndFinish(through: lastSample)
         } else {
@@ -305,33 +370,64 @@ class AppleSpeechTranscriptionService: ObservableObject {
     }
 
     @available(macOS 26.0, *)
-    private func collectSpeechTranscript(from transcriber: SpeechTranscriber) async throws -> String {
-        var finalized = ""
-        var volatile = ""
+    private func collectSpeechSegments(
+        from transcriber: SpeechTranscriber,
+        locale: Locale
+    ) async throws -> [AppleSpeechLaneSegment] {
+        var segments: [AppleSpeechLaneSegment] = []
         for try await result in transcriber.results {
             try Task.checkCancellation()
-            let text = String(result.text.characters)
-            if result.isFinal {
-                finalized += text
-                volatile = ""
-            } else {
-                volatile = text
+            guard result.isFinal else { continue }
+            if let segment = laneSegment(from: result.text, locale: locale) {
+                segments.append(segment)
             }
         }
-        return try finishedTranscript(finalized + volatile)
+        return segments
     }
 
     @available(macOS 26.0, *)
-    private func collectDictationTranscript(from transcriber: DictationTranscriber) async throws -> String {
-        var parts: [String] = []
+    private func collectDictationSegments(
+        from transcriber: DictationTranscriber,
+        locale: Locale
+    ) async throws -> [AppleSpeechLaneSegment] {
+        var segments: [AppleSpeechLaneSegment] = []
         for try await result in transcriber.results {
             try Task.checkCancellation()
-            let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty {
-                parts.append(text)
+            if let segment = laneSegment(from: result.text, locale: locale) {
+                segments.append(segment)
             }
         }
-        return try finishedTranscript(parts.joined(separator: " "))
+        return segments
+    }
+
+    @available(macOS 26.0, *)
+    private func laneSegment(from text: AttributedString, locale: Locale) -> AppleSpeechLaneSegment? {
+        let value = String(text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let times = audioTimeBounds(from: text)
+        return AppleSpeechLaneSegment(
+            text: value,
+            start: times?.start,
+            end: times?.end,
+            localeIdentifier: locale.identifier
+        )
+    }
+
+    @available(macOS 26.0, *)
+    private func audioTimeBounds(from text: AttributedString) -> (start: TimeInterval, end: TimeInterval)? {
+        guard let range = text.audioTimeRange, range.isValid, !range.isEmpty else {
+            return nil
+        }
+        let start = CMTimeGetSeconds(range.start)
+        let end = CMTimeGetSeconds(range.end)
+        guard start.isFinite, end.isFinite, end >= start else { return nil }
+        return (start, end)
+    }
+
+    private func audioDuration(at url: URL) throws -> TimeInterval {
+        let file = try AVAudioFile(forReading: url)
+        guard file.fileFormat.sampleRate > 0 else { return 0 }
+        return Double(file.length) / file.fileFormat.sampleRate
     }
 
     private func finishedTranscript(_ raw: String) throws -> String {
@@ -342,31 +438,186 @@ class AppleSpeechTranscriptionService: ObservableObject {
         return combined
     }
 
+    private struct AppleSpeechLaneSegment: Sendable {
+        var text: String
+        var start: TimeInterval?
+        var end: TimeInterval?
+        var localeIdentifier: String
+    }
+
     @available(macOS 26.0, *)
     private enum AppleSpeechEngine: Sendable {
         case speechTranscriber(Locale)
         case dictationTranscriber(Locale)
+
+        var resolvedIdentifier: String {
+            switch self {
+            case let .speechTranscriber(locale), let .dictationTranscriber(locale):
+                return locale.identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+            }
+        }
+
+        var kindName: String {
+            switch self {
+            case .speechTranscriber: return "speech"
+            case .dictationTranscriber: return "dictation"
+            }
+        }
+    }
+
+    private func mergeLaneTranscripts(_ lanes: [[AppleSpeechLaneSegment]]) -> String {
+        let nonempty = lanes.filter { !$0.isEmpty }
+        if nonempty.isEmpty { return "" }
+        if nonempty.count == 1 {
+            return nonempty[0].map(\.text).joined(separator: " ")
+        }
+
+        let allHaveTimes = nonempty.allSatisfy { lane in
+            lane.allSatisfy { $0.start != nil && $0.end != nil }
+        }
+        if allHaveTimes {
+            return mergeTimedSegments(nonempty.flatMap { $0 })
+        }
+        return mergeScriptStretches(nonempty)
+    }
+
+    private func mergeTimedSegments(_ segments: [AppleSpeechLaneSegment]) -> String {
+        let sorted = segments.sorted { lhs, rhs in
+            (lhs.start ?? 0) < (rhs.start ?? 0)
+        }
+        var chosen: [AppleSpeechLaneSegment] = []
+        for segment in sorted {
+            if let last = chosen.last,
+               let lastEnd = last.end,
+               let start = segment.start,
+               start < lastEnd
+            {
+                if laneScore(segment) > laneScore(last) {
+                    chosen[chosen.count - 1] = segment
+                }
+            } else {
+                chosen.append(segment)
+            }
+        }
+        return chosen.map(\.text).joined(separator: " ")
+    }
+
+    private func mergeScriptStretches(_ lanes: [[AppleSpeechLaneSegment]]) -> String {
+        let sentenceLanes = lanes.map { lane in
+            lane.flatMap(splitIntoScriptStretches)
+        }
+        let maxCount = sentenceLanes.map(\.count).max() ?? 0
+        var parts: [String] = []
+        for index in 0..<maxCount {
+            var best: AppleSpeechLaneSegment?
+            var bestScore = -1.0
+            for lane in sentenceLanes {
+                guard index < lane.count else { continue }
+                let score = laneScore(lane[index])
+                if score > bestScore {
+                    bestScore = score
+                    best = lane[index]
+                }
+            }
+            if let text = best?.text, !text.isEmpty {
+                parts.append(text)
+            }
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private func splitIntoScriptStretches(_ segment: AppleSpeechLaneSegment) -> [AppleSpeechLaneSegment] {
+        let pieces = segment.text
+            .split(whereSeparator: { $0 == "." || $0 == "!" || $0 == "?" || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if pieces.count <= 1 {
+            return [segment]
+        }
+        return pieces.map { piece in
+            AppleSpeechLaneSegment(
+                text: piece,
+                start: nil,
+                end: nil,
+                localeIdentifier: segment.localeIdentifier
+            )
+        }
+    }
+
+    private func laneScore(_ segment: AppleSpeechLaneSegment) -> Double {
+        scriptPurity(segment.text, expected: expectedScript(for: segment.localeIdentifier))
+    }
+
+    private enum LetterScript {
+        case latin
+        case cyrillic
+        case other
+    }
+
+    private func expectedScript(for localeIdentifier: String) -> LetterScript {
+        let language = localeIdentifier
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .first
+            .map { String($0).lowercased() } ?? ""
+        switch language {
+        case "ru", "uk", "be", "bg", "sr", "mk", "kk":
+            return .cyrillic
+        default:
+            return .latin
+        }
+    }
+
+    private func scriptPurity(_ text: String, expected: LetterScript) -> Double {
+        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        guard !letters.isEmpty else { return 0.2 }
+        let matching = letters.filter { letterScript($0) == expected }.count
+        return Double(matching) / Double(letters.count)
+    }
+
+    private func letterScript(_ scalar: Unicode.Scalar) -> LetterScript {
+        if (0x0400...0x04FF).contains(scalar.value) || (0x0500...0x052F).contains(scalar.value) {
+            return .cyrillic
+        }
+        if CharacterSet.letters.contains(scalar), scalar.isASCII {
+            return .latin
+        }
+        if (0x00C0...0x024F).contains(scalar.value) {
+            return .latin
+        }
+        return .other
     }
 
     @available(macOS 26.0, *)
-    private func resolveEngine(localeIdentifier: String?) async throws -> AppleSpeechEngine {
+    private func resolveLanes(localeIdentifier: String?) async throws -> [AppleSpeechEngine] {
+        var lanes: [AppleSpeechEngine] = []
+        var seen = Set<String>()
         for locale in requestedLocales(from: localeIdentifier) {
+            let engine: AppleSpeechEngine?
             if let match = await SpeechTranscriber.supportedLocale(equivalentTo: locale) {
+                engine = .speechTranscriber(match)
+            } else if let match = await DictationTranscriber.supportedLocale(equivalentTo: locale) {
+                engine = .dictationTranscriber(match)
+            } else {
                 DebugLog.info(
-                    "Using Apple speech engine for \(locale.identifier)",
+                    "Skipping Apple speech lane for unsupported locale \(locale.identifier)",
                     context: "AppleSpeechTranscriptionService"
                 )
-                return .speechTranscriber(match)
+                engine = nil
             }
-            if let match = await DictationTranscriber.supportedLocale(equivalentTo: locale) {
-                DebugLog.info(
-                    "Using Apple dictation engine for \(locale.identifier)",
-                    context: "AppleSpeechTranscriptionService"
-                )
-                return .dictationTranscriber(match)
-            }
+            guard let engine else { continue }
+            let key = engine.resolvedIdentifier
+            guard seen.insert(key).inserted else { continue }
+            DebugLog.info(
+                "Using Apple \(engine.kindName) lane for \(locale.identifier)",
+                context: "AppleSpeechTranscriptionService"
+            )
+            lanes.append(engine)
         }
-        throw unsupportedLanguageError()
+        guard !lanes.isEmpty else {
+            throw unsupportedLanguageError()
+        }
+        return lanes
     }
 
     private func requestedLocales(from identifier: String?) -> [Locale] {

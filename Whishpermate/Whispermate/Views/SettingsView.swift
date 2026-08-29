@@ -1436,7 +1436,7 @@ struct SettingsView: View {
                         Button("Download") {
                             Task {
                                 try? await appleService.initialize(
-                                    localeIdentifier: languageManager.apiLanguageCode
+                                    localeIdentifier: languageManager.appleSpeechLanguageCodes.joined(separator: ",")
                                 )
                             }
                         }
@@ -1452,7 +1452,7 @@ struct SettingsView: View {
                             appleService.cleanup()
                             Task {
                                 try? await appleService.initialize(
-                                    localeIdentifier: languageManager.apiLanguageCode
+                                    localeIdentifier: languageManager.appleSpeechLanguageCodes.joined(separator: ",")
                                 )
                             }
                         }

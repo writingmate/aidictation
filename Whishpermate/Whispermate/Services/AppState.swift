@@ -2718,7 +2718,7 @@ class AppState: ObservableObject {
                     }
                 )
             }
-        case .parakeet:
+        case .parakeet, .apple:
             return
         }
 
@@ -2915,7 +2915,13 @@ class AppState: ObservableObject {
         let mode = modeOverride ?? transcriptionProviderManager.transcriptionMode
         let onlineProvider = onlineProviderOverride
             ?? transcriptionProviderManager.selectedOnlineProvider
-        let provider: TranscriptionProvider = mode == .local ? .parakeet : onlineProvider
+        let offlineProvider: TranscriptionProvider
+        if let override = onlineProviderOverride, override.isOnDevice {
+            offlineProvider = override
+        } else {
+            offlineProvider = transcriptionProviderManager.effectiveOfflineProvider
+        }
+        let provider: TranscriptionProvider = mode == .local ? offlineProvider : onlineProvider
         let endpoint: String
         let model: String
         let transport: TranscriptionTransport
@@ -3034,6 +3040,65 @@ class AppState: ObservableObject {
         buildSTTHintPromptComponents().joined(separator: "\n")
     }
 
+    private func resolvedAutoOfflineProvider(
+        snapshot: MacTranscriptionAttemptSnapshot
+    ) async throws -> TranscriptionProvider? {
+        let preferred = transcriptionProviderManager.effectiveOfflineProvider
+        let localeIdentifier = snapshot.languageCode ?? snapshot.languageCodes.first
+        if preferred == .apple, AppleSpeechTranscriptionService.isAvailable {
+            let appleState = await MainActor.run { AppleSpeechTranscriptionService.shared.state }
+            switch appleState {
+            case .ready, .transcribing:
+                DebugLog.info("Auto mode: network unavailable - using on-device Apple speech", context: "AppState")
+                return .apple
+            case .notInitialized, .error:
+                DebugLog.info("Auto mode: network unavailable, preparing Apple speech for fallback", context: "AppState")
+                do {
+                    try await AppleSpeechTranscriptionService.shared.initialize(
+                        localeIdentifier: localeIdentifier
+                    )
+                    DebugLog.info("Auto mode: Apple speech ready - using on-device", context: "AppState")
+                    return .apple
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    DebugLog.error(
+                        "Auto mode: Apple speech init failed (\(error.localizedDescription)) - trying Offline",
+                        context: "AppState"
+                    )
+                }
+            case .downloading:
+                DebugLog.info("Auto mode: network unavailable, Apple speech still loading - trying Offline", context: "AppState")
+            }
+        }
+
+        guard ParakeetTranscriptionService.isRuntimeSupported else {
+            return nil
+        }
+
+        let parakeetState = await MainActor.run { ParakeetTranscriptionService.shared.state }
+        switch parakeetState {
+        case .ready, .transcribing:
+            DebugLog.info("Auto mode: network unavailable - using on-device Parakeet", context: "AppState")
+            return .parakeet
+        case .notInitialized, .error:
+            DebugLog.info("Auto mode: network unavailable, initializing Parakeet for fallback", context: "AppState")
+            do {
+                try await ParakeetTranscriptionService.shared.initialize()
+                DebugLog.info("Auto mode: Parakeet initialized - using on-device", context: "AppState")
+                return .parakeet
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                DebugLog.error("Auto mode: Parakeet init failed (\(error.localizedDescription)) - attempting cloud", context: "AppState")
+                return nil
+            }
+        case .downloading, .initializing:
+            DebugLog.info("Auto mode: network unavailable, Parakeet still loading - attempting cloud", context: "AppState")
+            return nil
+        }
+    }
+
     private func singleAPILanguageCode() -> String? {
         guard let languageCode = languageManager.apiLanguageCode,
               !languageCode.contains(",")
@@ -3081,28 +3146,10 @@ class AppState: ObservableObject {
         if !transcriptionOptions.diarization,
            mode == .auto,
            !provider.isOnDevice,
-           !snapshot.networkWasConnected,
-           ParakeetTranscriptionService.isRuntimeSupported
+           !snapshot.networkWasConnected
         {
-            let parakeetState = await MainActor.run { ParakeetTranscriptionService.shared.state }
-            switch parakeetState {
-            case .ready, .transcribing:
-                DebugLog.info("Auto mode: network unavailable - using on-device Parakeet", context: "AppState")
-                provider = .parakeet
-            case .notInitialized, .error:
-                // Try to initialize Parakeet (model may be cached from a previous download)
-                DebugLog.info("Auto mode: network unavailable, initializing Parakeet for fallback", context: "AppState")
-                do {
-                    try await ParakeetTranscriptionService.shared.initialize()
-                    DebugLog.info("Auto mode: Parakeet initialized - using on-device", context: "AppState")
-                    provider = .parakeet
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    DebugLog.error("Auto mode: Parakeet init failed (\(error.localizedDescription)) - attempting cloud", context: "AppState")
-                }
-            case .downloading, .initializing:
-                DebugLog.info("Auto mode: network unavailable, Parakeet still loading - attempting cloud", context: "AppState")
+            if let fallback = try await resolvedAutoOfflineProvider(snapshot: snapshot) {
+                provider = fallback
             }
         }
 
@@ -3112,23 +3159,38 @@ class AppState: ObservableObject {
 
         switch transport {
         case .local:
-            guard ParakeetTranscriptionService.isRuntimeSupported else {
-                throw NSError(
-                    domain: "AppState",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: ParakeetTranscriptionService.unavailableMessage]
-                )
-            }
-
-            DebugLog.info("Using on-device Parakeet transcription", context: "AppState")
-
             let text: String
-            if transcriptionOptions.diarization {
-                text = try await withTimeout(seconds: diarizationTimeoutSeconds) {
-                    try await ParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
+            if provider == .apple, !transcriptionOptions.diarization {
+                guard AppleSpeechTranscriptionService.isAvailable else {
+                    throw NSError(
+                        domain: "AppState",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: AppleSpeechTranscriptionService.unavailableMessage]
+                    )
                 }
+
+                DebugLog.info("Using on-device Apple transcription", context: "AppState")
+                text = try await AppleSpeechTranscriptionService.shared.transcribe(
+                    audioURL: audioURL,
+                    localeIdentifier: snapshot.languageCode ?? snapshot.languageCodes.first
+                )
             } else {
-                text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+                guard ParakeetTranscriptionService.isRuntimeSupported else {
+                    throw NSError(
+                        domain: "AppState",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: ParakeetTranscriptionService.unavailableMessage]
+                    )
+                }
+
+                DebugLog.info("Using on-device Parakeet transcription", context: "AppState")
+                if transcriptionOptions.diarization {
+                    text = try await withTimeout(seconds: diarizationTimeoutSeconds) {
+                        try await ParakeetTranscriptionService.shared.transcribeDiarized(audioURL: audioURL)
+                    }
+                } else {
+                    text = try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+                }
             }
             let durableRaw = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !durableRaw.isEmpty else {

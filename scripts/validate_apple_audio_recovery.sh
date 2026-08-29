@@ -94,6 +94,12 @@ swiftc -parse-as-library -module-cache-path "$module_cache" \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  scripts/validate_apple_speech_transcription.swift \
+  -o "$work_dir/validate-apple-speech"
+"$work_dir/validate-apple-speech"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Services/RuntimeCallbackAttempt.swift \
   scripts/validate_parakeet_runtime_recovery.swift \
   -o "$work_dir/validate-parakeet-runtime"

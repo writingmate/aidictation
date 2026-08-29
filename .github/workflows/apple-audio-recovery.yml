@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'Whishpermate/**'
+      - 'scripts/validate_apple_speech_transcription.swift'
       - 'scripts/validate_apple_http_audio_recovery.swift'
       - 'scripts/validate_apple_audio_recovery.sh'
       - 'scripts/validate_ios_audio_processing_recovery.swift'

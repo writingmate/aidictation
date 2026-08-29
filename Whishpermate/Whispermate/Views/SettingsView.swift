@@ -129,6 +129,7 @@ struct SettingsView: View {
     @ObservedObject var authManager = AuthManager.shared
     @ObservedObject var screenCaptureManager = ScreenCaptureManager.shared
     @ObservedObject var parakeetService = ParakeetTranscriptionService.shared
+    @ObservedObject var appleService = AppleSpeechTranscriptionService.shared
     @ObservedObject var updateManager = UpdateManager.shared
     @ObservedObject var dockIconManager = DockIconManager.shared
     @Binding var selectedSection: SettingsSection
@@ -1211,7 +1212,8 @@ struct SettingsView: View {
                             set: { mode in
                                 pendingTranscriptionMode = transcriptionProviderManager.requestTranscriptionMode(
                                     mode,
-                                    parakeetService: parakeetService
+                                    parakeetService: parakeetService,
+                                    appleService: appleService
                                 )
                             }
                         )) {
@@ -1279,61 +1281,36 @@ struct SettingsView: View {
             SettingsCard {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Offline Model")
-                                .dsFont(.body)
-                                .foregroundStyle(Color.dsForeground)
-                            Text(parakeetStatusText)
-                                .dsFont(.label)
-                                .foregroundStyle(parakeetStatusColor)
-                        }
+                        Text("Offline Model")
+                            .dsFont(.body)
+                            .foregroundStyle(Color.dsForeground)
                         Spacer()
-
-                        switch parakeetService.state {
-                        case .notInitialized:
-                            Button("Download Model (~500 MB)") {
-                                Task {
-                                    try? await parakeetService.initialize()
-                                }
+                        Picker("", selection: Binding(
+                            get: { transcriptionProviderManager.selectedOfflineProvider },
+                            set: { provider in
+                                transcriptionProviderManager.setOfflineProvider(
+                                    provider,
+                                    parakeetService: parakeetService,
+                                    appleService: appleService
+                                )
                             }
-                            .controlSize(.small)
-                        case .downloading, .initializing:
-                            ProgressView()
-                                .controlSize(.small)
-                        case .ready, .transcribing:
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        case .error:
-                            Button("Retry") {
-                                parakeetService.cleanup()
-                                Task {
-                                    try? await parakeetService.initialize()
-                                }
+                        )) {
+                            ForEach(TranscriptionProvider.offlineProviders) { provider in
+                                Text(provider.displayName)
+                                    .tag(provider)
+                                    .disabled(!provider.isOfflineEngineAvailable)
                             }
-                            .controlSize(.small)
                         }
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                        .accessibilityLabel("Offline Model")
                     }
+                    .padding(.vertical, 2)
 
-                    if case .downloading = parakeetService.state {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ProgressView()
-                                .progressViewStyle(.linear)
-                            Text("Downloading offline model...")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
-                    } else if case .initializing = parakeetService.state {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ProgressView()
-                                .progressViewStyle(.linear)
-                            Text("Loading offline model...")
-                                .dsFont(.label)
-                                .foregroundStyle(Color.dsMutedForeground)
-                        }
+                    if transcriptionProviderManager.selectedOfflineProvider == .apple {
+                        appleOfflineModelStatus
                     } else {
-                        Text(TranscriptionProvider.parakeet.description)
-                            .dsFont(.label)
-                            .foregroundStyle(Color.dsMutedForeground)
+                        parakeetOfflineModelStatus
                     }
                 }
             }
@@ -1358,7 +1335,7 @@ struct SettingsView: View {
         for provider: TranscriptionProvider
     ) -> NSImage {
         switch provider {
-        case .aidictation, .parakeet:
+        case .aidictation, .parakeet, .apple:
             return resizedMenuIcon(NSApplication.shared.applicationIconImage)
         case .codex:
             if let appURL = NSWorkspace.shared.urlForApplication(
@@ -1386,6 +1363,157 @@ struct SettingsView: View {
         icon.unlockFocus()
         icon.isTemplate = false
         return icon
+    }
+
+    private var parakeetOfflineModelStatus: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(parakeetStatusText)
+                    .dsFont(.label)
+                    .foregroundStyle(parakeetStatusColor)
+                Spacer()
+
+                switch parakeetService.state {
+                case .notInitialized:
+                    Button("Download Model (~500 MB)") {
+                        Task {
+                            try? await parakeetService.initialize()
+                        }
+                    }
+                    .controlSize(.small)
+                case .downloading, .initializing:
+                    ProgressView()
+                        .controlSize(.small)
+                case .ready, .transcribing:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .error:
+                    Button("Retry") {
+                        parakeetService.cleanup()
+                        Task {
+                            try? await parakeetService.initialize()
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            if case .downloading = parakeetService.state {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                    Text("Downloading offline model...")
+                        .dsFont(.label)
+                        .foregroundStyle(Color.dsMutedForeground)
+                }
+            } else if case .initializing = parakeetService.state {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                    Text("Loading offline model...")
+                        .dsFont(.label)
+                        .foregroundStyle(Color.dsMutedForeground)
+                }
+            } else {
+                Text(TranscriptionProvider.parakeet.description)
+                    .dsFont(.label)
+                    .foregroundStyle(Color.dsMutedForeground)
+            }
+        }
+    }
+
+    private var appleOfflineModelStatus: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(appleStatusText)
+                    .dsFont(.label)
+                    .foregroundStyle(appleStatusColor)
+                Spacer()
+
+                if AppleSpeechTranscriptionService.isAvailable {
+                    switch appleService.state {
+                    case .notInitialized:
+                        Button("Download") {
+                            Task {
+                                try? await appleService.initialize(
+                                    localeIdentifier: languageManager.apiLanguageCode
+                                )
+                            }
+                        }
+                        .controlSize(.small)
+                    case .downloading:
+                        ProgressView()
+                            .controlSize(.small)
+                    case .ready, .transcribing:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    case .error:
+                        Button("Try Again") {
+                            appleService.cleanup()
+                            Task {
+                                try? await appleService.initialize(
+                                    localeIdentifier: languageManager.apiLanguageCode
+                                )
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+
+            if case .downloading = appleService.state {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                    Text(AppleSpeechTranscriptionService.downloadingMessage)
+                        .dsFont(.label)
+                        .foregroundStyle(Color.dsMutedForeground)
+                }
+            } else if !AppleSpeechTranscriptionService.isAvailable {
+                Text(AppleSpeechTranscriptionService.unavailableMessage)
+                    .dsFont(.label)
+                    .foregroundStyle(Color.dsMutedForeground)
+            } else {
+                Text(TranscriptionProvider.apple.description)
+                    .dsFont(.label)
+                    .foregroundStyle(Color.dsMutedForeground)
+            }
+        }
+    }
+
+    private var appleStatusText: String {
+        guard AppleSpeechTranscriptionService.isAvailable else {
+            return AppleSpeechTranscriptionService.unavailableMessage
+        }
+
+        switch appleService.state {
+        case .notInitialized:
+            return "Speech model not downloaded"
+        case .downloading:
+            return AppleSpeechTranscriptionService.downloadingMessage
+        case .ready:
+            return "Ready"
+        case .transcribing:
+            return "Transcribing..."
+        case let .error(message):
+            return message
+        }
+    }
+
+    private var appleStatusColor: Color {
+        switch appleService.state {
+        case .ready, .transcribing:
+            return .green
+        case .error:
+            return .red
+        default:
+            return Color.dsMutedForeground
+        }
+    }
+
+    private var restrictsLanguagesToParakeet: Bool {
+        transcriptionProviderManager.transcriptionMode == .local
+            && transcriptionProviderManager.effectiveOfflineProvider == .parakeet
     }
 
     private var parakeetStatusText: String {
@@ -1522,7 +1650,7 @@ struct SettingsView: View {
                             Text("Transcription Language")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text(transcriptionProviderManager.transcriptionMode == .local ? "Languages unavailable offline are shown muted; selecting one switches transcription to cloud." : "Select languages for transcription. Auto-detect works for all languages.")
+                            Text(restrictsLanguagesToParakeet ? "Languages unavailable offline are shown muted; selecting one switches transcription to cloud." : "Select languages for transcription. Auto-detect works for all languages.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1534,7 +1662,7 @@ struct SettingsView: View {
                         GridItem(.adaptive(minimum: 140)),
                     ], spacing: 8) {
                         ForEach(Language.allCases) { language in
-                            let isUnsupportedInLocalMode = transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet
+                            let isUnsupportedInLocalMode = restrictsLanguagesToParakeet && !language.supportsParakeet
                             Button(action: {
                                 selectLanguage(language)
                             }) {
@@ -1578,7 +1706,7 @@ struct SettingsView: View {
     }
 
     private func selectLanguage(_ language: Language) {
-        if transcriptionProviderManager.transcriptionMode == .local && !language.supportsParakeet {
+        if restrictsLanguagesToParakeet && !language.supportsParakeet {
             DispatchQueue.main.async {
                 pendingCloudLanguage = language
             }

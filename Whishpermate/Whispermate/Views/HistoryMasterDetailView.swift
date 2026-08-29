@@ -47,7 +47,10 @@ private struct RetranscriptionRouteMenu<LabelContent: View>: View {
     var body: some View {
         Menu {
             Button("Offline") {
-                retry(mode: .local, provider: .parakeet)
+                retry(
+                    mode: .local,
+                    provider: TranscriptionProviderManager.shared.effectiveOfflineProvider
+                )
             }
             .disabled(!TranscriptionMode.local.isAvailable)
 

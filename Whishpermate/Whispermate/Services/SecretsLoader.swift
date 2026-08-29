@@ -12,7 +12,7 @@ enum SecretsLoader {
 
     static func transcriptionKey(for provider: TranscriptionProvider) -> String? {
         switch provider {
-        case .parakeet, .codex:
+        case .parakeet, .apple, .codex:
             return nil // On-device, no API key needed
         case .aidictation:
             return secretsDictionary?["CustomTranscriptionKey"] as? String

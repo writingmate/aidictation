@@ -6,6 +6,7 @@ internal import Combine
 
 enum TranscriptionProvider: String, CaseIterable, Identifiable {
     case parakeet
+    case apple
     case aidictation = "custom"
     case codex
 
@@ -14,6 +15,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .parakeet: return "Offline"
+        case .apple: return "On-device (Apple)"
         case .aidictation: return "AI Dictation"
         case .codex: return "Codex"
         }
@@ -22,6 +24,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .parakeet: return "Keeps recordings and transcription on this Mac"
+        case .apple: return "Uses Apple speech recognition on this Mac"
         case .aidictation: return "Produces polished, ready-to-use text"
         case .codex: return "Uses transcription from your ChatGPT account"
         }
@@ -29,7 +32,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
 
     var defaultEndpoint: String {
         switch self {
-        case .parakeet: return ""
+        case .parakeet, .apple: return ""
         case .aidictation: return "https://writingmate.ai/api/openai/v1/audio/transcriptions"
         case .codex: return CodexTranscriptionSupport.webSocketEndpoint.absoluteString
         }
@@ -38,6 +41,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     var defaultModel: String {
         switch self {
         case .parakeet: return "parakeet-tdt-0.6b-v3"
+        case .apple: return "apple-speech"
         case .aidictation: return "openai/gpt-transcribe"
         case .codex: return ""
         }
@@ -45,7 +49,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
 
     var defaultTransport: TranscriptionTransport {
         switch self {
-        case .parakeet:
+        case .parakeet, .apple:
             return .local
         case .codex:
             return .realtime
@@ -55,7 +59,18 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     }
 
     var isOnDevice: Bool {
-        return self == .parakeet
+        self == .parakeet || self == .apple
+    }
+
+    var isOfflineEngineAvailable: Bool {
+        switch self {
+        case .parakeet:
+            return ParakeetTranscriptionService.isRuntimeSupported
+        case .apple:
+            return AppleSpeechTranscriptionService.isAvailable
+        case .aidictation, .codex:
+            return true
+        }
     }
 
     static var availableOnlineProviders: [TranscriptionProvider] {
@@ -66,11 +81,16 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         return providers
     }
 
+    static var offlineProviders: [TranscriptionProvider] {
+        [.parakeet, .apple]
+    }
+
     var onlineServiceName: String {
         switch self {
         case .aidictation: return "AI Dictation"
         case .codex: return "ChatGPT"
         case .parakeet: return "Offline"
+        case .apple: return "Apple"
         }
     }
 
@@ -163,6 +183,7 @@ enum TranscriptionMode: String, CaseIterable {
             return true
         case .auto, .local:
             return ParakeetTranscriptionService.isRuntimeSupported
+                || AppleSpeechTranscriptionService.isAvailable
         }
     }
 
@@ -176,6 +197,7 @@ class TranscriptionProviderManager: ObservableObject {
 
     @Published var selectedProvider: TranscriptionProvider = .aidictation
     @Published private(set) var selectedOnlineProvider: TranscriptionProvider = .aidictation
+    @Published private(set) var selectedOfflineProvider: TranscriptionProvider = .parakeet
     @Published var transcriptionMode: TranscriptionMode = .auto
     @Published var customEndpoint: String = ""
     @Published var customModel: String = ""
@@ -186,8 +208,14 @@ class TranscriptionProviderManager: ObservableObject {
     private enum Keys {
         static let selectedProvider = "transcriptionProvider"
         static let selectedOnlineProvider = "onlineTranscriptionProvider"
+        static let selectedOfflineProvider = "offlineTranscriptionProvider"
         static let transcriptionMode = "transcriptionMode"
         static let customTransport = "customTranscriptionTransport"
+    }
+
+    static var hasOfflineEngine: Bool {
+        ParakeetTranscriptionService.isRuntimeSupported
+            || AppleSpeechTranscriptionService.isAvailable
     }
 
     /// Whether the user prefers on-device transcription
@@ -222,11 +250,17 @@ class TranscriptionProviderManager: ObservableObject {
         selectedOnlineProvider = normalizedOnlineProvider(
             savedOnlineProvider ?? (selectedProvider.isOnDevice ? .aidictation : selectedProvider)
         )
+        selectedOfflineProvider = normalizedOfflineProvider(
+            AppDefaults.shared
+                .string(forKey: Keys.selectedOfflineProvider)
+                .flatMap(TranscriptionProvider.init(rawValue:))
+                ?? (selectedProvider == .apple ? .apple : .parakeet)
+        )
         selectedProvider = transcriptionMode == .local
-            ? .parakeet
+            ? effectiveOfflineProvider
             : selectedOnlineProvider
 
-        if !ParakeetTranscriptionService.isRuntimeSupported {
+        if !Self.hasOfflineEngine {
             if transcriptionMode == .local || transcriptionMode == .auto {
                 transcriptionMode = .cloud
                 AppDefaults.shared.set(TranscriptionMode.cloud.rawValue, forKey: Keys.transcriptionMode)
@@ -235,6 +269,7 @@ class TranscriptionProviderManager: ObservableObject {
         }
 
         AppDefaults.shared.set(selectedOnlineProvider.rawValue, forKey: Keys.selectedOnlineProvider)
+        AppDefaults.shared.set(selectedOfflineProvider.rawValue, forKey: Keys.selectedOfflineProvider)
         AppDefaults.shared.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
 
         enableLLMPostProcessing = false
@@ -260,9 +295,11 @@ class TranscriptionProviderManager: ObservableObject {
         // Keep selectedProvider in sync
         switch mode {
         case .local:
-            selectedProvider = .parakeet
-            LanguageManager.shared.restrictToParakeetSupported()
-            AppDefaults.shared.set(TranscriptionProvider.parakeet.rawValue, forKey: Keys.selectedProvider)
+            selectedProvider = effectiveOfflineProvider
+            if selectedProvider == .parakeet {
+                LanguageManager.shared.restrictToParakeetSupported()
+            }
+            AppDefaults.shared.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
         case .cloud, .auto:
             selectedProvider = selectedOnlineProvider
             AppDefaults.shared.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
@@ -275,24 +312,75 @@ class TranscriptionProviderManager: ObservableObject {
     }
 
     @discardableResult
-    func requestTranscriptionMode(_ mode: TranscriptionMode, parakeetService: ParakeetTranscriptionService = .shared) -> TranscriptionMode? {
+    func requestTranscriptionMode(
+        _ mode: TranscriptionMode,
+        parakeetService: ParakeetTranscriptionService = .shared,
+        appleService: AppleSpeechTranscriptionService = .shared
+    ) -> TranscriptionMode? {
         guard mode.isAvailable else {
             setTranscriptionMode(.cloud)
             return nil
         }
 
-        let modelReady: Bool = {
-            if case .ready = parakeetService.state { return true }
-            return false
-        }()
-
         setTranscriptionMode(mode)
 
-        if (mode == .local || mode == .auto) && !modelReady {
-            initializeParakeetIfNeeded(parakeetService)
+        if mode == .local || mode == .auto {
+            prepareSelectedOfflineEngine(
+                parakeetService: parakeetService,
+                appleService: appleService
+            )
         }
 
         return nil
+    }
+
+    func setOfflineProvider(
+        _ provider: TranscriptionProvider,
+        parakeetService: ParakeetTranscriptionService = .shared,
+        appleService: AppleSpeechTranscriptionService = .shared
+    ) {
+        let offlineProvider = normalizedOfflineProvider(provider)
+        selectedOfflineProvider = offlineProvider
+        AppDefaults.shared.set(offlineProvider.rawValue, forKey: Keys.selectedOfflineProvider)
+        if transcriptionMode == .local {
+            selectedProvider = effectiveOfflineProvider
+            if selectedProvider == .parakeet {
+                LanguageManager.shared.restrictToParakeetSupported()
+            }
+            AppDefaults.shared.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
+        }
+        prepareSelectedOfflineEngine(
+            parakeetService: parakeetService,
+            appleService: appleService
+        )
+        DebugLog.info("Set offline provider: \(offlineProvider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    var effectiveOfflineProvider: TranscriptionProvider {
+        if selectedOfflineProvider == .apple, AppleSpeechTranscriptionService.isAvailable {
+            return .apple
+        }
+        if ParakeetTranscriptionService.isRuntimeSupported {
+            return .parakeet
+        }
+        if AppleSpeechTranscriptionService.isAvailable {
+            return .apple
+        }
+        return .parakeet
+    }
+
+    private func prepareSelectedOfflineEngine(
+        parakeetService: ParakeetTranscriptionService,
+        appleService: AppleSpeechTranscriptionService
+    ) {
+        switch effectiveOfflineProvider {
+        case .apple:
+            initializeAppleIfNeeded(appleService)
+        case .parakeet:
+            initializeParakeetIfNeeded(parakeetService)
+        default:
+            break
+        }
     }
 
     private func initializeParakeetIfNeeded(_ service: ParakeetTranscriptionService) {
@@ -304,8 +392,18 @@ class TranscriptionProviderManager: ObservableObject {
         }
     }
 
+    private func initializeAppleIfNeeded(_ service: AppleSpeechTranscriptionService) {
+        Task {
+            if case .error = await MainActor.run(body: { service.state }) {
+                await MainActor.run { service.cleanup() }
+            }
+            try? await service.initialize()
+        }
+    }
+
     func setProvider(_ provider: TranscriptionProvider) {
         guard !provider.isOnDevice else {
+            setOfflineProvider(provider)
             setTranscriptionMode(.local)
             return
         }
@@ -329,6 +427,19 @@ class TranscriptionProviderManager: ObservableObject {
             return .aidictation
         default:
             return .aidictation
+        }
+    }
+
+    private func normalizedOfflineProvider(
+        _ provider: TranscriptionProvider
+    ) -> TranscriptionProvider {
+        switch provider {
+        case .apple:
+            return .apple
+        case .parakeet:
+            return .parakeet
+        default:
+            return .parakeet
         }
     }
 

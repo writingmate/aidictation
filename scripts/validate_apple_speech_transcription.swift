@@ -62,6 +62,10 @@ private enum AppleSpeechTranscriptionValidator {
             "Apple speech must also require SpeechTranscriber.isAvailable"
         )
         try require(
+            appleService.contains("await SpeechTranscriber.supportedLocale(equivalentTo:"),
+            "supportedLocale lookups must be awaited"
+        )
+        try require(
             appleService.contains("Downloading Apple speech model"),
             "download copy must stay plain-language"
         )

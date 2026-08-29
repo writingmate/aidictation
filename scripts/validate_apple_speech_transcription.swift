@@ -63,7 +63,23 @@ private enum AppleSpeechTranscriptionValidator {
         )
         try require(
             appleService.contains("await SpeechTranscriber.supportedLocale(equivalentTo:"),
-            "supportedLocale lookups must be awaited"
+            "SpeechTranscriber supportedLocale lookups must be awaited"
+        )
+        try require(
+            appleService.contains("DictationTranscriber"),
+            "languages without a SpeechTranscriber model must use DictationTranscriber"
+        )
+        try require(
+            appleService.contains("await DictationTranscriber.supportedLocale(equivalentTo:"),
+            "DictationTranscriber supportedLocale lookups must be awaited"
+        )
+        try require(
+            appleService.contains("Apple speech doesn't support this language yet"),
+            "unsupported locales must surface a plain error instead of English"
+        )
+        try require(
+            !appleService.contains("supported.first ?? preferred"),
+            "Apple speech must not substitute an unrelated SpeechTranscriber locale"
         )
         try require(
             appleService.contains("Downloading Apple speech model"),
@@ -81,6 +97,10 @@ private enum AppleSpeechTranscriptionValidator {
         try require(
             appState.contains("AppleSpeechTranscriptionService.shared.transcribe"),
             "live and history transcription must call the Apple service"
+        )
+        try require(
+            appState.contains("appleSpeechLocaleIdentifier(from: snapshot)"),
+            "Apple speech must honor the app language setting"
         )
         try require(
             appState.contains("effectiveOfflineProvider"),

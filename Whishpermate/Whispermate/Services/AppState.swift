@@ -3040,11 +3040,23 @@ class AppState: ObservableObject {
         buildSTTHintPromptComponents().joined(separator: "\n")
     }
 
+    private func appleSpeechLocaleIdentifier(
+        from snapshot: MacTranscriptionAttemptSnapshot
+    ) -> String? {
+        if let languageCode = snapshot.languageCode, !languageCode.isEmpty {
+            return languageCode
+        }
+        if snapshot.languageCodes.isEmpty {
+            return nil
+        }
+        return snapshot.languageCodes.joined(separator: ",")
+    }
+
     private func resolvedAutoOfflineProvider(
         snapshot: MacTranscriptionAttemptSnapshot
     ) async throws -> TranscriptionProvider? {
         let preferred = transcriptionProviderManager.effectiveOfflineProvider
-        let localeIdentifier = snapshot.languageCode ?? snapshot.languageCodes.first
+        let localeIdentifier = appleSpeechLocaleIdentifier(from: snapshot)
         if preferred == .apple, AppleSpeechTranscriptionService.isAvailable {
             let appleState = await MainActor.run { AppleSpeechTranscriptionService.shared.state }
             switch appleState {
@@ -3172,7 +3184,7 @@ class AppState: ObservableObject {
                 DebugLog.info("Using on-device Apple transcription", context: "AppState")
                 text = try await AppleSpeechTranscriptionService.shared.transcribe(
                     audioURL: audioURL,
-                    localeIdentifier: snapshot.languageCode ?? snapshot.languageCodes.first
+                    localeIdentifier: appleSpeechLocaleIdentifier(from: snapshot)
                 )
             } else {
                 guard ParakeetTranscriptionService.isRuntimeSupported else {

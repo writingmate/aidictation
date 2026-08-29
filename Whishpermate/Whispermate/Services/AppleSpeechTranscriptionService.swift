@@ -239,10 +239,10 @@ class AppleSpeechTranscriptionService: ObservableObject {
     @available(macOS 26.0, *)
     private func resolvedLocale(preferredIdentifier: String?) async -> Locale {
         let preferred = preferredLocale(from: preferredIdentifier)
-        if let match = SpeechTranscriber.supportedLocale(equivalentTo: preferred) {
+        if let match = await SpeechTranscriber.supportedLocale(equivalentTo: preferred) {
             return match
         }
-        if let match = SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) {
+        if let match = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) {
             return match
         }
         let supported = await SpeechTranscriber.supportedLocales

@@ -39,6 +39,31 @@ function readPlistValue(path, key) {
   ).trim();
 }
 
+function readAppSession() {
+  const session = execFileSync(
+    "/usr/bin/security",
+    [
+      "find-generic-password",
+      "-s",
+      "com.whispermate.supabase.auth",
+      "-a",
+      "sb-aidictation-auth-token",
+      "-w",
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  );
+  const decoded = JSON.parse(session);
+  if (
+    typeof decoded.accessToken !== "string" ||
+    decoded.accessToken.length < 20
+  ) {
+    throw new Error("The AIDictation sign-in session is unavailable");
+  }
+  return {
+    accessToken: decoded.accessToken,
+  };
+}
+
 function fixturePaths(directory) {
   const names = readdirSync(directory);
   return defaultFixturePrefixes.map((prefix) => {
@@ -191,7 +216,7 @@ async function sonioxRealtime({ pcm, endpoint, authorization }) {
 async function currentBatch({ path, endpoint, authorization }) {
   const audio = await import("node:fs/promises").then(({ readFile }) => readFile(path));
   const form = new FormData();
-  form.append("file", new Blob([audio]), basename(path));
+  form.append("file", new Blob([audio], { type: "audio/mp4" }), basename(path));
   form.append("model", "openai/gpt-transcribe");
   form.append("post_processing", "false");
   const startedAt = performance.now();
@@ -200,24 +225,40 @@ async function currentBatch({ path, endpoint, authorization }) {
     headers: { Authorization: `Bearer ${authorization}` },
     body: form,
   });
-  const raw = await response.text();
+  const responseBody = await response.text();
   if (!response.ok) {
     throw new Error(`Current provider failed with HTTP ${response.status}`);
   }
   return {
-    raw: raw.trim(),
+    raw: parseTranscriptionText(responseBody),
     keyUpToFinalMs: Math.round(performance.now() - startedAt),
     upstreamMs: Number(response.headers.get("x-aidictation-stt-ms")) || null,
     provider: response.headers.get("x-aidictation-provider") ?? "unknown",
   };
 }
 
+function parseTranscriptionText(body) {
+  try {
+    const decoded = JSON.parse(body);
+    if (typeof decoded.text === "string") return decoded.text.trim();
+  } catch {
+    // Plain text is a valid OpenAI-compatible transcription response.
+  }
+  return body.trim();
+}
+
 async function main() {
+  const includeSoniox = !process.argv.includes("--current-only");
   const secretsPath = resolve(argumentValue("--secrets", defaultSecretsPath));
   const recordingsDirectory = resolve(
     argumentValue("--recordings", defaultRecordingsDirectory),
   );
-  const authorization = readPlistValue(secretsPath, "CustomTranscriptionKey");
+  const session = readAppSession();
+  const realtimeAuthorization = session.accessToken;
+  const batchAuthorization = readPlistValue(
+    secretsPath,
+    "CustomTranscriptionKey",
+  );
   const batchEndpoint = readPlistValue(secretsPath, "CustomTranscriptionEndpoint");
   const realtimeEndpoint = new URL(
     "/api/openai/v1/realtime/client_secrets",
@@ -228,8 +269,18 @@ async function main() {
   for (const path of fixturePaths(recordingsDirectory)) {
     const pcm = decodePCM(path);
     const [current, soniox] = await Promise.all([
-      currentBatch({ path, endpoint: batchEndpoint, authorization }),
-      sonioxRealtime({ pcm, endpoint: realtimeEndpoint, authorization }),
+      currentBatch({
+        path,
+        endpoint: batchEndpoint,
+        authorization: batchAuthorization,
+      }),
+      includeSoniox
+        ? sonioxRealtime({
+            pcm,
+            endpoint: realtimeEndpoint,
+            authorization: realtimeAuthorization,
+          })
+        : Promise.resolve(null),
     ]);
     const row = { fixture: basename(path).slice(0, 8), current, soniox };
     rows.push(row);
@@ -237,7 +288,9 @@ async function main() {
   }
 
   const currentLatencies = rows.map((row) => row.current.keyUpToFinalMs);
-  const sonioxLatencies = rows.map((row) => row.soniox.keyUpToFinalMs);
+  const sonioxLatencies = rows
+    .map((row) => row.soniox?.keyUpToFinalMs)
+    .filter((value) => typeof value === "number");
   console.log(JSON.stringify({
     summary: {
       count: rows.length,
@@ -245,10 +298,12 @@ async function main() {
         p50: percentile(currentLatencies, 0.5),
         p90: percentile(currentLatencies, 0.9),
       },
-      soniox: {
-        p50: percentile(sonioxLatencies, 0.5),
-        p90: percentile(sonioxLatencies, 0.9),
-      },
+      soniox: sonioxLatencies.length
+        ? {
+            p50: percentile(sonioxLatencies, 0.5),
+            p90: percentile(sonioxLatencies, 0.9),
+          }
+        : null,
     },
   }));
 }

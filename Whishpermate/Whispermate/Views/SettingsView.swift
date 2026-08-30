@@ -1358,7 +1358,7 @@ struct SettingsView: View {
         for provider: TranscriptionProvider
     ) -> NSImage {
         switch provider {
-        case .aidictation, .parakeet:
+        case .aidictation, .soniox, .parakeet:
             return resizedMenuIcon(NSApplication.shared.applicationIconImage)
         case .codex:
             if let appURL = NSWorkspace.shared.urlForApplication(

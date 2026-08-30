@@ -236,7 +236,22 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))
         precondition(source.contains("return realtimeResult"))
-        precondition(!source.contains("rawText: realtimeResult,"))
+        guard let realtimeCheckpoint = source.range(
+            of: "try await session.markRawResultReady(realtimeResult)"
+        ),
+        let sonioxCleanup = source.range(
+            of: "rawText: realtimeResult,",
+            range: realtimeCheckpoint.upperBound..<source.endIndex
+        ) else {
+            preconditionFailure(
+                "Soniox realtime transcript did not reach cleanup after its durable raw checkpoint"
+            )
+        }
+        precondition(
+            source[realtimeCheckpoint.upperBound..<sonioxCleanup.lowerBound]
+                .contains("if snapshot.provider == .soniox"),
+            "Realtime cleanup must remain limited to the two-stage Soniox path"
+        )
         precondition(
             !source.contains("applyReplacements(to:"),
             "Recognizer text is being transformed before the durable raw checkpoint"

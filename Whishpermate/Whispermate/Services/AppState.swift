@@ -2223,6 +2223,22 @@ class AppState: ObservableObject {
                     try await session.checkpoint(realtimeResult)
                     try await session.markRawResultReady(realtimeResult)
                     try await session.beginCleanup()
+                    if snapshot.provider == .soniox {
+                        let cleanupStartedAt = CFAbsoluteTimeGetCurrent()
+                        let cleaned = try await self.applyLLMPassWithFallback(
+                            rawText: realtimeResult,
+                            client: OpenAIClient(config: .init()),
+                            snapshot: snapshot
+                        )
+                        let cleanupMilliseconds = Int(
+                            (CFAbsoluteTimeGetCurrent() - cleanupStartedAt) * 1_000
+                        )
+                        DebugLog.info(
+                            "Soniox cleanup completed durationMs=\(cleanupMilliseconds) rawLength=\(realtimeResult.count) cleanedLength=\(cleaned.count)",
+                            context: "SonioxRealtime"
+                        )
+                        return cleaned
+                    }
                     return realtimeResult
                 }
                 return try await self.performTranscription(
@@ -2638,6 +2654,38 @@ class AppState: ObservableObject {
                     }
                 }
             )
+        case .soniox:
+            guard let endpoint = URL(string: snapshot.transcriptionEndpoint) else {
+                DebugLog.warning("Invalid fast streaming session endpoint", context: "AppState")
+                return
+            }
+            client = SonioxRealtimeTranscriptionClient(
+                authorizationProvider: {
+                    let accessToken = try await AuthManager.shared.accessToken()
+                    return try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
+                        endpoint: endpoint,
+                        apiKey: accessToken,
+                        model: SonioxRealtimeProtocol.model,
+                        prompt: realtimePrompt,
+                        language: languageCode,
+                        keywords: snapshot.transcriptionKeywords,
+                        languages: snapshot.languageCodes
+                    )
+                },
+                languages: snapshot.languageCodes,
+                keywords: snapshot.transcriptionKeywords,
+                prompt: realtimePrompt,
+                onPartialTranscript: { [weak self] partial in
+                    self?.handleRealtimePartial(
+                        partial,
+                        recordingID: recordingID,
+                        attemptID: attemptID
+                    )
+                },
+                onError: { message in
+                    DebugLog.warning(message, context: "SonioxRealtime")
+                }
+            )
         case .aidictation:
             let realtimeModel = resolvedRealtimeTranscriptionModel(
                 configuredModel: snapshot.transcriptionModel,
@@ -2915,7 +2963,10 @@ class AppState: ObservableObject {
         let mode = modeOverride ?? transcriptionProviderManager.transcriptionMode
         let onlineProvider = onlineProviderOverride
             ?? transcriptionProviderManager.selectedOnlineProvider
-        let provider: TranscriptionProvider = mode == .local ? .parakeet : onlineProvider
+        let selectedProvider: TranscriptionProvider = mode == .local ? .parakeet : onlineProvider
+        let provider: TranscriptionProvider = isRetranscription && selectedProvider == .soniox
+            ? .aidictation
+            : selectedProvider
         let endpoint: String
         let model: String
         let transport: TranscriptionTransport

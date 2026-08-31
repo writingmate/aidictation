@@ -66,11 +66,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     }
 
     static var availableOnlineProviders: [TranscriptionProvider] {
-        var providers: [TranscriptionProvider] = [.soniox]
-        if CodexTranscriptionSupport.isInstalled {
-            providers.append(.codex)
-        }
-        return providers
+        [.soniox]
     }
 
     var onlineServiceName: String {
@@ -331,11 +327,7 @@ class TranscriptionProviderManager: ObservableObject {
         _ provider: TranscriptionProvider
     ) -> TranscriptionProvider {
         switch provider {
-        case .codex where CodexTranscriptionSupport.isInstalled:
-            return .codex
         case .soniox:
-            return .soniox
-        case .aidictation:
             return .soniox
         default:
             return .soniox

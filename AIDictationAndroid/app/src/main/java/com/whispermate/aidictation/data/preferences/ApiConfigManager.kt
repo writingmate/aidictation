@@ -48,7 +48,7 @@ class ApiConfigManager @Inject constructor() {
                 ParakeetRuntime.ONNX -> "parakeet-tdt-0.6b-v3"
                 ParakeetRuntime.LITERT -> "parakeet-tdt-0.6b-v3-litert"
             }
-            ApiProvider.WRITINGMATE -> "openai/gpt-transcribe"
+            ApiProvider.WRITINGMATE -> "soniox/stt-async-v5"
             ApiProvider.OPENAI -> "gpt-transcribe"
             ApiProvider.GROQ -> "whisper-large-v3-turbo"
         }

@@ -33,26 +33,26 @@ require(
 )
 require(
     mac_provider,
-    "var providers: [TranscriptionProvider] = [.soniox]",
+    "static var availableOnlineProviders: [TranscriptionProvider] {\n        [.soniox]\n    }",
     "macOS provider menu",
 )
 require(mac_provider, 'case .soniox: return "AI Dictation"', "macOS product label")
-require(mac_provider, "case .aidictation:\n            return .soniox", "macOS migration")
 reject(mac_provider, 'return "Fast streaming"', "macOS implementation label")
 
 mac_state = source("Whishpermate/Whispermate/Services/AppState.swift")
 require(
     mac_state,
-    'model: "groq/whisper-large-v3-turbo"',
-    "macOS batch fallback",
+    'model = "soniox/stt-async-v5"',
+    "macOS Soniox batch model",
 )
-require(mac_state, "snapshot.usingBatchFallback()", "macOS fallback activation")
+reject(mac_state, "snapshot.usingBatchFallback()", "macOS cross-provider fallback")
+reject(mac_state, 'groq/whisper-large-v3-turbo', "macOS Groq fallback")
 
 shared_provider = source("Whishpermate/WhisperMateShared/Models/APIProvider.swift")
 require(shared_provider, 'case .custom: return "AI Dictation"', "Apple shared label")
 require(
     shared_provider,
-    'case .custom: return "openai/gpt-transcribe"',
+    'case .custom: return "soniox/stt-async-v5"',
     "Apple shared batch model",
 )
 require(
@@ -67,24 +67,21 @@ android = source(
 )
 require(
     android,
-    'ApiProvider.WRITINGMATE -> "openai/gpt-transcribe"',
+    'ApiProvider.WRITINGMATE -> "soniox/stt-async-v5"',
     "Android batch model",
 )
-reject(android, "soniox/stt-async-v5", "Android async Soniox rollout")
 android_workflow = source(".github/workflows/android-build.yml")
 require(
     android_workflow,
     "github.event_name == 'pull_request' && 'pull-request' || 'release'",
     "Android pull-request environment",
 )
-reject(android_workflow, "soniox/stt-async-v5", "Android release async Soniox rollout")
 
 windows = source("AIDictation.Windows/AIDictation/Helpers/BuildConfig.cs")
 require(
     windows,
-    'TranscriptionModel = "openai/gpt-transcribe"',
+    'TranscriptionModel = "soniox/stt-async-v5"',
     "Windows batch model",
 )
-reject(windows, "soniox/stt-async-v5", "Windows async Soniox rollout")
 
 print("Soniox realtime default and batch controls: PASS")

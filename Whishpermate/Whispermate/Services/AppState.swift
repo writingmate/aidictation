@@ -3043,6 +3043,11 @@ class AppState: ObservableObject {
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: cleanupComponents,
             baseCleanupPromptComponents: cleanupComponents,
+            shortcutExpansions: shortcutManager.shortcuts
+                .filter(\.isEnabled)
+                .map {
+                    .init(trigger: $0.voiceTrigger, expansion: $0.expansion)
+                },
             contextRules: contextRules,
             usesContextRules: usesContextRules,
             appContext: appContext,
@@ -3063,9 +3068,6 @@ class AppState: ObservableObject {
             promptComponents.append("Phrases: \(shortcutManager.transcriptionHints)")
         }
         if let instructions = dictionaryManager.formattingInstructions {
-            promptComponents.append(instructions)
-        }
-        if let instructions = shortcutManager.formattingInstructions {
             promptComponents.append(instructions)
         }
         return promptComponents
@@ -3380,7 +3382,7 @@ class AppState: ObservableObject {
         snapshot: MacTranscriptionAttemptSnapshot
     ) async throws -> String {
         let outputMode = snapshot.outputMode
-        let promptComponents = snapshot.cleanupPromptComponents
+        let promptComponents = snapshot.cleanupPromptComponents(for: rawText)
         let postProcessor = snapshot.postProcessingProvider
 
         if postProcessor == .aidictation,

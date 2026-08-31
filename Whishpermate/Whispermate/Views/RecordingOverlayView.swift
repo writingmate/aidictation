@@ -3,6 +3,7 @@ import WhisperMateShared
 
 struct RecordingOverlayView: View {
     @ObservedObject var manager: OverlayWindowManager
+    @ObservedObject private var history = HistoryManager.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering = false
     @State private var shouldShowExpandedPill = false
@@ -341,11 +342,7 @@ struct RecordingOverlayView: View {
                     targetHeight: targetPillHeight
                 )
             } else if shouldShowExpandedPill && shouldShowContent {
-                centeredWaveContent(
-                    OverlayIdleDotsView(color: .white.opacity(0.92)),
-                    targetWidth: targetPillWidth,
-                    targetHeight: targetPillHeight
-                )
+                idleControls(targetWidth: targetPillWidth, targetHeight: targetPillHeight)
             }
         }
         .frame(width: targetPillWidth, height: targetPillHeight)
@@ -371,6 +368,67 @@ struct RecordingOverlayView: View {
                 .frame(width: waveSpanWidth, height: activeStateHeight)
             Spacer(minLength: 0)
         }
+        .frame(width: targetWidth, height: targetHeight)
+        .transition(
+            .asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.96)),
+                removal: .opacity
+            )
+        )
+    }
+
+    private var latestTranscription: String? {
+        history.recordings
+            .first { !($0.transcription ?? "").isEmpty }?
+            .transcription
+    }
+
+    private func idleControls(targetWidth: CGFloat, targetHeight: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            OverlayIdleControlButton(
+                systemName: "gearshape.fill",
+                accessibilityLabel: "Open settings",
+                iconSize: cancelIconSize,
+                buttonSize: buttonSize
+            ) {
+                updateHoverCursor(isActive: false)
+                manager.expandToFullMode()
+            } onHover: { hovering in
+                updateHoverCursor(isActive: hovering)
+            }
+
+            Spacer(minLength: 0)
+
+            OverlayIdleControlButton(
+                systemName: "play.fill",
+                accessibilityLabel: "Start dictation",
+                iconSize: cancelIconSize,
+                buttonSize: buttonSize
+            ) {
+                updateHoverCursor(isActive: false)
+                manager.startRecordingFromOverlay()
+            } onHover: { hovering in
+                updateHoverCursor(isActive: hovering)
+            }
+
+            Spacer(minLength: 0)
+
+            OverlayIdleControlButton(
+                systemName: "doc.on.doc.fill",
+                accessibilityLabel: "Copy last dictation",
+                iconSize: cancelIconSize,
+                buttonSize: buttonSize,
+                isEnabled: latestTranscription != nil
+            ) {
+                guard let text = latestTranscription else { return }
+                updateHoverCursor(isActive: false)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            } onHover: { hovering in
+                updateHoverCursor(isActive: hovering && latestTranscription != nil)
+            }
+        }
+        .padding(.horizontal, recordingControlsPadding)
         .frame(width: targetWidth, height: targetHeight)
         .transition(
             .asymmetric(
@@ -525,17 +583,35 @@ private enum OverlayWaveMetrics {
     static let cornerRadius: CGFloat = dotSize / 2
 }
 
-private struct OverlayIdleDotsView: View {
-    let color: Color
+private struct OverlayIdleControlButton: View {
+    let systemName: String
+    let accessibilityLabel: String
+    let iconSize: CGFloat
+    let buttonSize: CGFloat
+    var isEnabled: Bool = true
+    let action: () -> Void
+    let onHover: (Bool) -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: OverlayWaveMetrics.spacing) {
-            ForEach(0 ..< OverlayWaveMetrics.count, id: \.self) { _ in
-                Circle()
-                    .fill(color)
-                    .frame(width: OverlayWaveMetrics.dotSize, height: OverlayWaveMetrics.dotSize)
-            }
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: iconSize, weight: .bold))
+                .foregroundStyle(.white.opacity(isEnabled ? 0.92 : 0.35))
+                .frame(width: buttonSize, height: buttonSize)
+                .background(Circle().fill(Color.white.opacity(isEnabled && isHovering ? 0.28 : 0.18)))
         }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .scaleEffect(isEnabled && isHovering ? 1.06 : 1)
+        .contentShape(Circle())
+        .onHover { hovering in
+            isHovering = hovering
+            onHover(hovering)
+        }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 

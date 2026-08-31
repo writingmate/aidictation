@@ -32,4 +32,29 @@ struct TranscriptionOutputFilter {
 
         return result
     }
+
+    static func removeStandaloneFillers(_ text: String) -> String {
+        let pattern = #"(?i)(?<![\p{L}\p{N}])(?:u+h+|u+m+|u+h+m+|e+r+m*|a+h+|h+m+|u+g+h+)(?![\p{L}\p{N}])(?:[,.!?…]+)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+
+        var result = regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: ""
+        )
+        result = result.replacingOccurrences(
+            of: #"\s+([,.;:!?])"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        result = result.replacingOccurrences(
+            of: #"\s{2,}"#,
+            with: " ",
+            options: .regularExpression
+        )
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result
+    }
 }

@@ -197,7 +197,7 @@ mac_pipeline = function_body(
 )
 require(
     "postProcessingPrompt: nil" in mac_pipeline,
-    "AI Dictation batch transcription still sends a separate cleanup prompt",
+    "AI Dictation batch recognition still sends a cleanup prompt to STT",
 )
 require(
     "postProcessingEnabled: provider != .aidictation" in mac_pipeline,
@@ -205,7 +205,12 @@ require(
 )
 require(
     "cleanupMergedTranscript: nil" in mac_pipeline,
-    "AI Dictation chunked transcription still schedules client cleanup",
+    "AI Dictation chunked recognition has more than one cleanup owner",
+)
+require(
+    """if provider == .aidictation {
+                return try await applyLLMPassWithFallback(""" in mac_pipeline,
+    "AI Dictation batch transcription does not run client cleanup after raw recognition",
 )
 
 mac_server_prompt = function_body(

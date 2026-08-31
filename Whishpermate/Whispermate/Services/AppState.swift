@@ -3309,7 +3309,11 @@ class AppState: ObservableObject {
             try await milestones.beginCleanup()
 
             if provider == .aidictation {
-                return durableRaw
+                return try await applyLLMPassWithFallback(
+                    rawText: durableRaw,
+                    client: client,
+                    snapshot: snapshot
+                )
             }
 
             return try await applyLLMPassWithFallback(
@@ -3376,15 +3380,20 @@ class AppState: ObservableObject {
             ).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleaned.isEmpty else {
                 DebugLog.warning("\(label) returned no text - using transcript", context: "AppState")
-                return rawText
+                return transcriptWithoutStandaloneFillers(rawText)
             }
-            return cleaned
+            return transcriptWithoutStandaloneFillers(cleaned)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             DebugLog.warning("\(label) unavailable within time limit - using transcript", context: "AppState")
-            return rawText
+            return transcriptWithoutStandaloneFillers(rawText)
         }
+    }
+
+    private func transcriptWithoutStandaloneFillers(_ text: String) -> String {
+        let filtered = TranscriptionOutputFilter.removeStandaloneFillers(text)
+        return filtered.isEmpty ? text : filtered
     }
 
     /// Every path that reaches this method has already produced and durably

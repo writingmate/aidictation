@@ -4,6 +4,24 @@ import XCTest
 /// user's app. A bug here silently deletes words the user actually said.
 final class TranscriptionOutputFilterTests: XCTestCase {
     private func filter(_ s: String) -> String { TranscriptionOutputFilter.filter(s) }
+    private func removeFillers(_ s: String) -> String {
+        TranscriptionOutputFilter.removeStandaloneFillers(s)
+    }
+
+    func testRemovesStandaloneFillerVocalizations() {
+        XCTAssertEqual(
+            removeFillers("Um, this is uh a test. Ugh! It works erm now."),
+            "this is a test. It works now."
+        )
+        XCTAssertEqual(removeFillers("AH... well, hmm, yes."), "well, yes.")
+    }
+
+    func testFillerRemovalDoesNotDamageMeaningfulWords() {
+        XCTAssertEqual(
+            removeFillers("The U-Haul reached Birmingham and Ahmet said ahoy."),
+            "The U-Haul reached Birmingham and Ahmet said ahoy."
+        )
+    }
 
     // MARK: - Hallucination artifacts it exists to remove
 

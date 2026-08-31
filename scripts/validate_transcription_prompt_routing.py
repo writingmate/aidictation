@@ -139,9 +139,9 @@ require(
     "macOS recognition lost vocabulary or phrase hints",
 )
 require(
-    "dictionaryManager.formattingInstructions" in stt_builder
-    and "shortcutManager.formattingInstructions" in stt_builder,
-    "macOS recognition lost replacements or phrase expansions",
+    "dictionaryManager.formattingInstructions" not in stt_builder
+    and "shortcutManager.formattingInstructions" not in stt_builder,
+    "macOS recognition contains cleanup-only replacement or expansion values",
 )
 require(
     '"Vocabulary:' not in stt_builder and '"Phrases:' not in stt_builder,
@@ -159,7 +159,9 @@ require(
 )
 require(
     "dictionaryManager.transcriptionKeywords" in app_state_source
-    and "shortcutManager.transcriptionKeywords" in app_state_source,
+    and "shortcutManager.shortcuts" in app_state_source
+    and ".map(\\.voiceTrigger)" in app_state_source
+    and "shortcutManager.transcriptionKeywords" not in app_state_source,
     "modern transcription requests lost literal keyword hints",
 )
 require(
@@ -200,8 +202,8 @@ require(
     "AI Dictation batch recognition still sends a cleanup prompt to STT",
 )
 require(
-    "postProcessingEnabled: provider != .aidictation" in mac_pipeline,
-    "AI Dictation batch transcription still enables server cleanup",
+    "postProcessingEnabled: false" in mac_pipeline,
+    "batch recognition still enables server cleanup",
 )
 require(
     "cleanupMergedTranscript: nil" in mac_pipeline,

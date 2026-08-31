@@ -1242,41 +1242,6 @@ struct SettingsView: View {
             }
 
             SettingsCard {
-                VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        Text("Cloud Model")
-                            .dsFont(.body)
-                            .foregroundStyle(Color.dsForeground)
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { transcriptionProviderManager.selectedOnlineProvider },
-                            set: { transcriptionProviderManager.setProvider($0) }
-                        )) {
-                            ForEach(TranscriptionProvider.availableOnlineProviders) { provider in
-                                cloudModelLabel(for: provider)
-                                    .tag(provider)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .fixedSize()
-                        .accessibilityLabel("Cloud Model")
-                    }
-                    .padding(.vertical, 2)
-
-                    HStack {
-                        Text(transcriptionProviderManager.selectedOnlineProvider.description)
-                            .dsFont(.label)
-                            .foregroundStyle(Color.dsMutedForeground)
-                        Spacer()
-                    }
-                    .padding(.top, 4)
-
-                }
-            }
-            .disabled(transcriptionProviderManager.transcriptionMode == .local)
-            .opacity(transcriptionProviderManager.transcriptionMode == .local ? 0.55 : 1)
-
-            SettingsCard {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -1342,50 +1307,6 @@ struct SettingsView: View {
 
             // Cleanup is product-defined and intentionally has no user-facing controls.
         }
-    }
-
-    private func cloudModelLabel(
-        for provider: TranscriptionProvider
-    ) -> some View {
-        HStack(spacing: 7) {
-            Image(nsImage: cloudModelIcon(for: provider))
-                .frame(width: 16, height: 16)
-            Text(provider.onlineServiceName)
-        }
-    }
-
-    private func cloudModelIcon(
-        for provider: TranscriptionProvider
-    ) -> NSImage {
-        switch provider {
-        case .aidictation, .soniox, .parakeet:
-            return resizedMenuIcon(NSApplication.shared.applicationIconImage)
-        case .codex:
-            if let appURL = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: "com.openai.codex"
-            ) {
-                return resizedMenuIcon(NSWorkspace.shared.icon(forFile: appURL.path))
-            }
-            return resizedMenuIcon(
-                NSImage(named: NSImage.applicationIconName)
-                    ?? NSApplication.shared.applicationIconImage
-            )
-        }
-    }
-
-    private func resizedMenuIcon(_ source: NSImage) -> NSImage {
-        let size = NSSize(width: 16, height: 16)
-        let icon = NSImage(size: size)
-        icon.lockFocus()
-        source.draw(
-            in: NSRect(origin: .zero, size: size),
-            from: NSRect(origin: .zero, size: source.size),
-            operation: .sourceOver,
-            fraction: 1
-        )
-        icon.unlockFocus()
-        icon.isTemplate = false
-        return icon
     }
 
     private var parakeetStatusText: String {

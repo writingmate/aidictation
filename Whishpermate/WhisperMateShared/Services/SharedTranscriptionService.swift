@@ -259,17 +259,14 @@ public enum SharedTranscriptionService {
         }
 
         if let instructions = dictionaryManager.formattingInstructions {
-            sttPromptComponents.append(instructions)
             postProcessingPromptComponents.append(instructions)
         }
 
         if let instructions = shortcutManager.formattingInstructions {
-            sttPromptComponents.append(instructions)
             postProcessingPromptComponents.append(instructions)
         }
 
         if let selectedPreset, !selectedPreset.isNotesModeRule, !selectedPreset.isMeetingsModeRule {
-            sttPromptComponents.append("\(selectedPreset.name): \(selectedPreset.instructions)")
             postProcessingPromptComponents.append("\(selectedPreset.name): \(selectedPreset.instructions)")
         }
 

@@ -2174,27 +2174,9 @@ class AppState: ObservableObject {
                 realtimeResult = nil
             }
 
-            let recognitionSnapshot: MacTranscriptionAttemptSnapshot
-            let usedBatchFallback: Bool
-            if realtimeResult == nil,
-               snapshot.provider == .soniox,
-               let fallback = snapshot.usingBatchFallback()
-            {
-                recognitionSnapshot = fallback
-                usedBatchFallback = true
-                DebugLog.warning(
-                    "Fast streaming did not complete; using cloud fallback",
-                    context: "SonioxRealtime"
-                )
-            } else {
-                recognitionSnapshot = snapshot
-                usedBatchFallback = false
-            }
-
             if activeTransport == .realtime,
                (snapshot.mode != .auto || snapshot.networkWasConnected),
-               realtimeResult == nil,
-               !usedBatchFallback
+               realtimeResult == nil
             {
                 throw NSError(
                     domain: "AppState",
@@ -2263,7 +2245,7 @@ class AppState: ObservableObject {
                     audioURL: audioURL,
                     clipboardContent: nil,
                     transientWorkspace: transientWorkspace,
-                    snapshot: recognitionSnapshot,
+                    snapshot: snapshot,
                     onRecognitionCheckpoint: { text in
                         try await session.checkpoint(text)
                     },
@@ -2981,28 +2963,35 @@ class AppState: ObservableObject {
         let mode = modeOverride ?? transcriptionProviderManager.transcriptionMode
         let onlineProvider = onlineProviderOverride
             ?? transcriptionProviderManager.selectedOnlineProvider
-        let selectedProvider: TranscriptionProvider = mode == .local ? .parakeet : onlineProvider
-        let provider: TranscriptionProvider = isRetranscription && selectedProvider == .soniox
-            ? .aidictation
-            : selectedProvider
+        let provider: TranscriptionProvider = mode == .local ? .parakeet : onlineProvider
         let endpoint: String
         let model: String
         let transport: TranscriptionTransport
-        if provider == .aidictation {
+        let transcriptionAPIKey: String?
+        if provider == .soniox, isRetranscription {
+            endpoint = SecretsLoader.customTranscriptionEndpoint()
+                ?? TranscriptionProvider.aidictation.defaultEndpoint
+            model = "soniox/stt-async-v5"
+            transport = .batch
+            transcriptionAPIKey = resolvedTranscriptionApiKey(for: .aidictation)
+        } else if provider == .aidictation {
             endpoint = SecretsLoader.customTranscriptionEndpoint()
                 ?? provider.defaultEndpoint
             model = isRetranscription
                 ? "gpt-transcribe"
                 : (SecretsLoader.customTranscriptionRealtimeModel() ?? "gpt-live-transcribe")
             transport = isRetranscription ? .batch : .realtime
+            transcriptionAPIKey = resolvedTranscriptionApiKey(for: provider)
         } else if provider == .codex, isRetranscription {
             endpoint = CodexTranscriptionSupport.batchEndpoint.absoluteString
             model = ""
             transport = .batch
+            transcriptionAPIKey = resolvedTranscriptionApiKey(for: provider)
         } else {
             endpoint = provider.defaultEndpoint
             model = provider.defaultModel
             transport = provider.defaultTransport
+            transcriptionAPIKey = resolvedTranscriptionApiKey(for: provider)
         }
         let sttHintPrompt = buildSTTHintPromptComponents().joined(separator: "\n")
         let cleanupComponents = buildTranscriptionPromptComponents()
@@ -3024,15 +3013,6 @@ class AppState: ObservableObject {
                 diarization: rule.transcriptionOptions.diarization
             )
         }
-        let batchFallback: MacTranscriptionAttemptSnapshot.BatchFallback? =
-            provider == .soniox
-            ? .init(
-                endpoint: SecretsLoader.customTranscriptionEndpoint()
-                    ?? TranscriptionProvider.aidictation.defaultEndpoint,
-                model: "groq/whisper-large-v3-turbo",
-                apiKey: resolvedTranscriptionApiKey(for: .aidictation)
-            )
-            : nil
         return MacTranscriptionAttemptSnapshot(
             outputMode: outputMode,
             transcriptionOptions: transcriptionOptions,
@@ -3041,10 +3021,9 @@ class AppState: ObservableObject {
             transport: transport,
             transcriptionEndpoint: endpoint,
             transcriptionModel: model,
-            transcriptionAPIKey: resolvedTranscriptionApiKey(for: provider),
+            transcriptionAPIKey: transcriptionAPIKey,
             customRealtimeEndpoint: configuredCustomRealtimeEndpoint(),
             customRealtimeModel: configuredCustomRealtimeModel(),
-            batchFallback: batchFallback,
             llmPostProcessingEnabled: transcriptionProviderManager.enableLLMPostProcessing,
             postProcessingProvider: transcriptionProviderManager.postProcessingProvider,
             llmEndpoint: llmProviderManager.effectiveEndpoint,
@@ -3056,7 +3035,9 @@ class AppState: ObservableObject {
             languageCodes: languageManager.apiLanguageCodes,
             transcriptionKeywords: Array(Set(
                 dictionaryManager.transcriptionKeywords
-                    + shortcutManager.transcriptionKeywords
+                    + shortcutManager.shortcuts
+                        .filter(\.isEnabled)
+                        .map(\.voiceTrigger)
             )).sorted(),
             recordingPrompt: recordingPrompt,
             sttHintPrompt: sttHintPrompt,
@@ -3099,14 +3080,7 @@ class AppState: ObservableObject {
         if !shortcutManager.transcriptionHints.isEmpty {
             hints.append(shortcutManager.transcriptionHints)
         }
-        if let instructions = dictionaryManager.formattingInstructions {
-            hints.append(instructions)
-        }
-        if let instructions = shortcutManager.formattingInstructions {
-            hints.append(instructions)
-        }
-
-        return [TranscriptionCleanupPrompt.speechRecognitionPrompt(hints: hints)]
+        return hints
     }
 
     private func buildRealtimePrompt() -> String {
@@ -3280,7 +3254,7 @@ class AppState: ObservableObject {
                         : nil,
                 postProcessingPrompt: nil,
                 serverPostProcessingEnabledByDefault: false,
-                postProcessingEnabled: provider != .aidictation,
+                postProcessingEnabled: false,
                 transientWorkspace: transientWorkspace,
                 onChunkCheckpoint: { completedLeafIndex, transcript in
                     try await checkpointAccumulator.accept(

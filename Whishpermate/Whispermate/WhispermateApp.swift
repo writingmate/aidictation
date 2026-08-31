@@ -508,6 +508,26 @@ private func presentMainSettingsWindow(_ window: NSWindow) {
     window.setIsVisible(true)
     window.makeKeyAndOrderFront(nil)
     window.orderFrontRegardless()
+    // Cooperative activation (macOS 14+) can land after the ordering above,
+    // leaving the window behind the previously active app. Re-assert once
+    // the activation has had a chance to complete.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak window] in
+        guard let window else { return }
+        if !NSApp.isActive {
+            activateAppForcefully()
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+}
+
+/// Activation that works even when triggered from a non-activating panel
+/// (the overlay), where plain NSApp.activate is ignored on macOS 14+.
+func activateAppForcefully() {
+    if #available(macOS 14.0, *) {
+        NSApp.activate()
+    }
+    NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
 }
 
 private func deduplicateMainSettingsWindows(keeping keepWindow: NSWindow) {
@@ -584,12 +604,12 @@ func showMainSettingsWindow(retryCount: Int = 0) {
             "Settings requested during onboarding; presenting onboarding",
             context: "WindowManagement"
         )
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        activateAppForcefully()
         WindowBridge.openLegacyWindow(id: "onboarding")
         return
     }
 
-    NSApplication.shared.activate(ignoringOtherApps: true)
+    activateAppForcefully()
 
     // Find the main window and show it
     if let window = findMainWindow() {

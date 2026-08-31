@@ -548,12 +548,7 @@ class OverlayWindowManager: ObservableObject {
             return
         }
         DebugLog.info("expandToFullMode() - bringing app to foreground", context: "OverlayWindowManager")
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = findMainWindow() {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            showMainSettingsWindow()
-        }
+        showMainSettingsWindow()
     }
 
     func setHoverExpanded(_ expanded: Bool) {

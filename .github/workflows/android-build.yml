@@ -36,7 +36,7 @@ jobs:
     # Every credential this job reads lives in the release environment, not at
     # repo level. Without this the secrets silently resolve to empty strings and
     # the debug APK ships with no auth config and no transcription key.
-    environment: release
+    environment: ${{ github.event_name == 'pull_request' && 'pull-request' || 'release' }}
 
     defaults:
       run:
@@ -240,6 +240,10 @@ jobs:
       - name: Write local.properties
         run: |
           normalize_transcription_model() {
+            if [[ "$2" == *writingmate* ]]; then
+              printf '%s\n' "soniox/stt-async-v5"
+              return
+            fi
             case "$1" in
               ""|*"gpt-4o-transcribe"*)
                 printf '%s\n' "groq/whisper-large-v3-turbo"
@@ -249,7 +253,8 @@ jobs:
                 ;;
             esac
           }
-          TRANSCRIPTION_MODEL="$(normalize_transcription_model "${TRANSCRIPTION_MODEL:-}")"
+          TRANSCRIPTION_ENDPOINT_VALUE="${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}"
+          TRANSCRIPTION_MODEL="$(normalize_transcription_model "${TRANSCRIPTION_MODEL:-}" "$TRANSCRIPTION_ENDPOINT_VALUE")"
           AUTH_WEB_URL_VALUE="${AUTH_WEB_URL:-https://aidictation.com/auth}"
           if [ "${AUTH_WEB_URL_VALUE%/}" = "https://voicesinmyhead.co/auth" ]; then
             AUTH_WEB_URL_VALUE=https://aidictation.com/auth
@@ -257,8 +262,8 @@ jobs:
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
-          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}
-          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-groq/whisper-large-v3-turbo}
+          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT_VALUE}
+          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-soniox/stt-async-v5}
           AIDICTATION_POST_PROCESSING_KEY=${AIDICTATION_POST_PROCESSING_KEY}
           AIDICTATION_POST_PROCESSING_ENDPOINT=${AIDICTATION_POST_PROCESSING_ENDPOINT:-https://writingmate.ai/api/openai/v1/chat/completions}
           AIDICTATION_POST_PROCESSING_MODEL=${AIDICTATION_POST_PROCESSING_MODEL:-openai/gpt-oss-20b}
@@ -517,6 +522,10 @@ jobs:
       - name: Write local.properties
         run: |
           normalize_transcription_model() {
+            if [[ "$2" == *writingmate* ]]; then
+              printf '%s\n' "soniox/stt-async-v5"
+              return
+            fi
             case "$1" in
               ""|*"gpt-4o-transcribe"*)
                 printf '%s\n' "groq/whisper-large-v3-turbo"
@@ -526,7 +535,8 @@ jobs:
                 ;;
             esac
           }
-          TRANSCRIPTION_MODEL="$(normalize_transcription_model "${TRANSCRIPTION_MODEL:-}")"
+          TRANSCRIPTION_ENDPOINT_VALUE="${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}"
+          TRANSCRIPTION_MODEL="$(normalize_transcription_model "${TRANSCRIPTION_MODEL:-}" "$TRANSCRIPTION_ENDPOINT_VALUE")"
           AUTH_WEB_URL_VALUE="${AUTH_WEB_URL:-https://aidictation.com/auth}"
           if [ "${AUTH_WEB_URL_VALUE%/}" = "https://voicesinmyhead.co/auth" ]; then
             AUTH_WEB_URL_VALUE=https://aidictation.com/auth
@@ -534,8 +544,8 @@ jobs:
           cat > local.properties <<EOF
           sdk.dir=$ANDROID_SDK_ROOT
           TRANSCRIPTION_API_KEY=${TRANSCRIPTION_API_KEY}
-          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT:-https://writingmate.ai/api/openai/v1/audio/transcriptions}
-          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-groq/whisper-large-v3-turbo}
+          TRANSCRIPTION_ENDPOINT=${TRANSCRIPTION_ENDPOINT_VALUE}
+          TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-soniox/stt-async-v5}
           AIDICTATION_POST_PROCESSING_KEY=${AIDICTATION_POST_PROCESSING_KEY}
           AIDICTATION_POST_PROCESSING_ENDPOINT=${AIDICTATION_POST_PROCESSING_ENDPOINT:-https://writingmate.ai/api/openai/v1/chat/completions}
           AIDICTATION_POST_PROCESSING_MODEL=${AIDICTATION_POST_PROCESSING_MODEL:-openai/gpt-oss-20b}

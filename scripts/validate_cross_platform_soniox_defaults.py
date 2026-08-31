@@ -71,6 +71,17 @@ require(
     "isLocalParakeet || provider == ApiProvider.WRITINGMATE",
     "Android build-config normalization",
 )
+android_workflow = source(".github/workflows/android-build.yml")
+require(
+    android_workflow,
+    'printf \'%s\\n\' "soniox/stt-async-v5"',
+    "Android release model normalization",
+)
+require(
+    android_workflow,
+    "github.event_name == 'pull_request' && 'pull-request' || 'release'",
+    "Android pull-request environment",
+)
 
 windows = source("AIDictation.Windows/AIDictation/Helpers/BuildConfig.cs")
 require(

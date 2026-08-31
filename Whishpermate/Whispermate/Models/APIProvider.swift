@@ -7,6 +7,7 @@ internal import Combine
 enum TranscriptionProvider: String, CaseIterable, Identifiable {
     case parakeet
     case aidictation = "custom"
+    case soniox
     case codex
 
     var id: String { rawValue }
@@ -15,6 +16,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet: return "Offline"
         case .aidictation: return "AI Dictation"
+        case .soniox: return "AI Dictation"
         case .codex: return "Codex"
         }
     }
@@ -23,6 +25,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet: return "Keeps recordings and transcription on this Mac"
         case .aidictation: return "Produces polished, ready-to-use text"
+        case .soniox: return "Produces polished, ready-to-use text"
         case .codex: return "Uses transcription from your ChatGPT account"
         }
     }
@@ -31,6 +34,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet: return ""
         case .aidictation: return "https://writingmate.ai/api/openai/v1/audio/transcriptions"
+        case .soniox: return "https://writingmate.ai/api/openai/v1/realtime/client_secrets"
         case .codex: return CodexTranscriptionSupport.webSocketEndpoint.absoluteString
         }
     }
@@ -39,6 +43,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet: return "parakeet-tdt-0.6b-v3"
         case .aidictation: return "openai/gpt-transcribe"
+        case .soniox: return SonioxRealtimeProtocol.model
         case .codex: return ""
         }
     }
@@ -48,6 +53,8 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .parakeet:
             return .local
         case .codex:
+            return .realtime
+        case .soniox:
             return .realtime
         case .aidictation:
             return .batch
@@ -59,7 +66,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     }
 
     static var availableOnlineProviders: [TranscriptionProvider] {
-        var providers: [TranscriptionProvider] = [.aidictation]
+        var providers: [TranscriptionProvider] = [.soniox]
         if CodexTranscriptionSupport.isInstalled {
             providers.append(.codex)
         }
@@ -69,6 +76,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     var onlineServiceName: String {
         switch self {
         case .aidictation: return "AI Dictation"
+        case .soniox: return "AI Dictation"
         case .codex: return "ChatGPT"
         case .parakeet: return "Offline"
         }
@@ -174,8 +182,8 @@ enum TranscriptionMode: String, CaseIterable {
 class TranscriptionProviderManager: ObservableObject {
     static let shared = TranscriptionProviderManager()
 
-    @Published var selectedProvider: TranscriptionProvider = .aidictation
-    @Published private(set) var selectedOnlineProvider: TranscriptionProvider = .aidictation
+    @Published var selectedProvider: TranscriptionProvider = .soniox
+    @Published private(set) var selectedOnlineProvider: TranscriptionProvider = .soniox
     @Published var transcriptionMode: TranscriptionMode = .auto
     @Published var customEndpoint: String = ""
     @Published var customModel: String = ""
@@ -204,7 +212,7 @@ class TranscriptionProviderManager: ObservableObject {
         {
             selectedProvider = provider
         } else {
-            selectedProvider = .aidictation
+            selectedProvider = .soniox
         }
 
         if let savedMode = AppDefaults.shared.string(forKey: Keys.transcriptionMode),
@@ -220,7 +228,7 @@ class TranscriptionProviderManager: ObservableObject {
             .string(forKey: Keys.selectedOnlineProvider)
             .flatMap(TranscriptionProvider.init(rawValue:))
         selectedOnlineProvider = normalizedOnlineProvider(
-            savedOnlineProvider ?? (selectedProvider.isOnDevice ? .aidictation : selectedProvider)
+            savedOnlineProvider ?? (selectedProvider.isOnDevice ? .soniox : selectedProvider)
         )
         selectedProvider = transcriptionMode == .local
             ? .parakeet
@@ -325,10 +333,12 @@ class TranscriptionProviderManager: ObservableObject {
         switch provider {
         case .codex where CodexTranscriptionSupport.isInstalled:
             return .codex
+        case .soniox:
+            return .soniox
         case .aidictation:
-            return .aidictation
+            return .soniox
         default:
-            return .aidictation
+            return .soniox
         }
     }
 

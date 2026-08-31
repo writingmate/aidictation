@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5A10A0012F90000100000001 /* SonioxRealtimeProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A10A0012F90000100000003 /* SonioxRealtimeProtocolTests.swift */; };
+		5A10A0012F90000100000002 /* SonioxRealtimeProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A10A0012F90000100000004 /* SonioxRealtimeProtocol.swift */; };
 		16463B427730D7FD75EA0791 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6DAE0F0310D8E0C37D98C312 /* Cocoa.framework */; };
 		19702C83BABA8D7EE38F09DA /* HotkeyGestureResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */; };
 		1FB33087FF396340CC97677A /* ParakeetRuntimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4196DA6423A836157CA2C8A0 /* ParakeetRuntimeBridge.swift */; };
@@ -159,6 +161,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		5A10A0012F90000100000003 /* SonioxRealtimeProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SonioxRealtimeProtocolTests.swift; sourceTree = "<group>"; };
+		5A10A0012F90000100000004 /* SonioxRealtimeProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SonioxRealtimeProtocol.swift; sourceTree = "<group>"; };
 		0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatter.swift; sourceTree = "<group>"; };
 		18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptionOutputFilterTests.swift; sourceTree = "<group>"; };
 		19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KeyboardDictationLiveActivity.swift; sourceTree = "<group>"; };
@@ -334,6 +338,7 @@
 		7645026F648E8336F7A7853E /* WhispermateTests */ = {
 			isa = PBXGroup;
 			children = (
+				5A10A0012F90000100000003 /* SonioxRealtimeProtocolTests.swift */,
 				53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */,
 				AA10000000000000000001 /* HostLaunchRecoveryGateTests.swift */,
 				AA10000000000000000003 /* HostLaunchRecoveryGate.swift */,
@@ -358,6 +363,7 @@
 		98100320DE37E1160ADE235E /* WhispermateTestsSources */ = {
 			isa = PBXGroup;
 			children = (
+				5A10A0012F90000100000004 /* SonioxRealtimeProtocol.swift */,
 				7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */,
 				0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */,
 				5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */,
@@ -798,6 +804,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A10A0012F90000100000001 /* SonioxRealtimeProtocolTests.swift in Sources */,
+				5A10A0012F90000100000002 /* SonioxRealtimeProtocol.swift in Sources */,
 				AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */,
 				42FEFF2DC2C470F6B62A0E72 /* TextInsertionFormatterTests.swift in Sources */,
 				8C545C8B9B27F9E03A581045 /* FnKeyGestureResolver.swift in Sources */,

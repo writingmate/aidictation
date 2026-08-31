@@ -1,4 +1,5 @@
 import AppKit
+import AudioToolbox
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -46,6 +47,18 @@ class AudioDeviceManager: ObservableObject {
     private var maintenanceOperationID: UUID?
     private var refreshOperationID: UUID?
     private var routeReconciliationNeeded = false
+    private let capturePinLock = NSLock()
+    private var capturePin: CaptureGraphPin?
+    private var isRestoringPinnedDataSource = false
+
+    private struct CaptureGraphPin {
+        let recordingID: UUID
+        let deviceID: AudioDeviceID
+        let uniqueID: String
+        let dataSource: UInt32?
+        let listensForDataSource: Bool
+        let listensForJack: Bool
+    }
 
     // MARK: - Types
 
@@ -74,6 +87,11 @@ class AudioDeviceManager: ObservableObject {
         let device: AudioDevice
         let availableDevices: [AudioDevice]
         let usedFallback: Bool
+        /// HAL input data source (FourCC) at the moment capture resolved this
+        /// device. Built-in mics often expose Internal vs jack sources on the
+        /// same AudioDeviceID; pinning this value keeps I/O from following a
+        /// mid-start source switch. Nil when the device has no data source.
+        let inputDataSource: UInt32?
     }
 
     private struct DeviceApplyOutcome: Sendable {
@@ -98,6 +116,7 @@ class AudioDeviceManager: ObservableObject {
     deinit {
         wakeRecoveryWorkItem?.cancel()
         deviceChangeWorkItem?.cancel()
+        endCapturePinLocked(recordingID: nil, reason: "deinit")
         if let screenWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(screenWakeObserver)
         }
@@ -149,8 +168,113 @@ class AudioDeviceManager: ObservableObject {
         return CaptureDeviceResolution(
             device: target,
             availableDevices: devices,
-            usedFallback: usedFallback
+            usedFallback: usedFallback,
+            inputDataSource: currentInputDataSource(deviceID: target.id)
         )
+    }
+
+    /// Binds `inputNode` to a specific HAL device and input data source so the
+    /// graph does not follow later default-input or jack-source changes.
+    @discardableResult
+    func bindCaptureInputNode(
+        _ inputNode: AVAudioInputNode,
+        to resolution: CaptureDeviceResolution
+    ) -> Bool {
+        let device = resolution.device
+        let boundToDevice = bindInputNode(inputNode, toDeviceID: device.id)
+        if let dataSource = resolution.inputDataSource {
+            let pinned = pinInputDataSource(deviceID: device.id, source: dataSource)
+            if !pinned {
+                DebugLog.info(
+                    "Could not pin input data source for \(device.name)",
+                    context: "AudioDeviceManager"
+                )
+            }
+        }
+
+        if boundToDevice {
+            DebugLog.info(
+                "Bound capture input to \(device.name) uid=\(device.uniqueID) dataSource=\(resolution.inputDataSource.map { fourCCString($0) } ?? "none")",
+                context: "AudioDeviceManager"
+            )
+            SentryTelemetry.recordAudioDeviceEvent("capture_input_bound", device: device)
+        } else {
+            DebugLog.info(
+                "Failed to bind capture input to \(device.name) uid=\(device.uniqueID)",
+                context: "AudioDeviceManager"
+            )
+            SentryTelemetry.recordAudioDeviceEvent("capture_input_bind_failed", device: device)
+        }
+        return boundToDevice
+    }
+
+    /// Owns HAL data-source and jack listeners for one capture attempt so a
+    /// built-in source switch cannot retarget the live graph.
+    func beginCapturePin(recordingID: UUID, resolution: CaptureDeviceResolution) {
+        endCapturePinLocked(recordingID: nil, reason: "replaced")
+        deviceChangeWorkItem?.cancel()
+        wakeRecoveryWorkItem?.cancel()
+
+        var dataSourceAddress = inputDataSourcePropertyAddress()
+        var jackAddress = inputJackPropertyAddress()
+        let listensForDataSource = AudioObjectAddPropertyListener(
+            resolution.device.id,
+            &dataSourceAddress,
+            pinnedInputPropertyChangedCallback,
+            nil
+        ) == noErr
+        let listensForJack = AudioObjectAddPropertyListener(
+            resolution.device.id,
+            &jackAddress,
+            pinnedInputPropertyChangedCallback,
+            nil
+        ) == noErr
+
+        let pin = CaptureGraphPin(
+            recordingID: recordingID,
+            deviceID: resolution.device.id,
+            uniqueID: resolution.device.uniqueID,
+            dataSource: resolution.inputDataSource,
+            listensForDataSource: listensForDataSource,
+            listensForJack: listensForJack
+        )
+        capturePinLock.lock()
+        capturePin = pin
+        capturePinLock.unlock()
+
+        DebugLog.info(
+            "Capture pin started uid=\(pin.uniqueID) dataSource=\(pin.dataSource.map { fourCCString($0) } ?? "none") dataSourceListener=\(listensForDataSource) jackListener=\(listensForJack)",
+            context: "AudioDeviceManager"
+        )
+        SentryTelemetry.recordAudioEngineEvent("capture_graph_pin_started")
+    }
+
+    func endCapturePin(recordingID: UUID? = nil) {
+        endCapturePinLocked(recordingID: recordingID, reason: "ended")
+    }
+
+    /// Re-applies the pinned data source if HAL drifted after I/O start.
+    @discardableResult
+    func restorePinnedInputDataSourceIfNeeded() -> Bool {
+        capturePinLock.lock()
+        guard let pin = capturePin else {
+            capturePinLock.unlock()
+            return false
+        }
+        let deviceID = pin.deviceID
+        let pinnedSource = pin.dataSource
+        capturePinLock.unlock()
+        return restorePinnedInputDataSource(
+            deviceID: deviceID,
+            pinnedSource: pinnedSource,
+            reason: "explicit"
+        )
+    }
+
+    var isCaptureGraphPinned: Bool {
+        capturePinLock.lock()
+        defer { capturePinLock.unlock() }
+        return capturePin != nil
     }
 
     /// Publishes the already-resolved result after native preparation wins.
@@ -444,6 +568,7 @@ class AudioDeviceManager: ObservableObject {
 
     private func runPendingRouteReconciliationIfPossible() {
         guard maintenanceOperationID == nil, routeReconciliationNeeded else { return }
+        guard !isCaptureGraphPinned else { return }
         routeReconciliationNeeded = false
         applyPreferredOrAutomaticDevice()
     }
@@ -866,11 +991,27 @@ class AudioDeviceManager: ObservableObject {
     }
 
     func handleAudioHardwareChanged() {
+        if MacCaptureGraphPinPolicy.shouldDeferHardwareReapply(isCapturePinned: isCaptureGraphPinned) {
+            routeReconciliationNeeded = true
+            DebugLog.info(
+                "Deferring hardware reapply; capture graph is pinned",
+                context: "AudioDeviceManager"
+            )
+            SentryTelemetry.recordAudioEngineEvent("hardware_changed_deferred_capture_pin")
+            return
+        }
+
         deviceChangeWorkItem?.cancel()
         SentryTelemetry.recordAudioEngineEvent("hardware_changed")
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            if MacCaptureGraphPinPolicy.shouldDeferHardwareReapply(
+                isCapturePinned: self.isCaptureGraphPinned
+            ) {
+                self.routeReconciliationNeeded = true
+                return
+            }
 
             // Re-apply saved device preference when devices change. AirPods and other
             // Bluetooth devices often emit a burst of Core Audio notifications while
@@ -914,6 +1055,15 @@ class AudioDeviceManager: ObservableObject {
     }
 
     private func scheduleWakeRecovery(reason: String, restart: Bool) {
+        if MacCaptureGraphPinPolicy.shouldDeferHardwareReapply(isCapturePinned: isCaptureGraphPinned) {
+            routeReconciliationNeeded = true
+            DebugLog.info(
+                "Deferring audio device wake recovery during capture pin: \(reason)",
+                context: "AudioDeviceManager"
+            )
+            return
+        }
+
         if restart {
             wakeRecoveryGeneration += 1
             wakeOperationID = nil
@@ -932,6 +1082,12 @@ class AudioDeviceManager: ObservableObject {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard generation == self.wakeRecoveryGeneration else { return }
+            if MacCaptureGraphPinPolicy.shouldDeferHardwareReapply(
+                isCapturePinned: self.isCaptureGraphPinned
+            ) {
+                self.routeReconciliationNeeded = true
+                return
+            }
 
             let operationID = UUID()
             self.wakeOperationID = operationID
@@ -983,6 +1139,224 @@ class AudioDeviceManager: ObservableObject {
 
         return true
     }
+
+    // MARK: - Capture Graph Pinning
+
+    func handlePinnedInputPropertyChanged() {
+        capturePinLock.lock()
+        guard let pin = capturePin else {
+            capturePinLock.unlock()
+            return
+        }
+        let deviceID = pin.deviceID
+        let pinnedSource = pin.dataSource
+        capturePinLock.unlock()
+
+        _ = restorePinnedInputDataSource(
+            deviceID: deviceID,
+            pinnedSource: pinnedSource,
+            reason: "listener"
+        )
+    }
+
+    private func bindInputNode(_ inputNode: AVAudioInputNode, toDeviceID deviceID: AudioDeviceID) -> Bool {
+        // Touch the AUAudioUnit so the HAL IO unit exists before we set CurrentDevice.
+        _ = inputNode.auAudioUnit
+        guard let audioUnit = inputNode.audioUnit else {
+            DebugLog.info(
+                "Input node has no AudioUnit to bind to device ID \(deviceID)",
+                context: "AudioDeviceManager"
+            )
+            return false
+        }
+
+        if currentDeviceID(for: audioUnit) == deviceID {
+            return true
+        }
+
+        var targetDeviceID = deviceID
+        let setStatus = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &targetDeviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if setStatus != noErr {
+            DebugLog.info(
+                "AudioUnitSetProperty CurrentDevice failed status=\(setStatus)",
+                context: "AudioDeviceManager"
+            )
+            return false
+        }
+
+        return currentDeviceID(for: audioUnit) == deviceID
+    }
+
+    private func currentDeviceID(for audioUnit: AudioUnit) -> AudioDeviceID? {
+        var currentDeviceID = AudioDeviceID(kAudioDeviceUnknown)
+        var currentSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &currentDeviceID,
+            &currentSize
+        )
+        guard status == noErr else { return nil }
+        return currentDeviceID
+    }
+
+    private func pinInputDataSource(deviceID: AudioDeviceID, source: UInt32) -> Bool {
+        setInputDataSource(deviceID: deviceID, source: source)
+    }
+
+    private func restorePinnedInputDataSource(
+        deviceID: AudioDeviceID,
+        pinnedSource: UInt32?,
+        reason: String
+    ) -> Bool {
+        let current = currentInputDataSource(deviceID: deviceID)
+        guard MacCaptureGraphPinPolicy.shouldRestoreInputDataSource(
+            pinned: pinnedSource,
+            current: current
+        ), let pinnedSource else {
+            return false
+        }
+
+        capturePinLock.lock()
+        if isRestoringPinnedDataSource {
+            capturePinLock.unlock()
+            return false
+        }
+        isRestoringPinnedDataSource = true
+        capturePinLock.unlock()
+        defer {
+            capturePinLock.lock()
+            isRestoringPinnedDataSource = false
+            capturePinLock.unlock()
+        }
+
+        let restored = setInputDataSource(deviceID: deviceID, source: pinnedSource)
+        DebugLog.info(
+            "Restored pinned input data source reason=\(reason) from=\(current.map(fourCCString) ?? "none") to=\(fourCCString(pinnedSource)) success=\(restored)",
+            context: "AudioDeviceManager"
+        )
+        SentryTelemetry.recordAudioEngineEvent(
+            restored ? "pinned_data_source_restored" : "pinned_data_source_restore_failed",
+            reason: reason
+        )
+        return restored
+    }
+
+    private func endCapturePinLocked(recordingID: UUID?, reason: String) {
+        capturePinLock.lock()
+        if let recordingID, let pin = capturePin, pin.recordingID != recordingID {
+            capturePinLock.unlock()
+            return
+        }
+        let pin = capturePin
+        capturePin = nil
+        capturePinLock.unlock()
+
+        guard let pin else { return }
+
+        if pin.listensForDataSource {
+            var address = inputDataSourcePropertyAddress()
+            _ = AudioObjectRemovePropertyListener(
+                pin.deviceID,
+                &address,
+                pinnedInputPropertyChangedCallback,
+                nil
+            )
+        }
+        if pin.listensForJack {
+            var address = inputJackPropertyAddress()
+            _ = AudioObjectRemovePropertyListener(
+                pin.deviceID,
+                &address,
+                pinnedInputPropertyChangedCallback,
+                nil
+            )
+        }
+
+        DebugLog.info(
+            "Capture pin \(reason) uid=\(pin.uniqueID)",
+            context: "AudioDeviceManager"
+        )
+        SentryTelemetry.recordAudioEngineEvent("capture_graph_pin_ended", reason: reason)
+
+        if reason == "ended" {
+            DispatchQueue.main.async { [weak self] in
+                self?.runPendingRouteReconciliationIfPossible()
+            }
+        }
+    }
+
+    private func currentInputDataSource(deviceID: AudioDeviceID) -> UInt32? {
+        var propertyAddress = inputDataSourcePropertyAddress()
+        var source: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize,
+            &source
+        )
+        guard status == noErr else { return nil }
+        return source
+    }
+
+    @discardableResult
+    private func setInputDataSource(deviceID: AudioDeviceID, source: UInt32) -> Bool {
+        var propertyAddress = inputDataSourcePropertyAddress()
+        var sourceCopy = source
+        let dataSize = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectSetPropertyData(
+            deviceID,
+            &propertyAddress,
+            0,
+            nil,
+            dataSize,
+            &sourceCopy
+        )
+        return status == noErr
+    }
+
+    private func inputDataSourcePropertyAddress() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDataSource,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private func inputJackPropertyAddress() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyJackIsConnected,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private func fourCCString(_ value: UInt32) -> String {
+        let bytes = [
+            UInt8((value >> 24) & 0xFF),
+            UInt8((value >> 16) & 0xFF),
+            UInt8((value >> 8) & 0xFF),
+            UInt8(value & 0xFF)
+        ]
+        if bytes.allSatisfy({ (32...126).contains($0) }),
+           let ascii = String(bytes: bytes, encoding: .ascii)
+        {
+            return ascii
+        }
+        return String(value)
+    }
 }
 
 // Callback for device changes
@@ -994,6 +1368,18 @@ private func deviceListChangedCallback(
 ) -> OSStatus {
     DispatchQueue.main.async {
         AudioDeviceManager.shared.handleAudioHardwareChanged()
+    }
+    return noErr
+}
+
+private func pinnedInputPropertyChangedCallback(
+    _: AudioObjectID,
+    _: UInt32,
+    _: UnsafePointer<AudioObjectPropertyAddress>,
+    _: UnsafeMutableRawPointer?
+) -> OSStatus {
+    DispatchQueue.main.async {
+        AudioDeviceManager.shared.handlePinnedInputPropertyChanged()
     }
     return noErr
 }

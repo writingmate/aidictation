@@ -131,11 +131,10 @@ class AudioRecorder: NSObject, ObservableObject {
         DebugLog.info("Audio input device changed", context: "AudioRecorder LOG")
         SentryTelemetry.recordAudioEngineEvent("input_device_changed")
 
-        // Device is pinned for the duration of preparation and recording.
-        // Ignore device-change notifications to prevent source-change crashes
-        // that occur when Core Audio reconfigures mid-start. The selected
-        // device continues to be used; any format issues are caught by the
-        // normal preparation/watchdog paths without tearing down the session.
+        // The capture graph is bound to a specific AudioDeviceID and input
+        // data source. Ignore default-input notifications so they cannot
+        // tear down a live session. HAL source changes are restored by
+        // AudioDeviceManager's capture pin, not by rebuilding the engine.
         if pendingPreparation != nil {
             DebugLog.info(
                 "Ignoring device change during preparation - device is pinned",
@@ -171,11 +170,10 @@ class AudioRecorder: NSObject, ObservableObject {
 
         guard let changedEngine = notification.object as? AVAudioEngine else { return }
 
-        // Engine configuration changes are ignored during preparation and
-        // active recording. Reacting to them mid-start caused source-change
-        // crashes: Core Audio was reconfiguring the IO unit while we tried to
-        // tear down or rebuild the engine. The pinned device continues to be
-        // used; if the engine actually stops, the watchdog will catch it.
+        // Configuration-change notifications are ignored during preparation
+        // and recording so we do not race HAL by tearing down the graph.
+        // The input unit is bound to the selected device; if it actually
+        // stops, the watchdog recovers on that same device UID.
         if let pendingPreparation, pendingPreparation.owns(engine: changedEngine) {
             DebugLog.info(
                 "Ignoring engine configuration change during preparation - device is pinned",
@@ -457,10 +455,19 @@ class AudioRecorder: NSObject, ObservableObject {
 
         guard preparation.attempt.isPending else { return }
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
+        AudioDeviceManager.shared.beginCapturePin(
+            recordingID: preparation.recordingID,
+            resolution: deviceResolution
+        )
+
+        guard let pinnedGraph = makePinnedCaptureGraph(deviceResolution: deviceResolution) else {
+            failPreparation(preparation, message: "The microphone audio format is unavailable. Please try again.")
+            return
+        }
+        let engine = pinnedGraph.engine
+        let inputNode = pinnedGraph.inputNode
         let bus = 0
-        let inputFormat = inputNode.outputFormat(forBus: bus)
+        let inputFormat = pinnedGraph.inputFormat
         guard inputFormat.channelCount > 0,
               let outputFormat = AVAudioFormat(
                   commonFormat: .pcmFormatFloat32,
@@ -518,6 +525,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
             do {
                 try engine.start()
+                AudioDeviceManager.shared.restorePinnedInputDataSourceIfNeeded()
             } catch {
                 failPreparation(preparation, message: "Recording could not start. Please try again.")
                 preparation.scheduleCleanup(deleteFile: true)
@@ -763,6 +771,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
     private func resetFailedStart() {
         stopRecordingWatchdog()
+        AudioDeviceManager.shared.endCapturePin()
         isRecording = false
         audioLevel = 0.0
         frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
@@ -860,12 +869,19 @@ class AudioRecorder: NSObject, ObservableObject {
 
     /// Replaces only the failed CoreAudio graph. The session's open audio file,
     /// durable recording identity, and realtime delivery owner survive.
+    /// Recovery rebinds the new engine to the same selected device UID and
+    /// input data source; it never adopts a fresh system-default input.
     private func rebuildCaptureEngine(_ session: MacCaptureSession) -> String? {
         guard session.isActive else { return "recording is no longer active" }
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard let pinnedGraph = makePinnedCaptureGraph(
+            deviceResolution: session.deviceResolution
+        ) else {
+            return "microphone format is unavailable"
+        }
+        let engine = pinnedGraph.engine
+        let inputNode = pinnedGraph.inputNode
+        let inputFormat = pinnedGraph.inputFormat
         guard inputFormat.channelCount > 0 else {
             return "microphone format is unavailable"
         }
@@ -892,11 +908,32 @@ class AudioRecorder: NSObject, ObservableObject {
         do {
             engine.prepare()
             try engine.start()
+            AudioDeviceManager.shared.restorePinnedInputDataSourceIfNeeded()
             return nil
         } catch {
             teardownCaptureEngine(engine)
             return error.localizedDescription
         }
+    }
+
+    private func makePinnedCaptureGraph(
+        deviceResolution: AudioDeviceManager.CaptureDeviceResolution
+    ) -> (engine: AVAudioEngine, inputNode: AVAudioInputNode, inputFormat: AVAudioFormat)? {
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let bound = AudioDeviceManager.shared.bindCaptureInputNode(
+            inputNode,
+            to: deviceResolution
+        )
+        if !bound {
+            DebugLog.warning(
+                "Failed to bind capture input uid=\(deviceResolution.device.uniqueID); using node after bind attempt",
+                context: "AudioRecorder LOG"
+            )
+        }
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.channelCount > 0 else { return nil }
+        return (engine, inputNode, inputFormat)
     }
 
     private func teardownCaptureEngine(_ engine: AVAudioEngine) {
@@ -1026,6 +1063,7 @@ class AudioRecorder: NSObject, ObservableObject {
         }
         activeCapture = nil
         isRecording = false
+        AudioDeviceManager.shared.endCapturePin(recordingID: session.recordingID)
         // Retiring the exact capture session closes durable write admission.
         // Only after that cutoff may realtime admission be sealed. A callback
         // that acquired both leases before retirement can finish both; one
@@ -1136,6 +1174,7 @@ class AudioRecorder: NSObject, ObservableObject {
         NotificationCenter.default.removeObserver(self)
 
         pendingPreparation?.scheduleCleanup(deleteFile: true)
+        AudioDeviceManager.shared.endCapturePin()
         if let activeCapture {
             DispatchQueue(
                 label: "ai.writingmate.audio-deinit.\(UUID().uuidString)",

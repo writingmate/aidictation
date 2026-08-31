@@ -236,7 +236,9 @@ async function currentBatch({ path, endpoint, authorization }) {
     raw: parseTranscriptionText(responseBody),
     keyUpToFinalMs: Math.round(performance.now() - startedAt),
     upstreamMs: Number(response.headers.get("x-aidictation-stt-ms")) || null,
-    provider: response.headers.get("x-aidictation-provider") ?? "unknown",
+    provider:
+      response.headers.get("x-aidictation-voice-provider") ?? "unknown",
+    model: response.headers.get("x-aidictation-voice-model") ?? "unknown",
   };
 }
 

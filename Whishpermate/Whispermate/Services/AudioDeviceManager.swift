@@ -1160,49 +1160,53 @@ class AudioDeviceManager: ObservableObject {
     }
 
     private func bindInputNode(_ inputNode: AVAudioInputNode, toDeviceID deviceID: AudioDeviceID) -> Bool {
-        var targetDeviceID = deviceID
-        var didSetProperty = false
-
-        if let audioUnit = inputNode.audioUnit {
-            var currentDeviceID = AudioDeviceID(kAudioDeviceUnknown)
-            var currentSize = UInt32(MemoryLayout<AudioDeviceID>.size)
-            let getStatus = AudioUnitGetProperty(
-                audioUnit,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global,
-                0,
-                &currentDeviceID,
-                &currentSize
+        // Touch the AUAudioUnit so the HAL IO unit exists before we set CurrentDevice.
+        _ = inputNode.auAudioUnit
+        guard let audioUnit = inputNode.audioUnit else {
+            DebugLog.info(
+                "Input node has no AudioUnit to bind to device ID \(deviceID)",
+                context: "AudioDeviceManager"
             )
-            if getStatus != noErr || currentDeviceID != deviceID {
-                let setStatus = AudioUnitSetProperty(
-                    audioUnit,
-                    kAudioOutputUnitProperty_CurrentDevice,
-                    kAudioUnitScope_Global,
-                    0,
-                    &targetDeviceID,
-                    UInt32(MemoryLayout<AudioDeviceID>.size)
-                )
-                if setStatus != noErr {
-                    DebugLog.info(
-                        "AudioUnitSetProperty CurrentDevice failed status=\(setStatus)",
-                        context: "AudioDeviceManager"
-                    )
-                } else {
-                    didSetProperty = true
-                }
-            } else {
-                didSetProperty = true
-            }
+            return false
         }
 
-        let audioUnitDeviceID = inputNode.auAudioUnit.deviceID
-        if audioUnitDeviceID != deviceID {
-            inputNode.auAudioUnit.deviceID = deviceID
+        if currentDeviceID(for: audioUnit) == deviceID {
+            return true
         }
 
-        let boundDeviceID = inputNode.auAudioUnit.deviceID
-        return didSetProperty || boundDeviceID == deviceID
+        var targetDeviceID = deviceID
+        let setStatus = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &targetDeviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if setStatus != noErr {
+            DebugLog.info(
+                "AudioUnitSetProperty CurrentDevice failed status=\(setStatus)",
+                context: "AudioDeviceManager"
+            )
+            return false
+        }
+
+        return currentDeviceID(for: audioUnit) == deviceID
+    }
+
+    private func currentDeviceID(for audioUnit: AudioUnit) -> AudioDeviceID? {
+        var currentDeviceID = AudioDeviceID(kAudioDeviceUnknown)
+        var currentSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &currentDeviceID,
+            &currentSize
+        )
+        guard status == noErr else { return nil }
+        return currentDeviceID
     }
 
     private func pinInputDataSource(deviceID: AudioDeviceID, source: UInt32) -> Bool {

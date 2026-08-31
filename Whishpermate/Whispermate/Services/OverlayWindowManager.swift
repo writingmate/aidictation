@@ -232,6 +232,9 @@ class OverlayWindowManager: ObservableObject {
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
     private var hoverTrackingTimer: Timer?
+    private var temporaryHideWorkItem: DispatchWorkItem?
+    private var isMenuTracking = false
+    private(set) var isTemporarilyHidden = false
     private var hoverCollapseResizeWorkItem: DispatchWorkItem?
     private var audioLevelCancellable: AnyCancellable?
     private var frequencyBandsCancellable: AnyCancellable?
@@ -245,6 +248,7 @@ class OverlayWindowManager: ObservableObject {
         setupSpaceChangeObserver()
         setupAppActivationObserver()
         setupMouseHoverMonitor()
+        setupMenuTrackingObservers()
         setupAudioObservers()
     }
 
@@ -266,6 +270,10 @@ class OverlayWindowManager: ObservableObject {
 
     func show() {
         DebugLog.info("show() called, overlayState=\(overlayState), hideIdleState=\(hideIdleState)", context: "OverlayWindowManager")
+        if isTemporarilyHidden {
+            DebugLog.info("show() suppressed by temporary hide", context: "OverlayWindowManager")
+            return
+        }
         logWindowState("show-before")
         if overlayWindow == nil {
             createWindow()
@@ -307,6 +315,13 @@ class OverlayWindowManager: ObservableObject {
 
         let previousState = overlayState
         overlayState = newState
+
+        switch newState {
+        case .recording, .processing:
+            cancelTemporaryHideIfNeeded()
+        default:
+            break
+        }
 
         // Update derived properties for backward compatibility with views
         switch newState {
@@ -494,6 +509,32 @@ class OverlayWindowManager: ObservableObject {
         } else {
             transition(to: .idle)
         }
+    }
+
+    /// Hides the overlay window and suppresses re-shows for `duration`.
+    /// Starting a recording (or processing) cancels the hide immediately so
+    /// the user always gets visual feedback for an active dictation.
+    func hideTemporarily(for duration: TimeInterval) {
+        temporaryHideWorkItem?.cancel()
+        isTemporarilyHidden = true
+        hide()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.isTemporarilyHidden = false
+            self.temporaryHideWorkItem = nil
+            if case .hidden = self.overlayState { return }
+            self.show()
+        }
+        temporaryHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+        DebugLog.info("hideTemporarily(\(duration)s)", context: "OverlayWindowManager")
+    }
+
+    private func cancelTemporaryHideIfNeeded() {
+        guard isTemporarilyHidden else { return }
+        temporaryHideWorkItem?.cancel()
+        temporaryHideWorkItem = nil
+        isTemporarilyHidden = false
     }
 
     func showAlways() {
@@ -760,6 +801,7 @@ class OverlayWindowManager: ObservableObject {
             self?.repositionWindow()
             guard let self else { return }
             if case .hidden = self.overlayState { return }
+            if self.isTemporarilyHidden { return }
             self.overlayWindow?.orderFrontRegardless()
             self.ensureWindowOnActiveSpace(reason: "observer-space")
             self.logWindowState("observer-space-after-orderFront")
@@ -778,9 +820,27 @@ class OverlayWindowManager: ObservableObject {
             self?.repositionWindow()
             guard let self else { return }
             if case .hidden = self.overlayState { return }
+            if self.isTemporarilyHidden { return }
             self.overlayWindow?.orderFrontRegardless()
             self.ensureWindowOnActiveSpace(reason: "observer-activate")
             self.logWindowState("observer-activate-after-orderFront")
+        }
+    }
+
+    /// Keeps the idle pill expanded while its context menu is open: moving the
+    /// mouse into the menu leaves the hover frame, which would otherwise
+    /// collapse the pill (and dismiss the menu's anchor) mid-interaction.
+    private func setupMenuTrackingObservers() {
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.isMenuTracking = true
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.isMenuTracking = false
+            self?.updateHoverExpansionFromMouseLocation()
         }
     }
 
@@ -818,6 +878,8 @@ class OverlayWindowManager: ObservableObject {
             }
             return
         }
+
+        if isMenuTracking, isHoverExpanded { return }
 
         let hoverFrame = idleInteractionFrame(for: overlayWindow).insetBy(dx: -Constants.hoverFrameInset, dy: -Constants.hoverFrameInset)
         let isMouseInside = hoverFrame.contains(NSEvent.mouseLocation)

@@ -226,6 +226,41 @@ struct RecordingOverlayView: View {
                 manager.startRecordingFromOverlay()
             }
         }
+        .contextMenu {
+            Button("Hide for 1 Hour") {
+                updateHoverCursor(isActive: false)
+                manager.hideTemporarily(for: 3600)
+            }
+
+            Divider()
+
+            if manager.position == .top {
+                Button("Move to Bottom") { manager.position = .bottom }
+            } else {
+                Button("Move to Top") { manager.position = .top }
+            }
+
+            Menu("Color") {
+                ForEach(OverlayColorTheme.allCases, id: \.self) { theme in
+                    Button {
+                        manager.setColorThemeFromMenu(theme)
+                    } label: {
+                        if manager.colorTheme == theme {
+                            Label(theme.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(theme.displayName)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Toggle("Sound Effects", isOn: Binding(
+                get: { SoundEffectManager.shared.isEnabled },
+                set: { SoundEffectManager.shared.isEnabled = $0 }
+            ))
+        }
         .padding(manager.position == .top ? .top : .bottom, edgeMargin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: manager.position == .top ? .top : .bottom) // Position vertically
         .onChange(of: manager.isHoverExpanded) { expanded in

@@ -220,7 +220,7 @@ async function currentBatch({ path, endpoint, authorization }) {
   const audio = await import("node:fs/promises").then(({ readFile }) => readFile(path));
   const form = new FormData();
   form.append("file", new Blob([audio], { type: "audio/mp4" }), basename(path));
-  form.append("model", "openai/gpt-transcribe");
+  form.append("model", "soniox/stt-async-v5");
   form.append("post_processing", "false");
   const startedAt = performance.now();
   const response = await fetch(endpoint, {
@@ -270,8 +270,13 @@ async function main() {
     batchEndpoint,
   ).toString();
   const rows = [];
+  const limit = Number(argumentValue("--limit", "0"));
+  const paths = fixturePaths(recordingsDirectory);
+  const selectedPaths = Number.isInteger(limit) && limit > 0
+    ? paths.slice(0, limit)
+    : paths;
 
-  for (const path of fixturePaths(recordingsDirectory)) {
+  for (const path of selectedPaths) {
     const pcm = decodePCM(path);
     const [current, soniox] = await Promise.all([
       currentBatch({

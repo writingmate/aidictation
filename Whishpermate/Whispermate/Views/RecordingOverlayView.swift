@@ -39,7 +39,7 @@ struct RecordingOverlayView: View {
     private let buttonSize: CGFloat = 28 * RecordingOverlayView.overlayScale
     private let cancelIconSize: CGFloat = 12 * RecordingOverlayView.overlayScale
     private let stopIconSize: CGFloat = 11 * RecordingOverlayView.overlayScale
-    private let idleControlIconSize: CGFloat = 11
+    private let idleControlIconSize: CGFloat = 12 * RecordingOverlayView.overlayScale
 
     // MARK: - Computed Properties
 
@@ -599,12 +599,13 @@ private struct OverlayIdleControlButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: iconSize, weight: .bold))
-                .foregroundStyle(.white.opacity(isEnabled ? (isHovering ? 1 : 0.85) : 0.35))
+                .foregroundStyle(.white.opacity(isEnabled ? 0.92 : 0.35))
                 .frame(width: buttonSize, height: buttonSize)
+                .background(Circle().fill(Color.white.opacity(isEnabled && isHovering ? 0.28 : 0.18)))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .scaleEffect(isEnabled && isHovering ? 1.12 : 1)
+        .scaleEffect(isEnabled && isHovering ? 1.06 : 1)
         .contentShape(Circle())
         .onHover { hovering in
             isHovering = hovering

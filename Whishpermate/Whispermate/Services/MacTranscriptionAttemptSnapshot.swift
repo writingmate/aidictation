@@ -6,6 +6,32 @@ import WhisperMateShared
 /// Every mutable preference needed by recognition and cleanup, captured before
 /// an attempt begins. Running attempts never consult the live manager objects.
 nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
+    struct ShortcutExpansion: Sendable {
+        let trigger: String
+        let expansion: String
+
+        func isSupported(in transcript: String) -> Bool {
+            let normalizedTrigger = trigger.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            guard !normalizedTrigger.isEmpty else { return false }
+            let escaped = NSRegularExpression.escapedPattern(
+                for: normalizedTrigger
+            )
+            guard let regex = try? NSRegularExpression(
+                pattern: "(?i)(?<![\\p{L}\\p{N}])\(escaped)(?![\\p{L}\\p{N}])"
+            ) else { return false }
+            return regex.firstMatch(
+                in: transcript,
+                range: NSRange(transcript.startIndex..., in: transcript)
+            ) != nil
+        }
+
+        var cleanupInstruction: String {
+            "Expand the exact spoken shortcut \"\(trigger)\" to \"\(expansion)\"."
+        }
+    }
+
     struct ContextRuleSnapshot: Sendable {
         let name: String
         let appBundleIDs: [String]
@@ -89,6 +115,7 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
     let sttHintPrompt: String
     let cleanupPromptComponents: [String]
     let baseCleanupPromptComponents: [String]
+    let shortcutExpansions: [ShortcutExpansion]
     let contextRules: [ContextRuleSnapshot]
     let usesContextRules: Bool
     let appContext: String?
@@ -157,6 +184,7 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: resolvedCleanupComponents,
             baseCleanupPromptComponents: baseCleanupPromptComponents,
+            shortcutExpansions: shortcutExpansions,
             contextRules: contextRules,
             usesContextRules: usesContextRules,
             appContext: appContext,
@@ -167,4 +195,9 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
         )
     }
 
+    func cleanupPromptComponents(for rawTranscript: String) -> [String] {
+        cleanupPromptComponents + shortcutExpansions
+            .filter { $0.isSupported(in: rawTranscript) }
+            .map(\.cleanupInstruction)
+    }
 }

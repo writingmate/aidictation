@@ -73,6 +73,10 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         sttHintPrompt: "Before hint",
         cleanupPromptComponents: settings.prompt,
         baseCleanupPromptComponents: settings.prompt,
+        shortcutExpansions: [
+            .init(trigger: "my calendly", expansion: "https://calendly.com/yourname"),
+            .init(trigger: "my email", expansion: "your.email@example.com"),
+        ],
         contextRules: [
             .init(
                 name: "Meetings",
@@ -130,6 +134,14 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(snapshot.languageCode == "en")
         precondition(snapshot.vadThreshold == 0.31)
         precondition(snapshot.cleanupPromptComponents == ["Before vocabulary"])
+        precondition(
+            !snapshot.cleanupPromptComponents(for: "Discuss my calendars.")
+                .joined().contains("calendly.com")
+        )
+        precondition(
+            snapshot.cleanupPromptComponents(for: "Send my Calendly.")
+                .joined().contains("calendly.com")
+        )
         let contextualSnapshot = snapshot.withContext(
             appContext: "Captured app",
             screenContext: "Captured screen"

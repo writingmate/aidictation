@@ -165,6 +165,10 @@ require(
     "modern transcription requests lost literal keyword hints",
 )
 require(
+    "snapshot.cleanupPromptComponents(for: rawText)" in app_state_source,
+    "macOS cleanup does not gate shortcut expansions on the raw transcript",
+)
+require(
     "languageManager.apiLanguageCodes" in app_state_source,
     "modern transcription requests lost multiple language hints",
 )

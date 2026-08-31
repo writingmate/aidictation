@@ -12,6 +12,7 @@ on:
       - 'scripts/validate_macos_audio_processing_store.swift'
       - 'scripts/validate_macos_lifecycle_guards.swift'
       - 'scripts/validate_macos_recording_recovery.swift'
+      - 'scripts/validate_macos_preparation_format_retry.swift'
       - 'scripts/validate_macos_transcription_attempt_snapshot.swift'
       - 'scripts/validate_macos_vad_recovery.swift'
       - 'scripts/validate_macos_url_handler_registration.sh'

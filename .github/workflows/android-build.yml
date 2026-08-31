@@ -199,11 +199,11 @@ jobs:
                   raise SystemExit(f"Android release job {job_name} must use the protected release environment")
 
           required_play_contract = (
-              f"PLAY_TRACK: {expression_open} github.event_name == 'push' && 'internal' || inputs.play_track }}",
+              f"PLAY_TRACK: {expression_open} github.event_name == 'push' && 'production' || inputs.play_track }}",
               f"PLAY_RELEASE_STATUS: {expression_open} github.event_name == 'push' && 'completed' || inputs.release_status }}",
               f"PLAY_PUBLISH_MODE: {expression_open} github.event_name == 'push' && 'upload' || inputs.publish_mode }}",
               f"PUBLISH_GITHUB_RELEASE: {expression_open} github.event_name == 'workflow_dispatch' && inputs.publish_github_release || false }}",
-              'if [ "${PLAY_TRACK}" != "internal" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "upload" ]; then',
+              'if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_RELEASE_STATUS}" != "completed" ] || [ "${PLAY_PUBLISH_MODE}" != "upload" ]; then',
               'if [ "${PUBLISH_GITHUB_RELEASE}" != "false" ]; then',
               'if [ "${PLAY_TRACK}" != "production" ] || [ "${PLAY_PROMOTE_FROM_TRACK}" != "internal" ] || [ "${PLAY_RELEASE_STATUS}" != "inProgress" ]; then',
               'if mode == "promote" and fraction > Decimal("0.10"):',
@@ -234,7 +234,7 @@ jobs:
           if "--draft \\" in release_block[1] or '"$is_draft" != "false"' not in release_block[1]:
               raise SystemExit("Tag build must not leave the GitHub release in draft state")
 
-          print("Android tag releases publish to GitHub and upload to the internal Play track.")
+          print("Android tag releases publish to GitHub and upload to the production Play track.")
           PY
 
       - name: Write local.properties

@@ -48,7 +48,7 @@ class ApiConfigManager @Inject constructor() {
                 ParakeetRuntime.ONNX -> "parakeet-tdt-0.6b-v3"
                 ParakeetRuntime.LITERT -> "parakeet-tdt-0.6b-v3-litert"
             }
-            ApiProvider.WRITINGMATE -> "soniox/stt-async-v5"
+            ApiProvider.WRITINGMATE -> "openai/gpt-transcribe"
             ApiProvider.OPENAI -> "gpt-transcribe"
             ApiProvider.GROQ -> "whisper-large-v3-turbo"
         }
@@ -101,7 +101,7 @@ class ApiConfigManager @Inject constructor() {
         return ApiConfig(
             provider = provider,
             apiKey = BuildConfig.TRANSCRIPTION_API_KEY,
-            model = if (isLocalParakeet || provider == ApiProvider.WRITINGMATE) {
+            model = if (isLocalParakeet) {
                 defaultTranscriptionModel(provider)
             } else {
                 BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) }
@@ -123,11 +123,7 @@ class ApiConfigManager @Inject constructor() {
         return ApiConfig(
             provider = provider,
             apiKey = BuildConfig.TRANSCRIPTION_API_KEY,
-            model = if (provider == ApiProvider.WRITINGMATE) {
-                defaultTranscriptionModel(provider)
-            } else {
-                BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) }
-            },
+            model = BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) },
             endpoint = BuildConfig.TRANSCRIPTION_ENDPOINT.ifEmpty { provider.transcriptionEndpoint() }
         )
     }

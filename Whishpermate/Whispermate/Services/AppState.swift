@@ -3029,7 +3029,7 @@ class AppState: ObservableObject {
             ? .init(
                 endpoint: SecretsLoader.customTranscriptionEndpoint()
                     ?? TranscriptionProvider.aidictation.defaultEndpoint,
-                model: "soniox/stt-async-v5",
+                model: "groq/whisper-large-v3-turbo",
                 apiKey: resolvedTranscriptionApiKey(for: .aidictation)
             )
             : nil

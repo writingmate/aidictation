@@ -41,15 +41,19 @@ require(mac_provider, "case .aidictation:\n            return .soniox", "macOS m
 reject(mac_provider, 'return "Fast streaming"', "macOS implementation label")
 
 mac_state = source("Whishpermate/Whispermate/Services/AppState.swift")
-require(mac_state, 'model: "soniox/stt-async-v5"', "macOS batch fallback")
+require(
+    mac_state,
+    'model: "groq/whisper-large-v3-turbo"',
+    "macOS batch fallback",
+)
 require(mac_state, "snapshot.usingBatchFallback()", "macOS fallback activation")
 
 shared_provider = source("Whishpermate/WhisperMateShared/Models/APIProvider.swift")
 require(shared_provider, 'case .custom: return "AI Dictation"', "Apple shared label")
 require(
     shared_provider,
-    'case .custom: return "soniox/stt-async-v5"',
-    "Apple shared model",
+    'case .custom: return "openai/gpt-transcribe"',
+    "Apple shared batch model",
 )
 require(
     shared_provider,
@@ -63,36 +67,24 @@ android = source(
 )
 require(
     android,
-    'ApiProvider.WRITINGMATE -> "soniox/stt-async-v5"',
-    "Android cloud model",
+    'ApiProvider.WRITINGMATE -> "openai/gpt-transcribe"',
+    "Android batch model",
 )
-require(
-    android,
-    "isLocalParakeet || provider == ApiProvider.WRITINGMATE",
-    "Android build-config normalization",
-)
+reject(android, "soniox/stt-async-v5", "Android async Soniox rollout")
 android_workflow = source(".github/workflows/android-build.yml")
-require(
-    android_workflow,
-    'printf \'%s\\n\' "soniox/stt-async-v5"',
-    "Android release model normalization",
-)
 require(
     android_workflow,
     "github.event_name == 'pull_request' && 'pull-request' || 'release'",
     "Android pull-request environment",
 )
+reject(android_workflow, "soniox/stt-async-v5", "Android release async Soniox rollout")
 
 windows = source("AIDictation.Windows/AIDictation/Helpers/BuildConfig.cs")
 require(
     windows,
-    'TranscriptionModel = "soniox/stt-async-v5"',
-    "Windows cloud model",
+    'TranscriptionModel = "openai/gpt-transcribe"',
+    "Windows batch model",
 )
-require(
-    windows,
-    'HostOf(TranscriptionEndpoint).Contains("writingmate")',
-    "Windows build-config normalization",
-)
+reject(windows, "soniox/stt-async-v5", "Windows async Soniox rollout")
 
-print("cross-platform Soniox defaults: PASS")
+print("Soniox realtime default and batch controls: PASS")

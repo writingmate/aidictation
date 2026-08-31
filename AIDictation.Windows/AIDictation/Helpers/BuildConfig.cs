@@ -16,7 +16,7 @@ public static class BuildConfig
     private static class Defaults
     {
         public const string TranscriptionEndpoint = "https://writingmate.ai/api/openai/v1/audio/transcriptions";
-        public const string TranscriptionModel = "soniox/stt-async-v5";
+        public const string TranscriptionModel = "openai/gpt-transcribe";
         public const string PostProcessingEndpoint = "https://writingmate.ai/api/openai/v1/chat/completions";
         public const string PostProcessingModel = "openai/gpt-oss-20b";
 
@@ -41,10 +41,7 @@ public static class BuildConfig
     // MARK: - Public API
 
     public static string TranscriptionEndpoint => Get("TRANSCRIPTION_ENDPOINT", Defaults.TranscriptionEndpoint);
-    public static string TranscriptionModel =>
-        HostOf(TranscriptionEndpoint).Contains("writingmate")
-            ? Defaults.TranscriptionModel
-            : Get("TRANSCRIPTION_MODEL", Defaults.TranscriptionModel);
+    public static string TranscriptionModel => Get("TRANSCRIPTION_MODEL", Defaults.TranscriptionModel);
     public static string TranscriptionApiKey => Get("TRANSCRIPTION_API_KEY", string.Empty);
     public static string PostProcessingEndpoint => Get("AIDICTATION_POST_PROCESSING_ENDPOINT", Defaults.PostProcessingEndpoint);
     public static string PostProcessingModel => Get("AIDICTATION_POST_PROCESSING_MODEL", Defaults.PostProcessingModel);

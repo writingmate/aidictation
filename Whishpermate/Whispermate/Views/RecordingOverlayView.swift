@@ -39,7 +39,7 @@ struct RecordingOverlayView: View {
     private let buttonSize: CGFloat = 28 * RecordingOverlayView.overlayScale
     private let cancelIconSize: CGFloat = 12 * RecordingOverlayView.overlayScale
     private let stopIconSize: CGFloat = 11 * RecordingOverlayView.overlayScale
-    private let idleControlIconSize: CGFloat = 11
+    private let idleControlIconSize: CGFloat = 10
 
     // MARK: - Computed Properties
 

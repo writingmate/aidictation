@@ -92,13 +92,7 @@ public enum SecretsLoader {
             return model
         }
 
-        switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
-             "groq/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo":
-            return "openai/gpt-transcribe"
-        default:
-            return model
-        }
+        return "soniox/stt-async-v5"
     }
 
     private static func normalizedCustomTranscriptionRealtimeModel(_ model: String) -> String {

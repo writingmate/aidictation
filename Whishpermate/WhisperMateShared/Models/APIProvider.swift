@@ -16,7 +16,7 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .onDevice: return "Offline Mode"
         case .groq: return "Groq"
         case .openai: return "OpenAI"
-        case .custom: return "Custom"
+        case .custom: return "AI Dictation"
         }
     }
 
@@ -25,7 +25,7 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .onDevice: return "Private, works without internet"
         case .groq: return "Whisper Large V3"
         case .openai: return "Whisper API"
-        case .custom: return "Enhanced Whisper + LLM"
+        case .custom: return "Produces polished, ready-to-use text"
         }
     }
 
@@ -43,7 +43,7 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .onDevice: return "apple-on-device"
         case .groq: return "whisper-large-v3-turbo"
         case .openai: return "gpt-transcribe"
-        case .custom: return "openai/gpt-transcribe"
+        case .custom: return "soniox/stt-async-v5"
         }
     }
 
@@ -358,10 +358,10 @@ public class LLMProviderManager: ObservableObject {
 // MARK: - Legacy API Provider (for backwards compatibility during migration)
 
 public class APIProviderManager: ObservableObject {
-    @Published var selectedProvider: TranscriptionProvider = .groq
+    @Published var selectedProvider: TranscriptionProvider = .custom
 
     init() {
         // This is now just a wrapper for backwards compatibility
-        selectedProvider = .groq
+        selectedProvider = .custom
     }
 }

@@ -6,6 +6,12 @@ import WhisperMateShared
 /// Every mutable preference needed by recognition and cleanup, captured before
 /// an attempt begins. Running attempts never consult the live manager objects.
 nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
+    struct BatchFallback: Sendable {
+        let endpoint: String
+        let model: String
+        let apiKey: String?
+    }
+
     struct ContextRuleSnapshot: Sendable {
         let name: String
         let appBundleIDs: [String]
@@ -75,6 +81,7 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
     let transcriptionAPIKey: String?
     let customRealtimeEndpoint: URL?
     let customRealtimeModel: String?
+    let batchFallback: BatchFallback?
     let llmPostProcessingEnabled: Bool
     let postProcessingProvider: PostProcessingProvider
     let llmEndpoint: String
@@ -141,6 +148,7 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
             transcriptionAPIKey: transcriptionAPIKey,
             customRealtimeEndpoint: customRealtimeEndpoint,
             customRealtimeModel: customRealtimeModel,
+            batchFallback: batchFallback,
             llmPostProcessingEnabled: llmPostProcessingEnabled,
             postProcessingProvider: postProcessingProvider,
             llmEndpoint: llmEndpoint,
@@ -156,6 +164,44 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
                 : recordingPrompt,
             sttHintPrompt: sttHintPrompt,
             cleanupPromptComponents: resolvedCleanupComponents,
+            baseCleanupPromptComponents: baseCleanupPromptComponents,
+            contextRules: contextRules,
+            usesContextRules: usesContextRules,
+            appContext: appContext,
+            screenContext: screenContext,
+            vadEnabled: vadEnabled,
+            vadThreshold: vadThreshold,
+            networkWasConnected: networkWasConnected
+        )
+    }
+
+    func usingBatchFallback() -> MacTranscriptionAttemptSnapshot? {
+        guard let batchFallback else { return nil }
+        return MacTranscriptionAttemptSnapshot(
+            outputMode: outputMode,
+            transcriptionOptions: transcriptionOptions,
+            mode: mode,
+            provider: .aidictation,
+            transport: .batch,
+            transcriptionEndpoint: batchFallback.endpoint,
+            transcriptionModel: batchFallback.model,
+            transcriptionAPIKey: batchFallback.apiKey,
+            customRealtimeEndpoint: nil,
+            customRealtimeModel: nil,
+            batchFallback: nil,
+            llmPostProcessingEnabled: llmPostProcessingEnabled,
+            postProcessingProvider: postProcessingProvider,
+            llmEndpoint: llmEndpoint,
+            llmModel: llmModel,
+            llmAPIKey: llmAPIKey,
+            aidictationPostProcessingEndpoint: aidictationPostProcessingEndpoint,
+            aidictationPostProcessingKey: aidictationPostProcessingKey,
+            languageCode: languageCode,
+            languageCodes: languageCodes,
+            transcriptionKeywords: transcriptionKeywords,
+            recordingPrompt: recordingPrompt,
+            sttHintPrompt: sttHintPrompt,
+            cleanupPromptComponents: cleanupPromptComponents,
             baseCleanupPromptComponents: baseCleanupPromptComponents,
             contextRules: contextRules,
             usesContextRules: usesContextRules,

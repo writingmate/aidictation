@@ -9,6 +9,7 @@ on:
       - 'AIDictation.Windows/**'
       - 'scripts/validate_transcription_prompt_routing.py'
       - 'scripts/validate_transcription_cleanup_prompt.swift'
+      - 'scripts/validate_cross_platform_soniox_defaults.py'
       - 'AGENTS.md'
       - '.github/workflows/transcription-contracts.yml'
 
@@ -31,3 +32,6 @@ jobs:
 
       - name: Validate transcription prompt routing
         run: python3 scripts/validate_transcription_prompt_routing.py
+
+      - name: Validate Soniox cloud defaults
+        run: python3 scripts/validate_cross_platform_soniox_defaults.py

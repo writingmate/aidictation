@@ -16,6 +16,7 @@ enum TranscriptionMode {
 }
 
 enum TranscriptionProvider {
+    case aidictation
     case custom
     case openAI
 }
@@ -56,6 +57,11 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         transcriptionAPIKey: settings.apiKey,
         customRealtimeEndpoint: URL(string: settings.realtimeEndpoint),
         customRealtimeModel: settings.realtimeModel,
+        batchFallback: .init(
+            endpoint: "https://fallback.example/transcribe",
+            model: "soniox/stt-async-v5",
+            apiKey: "fallback-key"
+        ),
         // Custom-provider controls historically leave this hidden toggle off.
         // A two-stage raw path must still run core cleanup with this snapshot.
         llmPostProcessingEnabled: false,
@@ -123,6 +129,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(snapshot.transcriptionAPIKey == "before-key")
         precondition(snapshot.customRealtimeEndpoint?.absoluteString == "wss://before.example/realtime")
         precondition(snapshot.customRealtimeModel == "before-realtime-model")
+        precondition(snapshot.batchFallback?.endpoint == "https://fallback.example/transcribe")
         precondition(snapshot.llmEndpoint == "https://before.example/chat")
         precondition(snapshot.llmModel == "before-llm")
         precondition(snapshot.llmAPIKey == "before-llm-key")
@@ -137,6 +144,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(contextualSnapshot.screenContext == "Captured screen")
         precondition(contextualSnapshot.transcriptionEndpoint == snapshot.transcriptionEndpoint)
         precondition(contextualSnapshot.transcriptionModel == snapshot.transcriptionModel)
+        precondition(contextualSnapshot.batchFallback?.model == "soniox/stt-async-v5")
         precondition(contextualSnapshot.llmEndpoint == snapshot.llmEndpoint)
         precondition(contextualSnapshot.cleanupPromptComponents == snapshot.cleanupPromptComponents)
         let currentContextSnapshot = snapshot.withContext(
@@ -165,6 +173,22 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
                 == currentContextSnapshot.cleanupPromptComponents,
             "Resolving captured context twice duplicated frozen instructions"
         )
+        guard let fallbackSnapshot = snapshot.usingBatchFallback() else {
+            preconditionFailure("Snapshot lost its captured batch fallback")
+        }
+        guard case .aidictation = fallbackSnapshot.provider else {
+            preconditionFailure("Batch fallback did not select AI Dictation")
+        }
+        guard case .batch = fallbackSnapshot.transport else {
+            preconditionFailure("Batch fallback did not select HTTP transport")
+        }
+        precondition(
+            fallbackSnapshot.transcriptionEndpoint
+                == "https://fallback.example/transcribe"
+        )
+        precondition(fallbackSnapshot.transcriptionModel == "soniox/stt-async-v5")
+        precondition(fallbackSnapshot.transcriptionAPIKey == "fallback-key")
+        precondition(fallbackSnapshot.batchFallback == nil)
         let appStatePath = "Whishpermate/Whispermate/Services/AppState.swift"
         let source = try String(contentsOfFile: appStatePath, encoding: .utf8)
         guard let start = source.range(of: "    private func performTranscription("),
@@ -232,6 +256,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             )
         }
         precondition(source.contains("if let realtimeResult"))
+        precondition(source.contains("snapshot.usingBatchFallback()"))
         precondition(source.contains("try await session.checkpoint(realtimeResult)"))
         precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))

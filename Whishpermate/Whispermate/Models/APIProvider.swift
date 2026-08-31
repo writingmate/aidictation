@@ -16,7 +16,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet: return "Offline"
         case .aidictation: return "AI Dictation"
-        case .soniox: return "Fast streaming"
+        case .soniox: return "AI Dictation"
         case .codex: return "Codex"
         }
     }
@@ -25,7 +25,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
         switch self {
         case .parakeet: return "Keeps recordings and transcription on this Mac"
         case .aidictation: return "Produces polished, ready-to-use text"
-        case .soniox: return "Streams speech while you talk for faster results"
+        case .soniox: return "Produces polished, ready-to-use text"
         case .codex: return "Uses transcription from your ChatGPT account"
         }
     }
@@ -66,7 +66,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     }
 
     static var availableOnlineProviders: [TranscriptionProvider] {
-        var providers: [TranscriptionProvider] = [.aidictation, .soniox]
+        var providers: [TranscriptionProvider] = [.soniox]
         if CodexTranscriptionSupport.isInstalled {
             providers.append(.codex)
         }
@@ -76,7 +76,7 @@ enum TranscriptionProvider: String, CaseIterable, Identifiable {
     var onlineServiceName: String {
         switch self {
         case .aidictation: return "AI Dictation"
-        case .soniox: return "Fast streaming"
+        case .soniox: return "AI Dictation"
         case .codex: return "ChatGPT"
         case .parakeet: return "Offline"
         }
@@ -182,8 +182,8 @@ enum TranscriptionMode: String, CaseIterable {
 class TranscriptionProviderManager: ObservableObject {
     static let shared = TranscriptionProviderManager()
 
-    @Published var selectedProvider: TranscriptionProvider = .aidictation
-    @Published private(set) var selectedOnlineProvider: TranscriptionProvider = .aidictation
+    @Published var selectedProvider: TranscriptionProvider = .soniox
+    @Published private(set) var selectedOnlineProvider: TranscriptionProvider = .soniox
     @Published var transcriptionMode: TranscriptionMode = .auto
     @Published var customEndpoint: String = ""
     @Published var customModel: String = ""
@@ -212,7 +212,7 @@ class TranscriptionProviderManager: ObservableObject {
         {
             selectedProvider = provider
         } else {
-            selectedProvider = .aidictation
+            selectedProvider = .soniox
         }
 
         if let savedMode = AppDefaults.shared.string(forKey: Keys.transcriptionMode),
@@ -228,7 +228,7 @@ class TranscriptionProviderManager: ObservableObject {
             .string(forKey: Keys.selectedOnlineProvider)
             .flatMap(TranscriptionProvider.init(rawValue:))
         selectedOnlineProvider = normalizedOnlineProvider(
-            savedOnlineProvider ?? (selectedProvider.isOnDevice ? .aidictation : selectedProvider)
+            savedOnlineProvider ?? (selectedProvider.isOnDevice ? .soniox : selectedProvider)
         )
         selectedProvider = transcriptionMode == .local
             ? .parakeet
@@ -336,9 +336,9 @@ class TranscriptionProviderManager: ObservableObject {
         case .soniox:
             return .soniox
         case .aidictation:
-            return .aidictation
+            return .soniox
         default:
-            return .aidictation
+            return .soniox
         }
     }
 

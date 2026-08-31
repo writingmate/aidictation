@@ -140,24 +140,23 @@ async function sonioxRealtime({ pcm, endpoint, authorization }) {
   let finalized = "";
   let provisional = "";
   let keyUpAt = 0;
+  let finalizationTimeout;
+  let rejectFinalization;
 
   const completion = new Promise((resolveCompletion, rejectCompletion) => {
-    const timeout = setTimeout(() => {
-      socket.close();
-      rejectCompletion(new Error("Soniox finalization timed out"));
-    }, 10_000);
+    rejectFinalization = rejectCompletion;
 
     socket.addEventListener("message", (event) => {
       let payload;
       try {
         payload = JSON.parse(String(event.data));
       } catch {
-        clearTimeout(timeout);
+        clearTimeout(finalizationTimeout);
         rejectCompletion(new Error("Soniox returned invalid JSON"));
         return;
       }
       if (typeof payload.error_type === "string") {
-        clearTimeout(timeout);
+        clearTimeout(finalizationTimeout);
         rejectCompletion(new Error(`Soniox error ${payload.error_type}`));
         return;
       }
@@ -174,7 +173,7 @@ async function sonioxRealtime({ pcm, endpoint, authorization }) {
         }
       }
       if (didFinalize) {
-        clearTimeout(timeout);
+        clearTimeout(finalizationTimeout);
         const completedAt = performance.now();
         socket.close();
         resolveCompletion({
@@ -184,7 +183,7 @@ async function sonioxRealtime({ pcm, endpoint, authorization }) {
       }
     });
     socket.addEventListener("error", () => {
-      clearTimeout(timeout);
+      clearTimeout(finalizationTimeout);
       rejectCompletion(new Error("Soniox WebSocket failed"));
     });
   });
@@ -208,6 +207,10 @@ async function sonioxRealtime({ pcm, endpoint, authorization }) {
     await sleep(chunkMilliseconds);
   }
   keyUpAt = performance.now();
+  finalizationTimeout = setTimeout(() => {
+    socket.close();
+    rejectFinalization(new Error("Soniox finalization timed out"));
+  }, 10_000);
   socket.send(Buffer.alloc(pcmBytesPerSecond / 5));
   socket.send(JSON.stringify({ type: "finalize" }));
   return completion;

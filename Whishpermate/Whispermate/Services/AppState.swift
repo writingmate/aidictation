@@ -2174,9 +2174,27 @@ class AppState: ObservableObject {
                 realtimeResult = nil
             }
 
-            if snapshot.transport == .realtime,
+            let recognitionSnapshot: MacTranscriptionAttemptSnapshot
+            let usedBatchFallback: Bool
+            if realtimeResult == nil,
+               snapshot.provider == .soniox,
+               let fallback = snapshot.usingBatchFallback()
+            {
+                recognitionSnapshot = fallback
+                usedBatchFallback = true
+                DebugLog.warning(
+                    "Fast streaming did not complete; using cloud fallback",
+                    context: "SonioxRealtime"
+                )
+            } else {
+                recognitionSnapshot = snapshot
+                usedBatchFallback = false
+            }
+
+            if activeTransport == .realtime,
                (snapshot.mode != .auto || snapshot.networkWasConnected),
-               realtimeResult == nil
+               realtimeResult == nil,
+               !usedBatchFallback
             {
                 throw NSError(
                     domain: "AppState",
@@ -2245,7 +2263,7 @@ class AppState: ObservableObject {
                     audioURL: audioURL,
                     clipboardContent: nil,
                     transientWorkspace: transientWorkspace,
-                    snapshot: snapshot,
+                    snapshot: recognitionSnapshot,
                     onRecognitionCheckpoint: { text in
                         try await session.checkpoint(text)
                     },
@@ -3006,6 +3024,15 @@ class AppState: ObservableObject {
                 diarization: rule.transcriptionOptions.diarization
             )
         }
+        let batchFallback: MacTranscriptionAttemptSnapshot.BatchFallback? =
+            provider == .soniox
+            ? .init(
+                endpoint: SecretsLoader.customTranscriptionEndpoint()
+                    ?? TranscriptionProvider.aidictation.defaultEndpoint,
+                model: "soniox/stt-async-v5",
+                apiKey: resolvedTranscriptionApiKey(for: .aidictation)
+            )
+            : nil
         return MacTranscriptionAttemptSnapshot(
             outputMode: outputMode,
             transcriptionOptions: transcriptionOptions,
@@ -3017,6 +3044,7 @@ class AppState: ObservableObject {
             transcriptionAPIKey: resolvedTranscriptionApiKey(for: provider),
             customRealtimeEndpoint: configuredCustomRealtimeEndpoint(),
             customRealtimeModel: configuredCustomRealtimeModel(),
+            batchFallback: batchFallback,
             llmPostProcessingEnabled: transcriptionProviderManager.enableLLMPostProcessing,
             postProcessingProvider: transcriptionProviderManager.postProcessingProvider,
             llmEndpoint: llmProviderManager.effectiveEndpoint,

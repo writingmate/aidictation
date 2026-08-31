@@ -12,6 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$(cd "$SCRIPT_DIR/../Whishpermate" && pwd)/Whispermate.xcodeproj"
 
+python3 "$SCRIPT_DIR/validate_cross_platform_soniox_defaults.py"
+
 echo "==> Running WhispermateTests"
 xcodebuild test \
   -project "$PROJECT" \

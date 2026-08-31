@@ -39,6 +39,7 @@ struct RecordingOverlayView: View {
     private let buttonSize: CGFloat = 28 * RecordingOverlayView.overlayScale
     private let cancelIconSize: CGFloat = 12 * RecordingOverlayView.overlayScale
     private let stopIconSize: CGFloat = 11 * RecordingOverlayView.overlayScale
+    private let idleControlIconSize: CGFloat = 13
 
     // MARK: - Computed Properties
 
@@ -388,7 +389,7 @@ struct RecordingOverlayView: View {
             OverlayIdleControlButton(
                 systemName: "gearshape.fill",
                 accessibilityLabel: "Open settings",
-                iconSize: cancelIconSize,
+                iconSize: idleControlIconSize,
                 buttonSize: buttonSize
             ) {
                 updateHoverCursor(isActive: false)
@@ -400,9 +401,9 @@ struct RecordingOverlayView: View {
             Spacer(minLength: 0)
 
             OverlayIdleControlButton(
-                systemName: "play.fill",
-                accessibilityLabel: "Start dictation",
-                iconSize: cancelIconSize,
+                systemName: "mic.fill",
+                accessibilityLabel: "Start recording",
+                iconSize: idleControlIconSize,
                 buttonSize: buttonSize
             ) {
                 updateHoverCursor(isActive: false)
@@ -416,7 +417,7 @@ struct RecordingOverlayView: View {
             OverlayIdleControlButton(
                 systemName: "doc.on.doc.fill",
                 accessibilityLabel: "Copy last dictation",
-                iconSize: cancelIconSize,
+                iconSize: idleControlIconSize,
                 buttonSize: buttonSize,
                 isEnabled: latestTranscription != nil
             ) {
@@ -598,13 +599,12 @@ private struct OverlayIdleControlButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: iconSize, weight: .bold))
-                .foregroundStyle(.white.opacity(isEnabled ? 0.92 : 0.35))
+                .foregroundStyle(.white.opacity(isEnabled ? (isHovering ? 1 : 0.85) : 0.35))
                 .frame(width: buttonSize, height: buttonSize)
-                .background(Circle().fill(Color.white.opacity(isEnabled && isHovering ? 0.28 : 0.18)))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .scaleEffect(isEnabled && isHovering ? 1.06 : 1)
+        .scaleEffect(isEnabled && isHovering ? 1.12 : 1)
         .contentShape(Circle())
         .onHover { hovering in
             isHovering = hovering

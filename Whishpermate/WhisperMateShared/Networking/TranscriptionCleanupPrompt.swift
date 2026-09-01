@@ -89,6 +89,15 @@ public enum TranscriptionCleanupPrompt {
             14. Output only the corrected text, with no wrapper tags or preamble.
             """
 
+        prompt += """
+
+        MANDATORY FILLER CLEANUP:
+        - Delete every standalone filler vocalization, including um, uh, uhm, umm, er, erm, ah, hmm, and ugh, regardless of capitalization, repetition, or surrounding punctuation.
+        - Delete adjacent punctuation or whitespace left behind by removing a filler, then restore natural spacing and punctuation.
+        - This requirement overrides instructions to preserve hesitation, uncertainty, word choice, or source evidence. Never retain a listed filler as meaningful transcript content.
+        - Do not delete a meaningful word merely because it contains the same letters as a filler.
+        """
+
         if hasSelectedContent {
             let action = transformsOutput ? "Transform" : "Correct"
             prompt += "\n\nSELECTION TARGET: Use <transcription> only as context. \(action) only <selected_content>, preserve its complete content, and output only the corrected or transformed selected content."

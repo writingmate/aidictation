@@ -139,9 +139,9 @@ require(
     "macOS recognition lost vocabulary or phrase hints",
 )
 require(
-    "dictionaryManager.formattingInstructions" in stt_builder
-    and "shortcutManager.formattingInstructions" in stt_builder,
-    "macOS recognition lost replacements or phrase expansions",
+    "dictionaryManager.formattingInstructions" not in stt_builder
+    and "shortcutManager.formattingInstructions" not in stt_builder,
+    "macOS recognition contains cleanup-only replacement or expansion values",
 )
 require(
     '"Vocabulary:' not in stt_builder and '"Phrases:' not in stt_builder,
@@ -159,8 +159,14 @@ require(
 )
 require(
     "dictionaryManager.transcriptionKeywords" in app_state_source
-    and "shortcutManager.transcriptionKeywords" in app_state_source,
+    and "shortcutManager.shortcuts" in app_state_source
+    and ".map(\\.voiceTrigger)" in app_state_source
+    and "shortcutManager.transcriptionKeywords" not in app_state_source,
     "modern transcription requests lost literal keyword hints",
+)
+require(
+    "snapshot.cleanupPromptComponents(for: rawText)" in app_state_source,
+    "macOS cleanup does not gate shortcut expansions on the raw transcript",
 )
 require(
     "languageManager.apiLanguageCodes" in app_state_source,
@@ -197,15 +203,20 @@ mac_pipeline = function_body(
 )
 require(
     "postProcessingPrompt: nil" in mac_pipeline,
-    "AI Dictation batch transcription still sends a separate cleanup prompt",
+    "AI Dictation batch recognition still sends a cleanup prompt to STT",
 )
 require(
-    "postProcessingEnabled: provider != .aidictation" in mac_pipeline,
-    "AI Dictation batch transcription still enables server cleanup",
+    "postProcessingEnabled: false" in mac_pipeline,
+    "batch recognition still enables server cleanup",
 )
 require(
     "cleanupMergedTranscript: nil" in mac_pipeline,
-    "AI Dictation chunked transcription still schedules client cleanup",
+    "AI Dictation chunked recognition has more than one cleanup owner",
+)
+require(
+    """if provider == .aidictation {
+                return try await applyLLMPassWithFallback(""" in mac_pipeline,
+    "AI Dictation batch transcription does not run client cleanup after raw recognition",
 )
 
 mac_server_prompt = function_body(

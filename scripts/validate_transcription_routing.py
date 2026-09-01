@@ -8,6 +8,8 @@ PROVIDERS = (ROOT / "Whishpermate/Whispermate/Models/APIProvider.swift").read_te
 TRANSCRIPTION_PROVIDERS = PROVIDERS.split("enum CodexTranscriptionSupport", 1)[0]
 APP_STATE = (ROOT / "Whishpermate/Whispermate/Services/AppState.swift").read_text()
 REALTIME = (ROOT / "Whishpermate/Whispermate/Services/OpenAIRealtimeTranscriptionClient.swift").read_text()
+HISTORY = (ROOT / "Whishpermate/Whispermate/Views/HistoryMasterDetailView.swift").read_text()
+SETTINGS = (ROOT / "Whishpermate/Whispermate/Views/SettingsView.swift").read_text()
 
 
 def require(condition: bool, message: str) -> None:
@@ -30,9 +32,17 @@ require(
     "ChatGPT retranscription is not pinned to batch transport",
 )
 require(
-    'model = isRetranscription\n                ? "gpt-transcribe"' in APP_STATE,
-    "AI Dictation retranscription is not mapped to gpt-transcribe",
+    'provider == .soniox, isRetranscription' in APP_STATE
+    and 'model = "soniox/stt-async-v5"' in APP_STATE,
+    "AI Dictation retranscription is not pinned to Soniox v5 batch",
 )
+require(
+    "onlineProvider: .soniox" in HISTORY,
+    "History re-transcription does not route directly to AI Dictation",
+)
+require("RetranscriptionRouteMenu" not in HISTORY, "History still exposes a provider switch")
+require('Button("ChatGPT")' not in HISTORY, "History still exposes ChatGPT transcription")
+require('Text("Cloud Model")' not in SETTINGS, "Settings still exposes a cloud-model switch")
 require(
     'https://chatgpt.com/backend-api/transcribe' in PROVIDERS,
     "ChatGPT batch transcription endpoint is missing",

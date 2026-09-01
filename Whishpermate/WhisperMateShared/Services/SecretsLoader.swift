@@ -94,8 +94,9 @@ public enum SecretsLoader {
 
         switch model.trimmingCharacters(in: .whitespacesAndNewlines) {
         case "gpt-4o-transcribe", "gpt-4o-mini-transcribe",
-             "groq/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo":
-            return "openai/gpt-transcribe"
+             "groq/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo",
+             "openai/gpt-transcribe":
+            return "soniox/stt-async-v5"
         default:
             return model
         }

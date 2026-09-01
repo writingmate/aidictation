@@ -57,11 +57,6 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         transcriptionAPIKey: settings.apiKey,
         customRealtimeEndpoint: URL(string: settings.realtimeEndpoint),
         customRealtimeModel: settings.realtimeModel,
-        batchFallback: .init(
-            endpoint: "https://fallback.example/transcribe",
-            model: "soniox/stt-async-v5",
-            apiKey: "fallback-key"
-        ),
         // Custom-provider controls historically leave this hidden toggle off.
         // A two-stage raw path must still run core cleanup with this snapshot.
         llmPostProcessingEnabled: false,
@@ -78,6 +73,10 @@ private func capture(_ settings: MutableAttemptSettings) -> MacTranscriptionAtte
         sttHintPrompt: "Before hint",
         cleanupPromptComponents: settings.prompt,
         baseCleanupPromptComponents: settings.prompt,
+        shortcutExpansions: [
+            .init(trigger: "my calendly", expansion: "https://calendly.com/yourname"),
+            .init(trigger: "my email", expansion: "your.email@example.com"),
+        ],
         contextRules: [
             .init(
                 name: "Meetings",
@@ -129,13 +128,20 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(snapshot.transcriptionAPIKey == "before-key")
         precondition(snapshot.customRealtimeEndpoint?.absoluteString == "wss://before.example/realtime")
         precondition(snapshot.customRealtimeModel == "before-realtime-model")
-        precondition(snapshot.batchFallback?.endpoint == "https://fallback.example/transcribe")
         precondition(snapshot.llmEndpoint == "https://before.example/chat")
         precondition(snapshot.llmModel == "before-llm")
         precondition(snapshot.llmAPIKey == "before-llm-key")
         precondition(snapshot.languageCode == "en")
         precondition(snapshot.vadThreshold == 0.31)
         precondition(snapshot.cleanupPromptComponents == ["Before vocabulary"])
+        precondition(
+            !snapshot.cleanupPromptComponents(for: "Discuss my calendars.")
+                .joined().contains("calendly.com")
+        )
+        precondition(
+            snapshot.cleanupPromptComponents(for: "Send my Calendly.")
+                .joined().contains("calendly.com")
+        )
         let contextualSnapshot = snapshot.withContext(
             appContext: "Captured app",
             screenContext: "Captured screen"
@@ -144,7 +150,6 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(contextualSnapshot.screenContext == "Captured screen")
         precondition(contextualSnapshot.transcriptionEndpoint == snapshot.transcriptionEndpoint)
         precondition(contextualSnapshot.transcriptionModel == snapshot.transcriptionModel)
-        precondition(contextualSnapshot.batchFallback?.model == "soniox/stt-async-v5")
         precondition(contextualSnapshot.llmEndpoint == snapshot.llmEndpoint)
         precondition(contextualSnapshot.cleanupPromptComponents == snapshot.cleanupPromptComponents)
         let currentContextSnapshot = snapshot.withContext(
@@ -173,22 +178,6 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
                 == currentContextSnapshot.cleanupPromptComponents,
             "Resolving captured context twice duplicated frozen instructions"
         )
-        guard let fallbackSnapshot = snapshot.usingBatchFallback() else {
-            preconditionFailure("Snapshot lost its captured batch fallback")
-        }
-        guard case .aidictation = fallbackSnapshot.provider else {
-            preconditionFailure("Batch fallback did not select AI Dictation")
-        }
-        guard case .batch = fallbackSnapshot.transport else {
-            preconditionFailure("Batch fallback did not select HTTP transport")
-        }
-        precondition(
-            fallbackSnapshot.transcriptionEndpoint
-                == "https://fallback.example/transcribe"
-        )
-        precondition(fallbackSnapshot.transcriptionModel == "soniox/stt-async-v5")
-        precondition(fallbackSnapshot.transcriptionAPIKey == "fallback-key")
-        precondition(fallbackSnapshot.batchFallback == nil)
         let appStatePath = "Whishpermate/Whispermate/Services/AppState.swift"
         let source = try String(contentsOfFile: appStatePath, encoding: .utf8)
         guard let start = source.range(of: "    private func performTranscription("),
@@ -220,7 +209,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         }
 
         precondition(attemptSource.contains("postProcessingPrompt: nil"))
-        precondition(attemptSource.contains("postProcessingEnabled: provider != .aidictation"))
+        precondition(attemptSource.contains("postProcessingEnabled: false"))
         precondition(attemptSource.contains("cleanupMergedTranscript: nil"))
         precondition(
             !attemptSource.contains("TranscriptionOutputFilter.filter"),
@@ -256,7 +245,8 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             )
         }
         precondition(source.contains("if let realtimeResult"))
-        precondition(source.contains("snapshot.usingBatchFallback()"))
+        precondition(!source.contains("usingBatchFallback"))
+        precondition(!source.contains("groq/whisper-large-v3-turbo"))
         precondition(source.contains("try await session.checkpoint(realtimeResult)"))
         precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))

@@ -40,10 +40,9 @@ swiftc -parse-as-library -module-cache-path "$module_cache" \
 "$work_dir/validate-macos-recorder"
 
 swiftc -parse-as-library -module-cache-path "$module_cache" \
-  Whishpermate/Whispermate/Services/MacCaptureGraphPinPolicy.swift \
   scripts/validate_macos_preparation_format_retry.swift \
-  -o "$work_dir/validate-macos-capture-pin"
-"$work_dir/validate-macos-capture-pin"
+  -o "$work_dir/validate-macos-source-change"
+"$work_dir/validate-macos-source-change"
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \

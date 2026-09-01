@@ -14,43 +14,17 @@ private func require(_ condition: @autoclosure () -> Bool, _ message: String) th
     guard condition() else { throw ValidationFailure.failed(message) }
 }
 
-/// Validates that macOS capture binds the HAL graph to a specific device UID
-/// and input data source. Ignoring notifications (PR 105) is not enough:
-/// Core Audio can still retarget the built-in input's data source when I/O
-/// starts. This contract also keeps the no-wait-on-record rule.
+/// Validates that macOS capture uses the system-default AVAudioEngine input
+/// (the 0.0.115 path) and that PR 105 still ignores device/configuration
+/// changes during preparation and recording. The 0.0.116 HAL pin
+/// (`kAudioOutputUnitProperty_CurrentDevice` + data-source restore) killed the
+/// built-in IO unit and dismissed the overlay. This contract also keeps the
+/// no-wait-on-record rule.
 @main
 private struct SourceChangePinningValidator {
     static func main() throws {
-        try validatePinPolicy()
         try validateSourceContract()
         print("macOS source-change pinning contract: PASS")
-    }
-
-    private static func validatePinPolicy() throws {
-        try require(
-            !MacCaptureGraphPinPolicy.shouldRestoreInputDataSource(pinned: nil, current: 1),
-            "A device without a data source must not attempt restore"
-        )
-        try require(
-            !MacCaptureGraphPinPolicy.shouldRestoreInputDataSource(pinned: 0x696D_6963, current: 0x696D_6963),
-            "Matching pinned and current data sources must not restore"
-        )
-        try require(
-            MacCaptureGraphPinPolicy.shouldRestoreInputDataSource(pinned: 0x696D_6963, current: 0x656D_656D),
-            "A drifted data source must be restored to the pinned source"
-        )
-        try require(
-            MacCaptureGraphPinPolicy.shouldRestoreInputDataSource(pinned: 0x696D_6963, current: nil),
-            "A missing current data source must be restored to the pinned source"
-        )
-        try require(
-            MacCaptureGraphPinPolicy.shouldDeferHardwareReapply(isCapturePinned: true),
-            "Hardware reapply must wait while the capture graph is pinned"
-        )
-        try require(
-            !MacCaptureGraphPinPolicy.shouldDeferHardwareReapply(isCapturePinned: false),
-            "Hardware reapply must run when no capture graph is pinned"
-        )
     }
 
     private static func validateSourceContract() throws {
@@ -61,6 +35,8 @@ private struct SourceChangePinningValidator {
             .appendingPathComponent("Whishpermate/Whispermate/Services/AudioRecorder.swift")
         let deviceManagerPath = workspaceRoot
             .appendingPathComponent("Whishpermate/Whispermate/Services/AudioDeviceManager.swift")
+        let pinPolicyPath = workspaceRoot
+            .appendingPathComponent("Whishpermate/Whispermate/Services/MacCaptureGraphPinPolicy.swift")
         let recorderSource = try String(contentsOf: audioRecorderPath, encoding: .utf8)
         let deviceManagerSource = try String(contentsOf: deviceManagerPath, encoding: .utf8)
 
@@ -168,73 +144,74 @@ private struct SourceChangePinningValidator {
             "checkRecordingHealth must still use attemptCaptureRecovery for engine failures"
         )
 
-        // 15. Verify the graph is bound to a specific AudioDeviceID / UID
+        // 15. HAL pin/bind from 0.0.116 must be gone. Built-in capture uses
+        // AVAudioEngine().inputNode on the system default, matching 0.0.115.
         try require(
-            deviceManagerSource.contains("kAudioOutputUnitProperty_CurrentDevice"),
-            "AudioDeviceManager must set kAudioOutputUnitProperty_CurrentDevice to bind the HAL unit"
+            !FileManager.default.fileExists(atPath: pinPolicyPath.path),
+            "MacCaptureGraphPinPolicy.swift must be removed with the HAL pin"
         )
         try require(
-            deviceManagerSource.contains("func bindCaptureInputNode"),
-            "AudioDeviceManager must expose bindCaptureInputNode"
+            !deviceManagerSource.contains("kAudioOutputUnitProperty_CurrentDevice"),
+            "AudioDeviceManager must not bind kAudioOutputUnitProperty_CurrentDevice"
         )
         try require(
-            recorderSource.contains("makePinnedCaptureGraph"),
-            "AudioRecorder must build capture graphs through makePinnedCaptureGraph"
+            !deviceManagerSource.contains("func bindCaptureInputNode"),
+            "AudioDeviceManager must not expose bindCaptureInputNode"
         )
         try require(
-            recorderSource.contains("bindCaptureInputNode"),
-            "AudioRecorder must bind the input node to the resolved device"
+            !deviceManagerSource.contains("func beginCapturePin"),
+            "AudioDeviceManager must not begin a HAL capture pin"
+        )
+        try require(
+            !deviceManagerSource.contains("restorePinnedInputDataSourceIfNeeded"),
+            "AudioDeviceManager must not restore a pinned HAL data source"
+        )
+        try require(
+            !deviceManagerSource.contains("kAudioDevicePropertyDataSource"),
+            "AudioDeviceManager must not pin kAudioDevicePropertyDataSource"
+        )
+        try require(
+            !deviceManagerSource.contains("kAudioDevicePropertyJackIsConnected"),
+            "AudioDeviceManager must not listen for jack-source changes during capture"
+        )
+        try require(
+            !recorderSource.contains("bindCaptureInputNode"),
+            "AudioRecorder must not bind the input node to a HAL device"
+        )
+        try require(
+            !recorderSource.contains("makePinnedCaptureGraph"),
+            "AudioRecorder must not build capture graphs through makePinnedCaptureGraph"
+        )
+        try require(
+            !recorderSource.contains("beginCapturePin"),
+            "AudioRecorder must not pin a HAL device before starting I/O"
+        )
+        try require(
+            !recorderSource.contains("restorePinnedInputDataSourceIfNeeded"),
+            "AudioRecorder must not restore a HAL data source after engine.start"
+        )
+        try require(
+            !recorderSource.contains("endCapturePin"),
+            "AudioRecorder must not end a HAL capture pin"
         )
 
-        // 16. Verify data-source / jack listeners on the selected device
-        try require(
-            deviceManagerSource.contains("kAudioDevicePropertyDataSource"),
-            "AudioDeviceManager must read and pin kAudioDevicePropertyDataSource"
-        )
-        try require(
-            deviceManagerSource.contains("kAudioDevicePropertyJackIsConnected"),
-            "AudioDeviceManager must listen for jack-source changes on the selected device"
-        )
-        try require(
-            deviceManagerSource.contains("pinnedInputPropertyChangedCallback"),
-            "AudioDeviceManager must listen for pinned-device property changes"
-        )
-        try require(
-            deviceManagerSource.contains("func beginCapturePin"),
-            "AudioDeviceManager must begin a capture pin for the selected device"
-        )
-
-        // 17. Recovery must reuse the same selected device, not a fresh default engine
-        let recoveryMethod = extractMethod(
-            named: "rebuildCaptureEngine",
-            from: recorderSource
-        )
-        try require(
-            recoveryMethod.contains("session.deviceResolution"),
-            "rebuildCaptureEngine must reuse session.deviceResolution"
-        )
-        try require(
-            recoveryMethod.contains("makePinnedCaptureGraph"),
-            "rebuildCaptureEngine must bind the replacement engine to the pinned device"
-        )
-        try require(
-            !recoveryMethod.contains("AVAudioEngine()\n        let inputNode = engine.inputNode\n        let inputFormat = inputNode.outputFormat"),
-            "rebuildCaptureEngine must not adopt an unbound system-default input node"
-        )
-
-        // 18. Hardware reapply must wait until the pin ends
-        try require(
-            deviceManagerSource.contains("hardware_changed_deferred_capture_pin"),
-            "Device-list changes must be deferred while the capture graph is pinned"
-        )
-        try require(
-            deviceManagerSource.contains("shouldDeferHardwareReapply"),
-            "Hardware reapply must consult MacCaptureGraphPinPolicy"
-        )
-
-        // 19. Start path must not gain the rejected wait-on-record delays
-        let startMethod = extractMethod(named: "startRecording", from: recorderSource)
         let prepareMethod = extractMethod(named: "prepareCapture", from: recorderSource)
+        let recoveryMethod = extractMethod(named: "rebuildCaptureEngine", from: recorderSource)
+        try require(
+            prepareMethod.contains("let engine = AVAudioEngine()")
+                && prepareMethod.contains("let inputNode = engine.inputNode")
+                && prepareMethod.contains("inputNode.outputFormat"),
+            "prepareCapture must create AVAudioEngine() and use inputNode.outputFormat"
+        )
+        try require(
+            recoveryMethod.contains("let engine = AVAudioEngine()")
+                && recoveryMethod.contains("let inputNode = engine.inputNode")
+                && recoveryMethod.contains("inputNode.outputFormat"),
+            "rebuildCaptureEngine must create AVAudioEngine() and use inputNode.outputFormat"
+        )
+
+        // 16. Start path must not gain the rejected wait-on-record delays
+        let startMethod = extractMethod(named: "startRecording", from: recorderSource)
         try require(
             !startMethod.contains("asyncAfter") || startMethod.contains("recordingPreparationTimeout"),
             "startRecording may only delay for the preparation deadline, not a start wait"
@@ -246,24 +223,12 @@ private struct SourceChangePinningValidator {
             "prepareCapture must not wait, sleep, or delay before engine.start"
         )
         try require(
-            prepareMethod.contains("beginCapturePin"),
-            "prepareCapture must pin the selected device before starting I/O"
-        )
-        try require(
-            prepareMethod.contains("restorePinnedInputDataSourceIfNeeded"),
-            "prepareCapture must restore a drifted data source after engine.start"
-        )
-        try require(
-            recoveryMethod.contains("restorePinnedInputDataSourceIfNeeded"),
-            "rebuildCaptureEngine must restore the pinned data source after recovery start"
-        )
-        try require(
-            recorderSource.contains("endCapturePin(recordingID: session.recordingID)"),
-            "stopRecording must end the capture pin for the session device"
-        )
-        try require(
-            extractMethod(named: "resetFailedStart", from: recorderSource).contains("endCapturePin"),
-            "Failed starts must end the capture pin"
+            !startMethod.contains("0.1")
+                && !startMethod.contains("0.25")
+                && !prepareMethod.contains("0.1")
+                && !prepareMethod.contains("0.25")
+                && !prepareMethod.contains("0.5"),
+            "startRecording/prepareCapture must not wait 0.1/0.25/0.5s on the start path"
         )
     }
 

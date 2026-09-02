@@ -20,6 +20,12 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.method.ScrollingMovementMethod
+import android.text.style.ForegroundColorSpan
+import android.text.style.StrikethroughSpan
+import android.text.style.StyleSpan
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -48,6 +54,7 @@ import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
+import com.whispermate.aidictation.util.TextChangeDiff
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -124,8 +131,9 @@ internal fun canStartSelectionCommand(
 internal fun shouldShowCommandActions(
     recordingState: OverlayRecordingState,
     workflowActive: Boolean,
-    hasSelection: Boolean
-): Boolean = hasSelection && canStartSelectionCommand(recordingState, workflowActive)
+    hasSelection: Boolean,
+    reviewPending: Boolean = false
+): Boolean = hasSelection && !reviewPending && canStartSelectionCommand(recordingState, workflowActive)
 
 /**
  * Dictation hands the bubble back as soon as transcription finishes so a new dictation
@@ -151,6 +159,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
+        private const val EVENT_COALESCE_MS = 120L
         private const val FOCUS_RECOVERY_ATTEMPTS = 15
         private const val FOCUS_RECOVERY_RETRY_MS = 200L
         private const val INSERT_RESOLVE_ATTEMPTS = 3
@@ -168,6 +177,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val COMMAND_ACTION_ELEVATION_DP = 6
         private const val COMMAND_ACTIONS_FADE_IN_MS = 150L
         private const val COMMAND_SLIDE_DURATION_MS = 220L
+        /** Matches the bubble's secondary surface so the buttons read as subordinate to it. */
+        private const val COMMAND_ACTION_SECONDARY_ALPHA = 0.34f
+        private const val REVIEW_CARD_MARGIN_DP = 12
+        private const val REVIEW_CARD_PADDING_DP = 16
+        private const val REVIEW_CARD_CORNER_DP = 18
+        private const val REVIEW_CARD_MAX_LINES = 8
+        private const val REVIEW_BUTTON_HEIGHT_DP = 44
+        private const val REVIEW_DELETED_ALPHA = 0.55f
         private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_CLEANUP_ID = "cleanup"
         private const val COMMAND_REWRITE_ID = "rewrite"
@@ -181,6 +198,32 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        )
+
+        /**
+         * Events caused directly by the user touching or focusing a field. These are rare
+         * and the overlay should react to them at once. Everything else in
+         * [TRACKED_EVENT_TYPES] (window and content changes) arrives in bursts during
+         * animations, scrolling and WebView tree rebuilds and is coalesced instead.
+         */
+        private val IMMEDIATE_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+        )
+
+        private val FOCUS_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED
+        )
+
+        /** Windows that never host a dictation target and are not worth a round trip. */
+        private val SKIPPED_WINDOW_TYPES = setOf(
+            AccessibilityWindowInfo.TYPE_SYSTEM,
+            AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY,
+            AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER
         )
     }
 
@@ -208,6 +251,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private data class SelectionCommandTarget(
         val selectedText: String,
         val contextBefore: String
+    )
+
+    /** A command result waiting for the user to accept or dismiss it. */
+    private data class PendingTextReview(
+        val action: CommandAction,
+        val originalText: String,
+        val transformedText: String,
+        val targetNode: AccessibilityNodeInfo?
     )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -242,6 +293,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var autoStopOnSilenceEnabled = false
     private var bubbleAnimationJob: Job? = null
     private var pendingHideJob: Job? = null
+    private var overlayRefreshJob: Job? = null
     private var focusRecoveryJob: Job? = null
     private var isServiceDestroyed = false
     private var stickyEditableFocusArmed = false
@@ -254,6 +306,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var commandSlideView: View? = null
     private var commandSlideInProgress = false
     private val commandIcons = mutableMapOf<CommandAction, Drawable>()
+    private var pendingReview: PendingTextReview? = null
+    private var reviewCardView: LinearLayout? = null
+    private var reviewCardParams: WindowManager.LayoutParams? = null
+    private var isReviewCardAttached = false
+    private var reviewApplyJob: Job? = null
 
     /** Single accent colour shared by the bubble and the command buttons. */
     private var bubbleAccentColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
@@ -317,11 +374,33 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.eventType !in TRACKED_EVENT_TYPES) return
+        val eventType = event.eventType
+        if (eventType !in TRACKED_EVENT_TYPES) return
 
         lastFocusedPackage = event.packageName?.toString()
-        refreshOverlayVisibility(event.source)
-        scheduleFocusRecoveryIfNeeded(force = isPotentialEditableFocusEvent(event))
+
+        // Every overlay refresh makes synchronous round trips into the focused app, and
+        // this service runs on the app's main thread. Reacting to each event of a burst
+        // stalls both the queried app and our own UI, so only direct user interaction is
+        // handled immediately; window and content changes are coalesced into one pass.
+        if (eventType in IMMEDIATE_EVENT_TYPES) {
+            overlayRefreshJob?.cancel()
+            overlayRefreshJob = null
+            val source = event.source
+            refreshOverlayVisibility(source)
+            scheduleFocusRecoveryIfNeeded(
+                force = eventType in FOCUS_EVENT_TYPES && source?.isEditable == true
+            )
+            return
+        }
+
+        if (overlayRefreshJob?.isActive == true) return
+        overlayRefreshJob = serviceScope.launch {
+            delay(EVENT_COALESCE_MS)
+            overlayRefreshJob = null
+            refreshOverlayVisibility(null)
+            scheduleFocusRecoveryIfNeeded()
+        }
     }
 
     override fun onInterrupt() {
@@ -332,6 +411,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
+        overlayRefreshJob?.cancel()
+        overlayRefreshJob = null
         focusRecoveryJob?.cancel()
         focusRecoveryJob = null
     }
@@ -359,8 +440,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun refreshBubbleBrandColor() {
         val color = OverlayBubblePreferences.getResolvedBubbleColor(this)
         bubbleAccentColor = color
-        commandChipTextColor = preferredOnColor(color)
-        commandChipBackgroundColor = color
+        // Tonal buttons: accent icon on the translucent secondary surface, so they sit
+        // quietly next to the solid bubble instead of competing with it.
+        commandChipTextColor = color
+        commandChipBackgroundColor = withAlpha(color, COMMAND_ACTION_SECONDARY_ALPHA)
         updateCommandActionButtons()
     }
 
@@ -389,14 +472,17 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
         if (isServiceDestroyed) return
-        if (shouldShowBubble(source)) {
+        // Resolve the focused field once per pass; the bubble and the command buttons
+        // both decide from the same node.
+        val node = resolveFocusedEditableNode(source)
+        if (shouldShowBubble(source, node)) {
             bubbleShouldBeVisible = true
             showBubble()
             // IME window-list updates can arrive after the accessibility event.
             // Reposition only when fresh keyboard bounds are available; never
             // remove the bubble just because the IME is temporarily absent.
             if (inputMethodBounds() != null) updateBubblePosition()
-            updateCommandActionsVisibility(source)
+            updateCommandActionsVisibility(node)
             return
         }
 
@@ -435,11 +521,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         pendingHideJob = null
     }
 
-    private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
+    private fun shouldShowBubble(
+        source: AccessibilityNodeInfo?,
+        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source)
+    ): Boolean {
         // The editable target owns bubble visibility. The IME is an independent
         // window and may disappear briefly while it animates or switches; using
         // it as a hard visibility gate causes the bubble to flicker or vanish.
-        if (!hasEditableDictationTarget(source)) return false
+        if (!hasEditableDictationTarget(source, node)) return false
         if (isBubbleSuppressed()) return false
         return true
     }
@@ -463,17 +552,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun isPotentialEditableFocusEvent(event: AccessibilityEvent): Boolean {
-        if (
-            event.eventType != AccessibilityEvent.TYPE_VIEW_FOCUSED &&
-            event.eventType != AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED &&
-            event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED
-        ) {
-            return false
-        }
-        return event.source?.isEditable == true
-    }
-
     /**
      * Editable-focus check with a sticky fallback. WebView-backed fields (LinkedIn,
      * Chrome, in-app browsers) drop FOCUS_INPUT for seconds while their virtual
@@ -481,8 +559,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
      * left. Once an eligible field has been seen, the target is considered present while
      * the keyboard catches up, until the keyboard closes or a password field takes focus.
      */
-    private fun hasEditableDictationTarget(source: AccessibilityNodeInfo?): Boolean {
-        if (resolveFocusedEditableNode(source) != null) {
+    private fun hasEditableDictationTarget(
+        source: AccessibilityNodeInfo?,
+        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source)
+    ): Boolean {
+        if (node != null) {
             stickyEditableFocusArmed = true
             return true
         }
@@ -603,10 +684,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         @Suppress("DEPRECATION")
         sourceFocused?.recycle()
 
-        // Search across all windows. On foldables (Flip/Fold), the target app
+        // The active window answers with a single round trip; try it before fetching
+        // the root of every window on screen.
+        val activeFocused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (activeFocused != null && isEligibleEditableNode(activeFocused)) {
+            return activeFocused
+        }
+        @Suppress("DEPRECATION")
+        activeFocused?.recycle()
+
+        // Search across the remaining windows. On foldables (Flip/Fold), the target app
         // might be in a different window type when closed/on cover screen.
         val windows = windows
         for (window in windows) {
+            if (window.type in SKIPPED_WINDOW_TYPES) continue
             val root = window.root ?: continue
             val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             if (focused != null && isEligibleEditableNode(focused)) {
@@ -618,11 +709,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             root.recycle()
             @Suppress("DEPRECATION")
             focused?.recycle()
-        }
-
-        val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (focused != null && isEligibleEditableNode(focused)) {
-            return focused
         }
 
         return null
@@ -731,6 +817,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             isBubbleAttached = false
             bubble.alpha = 1f
             cancelCommandSlide()
+            dismissTextReview()
             hideCommandActions()
             stopBubbleAnimation()
         }
@@ -886,7 +973,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun updateCommandActionsVisibility(source: AccessibilityNodeInfo?) {
+    private fun updateCommandActionsVisibility(node: AccessibilityNodeInfo?) {
         if (!isBubbleAttached || commandSlideInProgress) {
             hideCommandActions()
             return
@@ -894,17 +981,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         val workflowActive = hasOverlayWorkflow()
         // Only inspect the field when the buttons could be shown at all.
-        val hasSelection = canStartSelectionCommand(recordingState, workflowActive) &&
-            hasSelectedEditableText(source)
-        if (shouldShowCommandActions(recordingState, workflowActive, hasSelection)) {
+        val reviewPending = pendingReview != null
+        val hasSelection = !reviewPending &&
+            canStartSelectionCommand(recordingState, workflowActive) &&
+            hasSelectedEditableText(node)
+        if (shouldShowCommandActions(recordingState, workflowActive, hasSelection, reviewPending)) {
             showCommandActions()
         } else {
             hideCommandActions()
         }
     }
 
-    private fun hasSelectedEditableText(source: AccessibilityNodeInfo?): Boolean {
-        val node = resolveFocusedEditableNode(source) ?: return false
+    private fun hasSelectedEditableText(node: AccessibilityNodeInfo?): Boolean {
+        node ?: return false
         val snapshot = captureEditableTextSnapshot(node)
         if (snapshot.selectionEnd <= snapshot.selectionStart) return false
         return snapshot.text.substring(snapshot.selectionStart, snapshot.selectionEnd).isNotBlank()
@@ -917,10 +1006,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (!isBubbleAttached) return
 
         if (isCommandActionsAttached) {
-            actions.alpha = 1f
             updateCommandActionsPosition()
-            actions.post { updateCommandActionsPosition() }
-            updateCommandActionButtons()
             return
         }
 
@@ -1302,6 +1388,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             windowManager.updateViewLayout(bubble, params)
             updateCommandActionsPosition()
             updateDismissActionsPosition()
+            updateReviewCardPosition()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update bubble position", e)
         }
@@ -1379,17 +1466,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 )
                 result.onSuccess { transformed ->
                     if (transformed.isBlank()) return@onSuccess
-                    val applied = replaceSelectionOrMatchedText(target.selectedText, transformed)
-                    if (!applied) {
-                        Toast.makeText(
-                            this@OverlayDictationAccessibilityService,
-                            R.string.overlay_command_apply_failed,
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    } else {
-                        lastDictatedText = transformed
-                        subscriptionRepository.recordWords(transformed)
-                    }
+                    presentTextReview(
+                        PendingTextReview(
+                            action = action,
+                            originalText = target.selectedText,
+                            transformedText = transformed,
+                            targetNode = dictationTargetNode
+                        )
+                    )
                 }.onFailure { error ->
                     Log.e(TAG, "Command '${command.name}' failed", error)
                     Toast.makeText(
@@ -1511,6 +1595,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun startRecording(mode: RecordingMode) {
         if (recordingState != OverlayRecordingState.Idle) return
+
+        // Starting anything new is how the user ignores a pending suggestion.
+        dismissTextReview()
 
         if (mode == RecordingMode.Dictation) {
             pendingRewriteTarget = null
@@ -2019,21 +2106,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         if (transformed.isBlank() || !ownsDelivery(token)) return
 
-        val applied = replaceSelectionOrMatchedText(
-            targetText = target.selectedText,
-            replacement = transformed,
-            requiredDeliveryToken = token
+        presentTextReview(
+            PendingTextReview(
+                action = CommandAction.RewriteWithAi,
+                originalText = target.selectedText,
+                transformedText = transformed,
+                targetNode = dictationTargetNode
+            )
         )
-        if (!ownsDelivery(token)) return
-        if (!applied) {
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                R.string.overlay_command_apply_failed,
-                Toast.LENGTH_SHORT
-            ).show()
-        } else {
-            lastDictatedText = transformed
-        }
     }
 
     private suspend fun checkAccessForFinalizedRecording(
@@ -2547,6 +2627,297 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .setInterpolator(PathInterpolator(0.4f, 0f, 0.2f, 1f))
             .withEndAction { finishCommandSlide() }
             .start()
+    }
+
+    // MARK: - Text review card
+
+    /**
+     * Shows a command result for the user to accept or dismiss instead of replacing the
+     * text straight away. The bubble is already back to idle by the time this is called,
+     * so dictation stays available; starting it, or hiding the bubble, discards the
+     * suggestion. The command buttons stay hidden while a review is pending.
+     */
+    private fun presentTextReview(review: PendingTextReview) {
+        dismissTextReview()
+        if (!isBubbleAttached) return
+
+        val segments = TextChangeDiff.diff(review.originalText, review.transformedText)
+        if (!TextChangeDiff.hasChanges(segments)) {
+            Toast.makeText(this, R.string.overlay_review_no_changes, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        pendingReview = review
+        hideCommandActions()
+        showReviewCard(review, segments)
+        announceCommandState(R.string.overlay_review_ready)
+    }
+
+    private fun dismissTextReview() {
+        pendingReview = null
+        hideReviewCard()
+    }
+
+    private fun acceptTextReview() {
+        val review = pendingReview ?: return
+        dismissTextReview()
+        reviewApplyJob?.cancel()
+        reviewApplyJob = serviceScope.launch {
+            dictationTargetNode = review.targetNode
+            try {
+                val applied = replaceSelectionOrMatchedText(review.originalText, review.transformedText)
+                if (applied) {
+                    lastDictatedText = review.transformedText
+                    if (review.action == CommandAction.FixGrammar) {
+                        subscriptionRepository.recordWords(review.transformedText)
+                    }
+                } else {
+                    Toast.makeText(
+                        this@OverlayDictationAccessibilityService,
+                        R.string.overlay_command_apply_failed,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } finally {
+                if (recordingState == OverlayRecordingState.Idle) dictationTargetNode = null
+                refreshOverlayVisibility(null)
+            }
+        }
+    }
+
+    private fun showReviewCard(review: PendingTextReview, segments: List<TextChangeDiff.Segment>) {
+        hideReviewCard()
+        val card = buildReviewCard(review, segments)
+        val margin = dp(REVIEW_CARD_MARGIN_DP)
+        val width = (resources.displayMetrics.widthPixels - 2 * margin).coerceAtLeast(margin)
+        val params = WindowManager.LayoutParams(
+            width,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = margin
+            y = margin
+            windowAnimations = 0
+        }
+        reviewCardView = card
+        reviewCardParams = params
+        updateReviewCardPosition()
+
+        try {
+            card.alpha = 0f
+            windowManager.addView(card, params)
+            isReviewCardAttached = true
+            card.post { updateReviewCardPosition() }
+            card.animate().alpha(1f).setDuration(COMMAND_ACTIONS_FADE_IN_MS).start()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach review card overlay", e)
+            reviewCardView = null
+            reviewCardParams = null
+            pendingReview = null
+        }
+    }
+
+    private fun hideReviewCard() {
+        val card = reviewCardView
+        reviewCardView = null
+        reviewCardParams = null
+        if (!isReviewCardAttached || card == null) return
+        try {
+            card.animate().cancel()
+            windowManager.removeView(card)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove review card overlay", e)
+        } finally {
+            isReviewCardAttached = false
+        }
+    }
+
+    /** Keeps the card just above the keyboard, or at the bottom of the screen without one. */
+    private fun updateReviewCardPosition() {
+        val card = reviewCardView ?: return
+        val params = reviewCardParams ?: return
+        val margin = dp(REVIEW_CARD_MARGIN_DP)
+        val cardHeight = card.height.takeIf { it > 0 } ?: run {
+            card.measure(
+                View.MeasureSpec.makeMeasureSpec(params.width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            )
+            card.measuredHeight
+        }
+        params.y = (keyboardTop() - cardHeight - margin).coerceAtLeast(margin)
+        if (!isReviewCardAttached) return
+        try {
+            windowManager.updateViewLayout(card, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update review card position", e)
+        }
+    }
+
+    private fun buildReviewCard(
+        review: PendingTextReview,
+        segments: List<TextChangeDiff.Segment>
+    ): LinearLayout {
+        val surfaceColor = resolveThemeColor(
+            android.R.attr.colorBackgroundFloating,
+            resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
+        )
+        val onSurfaceColor = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
+        val padding = dp(REVIEW_CARD_PADDING_DP)
+        val corner = dp(REVIEW_CARD_CORNER_DP).toFloat()
+
+        val title = TextView(this).apply {
+            text = getString(review.action.labelRes)
+            setTextColor(onSurfaceColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            alpha = 0.7f
+            setCompoundDrawablesRelativeWithIntrinsicBounds(
+                ContextCompat.getDrawable(this@OverlayDictationAccessibilityService, review.action.iconRes)
+                    ?.mutate()
+                    ?.apply {
+                        setTint(bubbleAccentColor)
+                        setBounds(0, 0, dp(16), dp(16))
+                    },
+                null,
+                null,
+                null
+            )
+            compoundDrawablePadding = dp(8)
+        }
+
+        val body = TextView(this).apply {
+            text = renderReviewSegments(segments, onSurfaceColor)
+            setTextColor(onSurfaceColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setLineSpacing(0f, 1.15f)
+            maxLines = REVIEW_CARD_MAX_LINES
+            movementMethod = ScrollingMovementMethod.getInstance()
+            isVerticalScrollBarEnabled = true
+            contentDescription = review.transformedText
+        }
+
+        val dismiss = createReviewButton(
+            label = getString(R.string.overlay_review_dismiss),
+            textColor = bubbleAccentColor,
+            backgroundColor = withAlpha(bubbleAccentColor, COMMAND_ACTION_SECONDARY_ALPHA),
+            onClick = { dismissTextReview() }
+        )
+        val accept = createReviewButton(
+            label = getString(R.string.overlay_review_accept),
+            textColor = preferredOnColor(bubbleAccentColor),
+            backgroundColor = bubbleAccentColor,
+            onClick = { acceptTextReview() }
+        )
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            addView(dismiss, LinearLayout.LayoutParams(0, dp(REVIEW_BUTTON_HEIGHT_DP), 1f))
+            addView(
+                accept,
+                LinearLayout.LayoutParams(0, dp(REVIEW_BUTTON_HEIGHT_DP), 1f).apply {
+                    marginStart = dp(8)
+                }
+            )
+        }
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding, padding, padding)
+            elevation = dp(8).toFloat()
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = corner
+                setColor(surfaceColor)
+            }
+            addView(title, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(body, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(12)
+            })
+            addView(buttons, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+    }
+
+    /** Deletions are struck through and dimmed; insertions are bold in the accent colour. */
+    private fun renderReviewSegments(
+        segments: List<TextChangeDiff.Segment>,
+        onSurfaceColor: Int
+    ): CharSequence {
+        val builder = SpannableStringBuilder()
+        for (segment in segments) {
+            val start = builder.length
+            builder.append(segment.text)
+            val end = builder.length
+            when (segment.kind) {
+                TextChangeDiff.Kind.Equal -> Unit
+                TextChangeDiff.Kind.Deleted -> {
+                    builder.setSpan(StrikethroughSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    builder.setSpan(
+                        ForegroundColorSpan(withAlpha(onSurfaceColor, REVIEW_DELETED_ALPHA)),
+                        start,
+                        end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+                TextChangeDiff.Kind.Inserted -> {
+                    builder.setSpan(StyleSpan(android.graphics.Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    builder.setSpan(
+                        ForegroundColorSpan(bubbleAccentColor),
+                        start,
+                        end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+            }
+        }
+        return builder
+    }
+
+    private fun createReviewButton(
+        label: String,
+        textColor: Int,
+        backgroundColor: Int,
+        onClick: () -> Unit
+    ): TextView {
+        return TextView(this).apply {
+            text = label
+            setTextColor(textColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            isAllCaps = false
+            isClickable = true
+            isFocusable = true
+            isHapticFeedbackEnabled = true
+            setPadding(dp(12), 0, dp(12), 0)
+            val content = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(REVIEW_BUTTON_HEIGHT_DP / 2).toFloat()
+                setColor(backgroundColor)
+            }
+            val mask = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(REVIEW_BUTTON_HEIGHT_DP / 2).toFloat()
+                setColor(Color.WHITE)
+            }
+            background = RippleDrawable(ColorStateList.valueOf(withAlpha(textColor, 0.24f)), content, mask)
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                onClick()
+            }
+        }
     }
 
     private fun finishCommandSlide() {

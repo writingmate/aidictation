@@ -170,6 +170,10 @@
     <string name="overlay_action_rewrite_ai_state_starting">Starting microphone</string>
     <string name="overlay_action_rewrite_ai_state_listening">Listening for rewrite instructions</string>
     <string name="overlay_action_rewrite_ai_state_processing">Rewriting selected text</string>
+    <string name="overlay_review_accept">Accept</string>
+    <string name="overlay_review_dismiss">Dismiss</string>
+    <string name="overlay_review_ready">Review the suggested changes</string>
+    <string name="overlay_review_no_changes">No changes suggested</string>
     <string name="overlay_command_unavailable">Command unavailable</string>
     <string name="overlay_command_apply_failed">Could not apply command</string>
     <string name="overlay_command_failed">%1$s failed</string>

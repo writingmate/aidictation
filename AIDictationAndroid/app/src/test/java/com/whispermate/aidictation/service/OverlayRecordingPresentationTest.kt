@@ -165,6 +165,18 @@ class OverlayRecordingPresentationTest {
         )
     }
 
+    @Test
+    fun `command buttons hide while a suggestion is waiting for review`() {
+        assertFalse(
+            shouldShowCommandActions(
+                recordingState = OverlayRecordingState.Idle,
+                workflowActive = false,
+                hasSelection = true,
+                reviewPending = true
+            )
+        )
+    }
+
     // Delivery phase: dictation frees the bubble, a rewrite keeps it busy until applied.
 
     @Test

@@ -666,7 +666,8 @@ private fun OverlayPreviewCard(selectedColor: Int) {
         listOf(
             OverlayMicButtonView.State.Idle,
             OverlayMicButtonView.State.Recording,
-            OverlayMicButtonView.State.Processing
+            OverlayMicButtonView.State.Processing,
+            OverlayMicButtonView.State.CommandProcessing
         )
     }
     val previewState = previewStates[previewStateIndex]
@@ -711,6 +712,11 @@ private fun OverlayPreviewCard(selectedColor: Int) {
                 factory = { context ->
                     OverlayMicButtonView(context).apply {
                         setColors(resolvedColor, resolvedColor)
+                        setCommandIcon(
+                            ContextCompat.getDrawable(context, R.drawable.ic_cleanup)
+                                ?.mutate()
+                                ?.apply { setTint(android.graphics.Color.WHITE) }
+                        )
                         setState(previewState)
                         setAudioLevel(0.72f)
                         setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))

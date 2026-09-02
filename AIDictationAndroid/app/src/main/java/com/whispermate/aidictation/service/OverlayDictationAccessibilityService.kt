@@ -14,6 +14,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
@@ -30,13 +31,14 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.view.animation.PathInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
@@ -71,13 +73,39 @@ internal enum class OverlayRecordingState {
 internal enum class OverlayBubblePresentation {
     Idle,
     Recording,
-    Processing
+    Processing,
+    /** A selection command (Fix grammar / Rewrite with AI) is transforming text. */
+    CommandProcessing
 }
 
-internal fun OverlayRecordingState.bubblePresentation(): OverlayBubblePresentation = when (this) {
-    OverlayRecordingState.Idle -> OverlayBubblePresentation.Idle
-    OverlayRecordingState.Recording -> OverlayBubblePresentation.Recording
-    OverlayRecordingState.Processing -> OverlayBubblePresentation.Processing
+internal fun OverlayRecordingState.bubblePresentation(): OverlayBubblePresentation =
+    resolveBubblePresentation(this, commandActive = false, commandSlideInProgress = false)
+
+/**
+ * Bubble presentation invariants:
+ * - While a pressed command button is still sliding into the bubble's place the bubble
+ *   keeps its idle look, so the button visibly lands on the speak button before the
+ *   bubble morphs.
+ * - Recording looks the same for dictation and rewrite instructions (cancel / waveform /
+ *   accept).
+ * - Processing with an active command shows that command's icon plus a progress bar
+ *   instead of the dictation spinner.
+ */
+internal fun resolveBubblePresentation(
+    recordingState: OverlayRecordingState,
+    commandActive: Boolean,
+    commandSlideInProgress: Boolean
+): OverlayBubblePresentation {
+    if (commandSlideInProgress) return OverlayBubblePresentation.Idle
+    return when (recordingState) {
+        OverlayRecordingState.Idle -> OverlayBubblePresentation.Idle
+        OverlayRecordingState.Recording -> OverlayBubblePresentation.Recording
+        OverlayRecordingState.Processing -> if (commandActive) {
+            OverlayBubblePresentation.CommandProcessing
+        } else {
+            OverlayBubblePresentation.Processing
+        }
+    }
 }
 
 internal val OverlayRecordingState.streamsAudioLevels: Boolean
@@ -87,6 +115,24 @@ internal fun canStartSelectionCommand(
     recordingState: OverlayRecordingState,
     workflowActive: Boolean
 ): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive
+
+/**
+ * The command buttons are either shown and tappable, or not shown at all: there is no
+ * disabled or highlighted button state. They appear only next to an idle bubble, with no
+ * dictation delivery in flight, while the focused field has a non-blank selection.
+ */
+internal fun shouldShowCommandActions(
+    recordingState: OverlayRecordingState,
+    workflowActive: Boolean,
+    hasSelection: Boolean
+): Boolean = hasSelection && canStartSelectionCommand(recordingState, workflowActive)
+
+/**
+ * Dictation hands the bubble back as soon as transcription finishes so a new dictation
+ * can replace the pending insertion. A rewrite keeps the bubble busy until the rewritten
+ * text is applied: the command icon and progress bar stay until the selection changes.
+ */
+internal fun deliveryKeepsBubbleBusy(rewriteInstruction: Boolean): Boolean = rewriteInstruction
 
 /**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
@@ -118,6 +164,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val COMMAND_ACTION_CONTAINER_PADDING_DP = 6
         private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 130
         private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 67
+        private const val COMMAND_ACTION_ICON_PADDING_DP = 15
+        private const val COMMAND_ACTION_ELEVATION_DP = 6
+        private const val COMMAND_ACTIONS_FADE_IN_MS = 150L
+        private const val COMMAND_SLIDE_DURATION_MS = 220L
         private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_CLEANUP_ID = "cleanup"
         private const val COMMAND_REWRITE_ID = "rewrite"
@@ -139,9 +189,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         RewriteInstruction
     }
 
-    private enum class CommandAction {
-        FixGrammar,
-        RewriteWithAi
+    private enum class CommandAction(val iconRes: Int, val labelRes: Int) {
+        FixGrammar(R.drawable.ic_cleanup, R.string.overlay_action_fix_grammar),
+        RewriteWithAi(R.drawable.ic_command_mic, R.string.overlay_action_rewrite_ai)
     }
 
     private enum class BubbleDismissTarget {
@@ -200,17 +250,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var pendingRewriteTarget: SelectionCommandTarget? = null
     private var fixGrammarButton: ImageButton? = null
     private var rewriteButton: ImageButton? = null
+    /** Transient window hosting the copy of a pressed command button as it slides into the bubble. */
+    private var commandSlideView: View? = null
+    private var commandSlideInProgress = false
+    private val commandIcons = mutableMapOf<CommandAction, Drawable>()
 
-    private var bubbleIdleColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var bubbleDictationActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var bubbleRewriteActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var bubbleFixActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var commandChipIdleTextColor: Int = Color.WHITE
-    private var commandChipIdleBackgroundColor: Int = 0x24FFFFFF
-    private var commandChipFixTextColor: Int = Color.WHITE
-    private var commandChipFixBackgroundColor: Int = 0xFFFF6300.toInt()
-    private var commandChipRewriteTextColor: Int = Color.WHITE
-    private var commandChipRewriteBackgroundColor: Int = 0xFFFF6300.toInt()
+    /** Single accent colour shared by the bubble and the command buttons. */
+    private var bubbleAccentColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
+    private var commandChipTextColor: Int = Color.WHITE
+    private var commandChipBackgroundColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
@@ -279,6 +327,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         cancelOverlayAudio("Dictation was interrupted")
         dictationTargetNode = null
+        cancelCommandSlide()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
@@ -309,22 +358,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun refreshBubbleBrandColor() {
         val color = OverlayBubblePreferences.getResolvedBubbleColor(this)
-        bubbleIdleColor = color
-        bubbleDictationActiveColor = color
-        bubbleRewriteActiveColor = color
-        bubbleFixActiveColor = color
-        refreshCommandActionColors(color)
+        bubbleAccentColor = color
+        commandChipTextColor = preferredOnColor(color)
+        commandChipBackgroundColor = color
         updateCommandActionButtons()
-    }
-
-    private fun refreshCommandActionColors(accent: Int) {
-        val onAccent = preferredOnColor(accent)
-        commandChipIdleTextColor = onAccent
-        commandChipIdleBackgroundColor = accent
-        commandChipFixTextColor = onAccent
-        commandChipFixBackgroundColor = accent
-        commandChipRewriteTextColor = onAccent
-        commandChipRewriteBackgroundColor = accent
     }
 
     override fun onDestroy() {
@@ -340,6 +377,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         )
         serviceScope.cancel()
         dictationTargetNode = null
+        cancelCommandSlide()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
@@ -692,6 +730,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         } finally {
             isBubbleAttached = false
             bubble.alpha = 1f
+            cancelCommandSlide()
             hideCommandActions()
             stopBubbleAnimation()
         }
@@ -706,7 +745,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isHapticFeedbackEnabled = true
-            setColors(bubbleIdleColor, resolveBubbleActiveColor())
+            setColors(bubbleAccentColor, bubbleAccentColor)
             setState(OverlayMicButtonView.State.Idle)
         }
 
@@ -737,22 +776,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val containerPadding = dp(COMMAND_ACTION_CONTAINER_PADDING_DP)
         val buttonGap = dp(COMMAND_ACTION_GAP_DP)
         val buttonSize = dp(COMMAND_ACTION_BUTTON_SIZE_DP)
-        refreshCommandActionColors(bubbleIdleColor)
-        bubbleFixActiveColor = bubbleDictationActiveColor
-        bubbleRewriteActiveColor = bubbleDictationActiveColor
 
         fixGrammarButton = createCommandActionButton(
-            label = getString(R.string.overlay_action_fix_grammar),
-            iconRes = R.drawable.ic_cleanup,
-            textColor = commandChipIdleTextColor,
-            backgroundColor = commandChipIdleBackgroundColor,
+            action = CommandAction.FixGrammar,
             onClick = { executeSelectionCommand(COMMAND_CLEANUP_ID, CommandAction.FixGrammar) }
         )
         rewriteButton = createCommandActionButton(
-            label = getString(R.string.overlay_action_rewrite_ai),
-            iconRes = R.drawable.ic_command_mic,
-            textColor = commandChipIdleTextColor,
-            backgroundColor = commandChipIdleBackgroundColor,
+            action = CommandAction.RewriteWithAi,
             onClick = { startRewriteInstructionRecording() }
         )
 
@@ -792,30 +822,50 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun createCommandActionButton(
-        label: String,
-        iconRes: Int,
-        textColor: Int,
-        backgroundColor: Int,
+        action: CommandAction,
         onClick: () -> Unit
     ): ImageButton {
+        val label = getString(action.labelRes)
         return ImageButton(this).apply {
-            setImageResource(iconRes)
-            imageTintList = ColorStateList.valueOf(textColor)
+            styleCommandActionImage(this, action)
             contentDescription = label
             tooltipText = label
-            scaleType = ImageView.ScaleType.CENTER
             minimumWidth = 0
             minimumHeight = 0
             isFocusable = true
-            setPadding(dp(15), dp(15), dp(15), dp(15))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             isHapticFeedbackEnabled = true
-            elevation = dp(6).toFloat()
-            background = commandActionBackground(backgroundColor, textColor)
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                 onClick()
             }
+        }
+    }
+
+    /**
+     * Shared look for a command button and for the copy of it that slides into the
+     * bubble, so the two are indistinguishable during the hand-off.
+     */
+    private fun styleCommandActionImage(view: ImageView, action: CommandAction) {
+        val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
+        view.setImageResource(action.iconRes)
+        view.imageTintList = ColorStateList.valueOf(commandChipTextColor)
+        view.scaleType = ImageView.ScaleType.CENTER
+        view.setPadding(padding, padding, padding, padding)
+        view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
+        view.background = commandActionBackground(commandChipBackgroundColor, commandChipTextColor)
+    }
+
+    private fun commandButtonFor(action: CommandAction): ImageButton? = when (action) {
+        CommandAction.FixGrammar -> fixGrammarButton
+        CommandAction.RewriteWithAi -> rewriteButton
+    }
+
+    private fun commandIcon(action: CommandAction): Drawable? {
+        return commandIcons.getOrPut(action) {
+            val drawable = ContextCompat.getDrawable(this, action.iconRes)?.mutate() ?: return null
+            drawable.setTint(Color.WHITE)
+            drawable
         }
     }
 
@@ -837,36 +887,27 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun updateCommandActionsVisibility(source: AccessibilityNodeInfo?) {
-        if (!isBubbleAttached) {
+        if (!isBubbleAttached || commandSlideInProgress) {
             hideCommandActions()
             return
         }
 
-        if (recordingState != OverlayRecordingState.Idle) {
-            if (activeCommandAction != null) {
-                showCommandActions()
-            } else {
-                hideCommandActions()
-            }
-            updateCommandActionButtons()
-            return
-        }
-
-        val node = resolveFocusedEditableNode(source)
-        if (node == null) {
-            hideCommandActions()
-            return
-        }
-
-        val snapshot = captureEditableTextSnapshot(node)
-
-        val hasSelection = snapshot.selectionEnd > snapshot.selectionStart && snapshot.text.isNotBlank()
-        if (hasSelection) {
+        val workflowActive = hasOverlayWorkflow()
+        // Only inspect the field when the buttons could be shown at all.
+        val hasSelection = canStartSelectionCommand(recordingState, workflowActive) &&
+            hasSelectedEditableText(source)
+        if (shouldShowCommandActions(recordingState, workflowActive, hasSelection)) {
             showCommandActions()
         } else {
             hideCommandActions()
         }
-        updateCommandActionButtons()
+    }
+
+    private fun hasSelectedEditableText(source: AccessibilityNodeInfo?): Boolean {
+        val node = resolveFocusedEditableNode(source) ?: return false
+        val snapshot = captureEditableTextSnapshot(node)
+        if (snapshot.selectionEnd <= snapshot.selectionStart) return false
+        return snapshot.text.substring(snapshot.selectionStart, snapshot.selectionEnd).isNotBlank()
     }
 
     private fun showCommandActions() {
@@ -884,13 +925,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         try {
-            actions.alpha = 1f
+            actions.alpha = 0f
             windowManager.addView(actions, params)
             isCommandActionsAttached = true
             updateCommandActionsPosition()
             actions.post { updateCommandActionsPosition() }
             updateCommandActionButtons()
+            actions.animate().alpha(1f).setDuration(COMMAND_ACTIONS_FADE_IN_MS).start()
         } catch (e: Exception) {
+            actions.alpha = 1f
             Log.w(TAG, "Failed to attach command actions overlay", e)
         }
     }
@@ -905,6 +948,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (!isCommandActionsAttached) return
         val actions = commandActionsView ?: return
         try {
+            actions.animate().cancel()
             windowManager.removeView(actions)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to remove command actions overlay", e)
@@ -1044,14 +1088,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         setDismissZoneState(
             view = dismissSnoozeZone,
             selected = target == BubbleDismissTarget.Snooze,
-            selectedColor = bubbleRewriteActiveColor,
+            selectedColor = bubbleAccentColor,
             idleColor = idleZoneColor,
             idleTextColor = onSurfaceColor
         )
         setDismissZoneState(
             view = dismissHideZone,
             selected = target == BubbleDismissTarget.Hide,
-            selectedColor = bubbleDictationActiveColor,
+            selectedColor = bubbleAccentColor,
             idleColor = idleZoneColor,
             idleTextColor = onSurfaceColor
         )
@@ -1302,8 +1346,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         activeCommandAction = action
         recordingMode = RecordingMode.Dictation
         recordingState = OverlayRecordingState.Processing
-        updateBubbleUi()
-        showCommandActions()
+        slideCommandButtonIntoBubble(action)
+        announceCommandState(R.string.overlay_action_fix_grammar_state_active)
 
         serviceScope.launch {
             try {
@@ -1454,6 +1498,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         pendingRewriteTarget = target
         activeCommandAction = CommandAction.RewriteWithAi
         startRecording(mode = RecordingMode.RewriteInstruction)
+
+        // startRecording clears the command when it cannot start (no field, no mic
+        // permission); the buttons then simply stay where they are.
+        if (recordingState == OverlayRecordingState.Recording &&
+            activeCommandAction == CommandAction.RewriteWithAi
+        ) {
+            slideCommandButtonIntoBubble(CommandAction.RewriteWithAi)
+            announceCommandState(R.string.overlay_action_rewrite_ai_state_listening)
+        }
     }
 
     private fun startRecording(mode: RecordingMode) {
@@ -1463,9 +1516,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             pendingRewriteTarget = null
             activeCommandAction = null
             hideCommandActions()
-        } else {
-            showCommandActions()
-            updateCommandActionButtons()
         }
 
         val focusedNode = resolveFocusedEditableNode(null)
@@ -1669,6 +1719,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // cannot trigger a second stop while finalization is in progress.
         recordingState = OverlayRecordingState.Processing
         updateBubbleUi()
+        if (mode == RecordingMode.RewriteInstruction) {
+            announceCommandState(R.string.overlay_action_rewrite_ai_state_processing)
+        }
 
         audioWorkflowJob = serviceScope.launch {
             val finalized = audioProcessingCoordinator.stopCapture(AndroidAudioAttemptOwner.OVERLAY)
@@ -1750,12 +1803,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ownsDelivery(token: Long): Boolean =
         overlayWorkflowFence.ownsDelivery(token)
 
-    private suspend fun beginDeliveryPhase(token: Long): Boolean {
+    private suspend fun beginDeliveryPhase(token: Long, rewriteInstruction: Boolean): Boolean {
         if (!overlayWorkflowFence.beginDelivery(token)) return false
         val currentJob = kotlin.coroutines.coroutineContext[Job] ?: return false
         audioWorkflowJob = null
         deliveryJob = currentJob
-        recordingState = OverlayRecordingState.Idle
+        if (!deliveryKeepsBubbleBusy(rewriteInstruction)) {
+            recordingState = OverlayRecordingState.Idle
+        }
         updateBubbleUi()
         refreshOverlayVisibility(null)
         return true
@@ -1840,7 +1895,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 return
             }
         subscriptionRepository.recordUsageClaim(processed.usageClaimId)
-        if (!beginDeliveryPhase(token)) return
+        if (!beginDeliveryPhase(token, rewriteInstruction = false)) return
 
         // Command detection and execution (separate from transcription)
         val enabledCommands = runCatching {
@@ -1930,7 +1985,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 return
             }
         subscriptionRepository.recordUsageClaim(processing.usageClaimId)
-        if (!beginDeliveryPhase(token)) return
+        if (!beginDeliveryPhase(token, rewriteInstruction = true)) return
 
         val instruction = processing.text
         if (instruction.isBlank()) {
@@ -2393,61 +2448,128 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .lowercase()
     }
 
-    private fun resolveBubbleActiveColor(): Int {
-        return when (activeCommandAction) {
-            CommandAction.FixGrammar -> bubbleFixActiveColor
-            CommandAction.RewriteWithAi -> bubbleRewriteActiveColor
-            null -> bubbleDictationActiveColor
-        }
-    }
-
+    /**
+     * The buttons have a single visual state. Whether they are tappable is decided by
+     * [updateCommandActionsVisibility]: a button that cannot be tapped is not on screen.
+     */
     private fun updateCommandActionButtons() {
-        val hasActiveCommand = activeCommandAction != null
-        val workflowActive = hasOverlayWorkflow()
-        val isBusy = recordingState != OverlayRecordingState.Idle || workflowActive
-        val canTap = canStartSelectionCommand(recordingState, workflowActive)
-
-        val fixActive = hasActiveCommand && activeCommandAction == CommandAction.FixGrammar
-        val rewriteActive = hasActiveCommand && activeCommandAction == CommandAction.RewriteWithAi
-
-        applyCommandButtonStyle(
-            button = fixGrammarButton,
-            textColor = if (fixActive) commandChipFixTextColor else commandChipIdleTextColor,
-            backgroundColor = if (fixActive) commandChipFixBackgroundColor else commandChipIdleBackgroundColor,
-            enabled = canTap,
-            subdued = isBusy && !fixActive,
-            stateDescription = if (fixActive) getString(R.string.overlay_action_fix_grammar_state_active) else null
-        )
-        applyCommandButtonStyle(
-            button = rewriteButton,
-            textColor = if (rewriteActive) commandChipRewriteTextColor else commandChipIdleTextColor,
-            backgroundColor = if (rewriteActive) commandChipRewriteBackgroundColor else commandChipIdleBackgroundColor,
-            enabled = canTap,
-            subdued = isBusy && !rewriteActive,
-            stateDescription = when {
-                !rewriteActive -> null
-                recordingState == OverlayRecordingState.Recording -> {
-                    getString(R.string.overlay_action_rewrite_ai_state_listening)
-                }
-                else -> getString(R.string.overlay_action_rewrite_ai_state_processing)
-            }
-        )
+        fixGrammarButton?.let { styleCommandActionImage(it, CommandAction.FixGrammar) }
+        rewriteButton?.let { styleCommandActionImage(it, CommandAction.RewriteWithAi) }
     }
 
-    private fun applyCommandButtonStyle(
-        button: ImageButton?,
-        textColor: Int,
-        backgroundColor: Int,
-        enabled: Boolean,
-        subdued: Boolean,
-        stateDescription: String?
-    ) {
-        button ?: return
-        button.isEnabled = enabled
-        button.alpha = if (subdued) 0.55f else 1f
-        button.imageTintList = ColorStateList.valueOf(textColor)
-        button.background = commandActionBackground(backgroundColor, textColor)
-        ViewCompat.setStateDescription(button, stateDescription)
+    /**
+     * The bubble is hidden from accessibility services, so state changes that used to be
+     * exposed as button state descriptions are announced explicitly instead.
+     */
+    private fun announceCommandState(messageRes: Int) {
+        // Deprecated in favour of live regions, which need an accessible host view; the
+        // overlay deliberately has none, so a one-off announcement is the right tool here.
+        @Suppress("DEPRECATION")
+        bubbleView?.announceForAccessibility(getString(messageRes))
+    }
+
+    /**
+     * Moves a copy of the pressed command button from its position to the bubble's
+     * position in a transient, non-touchable overlay window. Both overlay windows clip
+     * to their own bounds, so the copy lives in a window that spans both. The real
+     * buttons are removed once the copy is on screen and the bubble keeps its idle look
+     * until the copy lands; [finishCommandSlide] then applies the busy presentation.
+     */
+    private fun slideCommandButtonIntoBubble(action: CommandAction) {
+        cancelCommandSlide()
+        val button = commandButtonFor(action)
+        val bubble = bubbleView
+        if (button == null || bubble == null || !isCommandActionsAttached || !isBubbleAttached ||
+            button.width <= 0 || bubble.width <= 0
+        ) {
+            hideCommandActions()
+            updateBubbleUi()
+            return
+        }
+
+        val buttonLocation = IntArray(2).also(button::getLocationOnScreen)
+        val bubbleLocation = IntArray(2).also(bubble::getLocationOnScreen)
+        val shadowPadding = dp(COMMAND_ACTION_CONTAINER_PADDING_DP)
+        val left = minOf(buttonLocation[0], bubbleLocation[0]) - shadowPadding
+        val top = minOf(buttonLocation[1], bubbleLocation[1]) - shadowPadding
+        val right = maxOf(buttonLocation[0] + button.width, bubbleLocation[0] + bubble.width) + shadowPadding
+        val bottom = maxOf(buttonLocation[1] + button.height, bubbleLocation[1] + bubble.height) + shadowPadding
+
+        val ghost = ImageView(this).apply {
+            styleCommandActionImage(this, action)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val container = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            addView(
+                ghost,
+                FrameLayout.LayoutParams(button.width, button.height).apply {
+                    leftMargin = buttonLocation[0] - left
+                    topMargin = buttonLocation[1] - top
+                }
+            )
+        }
+        val params = WindowManager.LayoutParams(
+            right - left,
+            bottom - top,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = left
+            y = top
+            windowAnimations = 0
+        }
+
+        try {
+            windowManager.addView(container, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach command slide overlay", e)
+            hideCommandActions()
+            updateBubbleUi()
+            return
+        }
+        commandSlideView = container
+        commandSlideInProgress = true
+        updateBubbleUi()
+        // Swap the real button for its copy only once the copy has been drawn.
+        container.post { hideCommandActions() }
+
+        ghost.animate()
+            .translationX((bubbleLocation[0] - buttonLocation[0]).toFloat())
+            .translationY((bubbleLocation[1] - buttonLocation[1]).toFloat())
+            .setDuration(COMMAND_SLIDE_DURATION_MS)
+            .setInterpolator(PathInterpolator(0.4f, 0f, 0.2f, 1f))
+            .withEndAction { finishCommandSlide() }
+            .start()
+    }
+
+    private fun finishCommandSlide() {
+        if (!commandSlideInProgress) return
+        commandSlideInProgress = false
+        removeCommandSlideView()
+        updateBubbleUi()
+        refreshOverlayVisibility(null)
+    }
+
+    private fun cancelCommandSlide() {
+        commandSlideInProgress = false
+        removeCommandSlideView()
+    }
+
+    private fun removeCommandSlideView() {
+        val view = commandSlideView ?: return
+        commandSlideView = null
+        try {
+            windowManager.removeViewImmediate(view)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove command slide overlay", e)
+        }
     }
 
     private fun preferredOnColor(backgroundColor: Int): Int {
@@ -2470,13 +2592,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun updateBubbleUi() {
-        updateCommandActionButtons()
         val bubble = bubbleView ?: return
-        bubble.setColors(bubbleIdleColor, resolveBubbleActiveColor())
+        bubble.setColors(bubbleAccentColor, bubbleAccentColor)
+        bubble.setCommandIcon(activeCommandAction?.let(::commandIcon))
         // Keep the screen awake while dictation is recording or processing
         bubble.keepScreenOn = recordingState != OverlayRecordingState.Idle
 
-        when (recordingState.bubblePresentation()) {
+        val presentation = resolveBubblePresentation(
+            recordingState = recordingState,
+            commandActive = activeCommandAction != null,
+            commandSlideInProgress = commandSlideInProgress
+        )
+        when (presentation) {
             OverlayBubblePresentation.Idle -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Idle)
@@ -2492,6 +2619,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             OverlayBubblePresentation.Processing -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Processing)
+                updateBubbleLayoutSize()
+            }
+
+            OverlayBubblePresentation.CommandProcessing -> {
+                stopBubbleAnimation()
+                bubble.setState(OverlayMicButtonView.State.CommandProcessing)
                 updateBubbleLayoutSize()
             }
         }

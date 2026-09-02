@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.util.AttributeSet
 import android.view.View
 import android.view.animation.OvershootInterpolator
@@ -22,7 +23,16 @@ class OverlayMicButtonView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    enum class State { Idle, Recording, Processing }
+    /**
+     * - [Idle]: collapsed circle showing the frozen waveform glyph (the "speak" button).
+     * - [Recording]: expanded pill with cancel, live waveform and accept controls.
+     * - [Processing]: expanded pill with animated bars and a spinner while dictation
+     *   audio is transcribed.
+     * - [CommandProcessing]: expanded pill showing an indeterminate progress bar with
+     *   the active selection command's icon sitting where the speak button was. Used
+     *   while "Fix grammar" or "Rewrite with AI" transforms the selected text.
+     */
+    enum class State { Idle, Recording, Processing, CommandProcessing }
 
     private var idleColor: Int = 0xFFFF6300.toInt()
     private var activeColor: Int = 0xFFFF6300.toInt()
@@ -30,6 +40,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private var audioLevel: Float = 0f
     private var frequencyBands: FloatArray? = null
     private var processingPhaseDegrees: Float = 0f
+    private var commandIcon: Drawable? = null
 
     private val barHeights = FloatArray(TOTAL_BARS) { FROZEN_HEIGHTS[it] }
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -48,6 +59,8 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     private val tempRect = RectF()
+    private val progressTrackRect = RectF()
+    private val progressSegmentRect = RectF()
     private val cancelRect = RectF()
     private val acceptRect = RectF()
     private val pillRect = RectF()
@@ -70,6 +83,11 @@ class OverlayMicButtonView @JvmOverloads constructor(
         private const val WAVEFORM_CONTRAST = 0.8f
         private const val WAVEFORM_FLOOR_THRESHOLD = 0.045f
         private const val WAVEFORM_ACTIVE_FLOOR = 0.16f
+        private const val PROCESSING_SPIN_DURATION_MS = 900L
+        private const val PROGRESS_SWEEP_DURATION_MS = 1300L
+        private const val PROGRESS_TRACK_ALPHA = 0.32f
+        private const val PROGRESS_SEGMENT_FRACTION = 0.34f
+        private const val COMMAND_ICON_FRACTION = 0.5f
         private val FROZEN_HEIGHTS = floatArrayOf(0.56f, 1f, 0.56f, 1f, 0.56f)
         private val CIRCLE_ENVELOPE_HEIGHTS = floatArrayOf(0.72f, 0.94f, 1f, 0.94f, 0.72f)
     }
@@ -88,9 +106,13 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     fun preferredWidthDp(): Int = when (state) {
-        State.Recording, State.Processing -> 250
+        State.Recording, State.Processing, State.CommandProcessing -> 250
         State.Idle -> 55
     }
+
+    /** True for the states that animate continuously without audio input. */
+    private val isProcessingLike: Boolean
+        get() = state == State.Processing || state == State.CommandProcessing
 
     fun preferredHeightDp(): Int = 55
 
@@ -104,8 +126,18 @@ class OverlayMicButtonView @JvmOverloads constructor(
 
     fun setOnClickCallback(callback: () -> Unit) {
         setOnClickListener {
-            if (state != State.Processing) callback()
+            if (!isProcessingLike) callback()
         }
+    }
+
+    /**
+     * Icon drawn in place of the speak button while in [State.CommandProcessing].
+     * The drawable should already be tinted for display on the accent colour.
+     */
+    fun setCommandIcon(icon: Drawable?) {
+        if (commandIcon === icon) return
+        commandIcon = icon
+        if (state == State.CommandProcessing) invalidate()
     }
 
     override fun performClick(): Boolean {
@@ -115,13 +147,13 @@ class OverlayMicButtonView @JvmOverloads constructor(
 
     fun setState(newState: State) {
         if (state == newState) {
-            if (state == State.Processing && processingAnimator == null) {
+            if (isProcessingLike && processingAnimator == null) {
                 startProcessingAnimation()
             }
             return
         }
         state = newState
-        if (state == State.Processing) {
+        if (isProcessingLike) {
             startProcessingAnimation()
         } else {
             stopProcessingAnimation()
@@ -155,7 +187,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
                 val boostedLevel = boostWaveformLevel(audioLevel)
                 (MIN_ACTIVE_BARS + (range * boostedLevel * 2.5f).toInt()).coerceIn(MIN_ACTIVE_BARS, TOTAL_BARS)
             }
-            State.Processing -> TOTAL_BARS
+            State.Processing, State.CommandProcessing -> TOTAL_BARS
         }
 
         for (i in 0 until TOTAL_BARS) {
@@ -170,9 +202,9 @@ class OverlayMicButtonView @JvmOverloads constructor(
                         boostWaveformLevel(recordingBandValue(i), audioLevel) * CIRCLE_ENVELOPE_HEIGHTS[i]
                     }
                 }
-                State.Processing -> CIRCLE_ENVELOPE_HEIGHTS[i]
+                State.Processing, State.CommandProcessing -> CIRCLE_ENVELOPE_HEIGHTS[i]
             }
-            if (state != State.Processing) {
+            if (!isProcessingLike) {
                 if (animate) {
                     animateBarTo(i, targetHeight)
                 } else {
@@ -223,7 +255,11 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private fun startProcessingAnimation() {
         processingAnimator?.cancel()
         processingAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = 900
+            duration = if (state == State.CommandProcessing) {
+                PROGRESS_SWEEP_DURATION_MS
+            } else {
+                PROCESSING_SPIN_DURATION_MS
+            }
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.RESTART
             addUpdateListener {
@@ -265,7 +301,12 @@ class OverlayMicButtonView @JvmOverloads constructor(
             surfaceInset + surfaceSize
         )
         cancelRect.set(surfaceInset, surfaceInset, surfaceInset + surfaceSize, surfaceInset + surfaceSize)
-        pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
+        if (state == State.CommandProcessing) {
+            // No cancel control: the progress bar takes the full width beside the icon.
+            pillRect.set(surfaceInset, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
+        } else {
+            pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
+        }
 
         val expanded = if (state == State.Idle) 0f else 1f
         val primaryColor = if (state == State.Idle) idleColor else activeColor
@@ -283,19 +324,70 @@ class OverlayMicButtonView @JvmOverloads constructor(
         backgroundPaint.color = withAlpha(primaryColor, PRIMARY_BUTTON_ALPHA)
         canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
 
-        if (state == State.Processing) {
-            drawProcessingBars(canvas, pillRect)
-            drawSpinner(canvas, acceptRect)
-        } else {
-            drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
-            if (state == State.Recording) {
-                drawX(canvas, cancelRect, expanded)
+        when (state) {
+            State.Processing -> {
+                drawProcessingBars(canvas, pillRect)
+                drawSpinner(canvas, acceptRect)
             }
-            drawCheck(canvas, acceptRect, expanded)
-            if (expanded < 1f) {
-                drawBars(canvas, acceptRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
+
+            State.CommandProcessing -> {
+                drawProgressBar(canvas, pillRect)
+                drawCommandIcon(canvas, acceptRect)
+            }
+
+            State.Idle, State.Recording -> {
+                drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
+                if (state == State.Recording) {
+                    drawX(canvas, cancelRect, expanded)
+                }
+                drawCheck(canvas, acceptRect, expanded)
+                if (expanded < 1f) {
+                    drawBars(canvas, acceptRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
+                }
             }
         }
+    }
+
+    /** Material-style indeterminate bar: a segment sweeping left to right along a track. */
+    private fun drawProgressBar(canvas: Canvas, bounds: RectF) {
+        val trackHeight = bounds.height() * 0.09f
+        val horizontalInset = bounds.height() * 0.42f
+        progressTrackRect.set(
+            bounds.left + horizontalInset,
+            bounds.centerY() - trackHeight / 2f,
+            bounds.right - horizontalInset,
+            bounds.centerY() + trackHeight / 2f
+        )
+        if (progressTrackRect.width() <= 0f) return
+
+        barPaint.color = withAlpha(Color.WHITE, PROGRESS_TRACK_ALPHA)
+        canvas.drawRoundRect(progressTrackRect, trackHeight / 2f, trackHeight / 2f, barPaint)
+
+        val trackWidth = progressTrackRect.width()
+        val segmentWidth = trackWidth * PROGRESS_SEGMENT_FRACTION
+        val phase = (processingPhaseDegrees / 360f).coerceIn(0f, 1f)
+        val eased = phase * phase * (3f - 2f * phase)
+        val segmentLeft = progressTrackRect.left - segmentWidth + eased * (trackWidth + segmentWidth)
+        val visibleLeft = max(segmentLeft, progressTrackRect.left)
+        val visibleRight = min(segmentLeft + segmentWidth, progressTrackRect.right)
+        if (visibleRight <= visibleLeft) return
+
+        progressSegmentRect.set(visibleLeft, progressTrackRect.top, visibleRight, progressTrackRect.bottom)
+        barPaint.color = Color.WHITE
+        canvas.drawRoundRect(progressSegmentRect, trackHeight / 2f, trackHeight / 2f, barPaint)
+    }
+
+    private fun drawCommandIcon(canvas: Canvas, bounds: RectF) {
+        val icon = commandIcon
+        if (icon == null) {
+            drawSpinner(canvas, bounds)
+            return
+        }
+        val iconSize = bounds.width() * COMMAND_ICON_FRACTION
+        val left = (bounds.centerX() - iconSize / 2f).toInt()
+        val top = (bounds.centerY() - iconSize / 2f).toInt()
+        icon.setBounds(left, top, left + iconSize.toInt(), top + iconSize.toInt())
+        icon.draw(canvas)
     }
 
 
@@ -385,7 +477,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (state == State.Processing) {
+        if (isProcessingLike) {
             startProcessingAnimation()
         }
     }

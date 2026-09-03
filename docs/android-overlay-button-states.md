@@ -34,8 +34,8 @@ transparent margin on every side of the drawn surface (its window is 67 dp tall)
 shadow is not clipped by the window edge. Its outline follows the drawn surfaces: the
 idle circle alone, or while recording the cancel (X) circle, the waveform pill and the
 accept circle each with their own shadow (on Android 10 and later; earlier releases only
-allow a convex outline, so one rounded shape spans all three). The panel's six buttons
-are raised 3 dp on the panel surface. The idle waveform logo is drawn at 90% of its
+allow a convex outline, so one rounded shape spans all three). The buttons inside the
+edit panel stay flat on the panel surface. The idle waveform logo is drawn at 90% of its
 former size inside the circle. Windows sit 8 dp from the screen edge and the keyboard,
 which with the margin puts the visible circle about 18 dp in.
 

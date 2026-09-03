@@ -338,8 +338,6 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
             isClickable = true
             isFocusable = true
             isHapticFeedbackEnabled = true
-            // Raised button on the panel surface: the oval background supplies the outline.
-            elevation = dp(BUTTON_ELEVATION_DP)
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                 onClick()
@@ -467,8 +465,6 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
         const val CORNER_DP = 18f
         const val BUTTON_DP = 44f
         const val BUTTON_GAP_DP = 10f
-        /** Resting elevation of the raised buttons inside the panel. */
-        const val BUTTON_ELEVATION_DP = 3f
         const val MAX_TEXT_LINES = 6
         /** Material state layers: pressed 12%; disabled content 38%. */
         const val RIPPLE_ALPHA = 0.12f

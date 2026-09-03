@@ -25,6 +25,13 @@ invariants and are covered by `OverlayRecordingPresentationTest`.
 The bubble takes no part in text editing: selection commands live entirely in the
 wand and its panel.
 
+**Visibility.** The bubble shows while an editable field has input focus and the
+keyboard is up. When the keyboard closes it leaves after a short grace period (the IME
+window flaps during animations), unless dictation is recording, processing or
+delivering, or the edit panel is open. The sticky-focus fallback that bridges WebView
+tree rebuilds applies only while the keyboard is still up; a closed keyboard or a
+password field ends it (`bubbleNeedsKeyboard`).
+
 ## Wand button invariants
 
 1. **Shown or absent, never disabled.** The wand appears only when it can be tapped:

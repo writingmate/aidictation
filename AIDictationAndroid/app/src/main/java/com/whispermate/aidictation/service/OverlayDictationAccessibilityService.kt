@@ -95,6 +95,18 @@ internal fun canStartSelectionCommand(
  * disabled state. It appears beside an idle bubble, with no dictation delivery in
  * flight, while the focused field has a non-blank selection and its panel is closed.
  */
+/**
+ * The bubble belongs with the keyboard: without one there is nothing to dictate into.
+ * The exceptions are while dictation is under way (recording, processing or delivering)
+ * and while the edit panel is open, so a keyboard that hides mid-task never tears the
+ * task down.
+ */
+internal fun bubbleNeedsKeyboard(
+    recordingState: OverlayRecordingState,
+    workflowActive: Boolean,
+    panelOpen: Boolean
+): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive && !panelOpen
+
 internal fun shouldShowWandButton(
     recordingState: OverlayRecordingState,
     workflowActive: Boolean,
@@ -119,6 +131,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val BUBBLE_MARGIN_DP = 20
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
+        /** IME window reports lag and flap while the keyboard animates; wait this long before trusting an absence. */
+        private const val KEYBOARD_HIDE_GRACE_MS = 700L
         private const val EVENT_COALESCE_MS = 120L
         private const val FOCUS_RECOVERY_ATTEMPTS = 15
         private const val FOCUS_RECOVERY_RETRY_MS = 200L
@@ -405,13 +419,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // Resolve the focused field once per pass; the bubble and the wand both decide
         // from the same node.
         val node = resolveFocusedEditableNode(source)
-        if (shouldShowBubble(source, node)) {
+        val keyboardVisible = inputMethodBounds() != null
+        if (shouldShowBubble(source, node, keyboardVisible)) {
             bubbleShouldBeVisible = true
             showBubble()
             // IME window-list updates can arrive after the accessibility event.
-            // Reposition only when fresh keyboard bounds are available; never
-            // remove the bubble just because the IME is temporarily absent.
-            if (inputMethodBounds() != null) updateBubblePosition()
+            // Reposition only when fresh keyboard bounds are available.
+            if (keyboardVisible) updateBubblePosition()
             // The panel follows the keyboard in both directions, including when it hides.
             updateRewritePanelPosition()
             updateCommandActionsVisibility(node)
@@ -434,9 +448,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         if (pendingHideJob?.isActive == true) return
+        // A field that still has focus while the keyboard is gone gets a longer grace
+        // period: the IME window often disappears briefly while it animates or switches.
+        val hideDelayMs = if (inputMethodBounds() == null && resolveFocusedEditableNode(null) != null) {
+            KEYBOARD_HIDE_GRACE_MS
+        } else {
+            BUBBLE_HIDE_DEBOUNCE_MS
+        }
         pendingHideJob = serviceScope.launch {
-            delay(BUBBLE_HIDE_DEBOUNCE_MS)
-            if (hasEditableDictationTarget(null) && !isBubbleSuppressed()) {
+            delay(hideDelayMs)
+            if (shouldShowBubble(null)) {
                 showBubble()
                 return@launch
             }
@@ -455,13 +476,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun shouldShowBubble(
         source: AccessibilityNodeInfo?,
-        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source)
+        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source),
+        keyboardVisible: Boolean = inputMethodBounds() != null
     ): Boolean {
-        // The editable target owns bubble visibility. The IME is an independent
-        // window and may disappear briefly while it animates or switches; using
-        // it as a hard visibility gate causes the bubble to flicker or vanish.
-        if (!hasEditableDictationTarget(source, node)) return false
+        if (!hasEditableDictationTarget(source, node, keyboardVisible)) return false
         if (isBubbleSuppressed()) return false
+        // The IME window may disappear briefly while it animates or switches, so this
+        // is never acted on immediately: hides go through scheduleDeferredHide's grace.
+        if (!keyboardVisible && bubbleNeedsKeyboard(recordingState, hasOverlayWorkflow(), rewriteSession != null)) {
+            return false
+        }
         return true
     }
 
@@ -489,17 +513,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
      * Chrome, in-app browsers) drop FOCUS_INPUT for seconds while their virtual
      * accessibility tree rebuilds, so a failed lookup is not evidence the field was
      * left. Once an eligible field has been seen, the target is considered present while
-     * the keyboard catches up, until the keyboard closes or a password field takes focus.
+     * the keyboard is still up. The keyboard closing or a password field taking focus
+     * ends the fallback; without that, a bubble that has appeared once would never leave.
      */
     private fun hasEditableDictationTarget(
         source: AccessibilityNodeInfo?,
-        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source)
+        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source),
+        keyboardVisible: Boolean = inputMethodBounds() != null
     ): Boolean {
         if (node != null) {
             stickyEditableFocusArmed = true
             return true
         }
-        if (isPasswordFieldFocused(source)) {
+        if (isPasswordFieldFocused(source) || !keyboardVisible) {
             stickyEditableFocusArmed = false
             return false
         }

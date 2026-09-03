@@ -63,6 +63,44 @@ class OverlayRecordingPresentationTest {
         )
     }
 
+    // The bubble belongs with the keyboard unless a task is under way.
+
+    @Test
+    fun `bubble leaves with the keyboard when idle`() {
+        assertTrue(
+            bubbleNeedsKeyboard(
+                recordingState = OverlayRecordingState.Idle,
+                workflowActive = false,
+                panelOpen = false
+            )
+        )
+    }
+
+    @Test
+    fun `bubble survives a hidden keyboard while dictating or editing`() {
+        assertFalse(
+            bubbleNeedsKeyboard(
+                recordingState = OverlayRecordingState.Recording,
+                workflowActive = true,
+                panelOpen = false
+            )
+        )
+        assertFalse(
+            bubbleNeedsKeyboard(
+                recordingState = OverlayRecordingState.Idle,
+                workflowActive = true,
+                panelOpen = false
+            )
+        )
+        assertFalse(
+            bubbleNeedsKeyboard(
+                recordingState = OverlayRecordingState.Idle,
+                workflowActive = false,
+                panelOpen = true
+            )
+        )
+    }
+
     // The wand button: shown and tappable, or not shown at all.
 
     @Test

@@ -65,8 +65,11 @@ is still up; a closed keyboard or a password field ends it (`bubbleNeedsKeyboard
    Because this list flaps during keyboard animations, hides on this path wait a
    700 ms grace period.
 
-The permission is optional: onboarding asks for it on its last step and Settings >
-Permissions shows its state.
+The permission is optional. Onboarding asks for all three permissions (Microphone, Text
+field access, Display over other apps) on one Permissions step (step 4 of 5) with an
+Allow button per row; Continue needs the first two, "Skip for now" is offered otherwise.
+Settings > Permissions shows the same rows (`ui/permissions/PermissionRows.kt`), and every
+check and settings intent lives in `ui/permissions/OverlayPermissions.kt`.
 
 ## Wand button invariants
 

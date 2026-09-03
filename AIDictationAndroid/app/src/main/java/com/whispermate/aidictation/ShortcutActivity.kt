@@ -1,12 +1,11 @@
 package com.whispermate.aidictation
 
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.Toast
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
+import com.whispermate.aidictation.ui.permissions.OverlayPermissions
 
 /**
  * A transparent activity that handles the shortcut intent.
@@ -34,24 +33,6 @@ class ShortcutActivity : Activity() {
         }
     }
 
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val enabled = Settings.Secure.getInt(
-            contentResolver,
-            Settings.Secure.ACCESSIBILITY_ENABLED,
-            0
-        ) == 1
-
-        if (!enabled) return false
-
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-
-        val expected = ComponentName(this, OverlayDictationAccessibilityService::class.java)
-        return enabledServices.split(':').any { serviceId ->
-            ComponentName.unflattenFromString(serviceId) == expected
-        }
-    }
+    private fun isAccessibilityServiceEnabled(): Boolean =
+        OverlayPermissions.isAccessibilityServiceEnabled(this)
 }

@@ -1,12 +1,7 @@
 package com.whispermate.aidictation.ui.screens.settings
 
-import android.Manifest
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -38,9 +33,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
@@ -74,7 +67,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
@@ -82,8 +74,10 @@ import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
-import com.whispermate.aidictation.service.KeyboardProbeWindow
-import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
+import com.whispermate.aidictation.ui.permissions.AccessibilityDisclosureSheet
+import com.whispermate.aidictation.ui.permissions.OverlayPermissions
+import com.whispermate.aidictation.ui.permissions.PermissionRows
+import com.whispermate.aidictation.ui.permissions.rememberMicrophonePermissionLauncher
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
 
 @Composable
@@ -109,16 +103,15 @@ fun SettingsScreen(
     var showAccessibilityDisclosureDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
     var showTranscriptionModeScreen by remember { mutableStateOf(false) }
-    var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
-    var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
-    var hasDisplayOverAppsPermission by remember { mutableStateOf(KeyboardProbeWindow.canDrawOverlays(context)) }
+    var permissions by remember { mutableStateOf(OverlayPermissions.read(context)) }
+    val requestMicrophone = rememberMicrophonePermissionLauncher { granted ->
+        permissions = permissions.copy(microphone = granted)
+    }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasMicPermission = hasMicrophonePermission(context)
-                hasOverlayPermission = isOverlayAccessibilityEnabled(context)
-                hasDisplayOverAppsPermission = KeyboardProbeWindow.canDrawOverlays(context)
+                permissions = OverlayPermissions.read(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -160,56 +153,11 @@ fun SettingsScreen(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
-            SettingsItem(
-                icon = Icons.Default.Mic,
-                title = stringResource(R.string.settings_microphone),
-                trailingContent = {
-                    StatusIcon(isEnabled = hasMicPermission)
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.Security,
-                title = stringResource(R.string.settings_overlay_access),
-                onClick = {
-                    if (hasOverlayPermission) {
-                        openAccessibilitySettings(context)
-                    } else {
-                        showAccessibilityDisclosureDialog = true
-                    }
-                },
-                trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusIcon(isEnabled = hasOverlayPermission)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.Layers,
-                title = stringResource(R.string.settings_display_over_apps),
-                onClick = { openDisplayOverAppsSettings(context) },
-                trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusIcon(isEnabled = hasDisplayOverAppsPermission)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+            PermissionRows(
+                state = permissions,
+                onAllowMicrophone = requestMicrophone,
+                onAllowAccessibility = { showAccessibilityDisclosureDialog = true },
+                onAllowOverlay = { OverlayPermissions.openDisplayOverAppsSettings(context) }
             )
 
             if (overlayBubbleSuppressed) {
@@ -398,33 +346,12 @@ fun SettingsScreen(
     }
 
     if (showAccessibilityDisclosureDialog) {
-        AlertDialog(
-            onDismissRequest = { showAccessibilityDisclosureDialog = false },
-            title = { Text(stringResource(R.string.onboarding_accessibility_disclosure_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_intro))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_use))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_data))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_cloud))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_settings))
-                }
+        AccessibilityDisclosureSheet(
+            onAgree = {
+                showAccessibilityDisclosureDialog = false
+                OverlayPermissions.openAccessibilitySettings(context)
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showAccessibilityDisclosureDialog = false
-                        openAccessibilitySettings(context)
-                    }
-                ) {
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_accept))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAccessibilityDisclosureDialog = false }) {
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_decline))
-                }
-            }
+            onDismiss = { showAccessibilityDisclosureDialog = false }
         )
     }
 }
@@ -834,16 +761,6 @@ private fun transcriptionModeStatus(
 }
 
 @Composable
-private fun StatusIcon(isEnabled: Boolean) {
-    Icon(
-        imageVector = if (isEnabled) Icons.Default.Check else Icons.Default.Close,
-        contentDescription = null,
-        tint = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        modifier = Modifier.size(20.dp)
-    )
-}
-
-@Composable
 private fun SectionHeader(title: String) {
     Text(
         text = title,
@@ -898,49 +815,5 @@ private fun SettingsItem(
         }
         Spacer(modifier = Modifier.width(12.dp))
         trailingContent()
-    }
-}
-
-private fun openAccessibilitySettings(context: Context) {
-    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-    }
-    context.startActivity(intent)
-}
-
-private fun openDisplayOverAppsSettings(context: Context) {
-    val intent = Intent(
-        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-        Uri.parse("package:${context.packageName}")
-    ).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-    }
-    context.startActivity(intent)
-}
-
-private fun hasMicrophonePermission(context: Context): Boolean {
-    return ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
-}
-
-private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
-    val enabled = Settings.Secure.getInt(
-        context.contentResolver,
-        Settings.Secure.ACCESSIBILITY_ENABLED,
-        0
-    ) == 1
-
-    if (!enabled) return false
-
-    val enabledServices = Settings.Secure.getString(
-        context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-
-    val expected = ComponentName(context, OverlayDictationAccessibilityService::class.java)
-    return enabledServices.split(':').any { serviceId ->
-        ComponentName.unflattenFromString(serviceId) == expected
     }
 }

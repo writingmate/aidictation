@@ -143,20 +143,19 @@ private fun PermissionRow(
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = when {
-                    granted -> stringResource(R.string.permission_tag_on)
-                    recommended -> stringResource(R.string.permission_tag_recommended)
-                    else -> stringResource(R.string.permission_tag_required)
-                }.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = when {
-                    granted -> green
-                    recommended -> colors.primary
-                    else -> colors.onSurfaceVariant
-                }
-            )
+            // The chip on the right already says "On", so the tag is only for missing ones.
+            if (!granted) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (recommended) {
+                        stringResource(R.string.permission_tag_recommended)
+                    } else {
+                        stringResource(R.string.permission_tag_required)
+                    }.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (recommended) colors.primary else colors.onSurfaceVariant
+                )
+            }
         }
         Spacer(modifier = Modifier.width(12.dp))
         if (granted) {

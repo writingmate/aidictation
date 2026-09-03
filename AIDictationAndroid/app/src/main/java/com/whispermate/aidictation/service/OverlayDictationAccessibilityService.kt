@@ -150,7 +150,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_ACTION_ICON_PADDING_DP = 15
         private const val COMMAND_ACTION_ELEVATION_DP = 6
-        private const val COMMAND_ACTION_STROKE_DP = 1.5f
+        private const val COMMAND_ACTION_STROKE_DP = 1f
+        /** Material outline role, derived from on-surface; pressed state layer at 12%. */
+        private const val COMMAND_ACTION_OUTLINE_ALPHA = 0.5f
+        private const val COMMAND_ACTION_RIPPLE_ALPHA = 0.12f
         private const val COMMAND_ACTIONS_FADE_IN_MS = 150L
         private const val WAND_ABSORB_MS = 220L
         private const val WAND_ABSORB_SCALE = 1.6f
@@ -861,7 +864,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Solid-border style: surface fill, accent stroke, accent wand icon. */
+    /** Material outlined button: surface fill, neutral outline, accent wand icon. */
     private fun styleWandButton(view: ImageView) {
         val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
         view.setImageResource(R.drawable.ic_command_mic)
@@ -869,15 +872,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         view.scaleType = ImageView.ScaleType.CENTER
         view.setPadding(padding, padding, padding, padding)
         view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
-        view.background = outlinedCircleBackground(overlaySurfaceColor(), bubbleAccentColor)
+        view.background = outlinedCircleBackground(
+            fillColor = overlaySurfaceColor(),
+            outlineColor = withAlpha(overlayOnSurfaceColor(), COMMAND_ACTION_OUTLINE_ALPHA),
+            contentColor = bubbleAccentColor
+        )
     }
 
-    private fun outlinedCircleBackground(fillColor: Int, accent: Int): RippleDrawable {
+    private fun outlinedCircleBackground(fillColor: Int, outlineColor: Int, contentColor: Int): RippleDrawable {
         val strokeWidth = (COMMAND_ACTION_STROKE_DP * resources.displayMetrics.density).toInt().coerceAtLeast(1)
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(fillColor)
-            setStroke(strokeWidth, accent)
+            setStroke(strokeWidth, outlineColor)
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -885,7 +892,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         val surfaceInset = dp(4)
         return RippleDrawable(
-            ColorStateList.valueOf(withAlpha(accent, 0.24f)),
+            ColorStateList.valueOf(withAlpha(contentColor, COMMAND_ACTION_RIPPLE_ALPHA)),
             InsetDrawable(content, surfaceInset),
             InsetDrawable(mask, surfaceInset)
         )
@@ -895,6 +902,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         android.R.attr.colorBackgroundFloating,
         resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
     )
+
+    private fun overlayOnSurfaceColor(): Int = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
 
     private fun updateCommandActionsVisibility(node: AccessibilityNodeInfo?) {
         if (!isBubbleAttached) {

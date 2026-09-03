@@ -57,6 +57,8 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
 
     private val surfaceColor: Int
     private val onSurfaceColor: Int
+    /** Material's outline role: a neutral stroke, derived from on-surface. */
+    private val outlineColor: Int
     private var accent: Int = 0xFFFF6300.toInt()
     private var onAccent: Int = Color.WHITE
 
@@ -80,6 +82,7 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
             themeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
         )
         onSurfaceColor = themeColor(android.R.attr.textColorPrimary, Color.WHITE)
+        outlineColor = withAlpha(onSurfaceColor, OUTLINE_ALPHA)
 
         orientation = VERTICAL
         clipChildren = false
@@ -348,7 +351,10 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
         }
     }
 
-    /** Solid-border circle: surface fill with an accent stroke and icon, or filled accent. */
+    /**
+     * Material button emphasis: filled (accent container, on-accent icon) for the one
+     * primary action, outlined (surface fill, neutral outline, accent icon) for the rest.
+     */
     private fun styleCircle(button: ImageView, filled: Boolean) {
         val fill = if (filled) accent else surfaceColor
         val foreground = if (filled) onAccent else accent
@@ -356,7 +362,7 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(fill)
-            setStroke(dp(STROKE_DP).toInt().coerceAtLeast(1), accent)
+            setStroke(dp(STROKE_DP).toInt().coerceAtLeast(1), if (filled) accent else outlineColor)
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -457,11 +463,13 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
         const val CORNER_DP = 18f
         const val BUTTON_DP = 44f
         const val BUTTON_GAP_DP = 10f
-        const val STROKE_DP = 1.5f
+        const val STROKE_DP = 1f
         const val MAX_TEXT_LINES = 6
-        const val RIPPLE_ALPHA = 0.24f
-        const val DISABLED_ALPHA = 0.5f
-        const val APPLY_DISABLED_ALPHA = 0.35f
+        /** Material state layers: pressed 12%; disabled content 38%; outline from on-surface. */
+        const val RIPPLE_ALPHA = 0.12f
+        const val DISABLED_ALPHA = 0.38f
+        const val APPLY_DISABLED_ALPHA = 0.38f
+        const val OUTLINE_ALPHA = 0.5f
         const val WORKING_TEXT_ALPHA = 0.4f
 
         const val OPEN_MS = 460L

@@ -57,8 +57,9 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
 
     private val surfaceColor: Int
     private val onSurfaceColor: Int
-    /** Material's outline role: a neutral stroke, derived from on-surface. */
-    private val outlineColor: Int
+    /** The themed black: opaque on-surface (near-black in light, light in dark). Fills the primary buttons. */
+    private val primaryFillColor: Int
+    private val onPrimaryFillColor: Int
     private var accent: Int = 0xFFFF6300.toInt()
     private var onAccent: Int = Color.WHITE
 
@@ -82,7 +83,8 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
             themeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
         )
         onSurfaceColor = themeColor(android.R.attr.textColorPrimary, Color.WHITE)
-        outlineColor = withAlpha(onSurfaceColor, OUTLINE_ALPHA)
+        primaryFillColor = opaqueOver(onSurfaceColor, surfaceColor)
+        onPrimaryFillColor = surfaceColor
 
         orientation = VERTICAL
         clipChildren = false
@@ -352,17 +354,18 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
     }
 
     /**
-     * Material button emphasis: filled (accent container, on-accent icon) for the one
-     * primary action, outlined (surface fill, neutral outline, accent icon) for the rest.
+     * Material button emphasis: filled (themed black container, surface-coloured icon)
+     * for the primary action and the running action; the rest are borderless secondary
+     * buttons (surface fill, accent icon). The accent stays on the glyphs and the
+     * bubble; the fill is the theme's black so it reads as the app's primary button.
      */
     private fun styleCircle(button: ImageView, filled: Boolean) {
-        val fill = if (filled) accent else surfaceColor
-        val foreground = if (filled) onAccent else accent
+        val fill = if (filled) primaryFillColor else surfaceColor
+        val foreground = if (filled) onPrimaryFillColor else accent
         button.imageTintList = ColorStateList.valueOf(foreground)
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(fill)
-            setStroke(dp(STROKE_DP).toInt().coerceAtLeast(1), if (filled) accent else outlineColor)
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -384,6 +387,13 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
 
     private fun withAlpha(color: Int, fraction: Float): Int =
         (color and 0x00FFFFFF) or ((fraction.coerceIn(0f, 1f) * 255f).toInt() shl 24)
+
+    /** Composites a translucent colour (theme text colours carry alpha) over an opaque one. */
+    private fun opaqueOver(color: Int, background: Int): Int {
+        val alpha = Color.alpha(color) / 255f
+        fun mix(channel: (Int) -> Int) = (channel(color) * alpha + channel(background) * (1f - alpha)).toInt().coerceIn(0, 255)
+        return Color.rgb(mix(Color::red), mix(Color::green), mix(Color::blue))
+    }
 
     /** Thin indeterminate bar: a segment sweeping left to right along a faint track. */
     private class IndeterminateBar(context: Context) : View(context) {
@@ -463,13 +473,11 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
         const val CORNER_DP = 18f
         const val BUTTON_DP = 44f
         const val BUTTON_GAP_DP = 10f
-        const val STROKE_DP = 1f
         const val MAX_TEXT_LINES = 6
-        /** Material state layers: pressed 12%; disabled content 38%; outline from on-surface. */
+        /** Material state layers: pressed 12%; disabled content 38%. */
         const val RIPPLE_ALPHA = 0.12f
         const val DISABLED_ALPHA = 0.38f
         const val APPLY_DISABLED_ALPHA = 0.38f
-        const val OUTLINE_ALPHA = 0.5f
         const val WORKING_TEXT_ALPHA = 0.4f
 
         const val OPEN_MS = 460L

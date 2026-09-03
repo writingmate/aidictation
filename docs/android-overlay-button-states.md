@@ -37,8 +37,8 @@ password field ends it (`bubbleNeedsKeyboard`).
 1. **Shown or absent, never disabled.** The wand appears only when it can be tapped:
    bubble idle, no dictation delivery in flight, a non-blank selection in the focused
    field, and no panel open.
-2. **Material outlined button.** Surface fill (white in a light theme), a 1 dp neutral
-   outline (on-surface at 50%) and the accent wand icon, so it reads as subordinate to
+2. **Borderless secondary button.** Surface fill (white in a light theme) with the
+   accent wand icon and a small elevation for its edge, so it reads as subordinate to
    the filled bubble. Pressed state layer 12%.
 3. **Follows the bubble.** It sits on the side of the bubble with room and moves with
    it when dragged. Dragging the bubble to the dismiss zones hides it.
@@ -50,10 +50,12 @@ password field ends it (`bubbleNeedsKeyboard`).
 1. **Layout.** The working text on top, full width, up to six lines with scrolling. One
    row below: the action icons (Fix grammar, Rephrase, Shorter, Longer) on the left,
    close (×) and apply (✓) on the right. No label, no inner card.
-2. **Styles.** Material emphasis levels: apply and the running action are filled
-   (accent container, on-accent icon); every other button is outlined (surface fill,
-   neutral outline, accent icon). Disabled content sits at 38%, pressed state layer at
-   12%. The panel surface is the theme's floating background.
+2. **Styles.** Material emphasis levels: apply and the running action are filled with
+   the theme's black (opaque on-surface: near-black in light, light in dark) and a
+   surface-coloured icon; every other button is a borderless secondary button (surface
+   fill, accent icon). The accent lives on the glyphs, the progress bar and the bubble.
+   Disabled content sits at 38%, pressed state layer at 12%. The panel surface is the
+   theme's floating background.
 3. **Bloom.** Opening scales the panel up from the wand's centre with a small overshoot
    while its corners round off, the text rises in, then the icons pop in one after
    another, × and ✓ last. Closing withers the panel back towards the wand. Applying

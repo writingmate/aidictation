@@ -150,9 +150,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_ACTION_ICON_PADDING_DP = 15
         private const val COMMAND_ACTION_ELEVATION_DP = 6
-        private const val COMMAND_ACTION_STROKE_DP = 1f
-        /** Material outline role, derived from on-surface; pressed state layer at 12%. */
-        private const val COMMAND_ACTION_OUTLINE_ALPHA = 0.5f
+        /** Material pressed state layer. */
         private const val COMMAND_ACTION_RIPPLE_ALPHA = 0.12f
         private const val COMMAND_ACTIONS_FADE_IN_MS = 150L
         private const val WAND_ABSORB_MS = 220L
@@ -864,7 +862,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Material outlined button: surface fill, neutral outline, accent wand icon. */
+    /** Borderless secondary button: surface fill, accent wand icon, elevation for the edge. */
     private fun styleWandButton(view: ImageView) {
         val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
         view.setImageResource(R.drawable.ic_command_mic)
@@ -872,19 +870,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         view.scaleType = ImageView.ScaleType.CENTER
         view.setPadding(padding, padding, padding, padding)
         view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
-        view.background = outlinedCircleBackground(
+        view.background = circleBackground(
             fillColor = overlaySurfaceColor(),
-            outlineColor = withAlpha(overlayOnSurfaceColor(), COMMAND_ACTION_OUTLINE_ALPHA),
             contentColor = bubbleAccentColor
         )
     }
 
-    private fun outlinedCircleBackground(fillColor: Int, outlineColor: Int, contentColor: Int): RippleDrawable {
-        val strokeWidth = (COMMAND_ACTION_STROKE_DP * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+    private fun circleBackground(fillColor: Int, contentColor: Int): RippleDrawable {
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(fillColor)
-            setStroke(strokeWidth, outlineColor)
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -903,7 +898,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
     )
 
-    private fun overlayOnSurfaceColor(): Int = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
 
     private fun updateCommandActionsVisibility(node: AccessibilityNodeInfo?) {
         if (!isBubbleAttached) {

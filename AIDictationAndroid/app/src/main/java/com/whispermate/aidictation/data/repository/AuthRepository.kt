@@ -97,26 +97,35 @@ class AuthRepository @Inject constructor(
         return preferredPaymentLink().isNotBlank()
     }
 
-    /** Native Google sign-in needs the auth API plus the Google web client ID. */
-    fun isGoogleSignInConfigured(): Boolean {
-        return BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank() &&
-            BuildConfig.SUPABASE_URL.isNotBlank() &&
-            BuildConfig.SUPABASE_ANON_KEY.isNotBlank()
-    }
+    /**
+     * Google sign-in is offered whenever the auth API is configured: its hosted OAuth
+     * flow (`/auth/v1/authorize?provider=google`) already carries the Google client.
+     */
+    fun isGoogleSignInConfigured(): Boolean = isAuthConfigured()
+
+    /** The native account picker needs the Google web client ID and an auth API that accepts ID tokens. */
+    private fun isNativeGoogleSignInConfigured(): Boolean = BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()
 
     /**
-     * Signs in with a Google account through Android's Credential Manager, then trades
-     * the Google ID token for an app session at the auth API (Supabase's
-     * `grant_type=id_token` contract). The raw nonce goes to the auth API and its SHA-256
-     * to Google, which is what the API verifies against the token's nonce claim.
+     * Signs in with Google. Without [BuildConfig.GOOGLE_WEB_CLIENT_ID] this opens the auth
+     * API's hosted Google OAuth flow in the browser, which ends in the same
+     * `aidictation://auth-callback` deep link as the web sign-in. With a client ID it uses
+     * Android's Credential Manager and trades the Google ID token for a session at the
+     * auth API (Supabase's `grant_type=id_token` contract; the raw nonce goes to the API
+     * and its SHA-256 to Google).
      *
      * [activityContext] must be an Activity: the account picker is shown from it.
-     * Returns true when a session was established, false when the user dismissed the
-     * picker; failures are surfaced through [authState] and a toast.
+     * Returns true when a session was established, false when the flow was handed to the
+     * browser or the user dismissed the picker; failures are surfaced through
+     * [authState] and a toast.
      */
     suspend fun signInWithGoogle(activityContext: Context): Boolean {
         if (!isGoogleSignInConfigured()) {
             reportGoogleFailure(activityContext, context.getString(R.string.account_google_not_configured))
+            return false
+        }
+        if (!isNativeGoogleSignInConfigured()) {
+            openHostedGoogleSignIn(activityContext)
             return false
         }
 
@@ -204,6 +213,12 @@ class AuthRepository @Inject constructor(
                 }
             }
         }
+
+    private fun openHostedGoogleSignIn(activityContext: Context) {
+        val redirectTo = URLEncoder.encode("aidictation://auth-callback", Charsets.UTF_8.name())
+        val url = "${BuildConfig.SUPABASE_URL.trimEnd('/')}/auth/v1/authorize?provider=google&redirect_to=$redirectTo"
+        openExternally(activityContext, url, "Could not open Google sign-in")
+    }
 
     private fun reportGoogleFailure(activityContext: Context, message: String) {
         _authState.value = _authState.value.copy(error = message)

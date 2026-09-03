@@ -1,46 +1,49 @@
-# Android: native Google sign-in
+# Android: Google sign-in
 
 The Android app offers "Continue with Google" in Settings › Account next to the
-existing web sign-in. It uses Android's Credential Manager to get a Google ID token on
-the device and trades it for an app session at the auth API, so no browser round trip.
+existing web sign-in. It has two modes.
 
-## How it works
+## Hosted flow (default, no extra setup)
 
-1. The app asks Credential Manager for a Google ID token, passing the Web (server)
-   OAuth client ID and the SHA-256 of a fresh random nonce.
+The auth API at `aidictation.com` already runs Google OAuth: its
+`/auth/v1/authorize?provider=google` endpoint redirects to Google with the existing
+writingmate client and finishes at `/auth/v1/callback`. The app opens that URL in the
+browser with `redirect_to=aidictation://auth-callback`, so the session lands in the same
+deep-link handler the web sign-in uses (`AuthRepository.handleAuthCallback`). Nothing
+needs configuring for this mode; the button shows whenever auth is configured.
+
+## Native flow (optional)
+
+With `GOOGLE_WEB_CLIENT_ID` set, the app instead uses Android's Credential Manager:
+
+1. It asks for a Google ID token, passing the Web (server) OAuth client ID and the
+   SHA-256 of a fresh random nonce.
 2. Google shows the account picker and returns an ID token whose `nonce` claim is that
    hash.
 3. The app posts `{provider: "google", id_token, nonce}` (the raw nonce) to
-   `${SUPABASE_URL}/auth/v1/token?grant_type=id_token` with the anon `apikey` header.
-   This is Supabase Auth's ID-token grant.
-4. The response's `access_token` and `refresh_token` are stored in the same encrypted
-   preferences the web sign-in uses; the rest of the app is unchanged.
+   `${SUPABASE_URL}/auth/v1/token?grant_type=id_token` with the anon `apikey` header,
+   Supabase Auth's ID-token grant, and stores the returned session.
 
-Dismissing the picker does nothing. Any other failure sets `AuthState.error` and shows
-a toast.
+**Do not set the client ID until the auth API implements that grant.** As of this
+writing `aidictation.com/auth/v1/token?grant_type=id_token` answers with the password
+grant's "Email and password are required", so the native exchange would fail. The
+underlying Supabase project (`labs-api.writingmate.ai`) does support it, so proxying
+that route is enough.
 
-## One-time setup
+Setup for the native mode, when the backend is ready:
 
-1. **Google Cloud** › APIs & Services › Credentials:
-   - Create an OAuth client of type **Web application**. Its client ID is the
-     `GOOGLE_WEB_CLIENT_ID`. Add the auth API's callback URL as an authorised redirect
-     URI (Supabase: `https://<project>.supabase.co/auth/v1/callback`).
-   - Create an OAuth client of type **Android** for package `com.aidictation.app` for
-     each signing key in use: the debug keystore's SHA-1, the release keystore's SHA-1,
-     and Play App Signing's SHA-1 (Play Console › App integrity). Without a matching
-     Android client Google refuses to issue the token.
-2. **Auth backend** (Supabase › Authentication › Providers › Google): enable it, set the
-   Web client ID and secret, and add the same Web client ID under "Authorized Client
-   IDs". If the API at `aidictation.com` proxies Supabase Auth, it must forward the
-   `grant_type=id_token` request unchanged.
-3. **Build configuration**: put `GOOGLE_WEB_CLIENT_ID=<web client id>` in
-   `local.properties`, and add the `GOOGLE_WEB_CLIENT_ID` secret to the GitHub
-   `pull-request` and `release` environments so CI builds carry it. A blank value hides
-   the button.
+1. Google Cloud › Credentials (the writingmate project): reuse the existing **Web
+   application** client as `GOOGLE_WEB_CLIENT_ID`, and add an **Android** client for
+   package `com.aidictation.app` per signing key in use (debug SHA-1, release SHA-1,
+   Play App Signing's SHA-1). Without a matching Android client Google refuses to
+   issue the token.
+2. Auth backend: the Web client ID must be among the provider's authorised client IDs.
+3. Put `GOOGLE_WEB_CLIENT_ID` in `local.properties` and in the `pull-request` and
+   `release` GitHub environments.
 
 ## Code
 
-- `AuthRepository.signInWithGoogle` and `exchangeGoogleIdToken`
+- `AuthRepository.signInWithGoogle`, `openHostedGoogleSignIn`, `exchangeGoogleIdToken`
 - `SubscriptionRepository.signInWithGoogle`, `MainViewModel.signInWithGoogle`
 - `GoogleSignInButton` in `SettingsScreen.kt`, the G mark in `ic_google_g.xml`
 - Dependencies: `androidx.credentials:credentials`,

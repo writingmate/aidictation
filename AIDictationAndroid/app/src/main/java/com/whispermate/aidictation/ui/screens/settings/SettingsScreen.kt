@@ -43,7 +43,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
@@ -52,23 +51,19 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -77,7 +72,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -88,7 +82,6 @@ import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
-import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 
 @Composable
 fun SettingsScreen(
@@ -113,7 +106,6 @@ fun SettingsScreen(
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showAccessibilityDisclosureDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
-    var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     var showTranscriptionModeScreen by remember { mutableStateOf(false) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
@@ -219,25 +211,6 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        SectionHeader(stringResource(R.string.settings_appearance))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            BubbleColorSelector(
-                selectedColor = selectedBubbleColor,
-                onColorSelected = { color ->
-                    selectedBubbleColor = color
-                    OverlayBubblePreferences.setBubbleColor(context, color)
-                }
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            OverlayPreviewCard(selectedColor = selectedBubbleColor)
-        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -538,245 +511,6 @@ private fun GoogleSignInButton(onClick: () -> Unit, modifier: Modifier = Modifie
             text = stringResource(R.string.account_continue_with_google),
             fontWeight = FontWeight.Medium
         )
-    }
-}
-
-@Composable
-private fun BubbleColorSelector(
-    selectedColor: Int,
-    onColorSelected: (Int) -> Unit
-) {
-    val context = LocalContext.current
-    val options = listOf(
-        BubbleColorOption(
-            color = OverlayBubblePreferences.SYSTEM_COLOR,
-            resolvedColor = OverlayBubblePreferences.getResolvedSystemColor(context),
-            label = stringResource(R.string.settings_bubble_color_system)
-        ),
-        BubbleColorOption(
-            color = OverlayBubblePreferences.DEFAULT_COLOR,
-            resolvedColor = OverlayBubblePreferences.DEFAULT_COLOR,
-            label = stringResource(R.string.settings_bubble_color_default)
-        ),
-        BubbleColorOption(
-            color = 0xFFE11D48.toInt(),
-            resolvedColor = 0xFFE11D48.toInt(),
-            label = stringResource(R.string.settings_bubble_color_red)
-        ),
-        BubbleColorOption(
-            color = 0xFF7C3AED.toInt(),
-            resolvedColor = 0xFF7C3AED.toInt(),
-            label = stringResource(R.string.settings_bubble_color_purple)
-        ),
-        BubbleColorOption(
-            color = 0xFF2563EB.toInt(),
-            resolvedColor = 0xFF2563EB.toInt(),
-            label = stringResource(R.string.settings_bubble_color_blue)
-        ),
-        BubbleColorOption(
-            color = 0xFF0D9488.toInt(),
-            resolvedColor = 0xFF0D9488.toInt(),
-            label = stringResource(R.string.settings_bubble_color_teal)
-        ),
-        BubbleColorOption(
-            color = OverlayBubblePreferences.BLACK_COLOR,
-            resolvedColor = OverlayBubblePreferences.BLACK_COLOR,
-            label = stringResource(R.string.settings_bubble_color_black)
-        )
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.settings_bubble_color),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-
-        options.chunked(4).forEach { rowOptions ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                rowOptions.forEach { option ->
-                    BubbleColorSwatchOption(
-                        option = option,
-                        selected = option.color == selectedColor,
-                        onClick = { onColorSelected(option.color) }
-                    )
-                }
-                repeat(4 - rowOptions.size) {
-                    Spacer(modifier = Modifier.width(62.dp))
-                }
-            }
-        }
-    }
-}
-
-private data class BubbleColorOption(
-    val color: Int,
-    val resolvedColor: Int,
-    val label: String
-)
-
-@Composable
-private fun BubbleColorSwatchOption(
-    option: BubbleColorOption,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier.width(62.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        BubbleColorSwatch(
-            color = option.resolvedColor,
-            selected = selected,
-            onClick = onClick
-        )
-        Text(
-            text = option.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun BubbleColorSwatch(
-    color: Int,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val shape = CircleShape
-    val composeColor = Color(color)
-    // onSurface keeps the selection ring visible in both light and dark themes.
-    val borderColor = if (selected) {
-        MaterialTheme.colorScheme.onSurface
-    } else {
-        MaterialTheme.colorScheme.outlineVariant
-    }
-
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(shape)
-            .background(composeColor)
-            .border(
-                BorderStroke(if (selected) 3.dp else 1.dp, borderColor),
-                shape
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        if (selected) {
-            // Dark badge on light swatches, light badge on dark ones.
-            val lightSwatch = composeColor.luminance() > 0.7f
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (lightSwatch) Color.Black.copy(alpha = 0.65f)
-                        else Color.White.copy(alpha = 0.94f)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = composeColor,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun OverlayPreviewCard(selectedColor: Int) {
-    var previewStateIndex by remember { mutableIntStateOf(0) }
-    val previewStates = remember {
-        listOf(
-            OverlayMicButtonView.State.Idle,
-            OverlayMicButtonView.State.Recording,
-            OverlayMicButtonView.State.Processing
-        )
-    }
-    val previewState = previewStates[previewStateIndex]
-    val previewWidth = if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp
-    // The bubble is drawn on the themed surface with a themed-black glyph; the chosen
-    // colour lives on the wand and the edit panel, not on the bubble itself.
-    val bubbleSurface = MaterialTheme.colorScheme.surface.toArgb()
-    val bubbleGlyph = MaterialTheme.colorScheme.onSurface.toArgb()
-    val resolvedColor = when (selectedColor) {
-        OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
-        else -> selectedColor
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = "Overlay preview",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = "Tap the control to switch states.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(74.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                .clickable {
-                    previewStateIndex = (previewStateIndex + 1) % previewStates.size
-                },
-            contentAlignment = Alignment.CenterEnd
-        ) {
-            AndroidView(
-                modifier = Modifier
-                    .width(previewWidth)
-                    .height(55.dp)
-                    .padding(end = 10.dp),
-                factory = { context ->
-                    OverlayMicButtonView(context).apply {
-                        setPalette(bubbleSurface, bubbleGlyph)
-                        setState(previewState)
-                        setAudioLevel(0.72f)
-                        setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
-                        setOnClickCallback {
-                            previewStateIndex = (previewStateIndex + 1) % previewStates.size
-                        }
-                    }
-                },
-                update = { view ->
-                    view.setPalette(bubbleSurface, bubbleGlyph)
-                    view.setState(previewState)
-                    view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
-                    view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
-                }
-            )
-        }
     }
 }
 

@@ -14,7 +14,6 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -60,12 +59,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
@@ -73,7 +70,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -81,7 +77,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -90,7 +85,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
-import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
@@ -192,7 +186,6 @@ private fun OnboardingSmallIcon(
 
 private enum class OnboardingStep {
     Welcome,
-    Color,
     Languages,
     OnDeviceTranscription,
     Microphone,
@@ -220,7 +213,6 @@ fun OnboardingScreen(
     var currentStep by remember { mutableIntStateOf(0) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
-    var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     var demoLaunchRequested by remember { mutableStateOf(false) }
     val colors = onboardingColors()
 
@@ -229,7 +221,6 @@ fun OnboardingScreen(
     val onboardingSteps = remember {
         buildList {
             add(OnboardingStep.Welcome)
-            add(OnboardingStep.Color)
             add(OnboardingStep.Languages)
             add(OnboardingStep.OnDeviceTranscription)
             add(OnboardingStep.Microphone)
@@ -340,13 +331,6 @@ fun OnboardingScreen(
             ) { step ->
                 when (step) {
                     OnboardingStep.Welcome -> WelcomeStep()
-                    OnboardingStep.Color -> BubbleColorStep(
-                        selectedColor = selectedBubbleColor,
-                        onColorSelected = { color ->
-                            selectedBubbleColor = color
-                            OverlayBubblePreferences.setBubbleColor(context, color)
-                        }
-                    )
                     OnboardingStep.Languages -> LanguageSelectionStep(
                         selectedLanguageCodes = selectedLanguageCodes,
                         onToggleLanguage = onToggleLanguage
@@ -358,7 +342,6 @@ fun OnboardingScreen(
                     )
                     OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
                     OnboardingStep.ButtonDemo -> ButtonDemoStep(
-                        selectedColor = selectedBubbleColor,
                         demoState = demoState,
                         onStartRecording = {
                             demoLaunchRequested = true
@@ -411,7 +394,6 @@ fun OnboardingScreen(
                 onClick = {
                     when (currentOnboardingStep) {
                         OnboardingStep.Welcome -> goToNextStep()
-                        OnboardingStep.Color -> goToNextStep()
                         OnboardingStep.Languages -> goToNextStep()
                         OnboardingStep.OnDeviceTranscription -> goToNextStep()
                         OnboardingStep.Microphone -> {
@@ -445,7 +427,6 @@ fun OnboardingScreen(
                 Text(
                     text = when (currentOnboardingStep) {
                         OnboardingStep.Welcome -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.Color -> stringResource(R.string.onboarding_continue)
                         OnboardingStep.Languages -> stringResource(R.string.onboarding_continue)
                         OnboardingStep.Microphone -> if (hasMicPermission) {
                             stringResource(R.string.onboarding_continue)
@@ -488,196 +469,8 @@ private fun OnboardingSystemBars() {
     }
 }
 
-private data class OnboardingBubbleColorOption(
-    val color: Int,
-    val resolvedColor: Int,
-    val label: String
-)
-
-@Composable
-private fun BubbleColorStep(
-    selectedColor: Int,
-    onColorSelected: (Int) -> Unit
-) {
-    val colors = onboardingColors()
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        OnboardingHeroIcon(icon = Icons.Default.Tune)
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_color_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_color_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        OnboardingBubbleColorSelector(
-            selectedColor = selectedColor,
-            onColorSelected = onColorSelected
-        )
-    }
-}
-
-@Composable
-private fun OnboardingBubbleColorSelector(
-    selectedColor: Int,
-    onColorSelected: (Int) -> Unit
-) {
-    val context = LocalContext.current
-    val options = listOf(
-        OnboardingBubbleColorOption(
-            color = OverlayBubblePreferences.SYSTEM_COLOR,
-            resolvedColor = OverlayBubblePreferences.getResolvedSystemColor(context),
-            label = stringResource(R.string.settings_bubble_color_system)
-        ),
-        OnboardingBubbleColorOption(
-            color = OverlayBubblePreferences.DEFAULT_COLOR,
-            resolvedColor = OverlayBubblePreferences.DEFAULT_COLOR,
-            label = stringResource(R.string.settings_bubble_color_default)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFFE11D48.toInt(),
-            resolvedColor = 0xFFE11D48.toInt(),
-            label = stringResource(R.string.settings_bubble_color_red)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFF7C3AED.toInt(),
-            resolvedColor = 0xFF7C3AED.toInt(),
-            label = stringResource(R.string.settings_bubble_color_purple)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFF2563EB.toInt(),
-            resolvedColor = 0xFF2563EB.toInt(),
-            label = stringResource(R.string.settings_bubble_color_blue)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFF0D9488.toInt(),
-            resolvedColor = 0xFF0D9488.toInt(),
-            label = stringResource(R.string.settings_bubble_color_teal)
-        ),
-        OnboardingBubbleColorOption(
-            color = OverlayBubblePreferences.BLACK_COLOR,
-            resolvedColor = OverlayBubblePreferences.BLACK_COLOR,
-            label = stringResource(R.string.settings_bubble_color_black)
-        )
-    )
-
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        options.chunked(4).forEach { rowOptions ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                rowOptions.forEach { option ->
-                    OnboardingBubbleColorSwatchOption(
-                        option = option,
-                        selected = option.color == selectedColor,
-                        onClick = { onColorSelected(option.color) }
-                    )
-                }
-                repeat(4 - rowOptions.size) {
-                    Spacer(modifier = Modifier.width(62.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OnboardingBubbleColorSwatchOption(
-    option: OnboardingBubbleColorOption,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val colors = onboardingColors()
-
-    Column(
-        modifier = Modifier.width(62.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        OnboardingBubbleColorSwatch(
-            color = option.resolvedColor,
-            selected = selected,
-            onClick = onClick
-        )
-        Text(
-            text = option.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) colors.onSurface else colors.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun OnboardingBubbleColorSwatch(
-    color: Int,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val colors = onboardingColors()
-    val composeColor = Color(color)
-    // onSurface keeps the selection ring visible in both light and dark themes.
-    val borderColor = if (selected) {
-        colors.onSurface
-    } else {
-        colors.outline
-    }
-
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(composeColor)
-            .border(BorderStroke(if (selected) 3.dp else 1.dp, borderColor), CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        if (selected) {
-            // Dark badge on light swatches, light badge on dark ones.
-            val lightSwatch = composeColor.luminance() > 0.7f
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (lightSwatch) Color.Black.copy(alpha = 0.65f)
-                        else Color.White.copy(alpha = 0.94f)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = composeColor,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-    }
-}
-
 @Composable
 private fun ButtonDemoStep(
-    selectedColor: Int,
     demoState: OnboardingDemoUiState,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
@@ -693,10 +486,6 @@ private fun ButtonDemoStep(
         demoState.isProcessing -> OverlayMicButtonView.State.Processing
         isRecording -> OverlayMicButtonView.State.Recording
         else -> OverlayMicButtonView.State.Idle
-    }
-    val resolvedColor = when (selectedColor) {
-        OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(context)
-        else -> selectedColor
     }
 
     // Keep the screen awake while the demo dictation is recording or processing

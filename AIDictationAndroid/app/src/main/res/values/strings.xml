@@ -12,8 +12,6 @@
     <string name="onboarding_mic_title">Microphone Access</string>
     <string name="onboarding_mic_subtitle">We need microphone access to transcribe your voice</string>
     <string name="onboarding_mic_enable">Enable Microphone</string>
-    <string name="onboarding_color_title">Make it yours</string>
-    <string name="onboarding_color_subtitle">Pick your color. The app and floating mic will change with it.</string>
     <string name="onboarding_languages_title">Choose your languages</string>
     <string name="onboarding_languages_subtitle">Select the languages you speak to improve transcription.</string>
     <string name="onboarding_languages_change_later">You can change this later in Settings.</string>
@@ -88,15 +86,6 @@
     <string name="settings_microphone">Microphone Access</string>
     <string name="settings_overlay_access">Floating mic access</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
-    <string name="settings_appearance">Appearance</string>
-    <string name="settings_bubble_color">Floating bubble color</string>
-    <string name="settings_bubble_color_system">System</string>
-    <string name="settings_bubble_color_default">Default</string>
-    <string name="settings_bubble_color_red">Red</string>
-    <string name="settings_bubble_color_purple">Purple</string>
-    <string name="settings_bubble_color_blue">Blue</string>
-    <string name="settings_bubble_color_teal">Teal</string>
-    <string name="settings_bubble_color_black">Black</string>
     <string name="settings_account">Account</string>
     <string name="account_sign_in">Sign in</string>
     <string name="account_sign_out">Sign out</string>

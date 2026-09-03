@@ -82,8 +82,7 @@ password field ends it (`bubbleNeedsKeyboard`).
 9. **Follows the keyboard.** The panel sits above the keyboard and repositions when the
    keyboard shows or hides.
 10. **Theme neutrals only.** The bubble, the wand and the panel are drawn in the theme's
-    surface and black; the bubble colour preference does not colour the overlay (it
-    still tints the drag-to-dismiss zones and the app's own screens).
+    surface and black. There is no bubble colour preference any more.
 11. **Light and dark.** Surface, text and outline come from the app's XML theme, which
     has a night variant (`values-night/themes.xml`), so the panel and wand follow the
     system dark mode. A panel that is already open keeps its colours until reopened.

@@ -2,14 +2,10 @@ package com.whispermate.aidictation.service
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.res.ColorStateList
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -62,7 +58,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 
 internal enum class OverlayRecordingState {
     Idle,
@@ -264,19 +259,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var isRewritePanelAttached = false
     private var rewriteSession: RewriteSession? = null
 
-    /** Single accent colour shared by the bubble, the wand and the panel. */
-    private var bubbleAccentColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
 
     private val bubblePrefs by lazy { OverlayBubblePreferences.prefs(this) }
-    private var bubblePrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        registerBubblePreferenceListener()
 
         serviceScope.launch {
             appPreferences.autoStopOnSilenceEnabled.collectLatest { enabled ->
@@ -366,32 +356,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         focusRecoveryJob = null
     }
 
-    private fun registerBubblePreferenceListener() {
-        if (bubblePrefsListener != null) return
-
-        bubblePrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == OverlayBubblePreferences.COLOR_KEY) {
-                serviceScope.launch {
-                    refreshBubbleBrandColor()
-                    updateBubbleUi()
-                }
-            }
-        }
-        bubblePrefs.registerOnSharedPreferenceChangeListener(bubblePrefsListener)
-    }
-
-    private fun unregisterBubblePreferenceListener() {
-        val listener = bubblePrefsListener ?: return
-        bubblePrefs.unregisterOnSharedPreferenceChangeListener(listener)
-        bubblePrefsListener = null
-    }
-
-    private fun refreshBubbleBrandColor() {
-        // The overlay itself is drawn in theme neutrals; the preference colours the
-        // dismiss drop zones only.
-        bubbleAccentColor = OverlayBubblePreferences.getResolvedBubbleColor(this)
-    }
-
     override fun onDestroy() {
         isServiceDestroyed = true
         super.onDestroy()
@@ -412,7 +376,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         stopBubbleAnimation()
         focusRecoveryJob?.cancel()
         focusRecoveryJob = null
-        unregisterBubblePreferenceListener()
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
@@ -784,8 +747,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ensureBubbleCreated() {
         if (bubbleView != null) return
 
-        refreshBubbleBrandColor()
-
         bubbleView = OverlayMicButtonView(this).apply {
             elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -1113,14 +1074,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         setDismissZoneState(
             view = dismissSnoozeZone,
             selected = target == BubbleDismissTarget.Snooze,
-            selectedColor = bubbleAccentColor,
+            selectedColor = overlayOnSurfaceColor(),
             idleColor = idleZoneColor,
             idleTextColor = onSurfaceColor
         )
         setDismissZoneState(
             view = dismissHideZone,
             selected = target == BubbleDismissTarget.Hide,
-            selectedColor = bubbleAccentColor,
+            selectedColor = overlayOnSurfaceColor(),
             idleColor = idleZoneColor,
             idleTextColor = onSurfaceColor
         )

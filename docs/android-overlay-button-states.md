@@ -18,7 +18,7 @@ invariants and are covered by `OverlayRecordingPresentationTest`.
 
 | Presentation | When | Look |
 | --- | --- | --- |
-| Idle | `recordingState == Idle` | 55 dp circle with the frozen waveform glyph |
+| Idle | `recordingState == Idle` | 55 dp opaque accent circle with the frozen waveform glyph |
 | Recording | `recordingState == Recording` | 250 dp pill: cancel (X), live waveform, accept (check) |
 | Processing | `recordingState == Processing` | 250 dp pill: animated bars and a spinner |
 
@@ -75,8 +75,12 @@ password field ends it (`bubbleNeedsKeyboard`).
 9. **Follows the keyboard.** The panel sits above the keyboard and repositions when the
    keyboard shows or hides.
 10. **One accent colour.** The bubble, the wand and the panel share the colour from the
-    bubble colour preference; changing the preference restyles all of them.
-11. **Accessibility.** The panel's buttons are ordinary focusable controls with labels.
+    bubble colour preference; changing the preference restyles all of them. The bubble's
+    primary circle and the panel's filled buttons are both opaque accent.
+11. **Light and dark.** Surface, text and outline come from the app's XML theme, which
+    has a night variant (`values-night/themes.xml`), so the panel and wand follow the
+    system dark mode. A panel that is already open keeps its colours until reopened.
+12. **Accessibility.** The panel's buttons are ordinary focusable controls with labels.
     Panel open, action start and text updates are announced.
 
 ## Event handling cost

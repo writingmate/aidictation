@@ -63,7 +63,8 @@ class OverlayMicButtonView @JvmOverloads constructor(
         private const val TOTAL_BARS = 5
         private const val MIN_ACTIVE_BARS = 3
         private const val BACKGROUND_ALPHA = 0.82f
-        private const val PRIMARY_BUTTON_ALPHA = 0.76f
+        /** The speak button is a filled primary button: opaque accent, like the panel's apply. */
+        private const val PRIMARY_BUTTON_ALPHA = 1f
         private const val SECONDARY_SURFACE_ALPHA = 0.34f
         private const val WAVEFORM_LEVEL_GAIN = 1.35f
         private const val WAVEFORM_LEVEL_MIX = 0.08f

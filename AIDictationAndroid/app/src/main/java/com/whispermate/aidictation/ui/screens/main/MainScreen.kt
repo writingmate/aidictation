@@ -205,6 +205,11 @@ fun MainScreen(
                 onAutoStopOnSilenceToggled = { viewModel.setAutoStopOnSilenceEnabled(it) },
                 usageStatus = usageStatus,
                 onSignIn = { viewModel.openLogin() },
+                onSignInWithGoogle = if (viewModel.isGoogleSignInConfigured) {
+                    { viewModel.signInWithGoogle(context) }
+                } else {
+                    null
+                },
                 onSignOut = { viewModel.signOut() },
                 onUpgrade = { viewModel.openUpgrade() },
                 modifier = Modifier.padding(paddingValues)

@@ -44,6 +44,8 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -69,6 +71,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +104,7 @@ fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
+    onSignInWithGoogle: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -146,6 +150,7 @@ fun SettingsScreen(
         AccountSettingsSection(
             usageStatus = usageStatus,
             onSignIn = onSignIn,
+            onSignInWithGoogle = onSignInWithGoogle,
             onSignOut = onSignOut,
             onUpgrade = onUpgrade
         )
@@ -432,6 +437,7 @@ fun SettingsScreen(
 private fun AccountSettingsSection(
     usageStatus: UsageStatus,
     onSignIn: () -> Unit,
+    onSignInWithGoogle: (() -> Unit)?,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit
 ) {
@@ -483,6 +489,15 @@ private fun AccountSettingsSection(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
 
+        if (!usageStatus.isAuthenticated && onSignInWithGoogle != null) {
+            GoogleSignInButton(
+                onClick = onSignInWithGoogle,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
 
         if (usageStatus.isAuthenticated) {
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -492,6 +507,36 @@ private fun AccountSettingsSection(
                 onClick = onSignOut
             )
         }
+    }
+}
+
+/**
+ * Google's sign-in button per its branding guidelines: outlined, the untinted "G" mark,
+ * "Continue with Google". Material outlined emphasis, so it sits below the accent-filled
+ * primary actions.
+ */
+@Composable
+private fun GoogleSignInButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_google_g),
+            contentDescription = null,
+            tint = Color.Unspecified,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = stringResource(R.string.account_continue_with_google),
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

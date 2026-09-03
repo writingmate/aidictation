@@ -8,6 +8,15 @@ import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.core.net.toUri
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.whispermate.aidictation.R
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.whispermate.aidictation.BuildConfig
@@ -16,6 +25,8 @@ import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.UserProfile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.URLEncoder
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -85,6 +96,121 @@ class AuthRepository @Inject constructor(
     fun isPurchaseConfigured(): Boolean {
         return preferredPaymentLink().isNotBlank()
     }
+
+    /** Native Google sign-in needs the auth API plus the Google web client ID. */
+    fun isGoogleSignInConfigured(): Boolean {
+        return BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank() &&
+            BuildConfig.SUPABASE_URL.isNotBlank() &&
+            BuildConfig.SUPABASE_ANON_KEY.isNotBlank()
+    }
+
+    /**
+     * Signs in with a Google account through Android's Credential Manager, then trades
+     * the Google ID token for an app session at the auth API (Supabase's
+     * `grant_type=id_token` contract). The raw nonce goes to the auth API and its SHA-256
+     * to Google, which is what the API verifies against the token's nonce claim.
+     *
+     * [activityContext] must be an Activity: the account picker is shown from it.
+     * Returns true when a session was established, false when the user dismissed the
+     * picker; failures are surfaced through [authState] and a toast.
+     */
+    suspend fun signInWithGoogle(activityContext: Context): Boolean {
+        if (!isGoogleSignInConfigured()) {
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_not_configured))
+            return false
+        }
+
+        val rawNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }.toHex()
+        val hashedNonce = MessageDigest.getInstance("SHA-256")
+            .digest(rawNonce.toByteArray(Charsets.UTF_8))
+            .toHex()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(
+                GetGoogleIdOption.Builder()
+                    .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID)
+                    .setFilterByAuthorizedAccounts(false)
+                    .setAutoSelectEnabled(false)
+                    .setNonce(hashedNonce)
+                    .build()
+            )
+            .build()
+
+        val credential = try {
+            CredentialManager.create(activityContext).getCredential(activityContext, request).credential
+        } catch (error: GetCredentialCancellationException) {
+            return false
+        } catch (error: NoCredentialException) {
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_no_account))
+            return false
+        } catch (error: GetCredentialException) {
+            Log.w(TAG, "Google credential request failed", error)
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_failed))
+            return false
+        }
+
+        val idToken = (credential as? CustomCredential)
+            ?.takeIf { it.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL }
+            ?.let { runCatching { GoogleIdTokenCredential.createFrom(it.data).idToken }.getOrNull() }
+        if (idToken.isNullOrBlank()) {
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_failed))
+            return false
+        }
+
+        // Do not expose the previous user while the secure token is being replaced.
+        val previousState = _authState.value
+        _authState.value = AuthState(isLoading = true)
+        val session = exchangeGoogleIdToken(idToken, rawNonce)
+        val tokens = session.getOrElse { error ->
+            Log.w(TAG, "Google ID token exchange failed", error)
+            _authState.value = previousState
+            reportGoogleFailure(
+                activityContext,
+                error.message ?: context.getString(R.string.account_google_failed)
+            )
+            return false
+        }
+        storeTokens(tokens.first, tokens.second)
+        refreshUser()
+        return _authState.value.user != null
+    }
+
+    private suspend fun exchangeGoogleIdToken(idToken: String, rawNonce: String): Result<Pair<String, String?>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val body = JSONObject()
+                    .put("provider", "google")
+                    .put("id_token", idToken)
+                    .put("nonce", rawNonce)
+                    .toString()
+                    .toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/auth/v1/token?grant_type=id_token")
+                    .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                    .post(body)
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw sessionFailure(
+                            runCatching { JSONObject(text) }.getOrNull()
+                                ?.let { it.optString("error_description").ifBlank { it.optString("msg") } }
+                                ?.ifBlank { null }
+                                ?: context.getString(R.string.account_google_failed),
+                            response.code
+                        )
+                    }
+                    val json = JSONObject(text)
+                    json.getString("access_token") to json.optString("refresh_token").ifBlank { null }
+                }
+            }
+        }
+
+    private fun reportGoogleFailure(activityContext: Context, message: String) {
+        _authState.value = _authState.value.copy(error = message)
+        Toast.makeText(activityContext, message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     fun openLogin(context: Context) {
         if (!isAuthConfigured()) {

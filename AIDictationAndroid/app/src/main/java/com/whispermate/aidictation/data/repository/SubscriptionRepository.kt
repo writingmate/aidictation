@@ -176,6 +176,12 @@ class SubscriptionRepository @Inject constructor(
         authRepository.openLogin(context)
     }
 
+    fun isGoogleSignInConfigured(): Boolean = authRepository.isGoogleSignInConfigured()
+
+    /** [activityContext] must be an Activity; see [AuthRepository.signInWithGoogle]. */
+    suspend fun signInWithGoogle(activityContext: Context): Boolean =
+        authRepository.signInWithGoogle(activityContext)
+
     fun openUpgrade() {
         authRepository.openUpgrade(context)
     }

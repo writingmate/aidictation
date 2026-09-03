@@ -194,6 +194,10 @@ android {
         buildConfigField("String", "SUPABASE_URL", buildConfigString(authApiUrl))
         buildConfigField("String", "SUPABASE_ANON_KEY", buildConfigString(authApiKey))
         buildConfigField("String", "AUTH_WEB_URL", buildConfigString(authWebUrl))
+        // Native Google sign-in (Credential Manager). The web (server) OAuth client ID
+        // that the auth backend's Google provider is configured with; blank hides the
+        // "Continue with Google" entry point.
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", buildConfigString(configValue("GOOGLE_WEB_CLIENT_ID")))
         buildConfigField("String", "STRIPE_PAYMENT_LINK", buildConfigString(stripePaymentLink))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", buildConfigString(stripePaymentLinkAnnual))
@@ -285,6 +289,9 @@ dependencies {
     // Networking
     implementation(libs.retrofit)
     implementation(libs.retrofit.moshi)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.google.identity.googleid)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
     implementation(libs.moshi)

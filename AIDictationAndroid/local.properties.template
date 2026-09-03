@@ -34,6 +34,9 @@ AIDICTATION_POST_PROCESSING_MODEL=openai/gpt-oss-20b
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 AUTH_WEB_URL=https://aidictation.com/auth
+# Native Google sign-in: the Web application OAuth client ID from Google Cloud that the
+# auth backend's Google provider trusts. Leave empty to hide "Continue with Google".
+GOOGLE_WEB_CLIENT_ID=
 STRIPE_PAYMENT_LINK=
 STRIPE_PAYMENT_LINK_MONTHLY=
 STRIPE_PAYMENT_LINK_ANNUAL=

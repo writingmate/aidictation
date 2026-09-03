@@ -1,7 +1,7 @@
 # Android: Google sign-in
 
-The Android app offers "Continue with Google" in Settings › Account next to the
-existing web sign-in. It has two modes.
+"Continue with Google" in Settings › Account is the only way to sign in to the
+Android app; the web sign-in button was removed. It has two modes.
 
 ## Hosted flow (default, no extra setup)
 

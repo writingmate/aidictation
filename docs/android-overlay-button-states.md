@@ -79,7 +79,12 @@ Permissions shows its state.
 3. **Follows the bubble.** It sits on the side of the bubble with room and moves with
    it when dragged. Dragging the bubble to the dismiss zones hides it.
 4. **Absorbed by the panel.** Tapping it swells and fades the wand while the panel
-   blooms out of its centre. It reappears when the panel closes if a selection remains.
+   blooms out of its centre. It reappears when the panel closes if a selection remains,
+   and never while the panel's window is still on screen (the close and apply
+   animations included), so it cannot stack on top of the panel.
+5. **Always below the panel, above the bubble.** Overlay windows stack in the order
+   they are added. Whenever the bubble's window is re-added (its size changes with the
+   recording state) the wand and the panel are re-added after it.
 
 ## Rewrite panel invariants
 

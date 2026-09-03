@@ -1,80 +1,73 @@
-# Android overlay: bubble and selection-command button states
+# Android overlay: bubble, wand button and rewrite panel
 
 The Android accessibility overlay consists of four windows:
 
 - the **bubble** (`OverlayMicButtonView`): the speak button, draggable, shown while an
   editable field is focused;
-- the **command buttons**: *Fix grammar* and *Rewrite with AI*, shown beside the bubble
-  while the focused field has a selection, drawn in the bubble's secondary (translucent
-  accent) colour with an accent icon;
-- the **review card**: a command result waiting to be accepted or dismissed, shown just
-  above the keyboard;
+- the **wand button**: a single "Edit with AI" button shown beside the bubble while the
+  focused field has a selection;
+- the **rewrite panel** (`OverlayRewritePanelView`): opened from the wand, shown just
+  above the keyboard, stacked above the bubble;
 - the **dismiss zones** shown only while the bubble is being dragged.
 
 `OverlayDictationAccessibilityService` owns the state. The pure functions at the top
-of that file (`resolveBubblePresentation`, `shouldShowCommandActions`,
-`canStartSelectionCommand`, `deliveryKeepsBubbleBusy`) encode the invariants below and
-are covered by `OverlayRecordingPresentationTest`.
+of that file (`canStartSelectionCommand`, `shouldShowWandButton`) encode the visibility
+invariants and are covered by `OverlayRecordingPresentationTest`.
 
 ## Bubble presentations
 
 | Presentation | When | Look |
 | --- | --- | --- |
 | Idle | `recordingState == Idle` | 55 dp circle with the frozen waveform glyph |
-| Recording | `recordingState == Recording` (dictation or rewrite instruction) | 250 dp pill: cancel (X), live waveform, accept (check) |
-| Processing | `recordingState == Processing`, no active command | 250 dp pill: animated bars and a spinner |
-| CommandProcessing | `recordingState == Processing`, a command is active | 250 dp pill: indeterminate progress bar, the command's icon where the speak button was |
+| Recording | `recordingState == Recording` | 250 dp pill: cancel (X), live waveform, accept (check) |
+| Processing | `recordingState == Processing` | 250 dp pill: animated bars and a spinner |
 
-While a pressed command button is sliding into the bubble the bubble keeps the Idle look
-regardless of the logical state, so the button visibly lands on the speak button before
-the bubble morphs.
+The bubble takes no part in text editing: selection commands live entirely in the
+wand and its panel.
 
-## Command button invariants
+## Wand button invariants
 
-1. **Shown or absent, never disabled.** The buttons appear only when they can be tapped:
-   bubble idle, no dictation delivery in flight, and a non-blank selection in the focused
-   field. There is no dimmed, disabled, or highlighted button state.
-2. **Both buttons leave together.** When either is pressed, a copy of the pressed button
-   slides into the bubble's position and the real buttons are removed. The other button
-   never stays behind.
-3. **Only one command at a time.** A second press, or a bubble tap, is ignored while a
-   command is active. The bubble is not tappable for dictation until the command finishes.
-4. **The pressed button becomes the speak button.** After the slide the bubble shows the
-   command's icon in the speak button's circle with a progress bar beside it. For
-   *Fix grammar* this happens immediately. For *Rewrite with AI* the bubble first records
-   the instruction (same controls as dictation) and shows the icon and progress bar after
-   the instruction is accepted.
-5. **Busy until the suggestion is ready.** A rewrite keeps the icon and progress bar
-   through instruction transcription and the rewrite request. Only dictation hands the
-   bubble back early so a new dictation can replace a pending insertion.
-6. **Nothing is replaced without review.** A command result is shown on the review card
-   with deletions struck through and insertions in bold accent. *Accept* replaces the
+1. **Shown or absent, never disabled.** The wand appears only when it can be tapped:
+   bubble idle, no dictation delivery in flight, a non-blank selection in the focused
+   field, and no panel open.
+2. **Solid-border style.** Surface fill (white in a light theme), a 1.5 dp accent
+   stroke and the accent wand icon, so it reads as subordinate to the solid bubble.
+3. **Follows the bubble.** It sits on the side of the bubble with room and moves with
+   it when dragged. Dragging the bubble to the dismiss zones hides it.
+4. **Absorbed by the panel.** Tapping it swells and fades the wand while the panel
+   blooms out of its centre. It reappears when the panel closes if a selection remains.
+
+## Rewrite panel invariants
+
+1. **Layout.** The working text on top, full width, up to six lines with scrolling. One
+   row below: the action icons (Fix grammar, Rephrase, Shorter, Longer) on the left,
+   close (×) and apply (✓) on the right. No label, no inner card.
+2. **Styles.** Apply and the running action are filled accent. Every other button uses
+   the solid-border style. The panel surface is the theme's floating background.
+3. **Bloom.** Opening scales the panel up from the wand's centre with a small overshoot
+   while its corners round off, the text rises in, then the icons pop in one after
+   another, × and ✓ last. Closing withers the panel back towards the wand. Applying
+   settles it down towards the field and fades.
+4. **Working text, not the field.** Actions transform the panel's working copy and
+   chain on the current text. Nothing is written to the field until ✓.
+5. **One action at a time.** While an action runs its icon is filled and pulses, a thin
+   progress bar sweeps along the top edge, the text dims, and the other actions and ✓
+   are disabled. × still works and cancels the request.
+6. **Results land visibly.** The new text cross-fades over the old and the icon nods.
+   A failed action leaves the text unchanged and shows a toast.
+7. **Apply replaces the original selection.** ✓ writes the working text over the
    originally selected text (the current selection, else its last occurrence in the
-   field). *Dismiss* discards it. A result identical to the original shows a toast
-   instead of a card.
-7. **Ignoring a suggestion is free.** The bubble is idle while the card is showing. The
-   card is discarded, without changing text, when the user starts dictation from the
-   bubble, when the field loses focus and the bubble hides, or when the service stops.
-   The command buttons stay hidden while a review is pending, so only one suggestion
-   exists at a time.
-8. **Return to the pre-press state.** When a command fails or is cancelled (cancel tap
-   during rewrite recording, field closed, bubble hidden), or a review is dismissed, the
-   bubble is Idle and the buttons fade back in if a selection is still present. After an
-   accepted replacement the selection collapses, so the buttons stay hidden.
-9. **Hidden while the bubble is busy for dictation.** A dictation started from the bubble
-   hides the buttons even if a selection exists, and they stay hidden while the dictated
-   text is being inserted.
-10. **Follow the bubble and the keyboard.** While visible the buttons sit beside the
-    bubble, on the side with room, and move with it when it is dragged. Dragging the
-    bubble to the dismiss zones hides them. The review card sits above the keyboard and
-    follows it.
-11. **One accent colour.** The bubble, the buttons, the sliding copy and the review card
-    share the colour from the bubble colour preference; changing the preference restyles
-    all of them.
-12. **Accessibility.** The bubble is hidden from accessibility services, so the transitions
-    are announced: "Fixing grammar", "Listening for rewrite instructions", "Rewriting
-    selected text" and "Review the suggested changes". The card's buttons are ordinary
-    focusable controls.
+   field) and collapses the caret after it. Applying unchanged text simply closes.
+8. **Ignoring is free.** The bubble stays idle and usable while the panel is open.
+   Starting dictation from the bubble, the field losing focus (bubble hides), or the
+   service stopping discards the panel without changing text. × does the same with the
+   wither animation.
+9. **Follows the keyboard.** The panel sits above the keyboard and repositions when the
+   keyboard shows or hides.
+10. **One accent colour.** The bubble, the wand and the panel share the colour from the
+    bubble colour preference; changing the preference restyles all of them.
+11. **Accessibility.** The panel's buttons are ordinary focusable controls with labels.
+    Panel open, action start and text updates are announced.
 
 ## Event handling cost
 

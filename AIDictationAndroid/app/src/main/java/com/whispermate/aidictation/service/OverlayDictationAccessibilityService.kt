@@ -14,18 +14,11 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.method.ScrollingMovementMethod
-import android.text.style.ForegroundColorSpan
-import android.text.style.StrikethroughSpan
-import android.text.style.StyleSpan
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -37,9 +30,8 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.view.animation.PathInterpolator
-import android.widget.FrameLayout
-import android.widget.ImageButton
+import android.view.ViewTreeObserver
+import android.view.animation.AccelerateInterpolator
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -54,7 +46,8 @@ import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
-import com.whispermate.aidictation.util.TextChangeDiff
+import com.whispermate.aidictation.ui.views.OverlayRewritePanelView
+import com.whispermate.aidictation.ui.views.RewriteAction
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -80,39 +73,13 @@ internal enum class OverlayRecordingState {
 internal enum class OverlayBubblePresentation {
     Idle,
     Recording,
-    Processing,
-    /** A selection command (Fix grammar / Rewrite with AI) is transforming text. */
-    CommandProcessing
+    Processing
 }
 
-internal fun OverlayRecordingState.bubblePresentation(): OverlayBubblePresentation =
-    resolveBubblePresentation(this, commandActive = false, commandSlideInProgress = false)
-
-/**
- * Bubble presentation invariants:
- * - While a pressed command button is still sliding into the bubble's place the bubble
- *   keeps its idle look, so the button visibly lands on the speak button before the
- *   bubble morphs.
- * - Recording looks the same for dictation and rewrite instructions (cancel / waveform /
- *   accept).
- * - Processing with an active command shows that command's icon plus a progress bar
- *   instead of the dictation spinner.
- */
-internal fun resolveBubblePresentation(
-    recordingState: OverlayRecordingState,
-    commandActive: Boolean,
-    commandSlideInProgress: Boolean
-): OverlayBubblePresentation {
-    if (commandSlideInProgress) return OverlayBubblePresentation.Idle
-    return when (recordingState) {
-        OverlayRecordingState.Idle -> OverlayBubblePresentation.Idle
-        OverlayRecordingState.Recording -> OverlayBubblePresentation.Recording
-        OverlayRecordingState.Processing -> if (commandActive) {
-            OverlayBubblePresentation.CommandProcessing
-        } else {
-            OverlayBubblePresentation.Processing
-        }
-    }
+internal fun OverlayRecordingState.bubblePresentation(): OverlayBubblePresentation = when (this) {
+    OverlayRecordingState.Idle -> OverlayBubblePresentation.Idle
+    OverlayRecordingState.Recording -> OverlayBubblePresentation.Recording
+    OverlayRecordingState.Processing -> OverlayBubblePresentation.Processing
 }
 
 internal val OverlayRecordingState.streamsAudioLevels: Boolean
@@ -124,23 +91,16 @@ internal fun canStartSelectionCommand(
 ): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive
 
 /**
- * The command buttons are either shown and tappable, or not shown at all: there is no
- * disabled or highlighted button state. They appear only next to an idle bubble, with no
- * dictation delivery in flight, while the focused field has a non-blank selection.
+ * The wand button is either shown and tappable, or not shown at all: there is no
+ * disabled state. It appears beside an idle bubble, with no dictation delivery in
+ * flight, while the focused field has a non-blank selection and its panel is closed.
  */
-internal fun shouldShowCommandActions(
+internal fun shouldShowWandButton(
     recordingState: OverlayRecordingState,
     workflowActive: Boolean,
     hasSelection: Boolean,
-    reviewPending: Boolean = false
-): Boolean = hasSelection && !reviewPending && canStartSelectionCommand(recordingState, workflowActive)
-
-/**
- * Dictation hands the bubble back as soon as transcription finishes so a new dictation
- * can replace the pending insertion. A rewrite keeps the bubble busy until the rewritten
- * text is applied: the command icon and progress bar stay until the selection changes.
- */
-internal fun deliveryKeepsBubbleBusy(rewriteInstruction: Boolean): Boolean = rewriteInstruction
+    panelOpen: Boolean
+): Boolean = hasSelection && !panelOpen && canStartSelectionCommand(recordingState, workflowActive)
 
 /**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
@@ -171,23 +131,17 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val COMMAND_ACTION_GAP_DP = 8
         private const val COMMAND_ACTION_BUTTON_SIZE_DP = 55
         private const val COMMAND_ACTION_CONTAINER_PADDING_DP = 6
-        private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 130
+        private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 67
         private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 67
+        private const val DISMISS_ACTION_HEIGHT_DP = 104
         private const val COMMAND_ACTION_ICON_PADDING_DP = 15
         private const val COMMAND_ACTION_ELEVATION_DP = 6
+        private const val COMMAND_ACTION_STROKE_DP = 1.5f
         private const val COMMAND_ACTIONS_FADE_IN_MS = 150L
-        private const val COMMAND_SLIDE_DURATION_MS = 220L
-        /** Matches the bubble's secondary surface so the buttons read as subordinate to it. */
-        private const val COMMAND_ACTION_SECONDARY_ALPHA = 0.34f
-        private const val REVIEW_CARD_MARGIN_DP = 12
-        private const val REVIEW_CARD_PADDING_DP = 16
-        private const val REVIEW_CARD_CORNER_DP = 18
-        private const val REVIEW_CARD_MAX_LINES = 8
-        private const val REVIEW_BUTTON_HEIGHT_DP = 44
-        private const val REVIEW_DELETED_ALPHA = 0.55f
-        private const val DISMISS_ACTION_HEIGHT_DP = 104
+        private const val WAND_ABSORB_MS = 220L
+        private const val WAND_ABSORB_SCALE = 1.6f
+        private const val REWRITE_PANEL_MARGIN_DP = 12
         private const val COMMAND_CLEANUP_ID = "cleanup"
-        private const val COMMAND_REWRITE_ID = "rewrite"
 
         private val TRACKED_EVENT_TYPES = setOf(
             AccessibilityEvent.TYPE_VIEW_FOCUSED,
@@ -227,16 +181,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         )
     }
 
-    private enum class RecordingMode {
-        Dictation,
-        RewriteInstruction
-    }
-
-    private enum class CommandAction(val iconRes: Int, val labelRes: Int) {
-        FixGrammar(R.drawable.ic_cleanup, R.string.overlay_action_fix_grammar),
-        RewriteWithAi(R.drawable.ic_command_mic, R.string.overlay_action_rewrite_ai)
-    }
-
     private enum class BubbleDismissTarget {
         Snooze,
         Hide
@@ -253,12 +197,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val contextBefore: String
     )
 
-    /** A command result waiting for the user to accept or dismiss it. */
-    private data class PendingTextReview(
-        val action: CommandAction,
+    /** The text being edited in the rewrite panel, from the wand tap to apply or close. */
+    private class RewriteSession(
         val originalText: String,
-        val transformedText: String,
-        val targetNode: AccessibilityNodeInfo?
+        val contextBefore: String,
+        val targetNode: AccessibilityNodeInfo?,
+        var workingText: String,
+        var job: Job? = null
     )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -284,7 +229,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private var recordingState: OverlayRecordingState = OverlayRecordingState.Idle
     private var stopRequestedDuringStart = false
-    private var recordingMode: RecordingMode = RecordingMode.Dictation
     private val overlayWorkflowFence = ReplaceableDeliveryFence()
     private var audioWorkflowLease: AudioAttemptLease? = null
     private var audioWorkflowJob: Job? = null
@@ -298,24 +242,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var isServiceDestroyed = false
     private var stickyEditableFocusArmed = false
     private var dictationTargetNode: AccessibilityNodeInfo? = null
-    private var activeCommandAction: CommandAction? = null
-    private var pendingRewriteTarget: SelectionCommandTarget? = null
-    private var fixGrammarButton: ImageButton? = null
-    private var rewriteButton: ImageButton? = null
-    /** Transient window hosting the copy of a pressed command button as it slides into the bubble. */
-    private var commandSlideView: View? = null
-    private var commandSlideInProgress = false
-    private val commandIcons = mutableMapOf<CommandAction, Drawable>()
-    private var pendingReview: PendingTextReview? = null
-    private var reviewCardView: LinearLayout? = null
-    private var reviewCardParams: WindowManager.LayoutParams? = null
-    private var isReviewCardAttached = false
-    private var reviewApplyJob: Job? = null
+    private var wandButton: ImageView? = null
+    private var wandAbsorbing = false
+    private var rewritePanel: OverlayRewritePanelView? = null
+    private var rewritePanelParams: WindowManager.LayoutParams? = null
+    private var isRewritePanelAttached = false
+    private var rewriteSession: RewriteSession? = null
 
-    /** Single accent colour shared by the bubble and the command buttons. */
+    /** Single accent colour shared by the bubble, the wand and the panel. */
     private var bubbleAccentColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var commandChipTextColor: Int = Color.WHITE
-    private var commandChipBackgroundColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
@@ -344,13 +279,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     recordingState != OverlayRecordingState.Idle
                 ) {
                     failedToken ?: return@collect
-                    val failedMode = recordingMode
                     Toast.makeText(
                         this@OverlayDictationAccessibilityService,
                         event.message,
                         Toast.LENGTH_LONG
                     ).show()
-                    resetAfterRecording(failedMode, failedToken)
+                    resetAfterRecording(failedToken)
                 }
             }
         }
@@ -406,7 +340,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         cancelOverlayAudio("Dictation was interrupted")
         dictationTargetNode = null
-        cancelCommandSlide()
+        dismissRewritePanel()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
@@ -438,13 +372,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshBubbleBrandColor() {
-        val color = OverlayBubblePreferences.getResolvedBubbleColor(this)
-        bubbleAccentColor = color
-        // Tonal buttons: accent icon on the translucent secondary surface, so they sit
-        // quietly next to the solid bubble instead of competing with it.
-        commandChipTextColor = color
-        commandChipBackgroundColor = withAlpha(color, COMMAND_ACTION_SECONDARY_ALPHA)
-        updateCommandActionButtons()
+        bubbleAccentColor = OverlayBubblePreferences.getResolvedBubbleColor(this)
+        wandButton?.let(::styleWandButton)
+        rewritePanel?.setAccent(bubbleAccentColor, preferredOnColor(bubbleAccentColor))
     }
 
     override fun onDestroy() {
@@ -460,7 +390,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         )
         serviceScope.cancel()
         dictationTargetNode = null
-        cancelCommandSlide()
+        dismissRewritePanel()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
@@ -472,8 +402,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
         if (isServiceDestroyed) return
-        // Resolve the focused field once per pass; the bubble and the command buttons
-        // both decide from the same node.
+        // Resolve the focused field once per pass; the bubble and the wand both decide
+        // from the same node.
         val node = resolveFocusedEditableNode(source)
         if (shouldShowBubble(source, node)) {
             bubbleShouldBeVisible = true
@@ -482,6 +412,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             // Reposition only when fresh keyboard bounds are available; never
             // remove the bubble just because the IME is temporarily absent.
             if (inputMethodBounds() != null) updateBubblePosition()
+            // The panel follows the keyboard in both directions, including when it hides.
+            updateRewritePanelPosition()
             updateCommandActionsVisibility(node)
             return
         }
@@ -816,8 +748,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         } finally {
             isBubbleAttached = false
             bubble.alpha = 1f
-            cancelCommandSlide()
-            dismissTextReview()
+            dismissRewritePanel()
             hideCommandActions()
             stopBubbleAnimation()
         }
@@ -861,17 +792,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (commandActionsView != null) return
 
         val containerPadding = dp(COMMAND_ACTION_CONTAINER_PADDING_DP)
-        val buttonGap = dp(COMMAND_ACTION_GAP_DP)
         val buttonSize = dp(COMMAND_ACTION_BUTTON_SIZE_DP)
+        val label = getString(R.string.overlay_action_edit_with_ai)
 
-        fixGrammarButton = createCommandActionButton(
-            action = CommandAction.FixGrammar,
-            onClick = { executeSelectionCommand(COMMAND_CLEANUP_ID, CommandAction.FixGrammar) }
-        )
-        rewriteButton = createCommandActionButton(
-            action = CommandAction.RewriteWithAi,
-            onClick = { startRewriteInstructionRecording() }
-        )
+        val wand = ImageView(this).apply {
+            styleWandButton(this)
+            contentDescription = label
+            tooltipText = label
+            isClickable = true
+            isFocusable = true
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            isHapticFeedbackEnabled = true
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                openRewritePanel()
+            }
+        }
+        wandButton = wand
 
         commandActionsView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -880,14 +817,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             clipChildren = false
             clipToPadding = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-
-            addView(fixGrammarButton, LinearLayout.LayoutParams(buttonSize, buttonSize))
-            addView(rewriteButton, LinearLayout.LayoutParams(
-                buttonSize,
-                buttonSize
-            ).apply {
-                leftMargin = buttonGap
-            })
+            addView(wand, LinearLayout.LayoutParams(buttonSize, buttonSize))
         }
 
         commandActionsParams = WindowManager.LayoutParams(
@@ -903,63 +833,25 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             y = defaultBubbleY()
             windowAnimations = 0
         }
-
-        updateCommandActionButtons()
-        updateBubbleUi()
     }
 
-    private fun createCommandActionButton(
-        action: CommandAction,
-        onClick: () -> Unit
-    ): ImageButton {
-        val label = getString(action.labelRes)
-        return ImageButton(this).apply {
-            styleCommandActionImage(this, action)
-            contentDescription = label
-            tooltipText = label
-            minimumWidth = 0
-            minimumHeight = 0
-            isFocusable = true
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            isHapticFeedbackEnabled = true
-            setOnClickListener {
-                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                onClick()
-            }
-        }
-    }
-
-    /**
-     * Shared look for a command button and for the copy of it that slides into the
-     * bubble, so the two are indistinguishable during the hand-off.
-     */
-    private fun styleCommandActionImage(view: ImageView, action: CommandAction) {
+    /** Solid-border style: surface fill, accent stroke, accent wand icon. */
+    private fun styleWandButton(view: ImageView) {
         val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
-        view.setImageResource(action.iconRes)
-        view.imageTintList = ColorStateList.valueOf(commandChipTextColor)
+        view.setImageResource(R.drawable.ic_command_mic)
+        view.imageTintList = ColorStateList.valueOf(bubbleAccentColor)
         view.scaleType = ImageView.ScaleType.CENTER
         view.setPadding(padding, padding, padding, padding)
         view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
-        view.background = commandActionBackground(commandChipBackgroundColor, commandChipTextColor)
+        view.background = outlinedCircleBackground(overlaySurfaceColor(), bubbleAccentColor)
     }
 
-    private fun commandButtonFor(action: CommandAction): ImageButton? = when (action) {
-        CommandAction.FixGrammar -> fixGrammarButton
-        CommandAction.RewriteWithAi -> rewriteButton
-    }
-
-    private fun commandIcon(action: CommandAction): Drawable? {
-        return commandIcons.getOrPut(action) {
-            val drawable = ContextCompat.getDrawable(this, action.iconRes)?.mutate() ?: return null
-            drawable.setTint(Color.WHITE)
-            drawable
-        }
-    }
-
-    private fun commandActionBackground(backgroundColor: Int, rippleColor: Int): RippleDrawable {
+    private fun outlinedCircleBackground(fillColor: Int, accent: Int): RippleDrawable {
+        val strokeWidth = (COMMAND_ACTION_STROKE_DP * resources.displayMetrics.density).toInt().coerceAtLeast(1)
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(backgroundColor)
+            setColor(fillColor)
+            setStroke(strokeWidth, accent)
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -967,25 +859,32 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         val surfaceInset = dp(4)
         return RippleDrawable(
-            ColorStateList.valueOf(withAlpha(rippleColor, 0.24f)),
+            ColorStateList.valueOf(withAlpha(accent, 0.24f)),
             InsetDrawable(content, surfaceInset),
             InsetDrawable(mask, surfaceInset)
         )
     }
 
+    private fun overlaySurfaceColor(): Int = resolveThemeColor(
+        android.R.attr.colorBackgroundFloating,
+        resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
+    )
+
     private fun updateCommandActionsVisibility(node: AccessibilityNodeInfo?) {
-        if (!isBubbleAttached || commandSlideInProgress) {
+        if (!isBubbleAttached) {
             hideCommandActions()
             return
         }
+        // The wand is mid-absorb into the panel; let that animation finish.
+        if (wandAbsorbing) return
 
         val workflowActive = hasOverlayWorkflow()
-        // Only inspect the field when the buttons could be shown at all.
-        val reviewPending = pendingReview != null
-        val hasSelection = !reviewPending &&
+        val panelOpen = rewriteSession != null
+        // Only inspect the field when the wand could be shown at all.
+        val hasSelection = !panelOpen &&
             canStartSelectionCommand(recordingState, workflowActive) &&
             hasSelectedEditableText(node)
-        if (shouldShowCommandActions(recordingState, workflowActive, hasSelection, reviewPending)) {
+        if (shouldShowWandButton(recordingState, workflowActive, hasSelection, panelOpen)) {
             showCommandActions()
         } else {
             hideCommandActions()
@@ -1012,11 +911,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         try {
             actions.alpha = 0f
+            wandButton?.let(::styleWandButton)
             windowManager.addView(actions, params)
             isCommandActionsAttached = true
             updateCommandActionsPosition()
             actions.post { updateCommandActionsPosition() }
-            updateCommandActionButtons()
             actions.animate().alpha(1f).setDuration(COMMAND_ACTIONS_FADE_IN_MS).start()
         } catch (e: Exception) {
             actions.alpha = 1f
@@ -1035,6 +934,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val actions = commandActionsView ?: return
         try {
             actions.animate().cancel()
+            wandButton?.animate()?.cancel()
             windowManager.removeView(actions)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to remove command actions overlay", e)
@@ -1350,7 +1250,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun onBubbleTapped() {
         hideDismissActions()
         when (recordingState) {
-            OverlayRecordingState.Idle -> startRecording(mode = RecordingMode.Dictation)
+            OverlayRecordingState.Idle -> startRecording()
             OverlayRecordingState.Recording -> stopRecording(discard = false)
             OverlayRecordingState.Processing -> Unit
         }
@@ -1388,7 +1288,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             windowManager.updateViewLayout(bubble, params)
             updateCommandActionsPosition()
             updateDismissActionsPosition()
-            updateReviewCardPosition()
+            updateRewritePanelPosition()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update bubble position", e)
         }
@@ -1418,78 +1318,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .putInt(OverlayBubblePreferences.X_KEY, x)
             .putInt(OverlayBubblePreferences.Y_KEY, y)
             .apply()
-    }
-
-    private fun executeSelectionCommand(commandId: String, action: CommandAction) {
-        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
-
-        val target = resolveSelectionCommandTarget()
-        if (target == null) {
-            hideCommandActions()
-            return
-        }
-
-        dictationTargetNode = resolveFocusedEditableNode(null)
-        activeCommandAction = action
-        recordingMode = RecordingMode.Dictation
-        recordingState = OverlayRecordingState.Processing
-        slideCommandButtonIntoBubble(action)
-        announceCommandState(R.string.overlay_action_fix_grammar_state_active)
-
-        serviceScope.launch {
-            try {
-                subscriptionRepository.checkCanTranscribe().onFailure { error ->
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        error.message ?: getString(R.string.usage_limit_reached),
-                        Toast.LENGTH_LONG
-                    ).show()
-                    return@launch
-                }
-
-                val command = resolveCommand(commandId)
-                if (command == null) {
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        R.string.overlay_command_unavailable,
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    return@launch
-                }
-
-                val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
-                val result = CommandClient.execute(
-                    command = command,
-                    targetText = target.selectedText,
-                    context = target.contextBefore,
-                    additionalInstructions = contextRules
-                )
-                result.onSuccess { transformed ->
-                    if (transformed.isBlank()) return@onSuccess
-                    presentTextReview(
-                        PendingTextReview(
-                            action = action,
-                            originalText = target.selectedText,
-                            transformedText = transformed,
-                            targetNode = dictationTargetNode
-                        )
-                    )
-                }.onFailure { error ->
-                    Log.e(TAG, "Command '${command.name}' failed", error)
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        getString(R.string.overlay_command_failed, command.name),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            } finally {
-                recordingState = OverlayRecordingState.Idle
-                activeCommandAction = null
-                dictationTargetNode = null
-                updateBubbleUi()
-                refreshOverlayVisibility(null)
-            }
-        }
     }
 
     private suspend fun resolveCommand(commandId: String): Command? {
@@ -1570,48 +1398,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startRewriteInstructionRecording() {
-        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
-
-        val target = resolveSelectionCommandTarget()
-        if (target == null) {
-            hideCommandActions()
-            return
-        }
-
-        pendingRewriteTarget = target
-        activeCommandAction = CommandAction.RewriteWithAi
-        startRecording(mode = RecordingMode.RewriteInstruction)
-
-        // startRecording clears the command when it cannot start (no field, no mic
-        // permission); the buttons then simply stay where they are.
-        if (recordingState == OverlayRecordingState.Recording &&
-            activeCommandAction == CommandAction.RewriteWithAi
-        ) {
-            slideCommandButtonIntoBubble(CommandAction.RewriteWithAi)
-            announceCommandState(R.string.overlay_action_rewrite_ai_state_listening)
-        }
-    }
-
-    private fun startRecording(mode: RecordingMode) {
+    private fun startRecording() {
         if (recordingState != OverlayRecordingState.Idle) return
 
-        // Starting anything new is how the user ignores a pending suggestion.
-        dismissTextReview()
-
-        if (mode == RecordingMode.Dictation) {
-            pendingRewriteTarget = null
-            activeCommandAction = null
-            hideCommandActions()
-        }
+        // Starting dictation is how the user ignores an open edit panel.
+        dismissRewritePanel()
+        hideCommandActions()
 
         val focusedNode = resolveFocusedEditableNode(null)
         if (focusedNode == null && !stickyEditableFocusArmed) {
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-                updateBubbleUi()
-            }
             Toast.makeText(this, "Focus a text field first", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1619,30 +1414,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // insert-time acquisition re-resolves with retries.
         dictationTargetNode = focusedNode
 
-        if (mode == RecordingMode.RewriteInstruction && pendingRewriteTarget == null) {
-            activeCommandAction = null
-            Toast.makeText(this, R.string.overlay_command_apply_failed, Toast.LENGTH_SHORT).show()
-            updateBubbleUi()
-            return
-        }
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-                updateBubbleUi()
-            }
             Toast.makeText(this, "Microphone permission is required", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val startSnapshot = if (mode == RecordingMode.Dictation) {
-            focusedNode?.let { captureEditableTextSnapshot(it) }
-        } else {
-            null
-        }
+        val startSnapshot = focusedNode?.let { captureEditableTextSnapshot(it) }
         val cursorContext = startSnapshot
             ?.text
             ?.take(startSnapshot.selectionStart)
@@ -1652,7 +1431,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         cancelDeliveryForReplacement()
         val token = overlayWorkflowFence.beginAudio()
-        recordingMode = mode
         stopRequestedDuringStart = false
         // Show recording immediately. Recorder initialization and settings
         // loading happen asynchronously below and must not present as a
@@ -1662,8 +1440,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         audioWorkflowJob = serviceScope.launch {
             try {
-                val contextRules = if (mode == RecordingMode.Dictation) {
-                    try {
+                val contextRules = try {
                         withTimeout(SETTINGS_SNAPSHOT_TIMEOUT_MS) {
                             appPreferences.getInstructionsForApp(contextPackageAtStart)
                         }
@@ -1674,7 +1451,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                                 "Your transcription settings could not be loaded. Try again.",
                                 Toast.LENGTH_LONG
                             ).show()
-                            resetAfterRecording(mode, token)
+                            resetAfterRecording(token)
                             return@launch
                         }
                         throw error
@@ -1684,12 +1461,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                             "Your transcription settings could not be loaded. Try again.",
                             Toast.LENGTH_LONG
                         ).show()
-                        resetAfterRecording(mode, token)
+                        resetAfterRecording(token)
                         return@launch
                     }
-                } else {
-                    null
-                }
                 val started = audioProcessingCoordinator.startCapture(
                     owner = AndroidAudioAttemptOwner.OVERLAY,
                     workflowToken = token,
@@ -1714,7 +1488,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         R.string.dictation_recording_not_saved,
                         Toast.LENGTH_LONG
                     ).show()
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                     return@launch
                 }
                 val lease = started.getOrThrow()
@@ -1732,7 +1506,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                             expectedWorkflowToken = token
                         )
                     }
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                     return@launch
                 }
 
@@ -1762,7 +1536,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         expectedLease = audioWorkflowLease,
                         expectedWorkflowToken = token
                     )
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                 }
                 throw error
             }
@@ -1771,7 +1545,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun stopRecording(discard: Boolean) {
         if (recordingState != OverlayRecordingState.Recording) return
-        val mode = recordingMode
         val token = overlayWorkflowFence.currentToken() ?: return
         if (!ownsAudioPhase(token)) return
 
@@ -1782,7 +1555,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             stopRequestedDuringStart = true
             if (discard) {
                 audioWorkflowJob?.cancel()
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
             }
             return
         }
@@ -1797,7 +1570,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 expectedLease = audioWorkflowLease,
                 expectedWorkflowToken = token
             )
-            resetAfterRecording(mode, token)
+            resetAfterRecording(token)
             return
         }
 
@@ -1806,9 +1579,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // cannot trigger a second stop while finalization is in progress.
         recordingState = OverlayRecordingState.Processing
         updateBubbleUi()
-        if (mode == RecordingMode.RewriteInstruction) {
-            announceCommandState(R.string.overlay_action_rewrite_ai_state_processing)
-        }
 
         audioWorkflowJob = serviceScope.launch {
             val finalized = audioProcessingCoordinator.stopCapture(AndroidAudioAttemptOwner.OVERLAY)
@@ -1819,7 +1589,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         R.string.dictation_recording_not_saved,
                         Toast.LENGTH_LONG
                     ).show()
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                     return@launch
                 }
             audioWorkflowLease = finalized.lease
@@ -1831,14 +1601,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 )
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
-                    if (mode == RecordingMode.RewriteInstruction) {
-                        R.string.overlay_command_no_instruction
-                    } else {
-                        R.string.dictation_no_speech_heard
-                    },
+                    R.string.dictation_no_speech_heard,
                     Toast.LENGTH_LONG
                 ).show()
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
                 return@launch
             }
 
@@ -1853,19 +1619,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     R.string.dictation_text_field_lost,
                     Toast.LENGTH_LONG
                 ).show()
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
                 return@launch
             }
 
             try {
-                when (mode) {
-                    RecordingMode.Dictation -> processRecording(finalized, token)
-                    RecordingMode.RewriteInstruction -> processRewriteInstructionRecording(
-                        finalized = finalized,
-                        target = pendingRewriteTarget,
-                        token = token
-                    )
-                }
+                processRecording(finalized, token)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -1876,7 +1635,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     Toast.LENGTH_LONG
                 ).show()
             } finally {
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
             }
         }
     }
@@ -1890,14 +1649,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ownsDelivery(token: Long): Boolean =
         overlayWorkflowFence.ownsDelivery(token)
 
-    private suspend fun beginDeliveryPhase(token: Long, rewriteInstruction: Boolean): Boolean {
+    private suspend fun beginDeliveryPhase(token: Long): Boolean {
         if (!overlayWorkflowFence.beginDelivery(token)) return false
         val currentJob = kotlin.coroutines.coroutineContext[Job] ?: return false
         audioWorkflowJob = null
         deliveryJob = currentJob
-        if (!deliveryKeepsBubbleBusy(rewriteInstruction)) {
-            recordingState = OverlayRecordingState.Idle
-        }
+        recordingState = OverlayRecordingState.Idle
         updateBubbleUi()
         refreshOverlayVisibility(null)
         return true
@@ -1909,18 +1666,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         previous?.cancel(CancellationException("A new dictation replaced the previous delivery"))
     }
 
-    private fun resetAfterRecording(mode: RecordingMode, token: Long) {
+    private fun resetAfterRecording(token: Long) {
         if (!overlayWorkflowFence.finish(token)) return
         audioWorkflowJob = null
         deliveryJob = null
         audioWorkflowLease = null
         recordingState = OverlayRecordingState.Idle
         dictationTargetNode = null
-        if (mode == RecordingMode.RewriteInstruction) {
-            activeCommandAction = null
-            pendingRewriteTarget = null
-        }
-        recordingMode = RecordingMode.Dictation
         updateBubbleUi()
         refreshOverlayVisibility(null)
     }
@@ -1929,7 +1681,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val token = overlayWorkflowFence.currentToken() ?: return
         val lease = audioWorkflowLease
         val wasAudio = overlayWorkflowFence.currentPhase() == ReplaceableDeliveryFence.Phase.AUDIO
-        val mode = recordingMode
         audioWorkflowJob?.cancel()
         audioWorkflowJob = null
         deliveryJob?.cancel(CancellationException(reason))
@@ -1944,7 +1695,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 expectedWorkflowToken = token
             )
         }
-        resetAfterRecording(mode, token)
+        resetAfterRecording(token)
     }
 
     private suspend fun processRecording(finalized: FinalizedAndroidCapture, token: Long) {
@@ -1982,7 +1733,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 return
             }
         subscriptionRepository.recordUsageClaim(processed.usageClaimId)
-        if (!beginDeliveryPhase(token, rewriteInstruction = false)) return
+        if (!beginDeliveryPhase(token)) return
 
         // Command detection and execution (separate from transcription)
         val enabledCommands = runCatching {
@@ -2027,93 +1778,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 Toast.LENGTH_LONG
             ).show()
         }
-    }
-
-    private suspend fun processRewriteInstructionRecording(
-        finalized: FinalizedAndroidCapture,
-        target: SelectionCommandTarget?,
-        token: Long
-    ) {
-        val access = checkAccessForFinalizedRecording(finalized)
-        access.onFailure { error ->
-            audioProcessingCoordinator.failBeforeRecognition(
-                finalized,
-                error.message ?: "Transcription is not available right now. Your audio was saved."
-            )
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                error.message ?: getString(R.string.usage_limit_reached),
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-
-        if (target == null) {
-            audioProcessingCoordinator.failBeforeRecognition(
-                finalized,
-                "The selected text was no longer available. Your audio was saved."
-            )
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                R.string.overlay_command_apply_failed,
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val processing = audioProcessingCoordinator.processRecognition(finalized)
-            .getOrElse { error ->
-                Log.e(TAG, "Instruction transcription failed", error)
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    error.message ?: "Transcription failed. Your audio is available in History.",
-                    Toast.LENGTH_LONG
-                ).show()
-                return
-            }
-        subscriptionRepository.recordUsageClaim(processing.usageClaimId)
-        if (!beginDeliveryPhase(token, rewriteInstruction = true)) return
-
-        val instruction = processing.text
-        if (instruction.isBlank()) {
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                R.string.overlay_command_no_instruction,
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
-        if (!ownsDelivery(token)) return
-        val commandResult = CommandClient.executeInstruction(
-            instruction = instruction,
-            targetText = target.selectedText,
-            context = target.contextBefore,
-            additionalInstructions = contextRules
-        )
-        if (!ownsDelivery(token)) return
-
-        val transformed = commandResult.getOrElse { error ->
-            if (!ownsDelivery(token)) return
-            Log.e(TAG, "Rewrite instruction failed", error)
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                getString(R.string.overlay_command_failed, getString(R.string.overlay_action_rewrite_ai)),
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-        if (transformed.isBlank() || !ownsDelivery(token)) return
-
-        presentTextReview(
-            PendingTextReview(
-                action = CommandAction.RewriteWithAi,
-                originalText = target.selectedText,
-                transformedText = transformed,
-                targetNode = dictationTargetNode
-            )
-        )
     }
 
     private suspend fun checkAccessForFinalizedRecording(
@@ -2528,149 +2192,224 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .lowercase()
     }
 
-    /**
-     * The buttons have a single visual state. Whether they are tappable is decided by
-     * [updateCommandActionsVisibility]: a button that cannot be tapped is not on screen.
-     */
-    private fun updateCommandActionButtons() {
-        fixGrammarButton?.let { styleCommandActionImage(it, CommandAction.FixGrammar) }
-        rewriteButton?.let { styleCommandActionImage(it, CommandAction.RewriteWithAi) }
-    }
+    // MARK: - Rewrite panel
 
     /**
-     * The bubble is hidden from accessibility services, so state changes that used to be
-     * exposed as button state descriptions are announced explicitly instead.
+     * Opens the panel from the wand: the wand swells and fades while the panel blooms
+     * out of the wand's centre. The selection is captured now; the panel then edits its
+     * own working copy until the user applies or closes it.
      */
-    private fun announceCommandState(messageRes: Int) {
-        // Deprecated in favour of live regions, which need an accessible host view; the
-        // overlay deliberately has none, so a one-off announcement is the right tool here.
-        @Suppress("DEPRECATION")
-        bubbleView?.announceForAccessibility(getString(messageRes))
-    }
+    private fun openRewritePanel() {
+        if (rewriteSession != null || !isBubbleAttached) return
+        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
 
-    /**
-     * Moves a copy of the pressed command button from its position to the bubble's
-     * position in a transient, non-touchable overlay window. Both overlay windows clip
-     * to their own bounds, so the copy lives in a window that spans both. The real
-     * buttons are removed once the copy is on screen and the bubble keeps its idle look
-     * until the copy lands; [finishCommandSlide] then applies the busy presentation.
-     */
-    private fun slideCommandButtonIntoBubble(action: CommandAction) {
-        cancelCommandSlide()
-        val button = commandButtonFor(action)
-        val bubble = bubbleView
-        if (button == null || bubble == null || !isCommandActionsAttached || !isBubbleAttached ||
-            button.width <= 0 || bubble.width <= 0
-        ) {
+        val target = resolveSelectionCommandTarget()
+        if (target == null) {
             hideCommandActions()
-            updateBubbleUi()
             return
         }
 
-        val buttonLocation = IntArray(2).also(button::getLocationOnScreen)
-        val bubbleLocation = IntArray(2).also(bubble::getLocationOnScreen)
-        val shadowPadding = dp(COMMAND_ACTION_CONTAINER_PADDING_DP)
-        val left = minOf(buttonLocation[0], bubbleLocation[0]) - shadowPadding
-        val top = minOf(buttonLocation[1], bubbleLocation[1]) - shadowPadding
-        val right = maxOf(buttonLocation[0] + button.width, bubbleLocation[0] + bubble.width) + shadowPadding
-        val bottom = maxOf(buttonLocation[1] + button.height, bubbleLocation[1] + bubble.height) + shadowPadding
+        val session = RewriteSession(
+            originalText = target.selectedText,
+            contextBefore = target.contextBefore,
+            targetNode = resolveFocusedEditableNode(null),
+            workingText = target.selectedText
+        )
+        rewriteSession = session
+        val wandCenter = wandCenterOnScreen()
 
-        val ghost = ImageView(this).apply {
-            styleCommandActionImage(this, action)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        val panel = OverlayRewritePanelView(this).apply {
+            setAccent(bubbleAccentColor, preferredOnColor(bubbleAccentColor))
+            setText(session.workingText, animate = false)
+            onAction = { action -> runRewriteAction(action) }
+            onClose = { closeRewritePanel() }
+            onApply = { applyRewritePanel() }
         }
-        val container = FrameLayout(this).apply {
-            clipChildren = false
-            clipToPadding = false
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            addView(
-                ghost,
-                FrameLayout.LayoutParams(button.width, button.height).apply {
-                    leftMargin = buttonLocation[0] - left
-                    topMargin = buttonLocation[1] - top
-                }
-            )
-        }
+        val margin = dp(REWRITE_PANEL_MARGIN_DP)
         val params = WindowManager.LayoutParams(
-            right - left,
-            bottom - top,
+            (resources.displayMetrics.widthPixels - 2 * margin).coerceAtLeast(margin),
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = left
-            y = top
+            x = margin
+            y = margin
             windowAnimations = 0
         }
+        rewritePanel = panel
+        rewritePanelParams = params
+        updateRewritePanelPosition()
 
         try {
-            windowManager.addView(container, params)
+            panel.alpha = 0f
+            windowManager.addView(panel, params)
+            isRewritePanelAttached = true
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to attach command slide overlay", e)
-            hideCommandActions()
-            updateBubbleUi()
+            Log.w(TAG, "Failed to attach rewrite panel overlay", e)
+            rewritePanel = null
+            rewritePanelParams = null
+            rewriteSession = null
             return
         }
-        commandSlideView = container
-        commandSlideInProgress = true
-        updateBubbleUi()
-        // Swap the real button for its copy only once the copy has been drawn.
-        container.post { hideCommandActions() }
 
-        ghost.animate()
-            .translationX((bubbleLocation[0] - buttonLocation[0]).toFloat())
-            .translationY((bubbleLocation[1] - buttonLocation[1]).toFloat())
-            .setDuration(COMMAND_SLIDE_DURATION_MS)
-            .setInterpolator(PathInterpolator(0.4f, 0f, 0.2f, 1f))
-            .withEndAction { finishCommandSlide() }
+        absorbWandButton()
+        // Bloom once the panel has a size: the pivot is the wand's centre in panel coordinates.
+        panel.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                panel.viewTreeObserver.removeOnPreDrawListener(this)
+                if (rewritePanel !== panel) return true
+                updateRewritePanelPosition()
+                panel.playOpen(
+                    pivotX = (wandCenter[0] - params.x).toFloat().coerceIn(0f, panel.width.toFloat()),
+                    pivotY = (wandCenter[1] - params.y).toFloat().coerceIn(0f, panel.height.toFloat())
+                )
+                return true
+            }
+        })
+        announceOverlayState(getString(R.string.overlay_panel_opened))
+    }
+
+    private fun wandCenterOnScreen(): IntArray {
+        val location = IntArray(2)
+        val wand = wandButton
+        if (wand != null && isCommandActionsAttached && wand.width > 0) {
+            wand.getLocationOnScreen(location)
+            location[0] += wand.width / 2
+            location[1] += wand.height / 2
+        } else {
+            val bubble = bubbleParams
+            location[0] = (bubble?.x ?: 0) + currentBubbleWidthPx() / 2
+            location[1] = (bubble?.y ?: 0) + currentBubbleHeightPx() / 2
+        }
+        return location
+    }
+
+    /** The wand swells and fades as the panel takes over, then its window goes away. */
+    private fun absorbWandButton() {
+        val wand = wandButton
+        if (wand == null || !isCommandActionsAttached) {
+            hideCommandActions()
+            return
+        }
+        wandAbsorbing = true
+        wand.animate().cancel()
+        wand.animate()
+            .scaleX(WAND_ABSORB_SCALE)
+            .scaleY(WAND_ABSORB_SCALE)
+            .alpha(0f)
+            .setDuration(WAND_ABSORB_MS)
+            .setInterpolator(AccelerateInterpolator())
+            .withEndAction {
+                wandAbsorbing = false
+                hideCommandActions()
+                wand.scaleX = 1f
+                wand.scaleY = 1f
+                wand.alpha = 1f
+            }
             .start()
     }
 
-    // MARK: - Text review card
+    /** Runs one action on the panel's working text. Actions chain on the current text. */
+    private fun runRewriteAction(action: RewriteAction) {
+        val session = rewriteSession ?: return
+        val panel = rewritePanel ?: return
+        if (session.job?.isActive == true) return
 
-    /**
-     * Shows a command result for the user to accept or dismiss instead of replacing the
-     * text straight away. The bubble is already back to idle by the time this is called,
-     * so dictation stays available; starting it, or hiding the bubble, discards the
-     * suggestion. The command buttons stay hidden while a review is pending.
-     */
-    private fun presentTextReview(review: PendingTextReview) {
-        dismissTextReview()
-        if (!isBubbleAttached) return
+        val label = getString(action.labelRes)
+        panel.setWorking(action)
+        announceOverlayState(getString(R.string.overlay_panel_working, label))
+        session.job = serviceScope.launch {
+            val result = try {
+                transformWorkingText(action, session)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                Result.failure(error)
+            }
+            if (rewriteSession !== session || rewritePanel !== panel) return@launch
 
-        val segments = TextChangeDiff.diff(review.originalText, review.transformedText)
-        if (!TextChangeDiff.hasChanges(segments)) {
-            Toast.makeText(this, R.string.overlay_review_no_changes, Toast.LENGTH_SHORT).show()
+            val transformed = result.getOrNull()
+            if (transformed.isNullOrBlank()) {
+                val error = result.exceptionOrNull()
+                Log.e(TAG, "Rewrite action $action failed", error)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    error?.message ?: getString(R.string.overlay_command_failed, label),
+                    Toast.LENGTH_SHORT
+                ).show()
+                panel.setWorking(null)
+                return@launch
+            }
+
+            session.workingText = transformed
+            panel.setWorking(null)
+            panel.setText(transformed, animate = true)
+            panel.nod(action)
+            announceOverlayState(getString(R.string.overlay_panel_updated))
+        }
+    }
+
+    private suspend fun transformWorkingText(action: RewriteAction, session: RewriteSession): Result<String> {
+        subscriptionRepository.checkCanTranscribe().onFailure { error ->
+            return Result.failure(IllegalStateException(error.message ?: getString(R.string.usage_limit_reached), error))
+        }
+        val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
+        return when (action) {
+            RewriteAction.FixGrammar -> {
+                val command = resolveCommand(COMMAND_CLEANUP_ID)
+                    ?: return Result.failure(IllegalStateException(getString(R.string.overlay_command_unavailable)))
+                CommandClient.execute(
+                    command = command,
+                    targetText = session.workingText,
+                    context = session.contextBefore,
+                    additionalInstructions = contextRules
+                )
+            }
+            RewriteAction.Rephrase,
+            RewriteAction.Shorter,
+            RewriteAction.Longer -> CommandClient.executeInstruction(
+                instruction = rewriteInstruction(action),
+                targetText = session.workingText,
+                context = session.contextBefore,
+                additionalInstructions = contextRules
+            )
+        }
+    }
+
+    private fun rewriteInstruction(action: RewriteAction): String = when (action) {
+        RewriteAction.FixGrammar -> "Fix grammar, spelling and punctuation. Keep the wording and meaning."
+        RewriteAction.Rephrase -> "Rephrase the text naturally. Keep its meaning, tone and roughly its length."
+        RewriteAction.Shorter -> "Make the text noticeably shorter while keeping its meaning and tone."
+        RewriteAction.Longer -> "Make the text longer by expanding it naturally, keeping its meaning and tone."
+    }
+
+    /** Apply: the panel settles towards the field while the working text replaces the selection. */
+    private fun applyRewritePanel() {
+        val session = rewriteSession ?: return
+        val panel = rewritePanel ?: return
+        if (session.job?.isActive == true) return
+        if (session.workingText == session.originalText) {
+            closeRewritePanel()
             return
         }
 
-        pendingReview = review
-        hideCommandActions()
-        showReviewCard(review, segments)
-        announceCommandState(R.string.overlay_review_ready)
-    }
+        rewriteSession = null
+        if (isRewritePanelAttached) {
+            panel.playApply { removeRewritePanel() }
+        } else {
+            removeRewritePanel()
+        }
 
-    private fun dismissTextReview() {
-        pendingReview = null
-        hideReviewCard()
-    }
-
-    private fun acceptTextReview() {
-        val review = pendingReview ?: return
-        dismissTextReview()
-        reviewApplyJob?.cancel()
-        reviewApplyJob = serviceScope.launch {
-            dictationTargetNode = review.targetNode
+        serviceScope.launch {
+            dictationTargetNode = session.targetNode
             try {
-                val applied = replaceSelectionOrMatchedText(review.originalText, review.transformedText)
+                val applied = replaceSelectionOrMatchedText(session.originalText, session.workingText)
                 if (applied) {
-                    lastDictatedText = review.transformedText
-                    if (review.action == CommandAction.FixGrammar) {
-                        subscriptionRepository.recordWords(review.transformedText)
-                    }
+                    lastDictatedText = session.workingText
+                    subscriptionRepository.recordWords(session.workingText)
                 } else {
                     Toast.makeText(
                         this@OverlayDictationAccessibilityService,
@@ -2685,262 +2424,81 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun showReviewCard(review: PendingTextReview, segments: List<TextChangeDiff.Segment>) {
-        hideReviewCard()
-        val card = buildReviewCard(review, segments)
-        val margin = dp(REVIEW_CARD_MARGIN_DP)
-        val width = (resources.displayMetrics.widthPixels - 2 * margin).coerceAtLeast(margin)
-        val params = WindowManager.LayoutParams(
-            width,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = margin
-            y = margin
-            windowAnimations = 0
+    /** Close: wither back towards the wand's place without touching the field. */
+    private fun closeRewritePanel() {
+        val session = rewriteSession ?: return
+        session.job?.cancel()
+        rewriteSession = null
+        val panel = rewritePanel
+        val params = rewritePanelParams
+        if (panel == null || params == null || !isRewritePanelAttached) {
+            removeRewritePanel()
+            refreshOverlayVisibility(null)
+            return
         }
-        reviewCardView = card
-        reviewCardParams = params
-        updateReviewCardPosition()
-
-        try {
-            card.alpha = 0f
-            windowManager.addView(card, params)
-            isReviewCardAttached = true
-            card.post { updateReviewCardPosition() }
-            card.animate().alpha(1f).setDuration(COMMAND_ACTIONS_FADE_IN_MS).start()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to attach review card overlay", e)
-            reviewCardView = null
-            reviewCardParams = null
-            pendingReview = null
+        val center = wandCenterOnScreen()
+        panel.playClose(
+            pivotX = (center[0] - params.x).toFloat().coerceIn(0f, panel.width.toFloat()),
+            pivotY = (center[1] - params.y).toFloat().coerceIn(0f, panel.height.toFloat())
+        ) {
+            removeRewritePanel()
+            refreshOverlayVisibility(null)
         }
     }
 
-    private fun hideReviewCard() {
-        val card = reviewCardView
-        reviewCardView = null
-        reviewCardParams = null
-        if (!isReviewCardAttached || card == null) return
+    /** Immediate teardown, no animation: bubble hidden, dictation starting, service stopping. */
+    private fun dismissRewritePanel() {
+        rewriteSession?.job?.cancel()
+        rewriteSession = null
+        removeRewritePanel()
+    }
+
+    private fun removeRewritePanel() {
+        val panel = rewritePanel
+        rewritePanel = null
+        rewritePanelParams = null
+        panel ?: return
+        panel.cancelAnimations()
+        if (!isRewritePanelAttached) return
         try {
-            card.animate().cancel()
-            windowManager.removeView(card)
+            windowManager.removeViewImmediate(panel)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to remove review card overlay", e)
+            Log.w(TAG, "Failed to remove rewrite panel overlay", e)
         } finally {
-            isReviewCardAttached = false
+            isRewritePanelAttached = false
         }
     }
 
-    /** Keeps the card just above the keyboard, or at the bottom of the screen without one. */
-    private fun updateReviewCardPosition() {
-        val card = reviewCardView ?: return
-        val params = reviewCardParams ?: return
-        val margin = dp(REVIEW_CARD_MARGIN_DP)
-        val cardHeight = card.height.takeIf { it > 0 } ?: run {
-            card.measure(
+    /** Keeps the panel just above the keyboard, or at the bottom of the screen without one. */
+    private fun updateRewritePanelPosition() {
+        val panel = rewritePanel ?: return
+        val params = rewritePanelParams ?: return
+        val margin = dp(REWRITE_PANEL_MARGIN_DP)
+        val panelHeight = panel.height.takeIf { it > 0 } ?: run {
+            panel.measure(
                 View.MeasureSpec.makeMeasureSpec(params.width, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
             )
-            card.measuredHeight
+            panel.measuredHeight
         }
-        params.y = (keyboardTop() - cardHeight - margin).coerceAtLeast(margin)
-        if (!isReviewCardAttached) return
+        params.y = (keyboardTop() - panelHeight - margin).coerceAtLeast(margin)
+        if (!isRewritePanelAttached) return
         try {
-            windowManager.updateViewLayout(card, params)
+            windowManager.updateViewLayout(panel, params)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to update review card position", e)
+            Log.w(TAG, "Failed to update rewrite panel position", e)
         }
     }
 
-    private fun buildReviewCard(
-        review: PendingTextReview,
-        segments: List<TextChangeDiff.Segment>
-    ): LinearLayout {
-        val surfaceColor = resolveThemeColor(
-            android.R.attr.colorBackgroundFloating,
-            resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
-        )
-        val onSurfaceColor = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
-        val padding = dp(REVIEW_CARD_PADDING_DP)
-        val corner = dp(REVIEW_CARD_CORNER_DP).toFloat()
-
-        val title = TextView(this).apply {
-            text = getString(review.action.labelRes)
-            setTextColor(onSurfaceColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            alpha = 0.7f
-            setCompoundDrawablesRelativeWithIntrinsicBounds(
-                ContextCompat.getDrawable(this@OverlayDictationAccessibilityService, review.action.iconRes)
-                    ?.mutate()
-                    ?.apply {
-                        setTint(bubbleAccentColor)
-                        setBounds(0, 0, dp(16), dp(16))
-                    },
-                null,
-                null,
-                null
-            )
-            compoundDrawablePadding = dp(8)
-        }
-
-        val body = TextView(this).apply {
-            text = renderReviewSegments(segments, onSurfaceColor)
-            setTextColor(onSurfaceColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            setLineSpacing(0f, 1.15f)
-            maxLines = REVIEW_CARD_MAX_LINES
-            movementMethod = ScrollingMovementMethod.getInstance()
-            isVerticalScrollBarEnabled = true
-            contentDescription = review.transformedText
-        }
-
-        val dismiss = createReviewButton(
-            label = getString(R.string.overlay_review_dismiss),
-            textColor = bubbleAccentColor,
-            backgroundColor = withAlpha(bubbleAccentColor, COMMAND_ACTION_SECONDARY_ALPHA),
-            onClick = { dismissTextReview() }
-        )
-        val accept = createReviewButton(
-            label = getString(R.string.overlay_review_accept),
-            textColor = preferredOnColor(bubbleAccentColor),
-            backgroundColor = bubbleAccentColor,
-            onClick = { acceptTextReview() }
-        )
-        val buttons = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            addView(dismiss, LinearLayout.LayoutParams(0, dp(REVIEW_BUTTON_HEIGHT_DP), 1f))
-            addView(
-                accept,
-                LinearLayout.LayoutParams(0, dp(REVIEW_BUTTON_HEIGHT_DP), 1f).apply {
-                    marginStart = dp(8)
-                }
-            )
-        }
-
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padding, padding, padding, padding)
-            elevation = dp(8).toFloat()
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = corner
-                setColor(surfaceColor)
-            }
-            addView(title, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
-            addView(body, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(8)
-                bottomMargin = dp(12)
-            })
-            addView(buttons, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
-        }
-    }
-
-    /** Deletions are struck through and dimmed; insertions are bold in the accent colour. */
-    private fun renderReviewSegments(
-        segments: List<TextChangeDiff.Segment>,
-        onSurfaceColor: Int
-    ): CharSequence {
-        val builder = SpannableStringBuilder()
-        for (segment in segments) {
-            val start = builder.length
-            builder.append(segment.text)
-            val end = builder.length
-            when (segment.kind) {
-                TextChangeDiff.Kind.Equal -> Unit
-                TextChangeDiff.Kind.Deleted -> {
-                    builder.setSpan(StrikethroughSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    builder.setSpan(
-                        ForegroundColorSpan(withAlpha(onSurfaceColor, REVIEW_DELETED_ALPHA)),
-                        start,
-                        end,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                    )
-                }
-                TextChangeDiff.Kind.Inserted -> {
-                    builder.setSpan(StyleSpan(android.graphics.Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    builder.setSpan(
-                        ForegroundColorSpan(bubbleAccentColor),
-                        start,
-                        end,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                    )
-                }
-            }
-        }
-        return builder
-    }
-
-    private fun createReviewButton(
-        label: String,
-        textColor: Int,
-        backgroundColor: Int,
-        onClick: () -> Unit
-    ): TextView {
-        return TextView(this).apply {
-            text = label
-            setTextColor(textColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            gravity = Gravity.CENTER
-            isAllCaps = false
-            isClickable = true
-            isFocusable = true
-            isHapticFeedbackEnabled = true
-            setPadding(dp(12), 0, dp(12), 0)
-            val content = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(REVIEW_BUTTON_HEIGHT_DP / 2).toFloat()
-                setColor(backgroundColor)
-            }
-            val mask = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(REVIEW_BUTTON_HEIGHT_DP / 2).toFloat()
-                setColor(Color.WHITE)
-            }
-            background = RippleDrawable(ColorStateList.valueOf(withAlpha(textColor, 0.24f)), content, mask)
-            setOnClickListener {
-                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                onClick()
-            }
-        }
-    }
-
-    private fun finishCommandSlide() {
-        if (!commandSlideInProgress) return
-        commandSlideInProgress = false
-        removeCommandSlideView()
-        updateBubbleUi()
-        refreshOverlayVisibility(null)
-    }
-
-    private fun cancelCommandSlide() {
-        commandSlideInProgress = false
-        removeCommandSlideView()
-    }
-
-    private fun removeCommandSlideView() {
-        val view = commandSlideView ?: return
-        commandSlideView = null
-        try {
-            windowManager.removeViewImmediate(view)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to remove command slide overlay", e)
-        }
+    /**
+     * The bubble is hidden from accessibility services, so overlay state changes are
+     * announced explicitly.
+     */
+    private fun announceOverlayState(message: String) {
+        // Deprecated in favour of live regions, which need an accessible host view; the
+        // bubble deliberately has none, so a one-off announcement is the right tool here.
+        @Suppress("DEPRECATION")
+        (rewritePanel ?: bubbleView)?.announceForAccessibility(message)
     }
 
     private fun preferredOnColor(backgroundColor: Int): Int {
@@ -2965,16 +2523,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun updateBubbleUi() {
         val bubble = bubbleView ?: return
         bubble.setColors(bubbleAccentColor, bubbleAccentColor)
-        bubble.setCommandIcon(activeCommandAction?.let(::commandIcon))
         // Keep the screen awake while dictation is recording or processing
         bubble.keepScreenOn = recordingState != OverlayRecordingState.Idle
 
-        val presentation = resolveBubblePresentation(
-            recordingState = recordingState,
-            commandActive = activeCommandAction != null,
-            commandSlideInProgress = commandSlideInProgress
-        )
-        when (presentation) {
+        when (recordingState.bubblePresentation()) {
             OverlayBubblePresentation.Idle -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Idle)
@@ -2990,12 +2542,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             OverlayBubblePresentation.Processing -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Processing)
-                updateBubbleLayoutSize()
-            }
-
-            OverlayBubblePresentation.CommandProcessing -> {
-                stopBubbleAnimation()
-                bubble.setState(OverlayMicButtonView.State.CommandProcessing)
                 updateBubbleLayoutSize()
             }
         }

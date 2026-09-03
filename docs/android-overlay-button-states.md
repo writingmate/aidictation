@@ -22,12 +22,6 @@ invariants and are covered by `OverlayRecordingPresentationTest`.
 | Recording | `recordingState == Recording` | 250 dp pill: cancel (X), live waveform, accept (check), same palette |
 | Processing | `recordingState == Processing` | 250 dp pill: animated bars and a spinner, same palette |
 
-**Transitions.** Idle ↔ pill is a cross-fade in place (220 ms, standard easing), nothing
-slides: the idle circle sits at the screen edge the bubble hugs and stays put while the
-pill, the X and the waveform or spinner fade in around it and the logo fades into the
-check; back to idle they fade out the same way. The window is widened before the fade
-in and shrunk only after the fade out (`OverlayMicButtonView.onCollapsed`).
-
 **Palette.** The bubble is drawn on the theme's surface (white in light mode, the dark
 surface in dark mode) with glyphs in the theme's black (opaque on-surface). The pill and
 cancel circle are that surface tinted 10% with the glyph colour. The wand and the panel

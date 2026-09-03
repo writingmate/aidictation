@@ -807,8 +807,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             isHapticFeedbackEnabled = true
             setPalette(overlaySurfaceColor(), overlayOnSurfaceColor())
             setState(OverlayMicButtonView.State.Idle)
-            // The window only shrinks once the pill has folded back into the circle.
-            onCollapsed = { updateBubbleLayoutSize() }
         }
 
         val width = currentBubbleWidthPx()
@@ -2629,46 +2627,37 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // Keep the screen awake while dictation is recording or processing
         bubble.keepScreenOn = recordingState != OverlayRecordingState.Idle
 
-        // The pill grows away from the anchored edge; the window is widened first so
-        // the view has room, and shrunk (via onCollapsed) only after it has folded back.
-        bubble.anchoredRight = bubbleAnchoredRight()
         when (recordingState.bubblePresentation()) {
             OverlayBubblePresentation.Idle -> {
                 stopBubbleAnimation()
                 bubble.setState(OverlayMicButtonView.State.Idle)
+                updateBubbleLayoutSize()
             }
 
             OverlayBubblePresentation.Recording -> {
-                updateBubbleLayoutSize(OverlayMicButtonView.State.Recording)
                 bubble.setState(OverlayMicButtonView.State.Recording)
+                updateBubbleLayoutSize()
                 startBubbleAnimation()
             }
 
             OverlayBubblePresentation.Processing -> {
                 stopBubbleAnimation()
-                updateBubbleLayoutSize(OverlayMicButtonView.State.Processing)
                 bubble.setState(OverlayMicButtonView.State.Processing)
+                updateBubbleLayoutSize()
             }
         }
     }
 
-    private fun bubbleAnchoredRight(): Boolean {
-        val params = bubbleParams ?: return true
-        val width = params.width.takeIf { it > 0 } ?: dp(BUBBLE_SIZE_DP)
-        return params.x + width / 2 >= resources.displayMetrics.widthPixels / 2
-    }
-
-    /** Sizes the bubble window for [forState], by default the state the view is showing. */
-    private fun updateBubbleLayoutSize(forState: OverlayMicButtonView.State? = null) {
+    private fun updateBubbleLayoutSize() {
         val bubble = bubbleView ?: return
         val params = bubbleParams ?: return
-        val targetWidth = forState?.let { dp(OverlayMicButtonView.widthDp(it)) } ?: currentBubbleWidthPx()
+        val targetWidth = currentBubbleWidthPx()
         val targetHeight = currentBubbleHeightPx()
         if (params.width == targetWidth && params.height == targetHeight) return
 
         val startWidth = params.width.takeIf { it > 0 } ?: dp(BUBBLE_SIZE_DP)
         val startX = params.x
-        val anchoredRight = bubbleAnchoredRight()
+        val anchoredRight = startX + (startWidth / 2) >= resources.displayMetrics.widthPixels / 2
         val anchoredEdgeX = if (anchoredRight) startX + startWidth else startX
         val margin = dp(BUBBLE_MARGIN_DP)
         val targetX = if (anchoredRight) {

@@ -13,7 +13,6 @@ import android.util.AttributeSet
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.view.animation.OvershootInterpolator
-import android.view.animation.PathInterpolator
 import com.whispermate.aidictation.R
 import kotlin.math.PI
 import kotlin.math.max
@@ -36,24 +35,6 @@ class OverlayMicButtonView @JvmOverloads constructor(
     /** Pill and cancel circle: the glyph colour laid lightly over the fill, kept opaque. */
     private var secondaryFillColor: Int = 0xFFE8E9EC.toInt()
     private var state: State = State.Idle
-    /** The pill look (X or spinner) that is shown, or fading out, while [expansion] is above zero. */
-    private var pillStyle: State = State.Recording
-    /** 0 is the idle circle, 1 the full pill; in between the two cross-fade in place. */
-    private var expansion: Float = 0f
-    private var expansionAnimator: ValueAnimator? = null
-    /**
-     * Which screen edge the bubble hugs. The idle circle sits at that edge of the view, so
-     * it stays in the same place on screen when the window widens for the pill.
-     */
-    var anchoredRight: Boolean = true
-        set(value) {
-            if (field == value) return
-            field = value
-            invalidateOutline()
-            invalidate()
-        }
-    /** Called once the pill has fully folded back into the idle circle. */
-    var onCollapsed: (() -> Unit)? = null
     private var audioLevel: Float = 0f
     private var frequencyBands: FloatArray? = null
     private var processingPhaseDegrees: Float = 0f
@@ -103,8 +84,6 @@ class OverlayMicButtonView @JvmOverloads constructor(
         const val ELEVATION_DP = 1.5f
         /** Fades the elevation shadow further; 1 is the platform default strength. */
         const val SHADOW_ALPHA = 0.45f
-        /** Length of the circle-to-pill (and back) cross-fade. */
-        const val EXPANSION_DURATION_MS = 220L
         /** Every overlay button is drawn slightly translucent so the field underneath shows through. */
         const val SURFACE_ALPHA = 0.9f
         /** The waveform logo sits a little smaller inside the idle circle. */
@@ -160,7 +139,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
      */
     private fun buildOutline(outline: Outline) {
         val radius = acceptRect.height() / 2f
-        if (expansion <= 0f) {
+        if (state == State.Idle) {
             outline.setOval(
                 acceptRect.left.toInt(),
                 acceptRect.top.toInt(),
@@ -169,25 +148,9 @@ class OverlayMicButtonView @JvmOverloads constructor(
             )
             return
         }
-        if (expansion < 1f) {
-            // Mid-fade: the faint shadow follows whichever look is more visible.
-            val circle = if (anchoredRight) acceptRect else cancelRect
-            if (expansion < 0.5f) {
-                outline.setOval(circle.left.toInt(), circle.top.toInt(), circle.right.toInt(), circle.bottom.toInt())
-            } else {
-                outline.setRoundRect(
-                    cancelRect.left.toInt(),
-                    acceptRect.top.toInt(),
-                    acceptRect.right.toInt(),
-                    acceptRect.bottom.toInt(),
-                    radius
-                )
-            }
-            return
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             outlinePath.rewind()
-            if (pillStyle == State.Recording) outlinePath.addOval(cancelRect, Path.Direction.CW)
+            if (state == State.Recording) outlinePath.addOval(cancelRect, Path.Direction.CW)
             if (pillRect.width() > 0f) outlinePath.addRoundRect(pillRect, radius, radius, Path.Direction.CW)
             outlinePath.addOval(acceptRect, Path.Direction.CW)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -199,7 +162,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
             }
             return
         }
-        val left = if (pillStyle == State.Recording) cancelRect.left else pillRect.left
+        val left = if (state == State.Recording) cancelRect.left else pillRect.left
         outline.setRoundRect(
             left.toInt(),
             acceptRect.top.toInt(),
@@ -214,11 +177,11 @@ class OverlayMicButtonView @JvmOverloads constructor(
     fun preferredHeightDp(): Int = heightDp()
 
     fun isCancelHit(x: Float, y: Float): Boolean {
-        return state == State.Recording && expansion >= 1f && cancelRect.contains(x, y)
+        return state == State.Recording && cancelRect.contains(x, y)
     }
 
     fun isAcceptHit(x: Float, y: Float): Boolean {
-        return state == State.Recording && expansion >= 1f && acceptRect.contains(x, y)
+        return state == State.Recording && acceptRect.contains(x, y)
     }
 
     fun setOnClickCallback(callback: () -> Unit) {
@@ -232,12 +195,6 @@ class OverlayMicButtonView @JvmOverloads constructor(
         return true
     }
 
-    /**
-     * Switches the look. Between the idle circle and the pill the change is animated when
-     * the view is on screen: the caller must already have given the view (and its window)
-     * room for the pill before expanding, and gets [onCollapsed] once a collapse has
-     * finished so it can shrink the window afterwards.
-     */
     fun setState(newState: State) {
         if (state == newState) {
             if (state == State.Processing && processingAnimator == null) {
@@ -246,50 +203,14 @@ class OverlayMicButtonView @JvmOverloads constructor(
             return
         }
         state = newState
-        if (state != State.Idle) pillStyle = state
         if (state == State.Processing) {
             startProcessingAnimation()
         } else {
             stopProcessingAnimation()
         }
         updateBarHeights(animate = false)
-        val target = if (state == State.Idle) 0f else 1f
-        val animate = isAttachedToWindow && width > 0 && expansion != target
-        if (animate) {
-            animateExpansionTo(target)
-        } else {
-            expansionAnimator?.cancel()
-            expansionAnimator = null
-            expansion = target
-            invalidateOutline()
-            invalidate()
-            if (target == 0f) onCollapsed?.invoke()
-        }
-    }
-
-    private fun animateExpansionTo(target: Float) {
-        expansionAnimator?.cancel()
-        expansionAnimator = ValueAnimator.ofFloat(expansion, target).apply {
-            duration = (EXPANSION_DURATION_MS * kotlin.math.abs(target - expansion)).toLong()
-            interpolator = PathInterpolator(0.4f, 0f, 0.2f, 1f)
-            addUpdateListener {
-                expansion = it.animatedValue as Float
-                invalidateOutline()
-                invalidate()
-            }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                private var cancelled = false
-                override fun onAnimationCancel(animation: android.animation.Animator) {
-                    cancelled = true
-                }
-
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    if (expansionAnimator === animation) expansionAnimator = null
-                    if (!cancelled && target == 0f) onCollapsed?.invoke()
-                }
-            })
-            start()
-        }
+        invalidateOutline()
+        invalidate()
     }
 
     fun setAudioLevel(level: Float) {
@@ -420,8 +341,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
 
     /**
      * Places the cancel circle, pill and accept circle inside the view, leaving the shadow
-     * margin free on every side. Nothing moves during a transition: the pill always spans
-     * the view, and the idle circle is whichever end circle sits at the anchored edge.
+     * margin free on every side.
      */
     private fun layoutSurfaces() {
         val pad = SHADOW_PADDING_DP * resources.displayMetrics.density
@@ -432,12 +352,19 @@ class OverlayMicButtonView @JvmOverloads constructor(
         val surfaceSize = h * 0.86f
         val surfaceInset = (h - surfaceSize) / 2f
         val gap = h * 0.13f
-        val spanLeft = innerLeft + surfaceInset
-        val spanRight = innerRight - surfaceInset
-        val top = innerTop + surfaceInset
 
-        acceptRect.set(spanRight - surfaceSize, top, spanRight, top + surfaceSize)
-        cancelRect.set(spanLeft, top, spanLeft + surfaceSize, top + surfaceSize)
+        acceptRect.set(
+            innerRight - surfaceInset - surfaceSize,
+            innerTop + surfaceInset,
+            innerRight - surfaceInset,
+            innerTop + surfaceInset + surfaceSize
+        )
+        cancelRect.set(
+            innerLeft + surfaceInset,
+            innerTop + surfaceInset,
+            innerLeft + surfaceInset + surfaceSize,
+            innerTop + surfaceInset + surfaceSize
+        )
         pillRect.set(cancelRect.right + gap, acceptRect.top, acceptRect.left - gap, acceptRect.bottom)
     }
 
@@ -445,48 +372,38 @@ class OverlayMicButtonView @JvmOverloads constructor(
         layoutSurfaces()
         val surfaceSize = acceptRect.height()
 
-        val expanded = expansion.coerceIn(0f, 1f)
-        val showsCancel = pillStyle == State.Recording && expanded > 0f
-        // The idle logo lives on whichever circle stays put; the check on the accept circle.
-        val logoRect = if (anchoredRight) acceptRect else cancelRect
+        val expanded = if (state == State.Idle) 0f else 1f
 
         if (pillRect.width() > 0f) {
             pillPaint.color = withAlpha(secondaryFillColor, expanded * SURFACE_ALPHA)
             canvas.drawRoundRect(pillRect, surfaceSize / 2f, surfaceSize / 2f, pillPaint)
         }
 
-        if (showsCancel) {
-            backgroundPaint.color = withAlpha(secondaryFillColor, expanded * SURFACE_ALPHA)
+        backgroundPaint.color = withAlpha(secondaryFillColor, expanded * SURFACE_ALPHA)
+        if (expanded > 0f && state == State.Recording) {
             canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
         }
 
-        // The accept circle is part of the pill look; the idle circle sits at the anchored edge.
-        // On the right they coincide, so the surface simply stays; on the left each fades.
-        val acceptAlpha = if (anchoredRight) SURFACE_ALPHA else SURFACE_ALPHA * expanded
-        backgroundPaint.color = withAlpha(fillColor, acceptAlpha)
+        backgroundPaint.color = withAlpha(fillColor, SURFACE_ALPHA)
         canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
-        if (!anchoredRight && expanded < 1f) {
-            backgroundPaint.color = withAlpha(fillColor, SURFACE_ALPHA * (1f - expanded))
-            canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
-        }
 
-        if (pillStyle == State.Processing && expanded > 0f) {
-            drawProcessingBars(canvas, pillRect, expanded)
-            drawSpinner(canvas, acceptRect, expanded)
-        } else if (expanded > 0f) {
+        if (state == State.Processing) {
+            drawProcessingBars(canvas, pillRect)
+            drawSpinner(canvas, acceptRect)
+        } else {
             drawBars(canvas, pillRect, barHeights, expanded, circleSpacing = false)
-            if (showsCancel) {
+            if (state == State.Recording) {
                 drawX(canvas, cancelRect, expanded)
             }
             drawCheck(canvas, acceptRect, expanded)
-        }
-        if (expanded < 1f) {
-            drawBars(canvas, logoRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
+            if (expanded < 1f) {
+                drawBars(canvas, acceptRect, FROZEN_HEIGHTS, 1f - expanded, circleSpacing = true)
+            }
         }
     }
 
 
-    private fun drawProcessingBars(canvas: Canvas, bounds: RectF, alpha: Float) {
+    private fun drawProcessingBars(canvas: Canvas, bounds: RectF) {
         val phase = (processingPhaseDegrees / 360f) * (2f * PI.toFloat())
         for (i in 0 until TOTAL_BARS) {
             val normalizedIndex = if (TOTAL_BARS == 1) 0f else i.toFloat() / (TOTAL_BARS - 1)
@@ -494,7 +411,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
             val sineValue = (sin(wavePosition) + 1f) / 2f
             processingHeights[i] = sineValue * CIRCLE_ENVELOPE_HEIGHTS[i]
         }
-        drawBars(canvas, bounds, processingHeights, alpha, circleSpacing = false)
+        drawBars(canvas, bounds, processingHeights, 1f, circleSpacing = false)
     }
 
     private fun drawBars(
@@ -556,8 +473,8 @@ class OverlayMicButtonView @JvmOverloads constructor(
         )
     }
 
-    private fun drawSpinner(canvas: Canvas, bounds: RectF, alpha: Float) {
-        spinnerPaint.color = withAlpha(glyphColor, alpha)
+    private fun drawSpinner(canvas: Canvas, bounds: RectF) {
+        spinnerPaint.color = glyphColor
         spinnerPaint.strokeWidth = bounds.width() * 0.056f
         tempRect.set(
             bounds.left + bounds.width() * 0.34f,
@@ -591,12 +508,5 @@ class OverlayMicButtonView @JvmOverloads constructor(
         super.onDetachedFromWindow()
         barAnimators.forEach { it?.cancel() }
         stopProcessingAnimation()
-        // Off screen there is nothing to animate; land on the final look.
-        expansionAnimator?.let {
-            it.cancel()
-            expansionAnimator = null
-            expansion = if (state == State.Idle) 0f else 1f
-            if (state == State.Idle) onCollapsed?.invoke()
-        }
     }
 }

@@ -937,7 +937,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (wandAbsorbing) return
 
         val workflowActive = hasOverlayWorkflow()
-        val panelOpen = rewriteSession != null
+        // The panel counts as open until its window is gone: the session is cleared when
+        // the close or apply animation starts, and a wand re-added during that animation
+        // would land on top of the withering panel.
+        val panelOpen = rewriteSession != null || isRewritePanelAttached
         // Only inspect the field when the wand could be shown at all.
         val hasSelection = !panelOpen &&
             canStartSelectionCommand(recordingState, workflowActive) &&
@@ -961,6 +964,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val actions = commandActionsView ?: return
         val params = commandActionsParams ?: return
         if (!isBubbleAttached) return
+        // Never stack the wand over a panel that is still on screen.
+        if (isRewritePanelAttached) return
 
         if (isCommandActionsAttached) {
             updateCommandActionsPosition()
@@ -2455,7 +2460,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         rewriteSession = null
         if (isRewritePanelAttached) {
-            panel.playApply { removeRewritePanel() }
+            panel.playApply {
+                removeRewritePanel()
+                // The wand may return only now that the panel's window is gone.
+                refreshOverlayVisibility(null)
+            }
         } else {
             removeRewritePanel()
         }
@@ -2634,8 +2643,37 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 windowManager.removeViewImmediate(bubble)
                 windowManager.addView(bubble, params)
                 updateCommandActionsPosition()
+                restackAboveBubble()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to update bubble overlay size", e)
+            }
+        }
+    }
+
+    /**
+     * Overlay windows stack in the order they were added, so re-adding the bubble puts it
+     * on top of the wand and the panel. Both must stay above the bubble: re-add whichever
+     * is attached so the stack is bubble, wand, panel again.
+     */
+    private fun restackAboveBubble() {
+        val actions = commandActionsView
+        val actionsParams = commandActionsParams
+        if (isCommandActionsAttached && actions != null && actionsParams != null) {
+            try {
+                windowManager.removeViewImmediate(actions)
+                windowManager.addView(actions, actionsParams)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to restack command actions overlay", e)
+            }
+        }
+        val panel = rewritePanel
+        val panelParams = rewritePanelParams
+        if (isRewritePanelAttached && panel != null && panelParams != null) {
+            try {
+                windowManager.removeViewImmediate(panel)
+                windowManager.addView(panel, panelParams)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to restack rewrite panel overlay", e)
             }
         }
     }

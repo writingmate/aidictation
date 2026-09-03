@@ -87,7 +87,8 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
         orientation = VERTICAL
         clipChildren = false
         clipToPadding = false
-        elevation = dp(8f)
+        // A faint lift only; the panel already reads as a sheet from its size and fill.
+        elevation = dp(3f)
         val padding = dp(PADDING_DP).toInt()
         setPadding(padding, 0, padding, padding)
         backgroundShape.cornerRadius = dp(CORNER_DP)

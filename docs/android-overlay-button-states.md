@@ -22,6 +22,12 @@ invariants and are covered by `OverlayRecordingPresentationTest`.
 | Recording | `recordingState == Recording` | 250 dp pill: cancel (X), live waveform, accept (check), same palette |
 | Processing | `recordingState == Processing` | 250 dp pill: animated bars and a spinner, same palette |
 
+**Transitions.** Idle ↔ pill is a cross-fade in place (220 ms, standard easing), nothing
+slides: the idle circle sits at the screen edge the bubble hugs and stays put while the
+pill, the X and the waveform or spinner fade in around it and the logo fades into the
+check; back to idle they fade out the same way. The window is widened before the fade
+in and shrunk only after the fade out (`OverlayMicButtonView.onCollapsed`).
+
 **Palette.** The bubble is drawn on the theme's surface (white in light mode, the dark
 surface in dark mode) with glyphs in the theme's black (opaque on-surface). The pill and
 cancel circle are that surface tinted 10% with the glyph colour. The wand and the panel
@@ -29,9 +35,10 @@ use the same neutrals; there is no colour preference.
 
 **Translucency and shadow.** Every floating button (the bubble in all three states and
 the wand) is filled at 90% opacity so the field underneath shows through faintly; glyphs
-stay opaque. Both sit on a standard 6 dp elevation shadow. The bubble view keeps a 6 dp
-transparent margin on every side of the drawn surface (its window is 67 dp tall) so the
-shadow is not clipped by the window edge. Its outline follows the drawn surfaces: the
+stay opaque. Shadows are kept barely noticeable: the bubble sits at 1.5 dp elevation with
+its outline alpha halved again, the wand at 2 dp and the panel at 3 dp. The bubble view
+keeps a 6 dp transparent margin on every side of the drawn surface (its window is 67 dp
+tall) so the shadow is not clipped by the window edge. Its outline follows the drawn surfaces: the
 idle circle alone, or while recording the cancel (X) circle, the waveform pill and the
 accept circle each with their own shadow (on Android 10 and later; earlier releases only
 allow a convex outline, so one rounded shape spans all three). The buttons inside the
@@ -114,14 +121,11 @@ check and settings intent lives in `ui/permissions/OverlayPermissions.kt`.
 7. **Apply replaces the original selection.** ✓ writes the working text over the
    originally selected text (the current selection, else its last occurrence in the
    field) and collapses the caret after it. Applying unchanged text simply closes.
-8. **Ignoring is free.** The bubble stays idle and usable while the panel is open. The
-   panel spans the screen just above the keyboard, where the bubble usually sits, so
-   while the panel is open the bubble is moved up above the panel's top edge and put
-   back where it was when the panel goes (a drag during that time sets a new place).
-   Window stacking alone is not relied on to keep the panel's buttons visible.
-   Starting dictation from the bubble, the field losing focus (bubble hides), or the
-   service stopping discards the panel without changing text. × does the same with the
-   wither animation.
+8. **Ignoring is free.** The panel spans the screen just above the keyboard, where the
+   bubble usually sits, so while the panel is open the bubble is hidden (invisible and
+   untouchable, its window kept) and shown again in the same place when the panel goes.
+   The field losing focus (bubble hides) or the service stopping discards the panel
+   without changing text. × does the same with the wither animation.
 9. **Follows the keyboard.** The panel sits above the keyboard and repositions when the
    keyboard shows or hides.
 10. **Theme neutrals only.** The bubble, the wand and the panel are drawn in the theme's

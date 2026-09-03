@@ -387,9 +387,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshBubbleBrandColor() {
+        // The overlay itself is drawn in theme neutrals; the preference colours the
+        // dismiss drop zones only.
         bubbleAccentColor = OverlayBubblePreferences.getResolvedBubbleColor(this)
-        wandButton?.let(::styleWandButton)
-        rewritePanel?.setAccent(bubbleAccentColor, preferredOnColor(bubbleAccentColor))
     }
 
     override fun onDestroy() {
@@ -862,17 +862,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Borderless secondary button: surface fill, accent wand icon, elevation for the edge. */
+    /** Borderless secondary button: themed surface fill, themed-black wand icon, elevation for the edge. */
     private fun styleWandButton(view: ImageView) {
         val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
+        val glyph = overlayOnSurfaceColor()
         view.setImageResource(R.drawable.ic_command_mic)
-        view.imageTintList = ColorStateList.valueOf(bubbleAccentColor)
+        view.imageTintList = ColorStateList.valueOf(glyph)
         view.scaleType = ImageView.ScaleType.CENTER
         view.setPadding(padding, padding, padding, padding)
         view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
         view.background = circleBackground(
             fillColor = overlaySurfaceColor(),
-            contentColor = bubbleAccentColor
+            contentColor = glyph
         )
     }
 
@@ -2257,7 +2258,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val wandCenter = wandCenterOnScreen()
 
         val panel = OverlayRewritePanelView(this).apply {
-            setAccent(bubbleAccentColor, preferredOnColor(bubbleAccentColor))
             setText(session.workingText, animate = false)
             onAction = { action -> runRewriteAction(action) }
             onClose = { closeRewritePanel() }

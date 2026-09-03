@@ -42,9 +42,9 @@ password field ends it (`bubbleNeedsKeyboard`).
 1. **Shown or absent, never disabled.** The wand appears only when it can be tapped:
    bubble idle, no dictation delivery in flight, a non-blank selection in the focused
    field, and no panel open.
-2. **Borderless secondary button.** Surface fill (white in a light theme) with the
-   accent wand icon and a small elevation for its edge, so it reads as subordinate to
-   the filled bubble. Pressed state layer 12%.
+2. **Borderless secondary button.** Themed surface fill (white in a light theme) with
+   the themed-black wand icon and a small elevation for its edge. Pressed state layer
+   12%.
 3. **Follows the bubble.** It sits on the side of the bubble with room and moves with
    it when dragged. Dragging the bubble to the dismiss zones hides it.
 4. **Absorbed by the panel.** Tapping it swells and fades the wand while the panel
@@ -58,7 +58,7 @@ password field ends it (`bubbleNeedsKeyboard`).
 2. **Styles.** Material emphasis levels: apply and the running action are filled with
    the theme's black (opaque on-surface: near-black in light, light in dark) and a
    surface-coloured icon; every other button is a borderless secondary button (surface
-   fill, accent icon). The accent lives on the glyphs, the progress bar and the bubble.
+   fill, themed-black icon). The progress bar is themed black too.
    Disabled content sits at 38%, pressed state layer at 12%. The panel surface is the
    theme's floating background.
 3. **Bloom.** Opening scales the panel up from the wand's centre with a small overshoot
@@ -81,10 +81,9 @@ password field ends it (`bubbleNeedsKeyboard`).
    wither animation.
 9. **Follows the keyboard.** The panel sits above the keyboard and repositions when the
    keyboard shows or hides.
-10. **One accent colour.** The wand glyph, the panel's secondary glyphs and its progress
-    bar take the colour from the bubble colour preference; changing the preference
-    restyles them. The bubble itself and the panel's filled buttons use the theme's
-    surface and black, so the accent reads as the AI colour and neutrals as controls.
+10. **Theme neutrals only.** The bubble, the wand and the panel are drawn in the theme's
+    surface and black; the bubble colour preference does not colour the overlay (it
+    still tints the drag-to-dismiss zones and the app's own screens).
 11. **Light and dark.** Surface, text and outline come from the app's XML theme, which
     has a night variant (`values-night/themes.xml`), so the panel and wand follow the
     system dark mode. A panel that is already open keeps its colours until reopened.

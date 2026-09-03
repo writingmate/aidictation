@@ -57,11 +57,9 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
 
     private val surfaceColor: Int
     private val onSurfaceColor: Int
-    /** The themed black: opaque on-surface (near-black in light, light in dark). Fills the primary buttons. */
+    /** The themed black: opaque on-surface (near-black in light, light in dark). Primary fill and secondary glyphs. */
     private val primaryFillColor: Int
     private val onPrimaryFillColor: Int
-    private var accent: Int = 0xFFFF6300.toInt()
-    private var onAccent: Int = Color.WHITE
 
     private val backgroundShape = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE }
     private val progressBar: IndeterminateBar
@@ -149,12 +147,6 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
     }
 
     // MARK: - Public API
-
-    fun setAccent(accent: Int, onAccent: Int) {
-        this.accent = accent
-        this.onAccent = onAccent
-        applyStyles()
-    }
 
     fun setText(text: CharSequence, animate: Boolean) {
         textView.text = text
@@ -299,7 +291,7 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
 
     private fun applyStyles() {
         backgroundShape.setColor(surfaceColor)
-        progressBar.setColor(accent)
+        progressBar.setColor(primaryFillColor)
         val working = workingAction
         actionButtons.forEach { (action, button) ->
             val active = action == working
@@ -354,14 +346,14 @@ class OverlayRewritePanelView(context: Context) : LinearLayout(context) {
     }
 
     /**
-     * Material button emphasis: filled (themed black container, surface-coloured icon)
-     * for the primary action and the running action; the rest are borderless secondary
-     * buttons (surface fill, accent icon). The accent stays on the glyphs and the
-     * bubble; the fill is the theme's black so it reads as the app's primary button.
+     * Material button emphasis, all in theme neutrals: filled (themed black container,
+     * surface-coloured icon) for the primary action and the running action; the rest
+     * are borderless secondary buttons (surface fill, themed-black icon). The bubble
+     * colour preference does not reach the overlay.
      */
     private fun styleCircle(button: ImageView, filled: Boolean) {
         val fill = if (filled) primaryFillColor else surfaceColor
-        val foreground = if (filled) onPrimaryFillColor else accent
+        val foreground = if (filled) onPrimaryFillColor else primaryFillColor
         button.imageTintList = ColorStateList.valueOf(foreground)
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL

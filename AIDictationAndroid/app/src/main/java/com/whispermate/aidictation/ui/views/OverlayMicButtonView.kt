@@ -24,8 +24,12 @@ class OverlayMicButtonView @JvmOverloads constructor(
 
     enum class State { Idle, Recording, Processing }
 
-    private var idleColor: Int = 0xFFFF6300.toInt()
-    private var activeColor: Int = 0xFFFF6300.toInt()
+    /** Themed white: the surface the bubble and its pill are filled with. */
+    private var fillColor: Int = Color.WHITE
+    /** Themed black: bars, icons and the spinner. */
+    private var glyphColor: Int = 0xFF1B1D22.toInt()
+    /** Pill and cancel circle: the glyph colour laid lightly over the fill, kept opaque. */
+    private var secondaryFillColor: Int = 0xFFE8E9EC.toInt()
     private var state: State = State.Idle
     private var audioLevel: Float = 0f
     private var frequencyBands: FloatArray? = null
@@ -65,7 +69,8 @@ class OverlayMicButtonView @JvmOverloads constructor(
         private const val BACKGROUND_ALPHA = 0.82f
         /** The speak button is a filled primary button: opaque accent, like the panel's apply. */
         private const val PRIMARY_BUTTON_ALPHA = 1f
-        private const val SECONDARY_SURFACE_ALPHA = 0.34f
+        /** How much of the glyph colour tints the pill and cancel circle over the fill. */
+        private const val SECONDARY_SURFACE_ALPHA = 0.1f
         private const val WAVEFORM_LEVEL_GAIN = 1.35f
         private const val WAVEFORM_LEVEL_MIX = 0.08f
         private const val WAVEFORM_CONTRAST = 0.8f
@@ -78,8 +83,9 @@ class OverlayMicButtonView @JvmOverloads constructor(
     init {
         context.theme.obtainStyledAttributes(attrs, R.styleable.CircularMicButtonView, 0, 0).apply {
             try {
-                idleColor = getColor(R.styleable.CircularMicButtonView_idleColor, idleColor)
-                activeColor = getColor(R.styleable.CircularMicButtonView_activeColor, activeColor)
+                fillColor = getColor(R.styleable.CircularMicButtonView_idleColor, fillColor)
+                glyphColor = getColor(R.styleable.CircularMicButtonView_activeColor, glyphColor)
+                secondaryFillColor = blend(glyphColor, fillColor, SECONDARY_SURFACE_ALPHA)
             } finally {
                 recycle()
             }
@@ -141,10 +147,15 @@ class OverlayMicButtonView @JvmOverloads constructor(
         if (state == State.Recording) updateBarHeights()
     }
 
-    fun setColors(idle: Int, active: Int) {
-        if (idleColor == idle && activeColor == active) return
-        idleColor = idle
-        activeColor = active
+    /**
+     * [fill] is the surface the button is drawn in (themed white), [glyph] the colour of
+     * the bars and icons (themed black). Same palette in every state.
+     */
+    fun setPalette(fill: Int, glyph: Int) {
+        if (fillColor == fill && glyphColor == glyph) return
+        fillColor = fill
+        glyphColor = glyph
+        secondaryFillColor = blend(glyph, fill, SECONDARY_SURFACE_ALPHA)
         invalidate()
     }
 
@@ -269,19 +280,18 @@ class OverlayMicButtonView @JvmOverloads constructor(
         pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
 
         val expanded = if (state == State.Idle) 0f else 1f
-        val primaryColor = if (state == State.Idle) idleColor else activeColor
 
         if (pillRect.width() > 0f) {
-            pillPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
+            pillPaint.color = withAlpha(secondaryFillColor, expanded)
             canvas.drawRoundRect(pillRect, surfaceSize / 2f, surfaceSize / 2f, pillPaint)
         }
 
-        backgroundPaint.color = withAlpha(activeColor, SECONDARY_SURFACE_ALPHA * expanded)
+        backgroundPaint.color = withAlpha(secondaryFillColor, expanded)
         if (expanded > 0f && state == State.Recording) {
             canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
         }
 
-        backgroundPaint.color = withAlpha(primaryColor, PRIMARY_BUTTON_ALPHA)
+        backgroundPaint.color = withAlpha(fillColor, PRIMARY_BUTTON_ALPHA)
         canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
 
         if (state == State.Processing) {
@@ -325,7 +335,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
         val dotSize = barWidth
         val totalBarsWidth = (barWidth * TOTAL_BARS) + (barSpacing * (TOTAL_BARS - 1))
         val startX = bounds.centerX() - (totalBarsWidth / 2f) + (barWidth / 2f)
-        barPaint.color = withAlpha(Color.WHITE, alpha)
+        barPaint.color = withAlpha(glyphColor, alpha)
 
         for (i in 0 until TOTAL_BARS) {
             val heightFraction = heights[i].coerceIn(0f, 1f)
@@ -342,7 +352,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     private fun drawX(canvas: Canvas, bounds: RectF, alpha: Float) {
-        iconPaint.color = withAlpha(Color.WHITE, alpha)
+        iconPaint.color = withAlpha(glyphColor, alpha)
         iconPaint.strokeWidth = bounds.width() * 0.052f
         val inset = bounds.width() * 0.41f
         canvas.drawLine(bounds.left + inset, bounds.top + inset, bounds.right - inset, bounds.bottom - inset, iconPaint)
@@ -350,7 +360,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     private fun drawCheck(canvas: Canvas, bounds: RectF, alpha: Float) {
-        iconPaint.color = withAlpha(Color.WHITE, alpha)
+        iconPaint.color = withAlpha(glyphColor, alpha)
         iconPaint.strokeWidth = bounds.width() * 0.056f
         canvas.drawLine(
             bounds.left + bounds.width() * 0.37f,
@@ -369,6 +379,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     }
 
     private fun drawSpinner(canvas: Canvas, bounds: RectF) {
+        spinnerPaint.color = glyphColor
         spinnerPaint.strokeWidth = bounds.width() * 0.056f
         tempRect.set(
             bounds.left + bounds.width() * 0.34f,
@@ -382,6 +393,13 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private fun withAlpha(color: Int, alphaFraction: Float): Int {
         val alpha = (alphaFraction.coerceIn(0f, 1f) * 255).toInt()
         return (color and 0x00FFFFFF) or (alpha shl 24)
+    }
+
+    /** Opaque result of laying [top] at [fraction] over [base]. */
+    private fun blend(top: Int, base: Int, fraction: Float): Int {
+        val f = fraction.coerceIn(0f, 1f)
+        fun mix(channel: (Int) -> Int) = (channel(top) * f + channel(base) * (1f - f)).toInt().coerceIn(0, 255)
+        return Color.rgb(mix(Color::red), mix(Color::green), mix(Color::blue))
     }
 
     override fun onAttachedToWindow() {

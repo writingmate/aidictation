@@ -67,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -716,6 +717,10 @@ private fun OverlayPreviewCard(selectedColor: Int) {
     }
     val previewState = previewStates[previewStateIndex]
     val previewWidth = if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp
+    // The bubble is drawn on the themed surface with a themed-black glyph; the chosen
+    // colour lives on the wand and the edit panel, not on the bubble itself.
+    val bubbleSurface = MaterialTheme.colorScheme.surface.toArgb()
+    val bubbleGlyph = MaterialTheme.colorScheme.onSurface.toArgb()
     val resolvedColor = when (selectedColor) {
         OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
         else -> selectedColor
@@ -755,7 +760,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
                     .padding(end = 10.dp),
                 factory = { context ->
                     OverlayMicButtonView(context).apply {
-                        setColors(resolvedColor, resolvedColor)
+                        setPalette(bubbleSurface, bubbleGlyph)
                         setState(previewState)
                         setAudioLevel(0.72f)
                         setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
@@ -765,7 +770,7 @@ private fun OverlayPreviewCard(selectedColor: Int) {
                     }
                 },
                 update = { view ->
-                    view.setColors(resolvedColor, resolvedColor)
+                    view.setPalette(bubbleSurface, bubbleGlyph)
                     view.setState(previewState)
                     view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
                     view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))

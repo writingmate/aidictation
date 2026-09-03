@@ -18,9 +18,14 @@ invariants and are covered by `OverlayRecordingPresentationTest`.
 
 | Presentation | When | Look |
 | --- | --- | --- |
-| Idle | `recordingState == Idle` | 55 dp opaque accent circle with the frozen waveform glyph |
-| Recording | `recordingState == Recording` | 250 dp pill: cancel (X), live waveform, accept (check) |
-| Processing | `recordingState == Processing` | 250 dp pill: animated bars and a spinner |
+| Idle | `recordingState == Idle` | 55 dp themed-white circle with the themed-black waveform glyph |
+| Recording | `recordingState == Recording` | 250 dp pill: cancel (X), live waveform, accept (check), same palette |
+| Processing | `recordingState == Processing` | 250 dp pill: animated bars and a spinner, same palette |
+
+**Palette.** The bubble is drawn on the theme's surface (white in light mode, the dark
+surface in dark mode) with glyphs in the theme's black (opaque on-surface). The pill and
+cancel circle are that surface tinted 10% with the glyph colour. The bubble colour
+preference no longer colours the bubble; it is the accent for the wand and the panel.
 
 The bubble takes no part in text editing: selection commands live entirely in the
 wand and its panel.
@@ -76,9 +81,10 @@ password field ends it (`bubbleNeedsKeyboard`).
    wither animation.
 9. **Follows the keyboard.** The panel sits above the keyboard and repositions when the
    keyboard shows or hides.
-10. **One accent colour.** The bubble, the wand and the panel share the colour from the
-    bubble colour preference; changing the preference restyles all of them. The bubble's
-    primary circle and the panel's filled buttons are both opaque accent.
+10. **One accent colour.** The wand glyph, the panel's secondary glyphs and its progress
+    bar take the colour from the bubble colour preference; changing the preference
+    restyles them. The bubble itself and the panel's filled buttons use the theme's
+    surface and black, so the accent reads as the AI colour and neutrals as controls.
 11. **Light and dark.** Surface, text and outline come from the app's XML theme, which
     has a night variant (`values-night/themes.xml`), so the panel and wand follow the
     system dark mode. A panel that is already open keeps its colours until reopened.

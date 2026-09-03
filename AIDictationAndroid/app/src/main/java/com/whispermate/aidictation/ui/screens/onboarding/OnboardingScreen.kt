@@ -72,6 +72,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -791,6 +792,8 @@ private fun ButtonDemoStep(
             }
 
             if (demoStage >= 1) {
+                val bubbleSurface = MaterialTheme.colorScheme.surface.toArgb()
+                val bubbleGlyph = MaterialTheme.colorScheme.onSurface.toArgb()
                 AndroidView(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -801,7 +804,7 @@ private fun ButtonDemoStep(
                         OverlayMicButtonView(androidContext).apply {
                             setOnClickCallback { handleDemoMicTap() }
                             isHapticFeedbackEnabled = true
-                            setColors(resolvedColor, resolvedColor)
+                            setPalette(bubbleSurface, bubbleGlyph)
                             setState(previewState)
                             setAudioLevel(audioLevel)
                             setFrequencyBands(frequencyBands)
@@ -809,7 +812,7 @@ private fun ButtonDemoStep(
                     },
                     update = { view ->
                         view.setOnClickCallback { handleDemoMicTap() }
-                        view.setColors(resolvedColor, resolvedColor)
+                        view.setPalette(bubbleSurface, bubbleGlyph)
                         view.setState(previewState)
                         view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) audioLevel else 0f)
                         view.setFrequencyBands(frequencyBands)

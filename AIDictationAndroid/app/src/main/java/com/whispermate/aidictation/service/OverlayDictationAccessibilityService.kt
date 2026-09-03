@@ -790,7 +790,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isHapticFeedbackEnabled = true
-            setColors(bubbleAccentColor, bubbleAccentColor)
+            setPalette(overlaySurfaceColor(), overlayOnSurfaceColor())
             setState(OverlayMicButtonView.State.Idle)
         }
 
@@ -897,6 +897,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         android.R.attr.colorBackgroundFloating,
         resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
     )
+
+    /** Themed black for glyphs: the theme's primary text colour made opaque over the surface. */
+    private fun overlayOnSurfaceColor(): Int {
+        val text = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
+        val surface = overlaySurfaceColor()
+        val alpha = Color.alpha(text) / 255f
+        fun mix(channel: (Int) -> Int) = (channel(text) * alpha + channel(surface) * (1f - alpha)).toInt().coerceIn(0, 255)
+        return Color.rgb(mix(Color::red), mix(Color::green), mix(Color::blue))
+    }
 
 
     private fun updateCommandActionsVisibility(node: AccessibilityNodeInfo?) {
@@ -2553,7 +2562,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun updateBubbleUi() {
         val bubble = bubbleView ?: return
-        bubble.setColors(bubbleAccentColor, bubbleAccentColor)
+        bubble.setPalette(overlaySurfaceColor(), overlayOnSurfaceColor())
         // Keep the screen awake while dictation is recording or processing
         bubble.keepScreenOn = recordingState != OverlayRecordingState.Idle
 

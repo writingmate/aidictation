@@ -46,7 +46,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -89,8 +88,6 @@ fun SettingsScreen(
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
-    autoStopOnSilenceEnabled: Boolean = false,
-    onAutoStopOnSilenceToggled: (Boolean) -> Unit = {},
     usageStatus: UsageStatus,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
@@ -200,19 +197,6 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
             SettingsItem(
-                icon = Icons.Default.Mic,
-                title = stringResource(R.string.settings_auto_stop_on_silence),
-                trailingContent = {
-                    Switch(
-                        checked = autoStopOnSilenceEnabled,
-                        onCheckedChange = onAutoStopOnSilenceToggled
-                    )
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
                 icon = Icons.Default.Language,
                 title = stringResource(R.string.settings_languages),
                 onClick = onNavigateToLanguageSettings,
@@ -231,23 +215,6 @@ fun SettingsScreen(
                 icon = Icons.Default.Settings,
                 title = stringResource(R.string.transcription_dictionary),
                 onClick = { onNavigateToPostProcessingSettings(0) },
-                enabled = !onDeviceTranscriptionEnabled,
-                trailingContent = {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
-                               else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                    )
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.AutoAwesome,
-                title = stringResource(R.string.transcription_tone_style),
-                onClick = { onNavigateToPostProcessingSettings(1) },
                 enabled = !onDeviceTranscriptionEnabled,
                 trailingContent = {
                     Icon(

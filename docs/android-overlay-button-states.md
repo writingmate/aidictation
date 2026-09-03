@@ -114,7 +114,11 @@ check and settings intent lives in `ui/permissions/OverlayPermissions.kt`.
 7. **Apply replaces the original selection.** ✓ writes the working text over the
    originally selected text (the current selection, else its last occurrence in the
    field) and collapses the caret after it. Applying unchanged text simply closes.
-8. **Ignoring is free.** The bubble stays idle and usable while the panel is open.
+8. **Ignoring is free.** The bubble stays idle and usable while the panel is open. The
+   panel spans the screen just above the keyboard, where the bubble usually sits, so
+   while the panel is open the bubble is moved up above the panel's top edge and put
+   back where it was when the panel goes (a drag during that time sets a new place).
+   Window stacking alone is not relied on to keep the panel's buttons visible.
    Starting dictation from the bubble, the field losing focus (bubble hides), or the
    service stopping discards the panel without changing text. × does the same with the
    wither animation.

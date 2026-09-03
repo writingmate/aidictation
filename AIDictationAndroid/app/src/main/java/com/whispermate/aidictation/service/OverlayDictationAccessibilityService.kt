@@ -264,6 +264,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var rewritePanelParams: WindowManager.LayoutParams? = null
     private var isRewritePanelAttached = false
     private var rewriteSession: RewriteSession? = null
+    /** Where the bubble sat before it was moved up out of the panel's way; null when not moved. */
+    private var bubbleRestingY: Int? = null
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
@@ -1336,6 +1338,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun moveBubbleTo(targetX: Int, targetY: Int) {
         val params = bubbleParams ?: return
+        // A place the user chose is the new resting place, even while the panel is open.
+        bubbleRestingY = null
         params.x = targetX
         params.y = targetY
         updateBubblePosition()
@@ -1351,7 +1355,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             windowManager.updateViewLayout(bubble, params)
             updateCommandActionsPosition()
             updateDismissActionsPosition()
-            updateRewritePanelPosition()
+            // The user is placing the bubble; do not fight the drag.
+            updateRewritePanelPosition(nudgeBubble = false)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update bubble position", e)
         }
@@ -2525,18 +2530,25 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         rewritePanelParams = null
         panel ?: return
         panel.cancelAnimations()
-        if (!isRewritePanelAttached) return
+        if (!isRewritePanelAttached) {
+            restoreBubbleAfterPanel()
+            return
+        }
         try {
             windowManager.removeViewImmediate(panel)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to remove rewrite panel overlay", e)
         } finally {
             isRewritePanelAttached = false
+            restoreBubbleAfterPanel()
         }
     }
 
-    /** Keeps the panel just above the keyboard, or at the bottom of the screen without one. */
-    private fun updateRewritePanelPosition() {
+    /**
+     * Keeps the panel just above the keyboard, or at the bottom of the screen without one,
+     * and (unless the bubble is being dragged) moves the bubble out of the panel's way.
+     */
+    private fun updateRewritePanelPosition(nudgeBubble: Boolean = true) {
         val panel = rewritePanel ?: return
         val params = rewritePanelParams ?: return
         val margin = dp(REWRITE_PANEL_MARGIN_DP)
@@ -2553,6 +2565,44 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             windowManager.updateViewLayout(panel, params)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update rewrite panel position", e)
+        }
+        if (nudgeBubble) keepBubbleClearOfPanel(panelTop = params.y)
+    }
+
+    /**
+     * The panel spans the screen just above the keyboard, exactly where the bubble usually
+     * sits. Window stacking alone is not trusted to keep the panel's buttons visible: while
+     * the panel is open the bubble is moved up above it, and put back when the panel goes.
+     */
+    private fun keepBubbleClearOfPanel(panelTop: Int) {
+        if (!isBubbleAttached) return
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        val margin = dp(BUBBLE_MARGIN_DP)
+        val clearY = (panelTop - currentBubbleHeightPx() - margin).coerceAtLeast(margin)
+        if (params.y <= clearY) return
+        if (bubbleRestingY == null) bubbleRestingY = params.y
+        params.y = clearY
+        try {
+            windowManager.updateViewLayout(bubble, params)
+            updateCommandActionsPosition()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to move bubble clear of the panel", e)
+        }
+    }
+
+    private fun restoreBubbleAfterPanel() {
+        val restingY = bubbleRestingY ?: return
+        bubbleRestingY = null
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        params.y = restingY.coerceIn(dp(BUBBLE_MARGIN_DP), maxBubbleY())
+        if (!isBubbleAttached) return
+        try {
+            windowManager.updateViewLayout(bubble, params)
+            updateCommandActionsPosition()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to restore bubble position after the panel", e)
         }
     }
 

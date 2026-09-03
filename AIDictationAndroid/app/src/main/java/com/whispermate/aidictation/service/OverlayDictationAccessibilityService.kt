@@ -2536,6 +2536,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         (rewritePanel ?: bubbleView)?.announceForAccessibility(message)
     }
 
+    /** Content colour for an accent-filled surface, matching the app theme. */
     private fun preferredOnColor(backgroundColor: Int): Int {
         fun linearChannel(channel: Int): Double {
             val normalized = channel / 255.0
@@ -2550,9 +2551,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             0.2126 * linearChannel(Color.red(backgroundColor)) +
                 0.7152 * linearChannel(Color.green(backgroundColor)) +
                 0.0722 * linearChannel(Color.blue(backgroundColor))
-        val whiteContrast = 1.05 / (luminance + 0.05)
-        val blackContrast = (luminance + 0.05) / 0.05
-        return if (whiteContrast >= blackContrast) Color.WHITE else Color.BLACK
+        // Same rule as the app theme's onColorFor: only light accents get dark content.
+        // Choosing by WCAG ratio instead would put black on the default orange, unlike
+        // the bubble and every themed screen, which draw white on it.
+        return if (luminance > 0.5) Color.BLACK else Color.WHITE
     }
 
     private fun updateBubbleUi() {

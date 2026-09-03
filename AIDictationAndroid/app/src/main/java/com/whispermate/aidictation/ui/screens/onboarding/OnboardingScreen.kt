@@ -586,9 +586,9 @@ private fun ButtonDemoStep(
                 AndroidView(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(16.dp)
-                        .width(if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp)
-                        .height(55.dp),
+                        .padding(10.dp)
+                        .width(OverlayMicButtonView.widthDp(previewState).dp)
+                        .height(OverlayMicButtonView.heightDp().dp),
                     factory = { androidContext ->
                         OverlayMicButtonView(androidContext).apply {
                             setOnClickCallback { handleDemoMicTap() }

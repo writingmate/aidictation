@@ -27,6 +27,18 @@ surface in dark mode) with glyphs in the theme's black (opaque on-surface). The 
 cancel circle are that surface tinted 10% with the glyph colour. The wand and the panel
 use the same neutrals; there is no colour preference.
 
+**Translucency and shadow.** Every floating button (the bubble in all three states and
+the wand) is filled at 90% opacity so the field underneath shows through faintly; glyphs
+stay opaque. Both sit on a standard 6 dp elevation shadow. The bubble view keeps a 6 dp
+transparent margin on every side of the drawn surface (its window is 67 dp tall) so the
+shadow is not clipped by the window edge. Its outline follows the drawn surfaces: the
+idle circle alone, or while recording the cancel (X) circle, the waveform pill and the
+accept circle each with their own shadow (on Android 10 and later; earlier releases only
+allow a convex outline, so one rounded shape spans all three). The panel's six buttons
+are raised 3 dp on the panel surface. The idle waveform logo is drawn at 90% of its
+former size inside the circle. Windows sit 8 dp from the screen edge and the keyboard,
+which with the margin puts the visible circle about 18 dp in.
+
 The bubble takes no part in text editing: selection commands live entirely in the
 wand and its panel.
 
@@ -42,9 +54,9 @@ password field ends it (`bubbleNeedsKeyboard`).
 1. **Shown or absent, never disabled.** The wand appears only when it can be tapped:
    bubble idle, no dictation delivery in flight, a non-blank selection in the focused
    field, and no panel open.
-2. **Borderless secondary button.** Themed surface fill (white in a light theme) with
-   the themed-black wand icon and a small elevation for its edge. Pressed state layer
-   12%.
+2. **Borderless secondary button.** Themed surface fill (white in a light theme) at the
+   same 90% opacity as the bubble, the themed-black wand icon and the standard 6 dp
+   shadow. Pressed state layer 12%.
 3. **Follows the bubble.** It sits on the side of the bubble with room and moves with
    it when dragged. Dragging the bubble to the dismiss zones hides it.
 4. **Absorbed by the panel.** Tapping it swells and fades the wand while the panel

@@ -122,8 +122,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val MIN_RECORDING_MS = 500L
         private const val ACCESS_CHECK_TIMEOUT_MS = 15_000L
         private const val SETTINGS_SNAPSHOT_TIMEOUT_MS = 5_000L
-        private const val BUBBLE_SIZE_DP = 55
-        private const val BUBBLE_MARGIN_DP = 20
+        /** Whole bubble window while idle: the 55 dp circle plus its shadow margin on every side. */
+        private const val BUBBLE_SIZE_DP = OverlayMicButtonView.IDLE_SIZE_DP
+        /**
+         * Gap between the bubble window and the screen edges or the keyboard. The window already
+         * carries a transparent shadow margin, so the visible circle sits a little further in.
+         */
+        private const val BUBBLE_MARGIN_DP = 8
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
         /** IME window reports lag and flap while the keyboard animates; wait this long before trusting an absence. */
@@ -136,7 +141,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val INSERT_VERIFY_ATTEMPTS = 5
         private const val INSERT_VERIFY_RETRY_MS = 150L
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
-        private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
+        /** Both the wand and the bubble windows carry transparent shadow margins, so the gap stays small. */
+        private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 2
         private const val COMMAND_ACTION_GAP_DP = 8
         private const val COMMAND_ACTION_BUTTON_SIZE_DP = 55
         private const val COMMAND_ACTION_CONTAINER_PADDING_DP = 6
@@ -748,20 +754,22 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (bubbleView != null) return
 
         bubbleView = OverlayMicButtonView(this).apply {
-            elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isHapticFeedbackEnabled = true
             setPalette(overlaySurfaceColor(), overlayOnSurfaceColor())
             setState(OverlayMicButtonView.State.Idle)
         }
 
-        val size = dp(BUBBLE_SIZE_DP)
+        val width = currentBubbleWidthPx()
+        val height = currentBubbleHeightPx()
+        // A position saved with an older window size or margin is pulled back inside the edges.
         val startX = bubblePrefs.getInt(OverlayBubblePreferences.X_KEY, defaultBubbleX())
+            .coerceIn(dp(BUBBLE_MARGIN_DP), maxBubbleX(width))
         val startY = bubblePrefs.getInt(OverlayBubblePreferences.Y_KEY, defaultBubbleY())
 
         bubbleParams = WindowManager.LayoutParams(
-            size,
-            size,
+            width,
+            height,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -823,7 +831,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Borderless secondary button: themed surface fill, themed-black wand icon, elevation for the edge. */
+    /**
+     * Borderless secondary button: slightly translucent themed surface fill (same as the bubble),
+     * themed-black wand icon, standard shadow underneath.
+     */
     private fun styleWandButton(view: ImageView) {
         val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
         val glyph = overlayOnSurfaceColor()
@@ -833,7 +844,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         view.setPadding(padding, padding, padding, padding)
         view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
         view.background = circleBackground(
-            fillColor = overlaySurfaceColor(),
+            fillColor = withAlpha(overlaySurfaceColor(), OverlayMicButtonView.SURFACE_ALPHA),
             contentColor = glyph
         )
     }
@@ -2612,10 +2623,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return (color and 0x00FFFFFF) or (alpha shl 24)
     }
 
-    private fun defaultBubbleX(): Int {
-        val screenWidth = resources.displayMetrics.widthPixels
-        return (screenWidth - dp(BUBBLE_SIZE_DP + BUBBLE_MARGIN_DP)).coerceAtLeast(dp(BUBBLE_MARGIN_DP))
-    }
+    private fun defaultBubbleX(): Int = maxBubbleX(dp(BUBBLE_SIZE_DP))
 
     private fun defaultBubbleY(): Int {
         val screenHeight = resources.displayMetrics.heightPixels

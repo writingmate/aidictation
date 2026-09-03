@@ -4,10 +4,14 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
+import android.os.Build
 import android.util.AttributeSet
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.animation.OvershootInterpolator
 import com.whispermate.aidictation.R
 import kotlin.math.PI
@@ -56,6 +60,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private val acceptRect = RectF()
     private val pillRect = RectF()
     private val barRect = RectF()
+    private val outlinePath = Path()
     private val processingHeights = FloatArray(TOTAL_BARS)
 
     private val barAnimators = arrayOfNulls<ValueAnimator>(TOTAL_BARS)
@@ -64,11 +69,25 @@ class OverlayMicButtonView @JvmOverloads constructor(
     private val springInterpolator = OvershootInterpolator(1.2f)
 
     companion object {
+        /** Height of the button in every state and width of the idle circle, shadow margin excluded. */
+        const val BUTTON_SIZE_DP = 55
+        /** Width of the recording and processing pill, shadow margin excluded. */
+        const val PILL_WIDTH_DP = 250
+        /**
+         * Transparent margin kept around the drawn surface on every side. The overlay window is
+         * exactly this view's size, so the elevation shadow needs room inside it or it is clipped.
+         */
+        const val SHADOW_PADDING_DP = 6
+        /** Size of the whole view (and its overlay window) while idle. */
+        const val IDLE_SIZE_DP = BUTTON_SIZE_DP + 2 * SHADOW_PADDING_DP
+        /** Standard resting elevation of a floating button. */
+        const val ELEVATION_DP = 6f
+        /** Every overlay button is drawn slightly translucent so the field underneath shows through. */
+        const val SURFACE_ALPHA = 0.9f
+        /** The waveform logo sits a little smaller inside the idle circle. */
+        private const val LOGO_SCALE = 0.9f
         private const val TOTAL_BARS = 5
         private const val MIN_ACTIVE_BARS = 3
-        private const val BACKGROUND_ALPHA = 0.82f
-        /** The speak button is a filled primary button: opaque accent, like the panel's apply. */
-        private const val PRIMARY_BUTTON_ALPHA = 1f
         /** How much of the glyph colour tints the pill and cancel circle over the fill. */
         private const val SECONDARY_SURFACE_ALPHA = 0.1f
         private const val WAVEFORM_LEVEL_GAIN = 1.35f
@@ -78,6 +97,15 @@ class OverlayMicButtonView @JvmOverloads constructor(
         private const val WAVEFORM_ACTIVE_FLOOR = 0.16f
         private val FROZEN_HEIGHTS = floatArrayOf(0.56f, 1f, 0.56f, 1f, 0.56f)
         private val CIRCLE_ENVELOPE_HEIGHTS = floatArrayOf(0.72f, 0.94f, 1f, 0.94f, 0.72f)
+
+        /** Width in dp of the whole view, shadow margin included, for [state]. */
+        fun widthDp(state: State): Int = when (state) {
+            State.Recording, State.Processing -> PILL_WIDTH_DP + 2 * SHADOW_PADDING_DP
+            State.Idle -> IDLE_SIZE_DP
+        }
+
+        /** Height in dp of the whole view, shadow margin included. */
+        fun heightDp(): Int = IDLE_SIZE_DP
     }
 
     init {
@@ -92,14 +120,59 @@ class OverlayMicButtonView @JvmOverloads constructor(
         }
         isClickable = true
         isFocusable = true
+        elevation = ELEVATION_DP * resources.displayMetrics.density
+        outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                layoutSurfaces()
+                buildOutline(outline)
+                outline.alpha = SURFACE_ALPHA
+            }
+        }
     }
 
-    fun preferredWidthDp(): Int = when (state) {
-        State.Recording, State.Processing -> 250
-        State.Idle -> 55
+    /**
+     * The shadow follows the drawn surfaces: the idle circle alone, or the cancel circle
+     * (while recording), the pill and the accept circle each with their own shadow. Before
+     * Android 10 an outline has to be convex, so there one rounded shape spans all three.
+     */
+    private fun buildOutline(outline: Outline) {
+        val radius = acceptRect.height() / 2f
+        if (state == State.Idle) {
+            outline.setOval(
+                acceptRect.left.toInt(),
+                acceptRect.top.toInt(),
+                acceptRect.right.toInt(),
+                acceptRect.bottom.toInt()
+            )
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            outlinePath.rewind()
+            if (state == State.Recording) outlinePath.addOval(cancelRect, Path.Direction.CW)
+            if (pillRect.width() > 0f) outlinePath.addRoundRect(pillRect, radius, radius, Path.Direction.CW)
+            outlinePath.addOval(acceptRect, Path.Direction.CW)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                outline.setPath(outlinePath)
+            } else {
+                // Misnamed until API 30: non-convex paths are accepted from API 29.
+                @Suppress("DEPRECATION")
+                outline.setConvexPath(outlinePath)
+            }
+            return
+        }
+        val left = if (state == State.Recording) cancelRect.left else pillRect.left
+        outline.setRoundRect(
+            left.toInt(),
+            acceptRect.top.toInt(),
+            acceptRect.right.toInt(),
+            acceptRect.bottom.toInt(),
+            radius
+        )
     }
 
-    fun preferredHeightDp(): Int = 55
+    fun preferredWidthDp(): Int = widthDp(state)
+
+    fun preferredHeightDp(): Int = heightDp()
 
     fun isCancelHit(x: Float, y: Float): Boolean {
         return state == State.Recording && cancelRect.contains(x, y)
@@ -134,6 +207,7 @@ class OverlayMicButtonView @JvmOverloads constructor(
             stopProcessingAnimation()
         }
         updateBarHeights(animate = false)
+        invalidateOutline()
         invalidate()
     }
 
@@ -263,35 +337,52 @@ class OverlayMicButtonView @JvmOverloads constructor(
         drawOverlay(canvas)
     }
 
-    private fun drawOverlay(canvas: Canvas) {
-        val h = height.toFloat()
-        val currentWidth = width.toFloat()
+    /**
+     * Places the cancel circle, pill and accept circle inside the view, leaving the shadow
+     * margin free on every side.
+     */
+    private fun layoutSurfaces() {
+        val pad = SHADOW_PADDING_DP * resources.displayMetrics.density
+        val innerTop = pad
+        val innerLeft = pad
+        val innerRight = width - pad
+        val h = height - 2f * pad
         val surfaceSize = h * 0.86f
         val surfaceInset = (h - surfaceSize) / 2f
         val gap = h * 0.13f
 
         acceptRect.set(
-            currentWidth - surfaceInset - surfaceSize,
-            surfaceInset,
-            currentWidth - surfaceInset,
-            surfaceInset + surfaceSize
+            innerRight - surfaceInset - surfaceSize,
+            innerTop + surfaceInset,
+            innerRight - surfaceInset,
+            innerTop + surfaceInset + surfaceSize
         )
-        cancelRect.set(surfaceInset, surfaceInset, surfaceInset + surfaceSize, surfaceInset + surfaceSize)
-        pillRect.set(cancelRect.right + gap, surfaceInset, acceptRect.left - gap, surfaceInset + surfaceSize)
+        cancelRect.set(
+            innerLeft + surfaceInset,
+            innerTop + surfaceInset,
+            innerLeft + surfaceInset + surfaceSize,
+            innerTop + surfaceInset + surfaceSize
+        )
+        pillRect.set(cancelRect.right + gap, acceptRect.top, acceptRect.left - gap, acceptRect.bottom)
+    }
+
+    private fun drawOverlay(canvas: Canvas) {
+        layoutSurfaces()
+        val surfaceSize = acceptRect.height()
 
         val expanded = if (state == State.Idle) 0f else 1f
 
         if (pillRect.width() > 0f) {
-            pillPaint.color = withAlpha(secondaryFillColor, expanded)
+            pillPaint.color = withAlpha(secondaryFillColor, expanded * SURFACE_ALPHA)
             canvas.drawRoundRect(pillRect, surfaceSize / 2f, surfaceSize / 2f, pillPaint)
         }
 
-        backgroundPaint.color = withAlpha(secondaryFillColor, expanded)
+        backgroundPaint.color = withAlpha(secondaryFillColor, expanded * SURFACE_ALPHA)
         if (expanded > 0f && state == State.Recording) {
             canvas.drawCircle(cancelRect.centerX(), cancelRect.centerY(), surfaceSize / 2f, backgroundPaint)
         }
 
-        backgroundPaint.color = withAlpha(fillColor, PRIMARY_BUTTON_ALPHA)
+        backgroundPaint.color = withAlpha(fillColor, SURFACE_ALPHA)
         canvas.drawCircle(acceptRect.centerX(), acceptRect.centerY(), surfaceSize / 2f, backgroundPaint)
 
         if (state == State.Processing) {
@@ -329,9 +420,11 @@ class OverlayMicButtonView @JvmOverloads constructor(
         circleSpacing: Boolean
     ) {
         if (alpha <= 0f) return
-        val barWidth = bounds.height() * 0.092f
-        val barSpacing = bounds.height() * if (circleSpacing) 0.044f else 0.14f
-        val maxBarHeight = bounds.height() * if (circleSpacing) 0.496f else 0.48f
+        // The idle logo (circle spacing) is scaled down a little; the live waveform in the pill is not.
+        val scale = if (circleSpacing) LOGO_SCALE else 1f
+        val barWidth = bounds.height() * 0.092f * scale
+        val barSpacing = bounds.height() * (if (circleSpacing) 0.044f else 0.14f) * scale
+        val maxBarHeight = bounds.height() * (if (circleSpacing) 0.496f else 0.48f) * scale
         val dotSize = barWidth
         val totalBarsWidth = (barWidth * TOTAL_BARS) + (barSpacing * (TOTAL_BARS - 1))
         val startX = bounds.centerX() - (totalBarsWidth / 2f) + (barWidth / 2f)

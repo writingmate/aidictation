@@ -98,7 +98,6 @@ fun SettingsScreen(
     autoStopOnSilenceEnabled: Boolean = false,
     onAutoStopOnSilenceToggled: (Boolean) -> Unit = {},
     usageStatus: UsageStatus,
-    onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
     onSignInWithGoogle: (() -> Unit)? = null,
@@ -147,7 +146,6 @@ fun SettingsScreen(
     ) {
         AccountSettingsSection(
             usageStatus = usageStatus,
-            onSignIn = onSignIn,
             onSignInWithGoogle = onSignInWithGoogle,
             onSignOut = onSignOut,
             onUpgrade = onUpgrade
@@ -434,13 +432,10 @@ fun SettingsScreen(
 @Composable
 private fun AccountSettingsSection(
     usageStatus: UsageStatus,
-    onSignIn: () -> Unit,
     onSignInWithGoogle: (() -> Unit)?,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit
 ) {
-    val showsIdentityRow = usageStatus.isAuthenticated || usageStatus.isPro
-
     SectionHeader(stringResource(R.string.settings_account))
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -453,17 +448,6 @@ private fun AccountSettingsSection(
                 email = usageStatus.email ?: stringResource(R.string.account_signed_in),
                 tierName = usageStatus.tierName
             )
-        } else if (usageStatus.isPro) {
-            SettingsItem(
-                icon = Icons.Default.AccountCircle,
-                title = stringResource(R.string.account_sign_in),
-                onClick = onSignIn,
-                iconTint = MaterialTheme.colorScheme.primary,
-                titleColor = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        if (showsIdentityRow) {
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
 
@@ -471,14 +455,22 @@ private fun AccountSettingsSection(
 
         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
-        if (!usageStatus.isPro) {
+        // Google is the only way in. Upgrading needs an account, so an anonymous user
+        // sees the Google button where a signed-in free user sees Upgrade.
+        if (!usageStatus.isAuthenticated) {
+            if (onSignInWithGoogle != null) {
+                GoogleSignInButton(
+                    onClick = onSignInWithGoogle,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            }
+        } else if (!usageStatus.isPro) {
             SettingsItem(
                 icon = Icons.Default.AutoAwesome,
-                title = if (usageStatus.isAuthenticated) {
-                    stringResource(R.string.account_upgrade)
-                } else {
-                    stringResource(R.string.account_sign_in_or_upgrade)
-                },
+                title = stringResource(R.string.account_upgrade),
                 onClick = onUpgrade,
                 iconTint = MaterialTheme.colorScheme.primary,
                 titleColor = MaterialTheme.colorScheme.primary
@@ -487,18 +479,7 @@ private fun AccountSettingsSection(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
 
-        if (!usageStatus.isAuthenticated && onSignInWithGoogle != null) {
-            GoogleSignInButton(
-                onClick = onSignInWithGoogle,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-        }
-
         if (usageStatus.isAuthenticated) {
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SettingsItem(
                 icon = Icons.AutoMirrored.Filled.Logout,
                 title = stringResource(R.string.account_sign_out),

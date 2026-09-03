@@ -204,7 +204,6 @@ fun MainScreen(
                 autoStopOnSilenceEnabled = autoStopOnSilenceEnabled,
                 onAutoStopOnSilenceToggled = { viewModel.setAutoStopOnSilenceEnabled(it) },
                 usageStatus = usageStatus,
-                onSignIn = { viewModel.openLogin() },
                 onSignInWithGoogle = if (viewModel.isGoogleSignInConfigured) {
                     { viewModel.signInWithGoogle(context) }
                 } else {

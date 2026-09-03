@@ -92,11 +92,9 @@
     <string name="settings_display_over_apps">Display over other apps</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
     <string name="settings_account">Account</string>
-    <string name="account_sign_in">Sign in</string>
     <string name="account_sign_out">Sign out</string>
     <string name="account_signed_in">Signed in</string>
     <string name="account_upgrade">Upgrade to Pro</string>
-    <string name="account_sign_in_or_upgrade">Sign in to upgrade</string>
     <string name="account_continue_with_google">Continue with Google</string>
     <string name="account_google_not_configured">Google sign-in is not configured</string>
     <string name="account_google_no_account">No Google account is available on this device</string>

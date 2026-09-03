@@ -24,8 +24,8 @@ invariants and are covered by `OverlayRecordingPresentationTest`.
 
 **Palette.** The bubble is drawn on the theme's surface (white in light mode, the dark
 surface in dark mode) with glyphs in the theme's black (opaque on-surface). The pill and
-cancel circle are that surface tinted 10% with the glyph colour. The bubble colour
-preference no longer colours the bubble; it is the accent for the wand and the panel.
+cancel circle are that surface tinted 10% with the glyph colour. The wand and the panel
+use the same neutrals; there is no colour preference.
 
 The bubble takes no part in text editing: selection commands live entirely in the
 wand and its panel.

@@ -39,6 +39,10 @@
     <string name="onboarding_accessibility_disclosure_accept">I agree</string>
     <string name="onboarding_accessibility_disclosure_decline">Not now</string>
     <string name="onboarding_accessibility_disclosure_settings">After you agree, Android settings will open so you can turn on AIDictation.</string>
+    <string name="onboarding_overlay_title">Keep the mic with your keyboard</string>
+    <string name="onboarding_overlay_subtitle">Allow AIDictation to display over other apps so the floating mic appears exactly when your keyboard does, and leaves when it closes.</string>
+    <string name="onboarding_overlay_note">Optional. Without it the mic still works, but may sometimes be late to appear.</string>
+    <string name="onboarding_overlay_allow">Allow</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
     <string name="onboarding_on_device_title">Choose transcription mode</string>
@@ -85,6 +89,7 @@
     <string name="settings_permissions">Permissions</string>
     <string name="settings_microphone">Microphone Access</string>
     <string name="settings_overlay_access">Floating mic access</string>
+    <string name="settings_display_over_apps">Display over other apps</string>
     <string name="settings_show_overlay_bubble">Show Dictation Bubble</string>
     <string name="settings_account">Account</string>
     <string name="account_sign_in">Sign in</string>

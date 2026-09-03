@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.KeyboardVoice
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Security
@@ -84,6 +86,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.service.KeyboardProbeWindow
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
@@ -190,7 +193,8 @@ private enum class OnboardingStep {
     OnDeviceTranscription,
     Microphone,
     ButtonDemo,
-    AccessibilityDisclosure
+    AccessibilityDisclosure,
+    DisplayOverApps
 }
 
 @Composable
@@ -213,6 +217,7 @@ fun OnboardingScreen(
     var currentStep by remember { mutableIntStateOf(0) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
+    var hasDisplayOverAppsPermission by remember { mutableStateOf(KeyboardProbeWindow.canDrawOverlays(context)) }
     var demoLaunchRequested by remember { mutableStateOf(false) }
     val colors = onboardingColors()
 
@@ -226,6 +231,7 @@ fun OnboardingScreen(
             add(OnboardingStep.Microphone)
             add(OnboardingStep.ButtonDemo)
             add(OnboardingStep.AccessibilityDisclosure)
+            add(OnboardingStep.DisplayOverApps)
         }
     }
     val currentOnboardingStep = onboardingSteps[currentStep.coerceAtMost(onboardingSteps.lastIndex)]
@@ -257,6 +263,7 @@ fun OnboardingScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasMicPermission = hasMicrophonePermission(context)
+                hasDisplayOverAppsPermission = KeyboardProbeWindow.canDrawOverlays(context)
                 val overlayEnabled = isOverlayAccessibilityEnabled(context)
                 isOverlayServiceEnabled = overlayEnabled
                 if (
@@ -284,6 +291,11 @@ fun OnboardingScreen(
 
     fun goToNextStep() {
         currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
+    }
+
+    fun finishOnboarding() {
+        onSaveContextRules(contextRulesEnabled.toList())
+        onComplete()
     }
 
     Column(
@@ -351,13 +363,46 @@ fun OnboardingScreen(
                         onCancelRecording = onCancelDemoRecording
                     )
                     OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep()
+                    OnboardingStep.DisplayOverApps -> DisplayOverAppsStep(hasPermission = hasDisplayOverAppsPermission)
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (currentOnboardingStep == OnboardingStep.AccessibilityDisclosure && !isOverlayServiceEnabled) {
+        if (currentOnboardingStep == OnboardingStep.DisplayOverApps && !hasDisplayOverAppsPermission) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { finishOnboarding() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.onboarding_accessibility_disclosure_decline),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                Button(
+                    onClick = { openDisplayOverAppsSettings(context) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primary,
+                        contentColor = colors.onPrimary
+                    )
+                ) {
+                    Text(
+                        text = stringResource(R.string.onboarding_overlay_allow),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
+        } else if (currentOnboardingStep == OnboardingStep.AccessibilityDisclosure && !isOverlayServiceEnabled) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -404,10 +449,8 @@ fun OnboardingScreen(
                             }
                         }
                         OnboardingStep.ButtonDemo -> goToNextStep()
-                        OnboardingStep.AccessibilityDisclosure -> {
-                            onSaveContextRules(contextRulesEnabled.toList())
-                            onComplete()
-                        }
+                        OnboardingStep.AccessibilityDisclosure -> goToNextStep()
+                        OnboardingStep.DisplayOverApps -> finishOnboarding()
                     }
                 },
                 modifier = Modifier
@@ -435,7 +478,8 @@ fun OnboardingScreen(
                         }
                         OnboardingStep.ButtonDemo -> stringResource(R.string.onboarding_continue)
                         OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.AccessibilityDisclosure -> stringResource(R.string.onboarding_get_started)
+                        OnboardingStep.AccessibilityDisclosure -> stringResource(R.string.onboarding_continue)
+                        OnboardingStep.DisplayOverApps -> stringResource(R.string.onboarding_get_started)
                     },
                     style = MaterialTheme.typography.titleMedium
                 )
@@ -1217,6 +1261,44 @@ private fun MicrophonePermissionStep(hasPermission: Boolean) {
 }
 
 @Composable
+private fun DisplayOverAppsStep(hasPermission: Boolean) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        OnboardingHeroIcon(icon = if (hasPermission) Icons.Default.Check else Icons.Default.Layers)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_overlay_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_overlay_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        if (!hasPermission) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = stringResource(R.string.onboarding_overlay_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
 private fun ContextRulesStep(
     enabledStates: List<Boolean>,
     onToggle: (Int, Boolean) -> Unit
@@ -1308,6 +1390,16 @@ private fun hasMicrophonePermission(context: Context): Boolean {
 
 private fun openAccessibilitySettings(context: Context) {
     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    context.startActivity(intent)
+}
+
+private fun openDisplayOverAppsSettings(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        Uri.parse("package:${context.packageName}")
+    ).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
     }
     context.startActivity(intent)

@@ -43,11 +43,30 @@ The bubble takes no part in text editing: selection commands live entirely in th
 wand and its panel.
 
 **Visibility.** The bubble shows while an editable field has input focus and the
-keyboard is up. When the keyboard closes it leaves after a short grace period (the IME
-window flaps during animations), unless dictation is recording, processing or
-delivering, or the edit panel is open. The sticky-focus fallback that bridges WebView
-tree rebuilds applies only while the keyboard is still up; a closed keyboard or a
-password field ends it (`bubbleNeedsKeyboard`).
+keyboard is up. When the keyboard closes it leaves after a short debounce, unless
+dictation is recording, processing or delivering, or the edit panel is open. The
+sticky-focus fallback that bridges WebView tree rebuilds applies only while the keyboard
+is still up; a closed keyboard or a password field ends it (`bubbleNeedsKeyboard`).
+
+**Keyboard signal.** Two sources, in order of preference:
+
+1. `KeyboardProbeWindow`: when "display over other apps" is granted, the service keeps
+   a hidden 1 px-wide, full-height application overlay window. The window manager
+   resizes it above the keyboard and (Android 11+) dispatches the keyboard insets to
+   it, so keyboard show, hide and top edge arrive as layout events with no polling and
+   no accessibility round trips. The probe's reports are used only once it has seen the
+   keyboard at least once on the device, so it can never make things worse than the
+   fallback. Hides then use the normal 250 ms debounce.
+2. The accessibility window list: an input-method window with non-empty bounds counts
+   as a keyboard. Keyboards are never active or focused windows and many expose no
+   accessibility tree (incognito and password modes, floating layouts, some third-party
+   keyboards), so nothing beyond the bounds is checked. An input-method window
+   appearing or disappearing is handled immediately rather than in the coalesced pass.
+   Because this list flaps during keyboard animations, hides on this path wait a
+   700 ms grace period.
+
+The permission is optional: onboarding asks for it on its last step and Settings >
+Permissions shows its state.
 
 ## Wand button invariants
 

@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
@@ -80,6 +82,7 @@ import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
+import com.whispermate.aidictation.service.KeyboardProbeWindow
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
 
@@ -109,12 +112,14 @@ fun SettingsScreen(
     var showTranscriptionModeScreen by remember { mutableStateOf(false) }
     var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
     var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
+    var hasDisplayOverAppsPermission by remember { mutableStateOf(KeyboardProbeWindow.canDrawOverlays(context)) }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasMicPermission = hasMicrophonePermission(context)
                 hasOverlayPermission = isOverlayAccessibilityEnabled(context)
+                hasDisplayOverAppsPermission = KeyboardProbeWindow.canDrawOverlays(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -180,6 +185,25 @@ fun SettingsScreen(
                 trailingContent = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusIcon(isEnabled = hasOverlayPermission)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+            SettingsItem(
+                icon = Icons.Default.Layers,
+                title = stringResource(R.string.settings_display_over_apps),
+                onClick = { openDisplayOverAppsSettings(context) },
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusIcon(isEnabled = hasDisplayOverAppsPermission)
                         Spacer(modifier = Modifier.width(8.dp))
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -898,6 +922,16 @@ private fun SettingsItem(
 
 private fun openAccessibilitySettings(context: Context) {
     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    context.startActivity(intent)
+}
+
+private fun openDisplayOverAppsSettings(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        Uri.parse("package:${context.packageName}")
+    ).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
     }
     context.startActivity(intent)

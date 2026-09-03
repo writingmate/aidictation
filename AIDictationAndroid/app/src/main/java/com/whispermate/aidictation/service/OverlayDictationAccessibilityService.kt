@@ -267,12 +267,17 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
+    /** Exact keyboard signal when "display over other apps" is granted; null reports fall back to the window list. */
+    private var keyboardProbe: KeyboardProbeWindow? = null
+    /** Last keyboard state seen in the accessibility window list, to spot changes between coalesced passes. */
+    private var lastInputMethodWindowVisible = false
 
     private val bubblePrefs by lazy { OverlayBubblePreferences.prefs(this) }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        keyboardProbe = KeyboardProbeWindow(this, windowManager, ::onKeyboardProbeChanged).also { it.attach() }
 
         serviceScope.launch {
             appPreferences.autoStopOnSilenceEnabled.collectLatest { enabled ->
@@ -339,6 +344,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             return
         }
 
+        // The keyboard window coming or going is the one window change the bubble must
+        // follow at once; other window bursts still wait for the coalesced pass.
+        if (eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED && keyboardProbe?.keyboardVisible == null) {
+            val inputMethodVisible = inputMethodBounds() != null
+            if (inputMethodVisible != lastInputMethodWindowVisible) {
+                lastInputMethodWindowVisible = inputMethodVisible
+                overlayRefreshJob?.cancel()
+                overlayRefreshJob = null
+                refreshOverlayVisibility(null)
+                scheduleFocusRecoveryIfNeeded()
+                return
+            }
+        }
+
         if (overlayRefreshJob?.isActive == true) return
         overlayRefreshJob = serviceScope.launch {
             delay(EVENT_COALESCE_MS)
@@ -382,6 +401,28 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         stopBubbleAnimation()
         focusRecoveryJob?.cancel()
         focusRecoveryJob = null
+        keyboardProbe?.detach()
+        keyboardProbe = null
+    }
+
+    /** The probe saw the keyboard appear or leave: refresh at once, no coalescing. */
+    private fun onKeyboardProbeChanged() {
+        if (isServiceDestroyed) return
+        overlayRefreshJob?.cancel()
+        overlayRefreshJob = null
+        refreshOverlayVisibility(null)
+        scheduleFocusRecoveryIfNeeded()
+    }
+
+    /**
+     * Whether the keyboard is showing: the probe window when it has proven itself on this
+     * device, else the accessibility window list.
+     */
+    private fun isKeyboardVisible(): Boolean {
+        val probe = keyboardProbe
+        // The permission can be granted after the service connected; attach lazily.
+        if (probe != null && !probe.isAttached) probe.attach()
+        return probe?.keyboardVisible ?: (inputMethodBounds() != null)
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
@@ -389,7 +430,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // Resolve the focused field once per pass; the bubble and the wand both decide
         // from the same node.
         val node = resolveFocusedEditableNode(source)
-        val keyboardVisible = inputMethodBounds() != null
+        val keyboardVisible = isKeyboardVisible()
         if (shouldShowBubble(source, node, keyboardVisible)) {
             bubbleShouldBeVisible = true
             showBubble()
@@ -419,11 +460,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         if (pendingHideJob?.isActive == true) return
         // A field that still has focus while the keyboard is gone gets a longer grace
-        // period: the IME window often disappears briefly while it animates or switches.
-        val hideDelayMs = if (inputMethodBounds() == null && resolveFocusedEditableNode(null) != null) {
-            KEYBOARD_HIDE_GRACE_MS
-        } else {
-            BUBBLE_HIDE_DEBOUNCE_MS
+        // period: the IME window in the accessibility list often disappears briefly while
+        // it animates or switches. The probe window does not flap, so it needs only the
+        // normal debounce.
+        val keyboardGone = !isKeyboardVisible()
+        val hideDelayMs = when {
+            keyboardGone && keyboardProbe?.keyboardVisible != null -> BUBBLE_HIDE_DEBOUNCE_MS
+            keyboardGone && resolveFocusedEditableNode(null) != null -> KEYBOARD_HIDE_GRACE_MS
+            else -> BUBBLE_HIDE_DEBOUNCE_MS
         }
         pendingHideJob = serviceScope.launch {
             delay(hideDelayMs)
@@ -447,7 +491,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun shouldShowBubble(
         source: AccessibilityNodeInfo?,
         node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source),
-        keyboardVisible: Boolean = inputMethodBounds() != null
+        keyboardVisible: Boolean = isKeyboardVisible()
     ): Boolean {
         if (!hasEditableDictationTarget(source, node, keyboardVisible)) return false
         if (isBubbleSuppressed()) return false
@@ -489,7 +533,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun hasEditableDictationTarget(
         source: AccessibilityNodeInfo?,
         node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source),
-        keyboardVisible: Boolean = inputMethodBounds() != null
+        keyboardVisible: Boolean = isKeyboardVisible()
     ): Boolean {
         if (node != null) {
             stickyEditableFocusArmed = true
@@ -538,7 +582,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun keyboardTop(): Int {
-        return inputMethodBounds()?.top ?: resources.displayMetrics.heightPixels
+        return inputMethodBounds()?.top
+            ?: keyboardProbe?.keyboardTop
+            ?: resources.displayMetrics.heightPixels
     }
 
     private fun dismissAreaTop(): Int {
@@ -551,19 +597,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .filter { window -> window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
             .mapNotNull { window ->
                 Rect().also { window.getBoundsInScreen(it) }
-                    .takeIf { bounds -> isVisibleInputMethodWindow(window, bounds) }
+                    .takeIf { bounds -> isVisibleInputMethodWindow(bounds) }
             }
             .minByOrNull { bounds -> bounds.top }
     }
 
-    private fun isVisibleInputMethodWindow(window: AccessibilityWindowInfo, bounds: Rect): Boolean {
-        if (bounds.height() <= 0 || bounds.width() <= 0) return false
-        if (window.isActive || window.isFocused) return true
-
-        val root = window.root ?: return false
-        @Suppress("DEPRECATION")
-        root.recycle()
-        return true
+    /**
+     * An input-method window with real bounds is a keyboard on screen. Keyboards are
+     * neither active nor focused windows, and many expose no accessibility tree at all
+     * (incognito and password modes, floating layouts, some third-party keyboards), so
+     * neither of those is evidence either way; asking for the root was a round trip that
+     * hid the bubble exactly when such a keyboard was up.
+     */
+    private fun isVisibleInputMethodWindow(bounds: Rect): Boolean {
+        return bounds.height() > 0 && bounds.width() > 0
     }
 
     private fun isBubbleSuppressed(): Boolean {

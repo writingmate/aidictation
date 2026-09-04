@@ -82,6 +82,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -101,6 +102,9 @@ import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.ui.components.KeepScreenOn
+import com.whispermate.aidictation.ui.components.GroupedListGap
+import com.whispermate.aidictation.ui.components.groupedItemShape
+import com.whispermate.aidictation.ui.components.SettingsIconTile
 import com.whispermate.aidictation.ui.components.GoogleSignInButton
 import com.whispermate.aidictation.ui.permissions.AccessibilityDisclosureSheet
 import com.whispermate.aidictation.ui.permissions.OverlayPermissions
@@ -187,22 +191,8 @@ private fun OnboardingSmallIcon(
     icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
-    val colors = onboardingColors()
-
-    Box(
-        modifier = modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .background(colors.onSurface.copy(alpha = 0.06f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = colors.onSurface
-        )
-    }
+    // Same tile as every settings row, so onboarding and Settings read as one system.
+    SettingsIconTile(icon = icon, modifier = modifier)
 }
 
 private enum class OnboardingStep {
@@ -1012,13 +1002,14 @@ private fun LanguageSelectionStep(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        visibleLanguages.forEach { language ->
+        visibleLanguages.forEachIndexed { index, language ->
             OnboardingLanguageRow(
+                shape = groupedItemShape(index, visibleLanguages.size),
                 language = language,
                 isSelected = language.code in selectedSet,
                 onClick = { onToggleLanguage(language.code) }
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(if (index == visibleLanguages.lastIndex) 12.dp else GroupedListGap))
         }
 
         Text(
@@ -1033,18 +1024,18 @@ private fun LanguageSelectionStep(
 
 @Composable
 private fun OnboardingLanguageRow(
+    shape: Shape,
     language: WhisperLanguage,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
     val colors = onboardingColors()
-    val shape = MaterialTheme.shapes.small
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (isSelected) colors.onSurface.copy(alpha = 0.06f) else colors.surfaceVariant.copy(alpha = 0.45f))
+            .background(colors.surface)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1207,7 +1198,7 @@ private fun TranscriptionModeChoice(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.large)
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(16.dp),
@@ -1354,14 +1345,14 @@ private fun PlanChoiceCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.large)
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
             .border(
                 BorderStroke(
                     width = if (selected) 2.dp else 1.dp,
                     color = if (selected) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant
                 ),
-                RoundedCornerShape(12.dp)
+                MaterialTheme.shapes.large
             )
             .clickable(onClick = onClick)
             .padding(16.dp),
@@ -1448,7 +1439,7 @@ private fun SignInStep(signedInEmail: String?) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(MaterialTheme.shapes.large)
                     .background(colors.surfaceVariant.copy(alpha = 0.55f))
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically

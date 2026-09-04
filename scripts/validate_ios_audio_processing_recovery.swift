@@ -2041,6 +2041,7 @@ private func testDirectoryCreationSucceedsWhenParentFsyncFails() async throws {
     )
 }
 
+@MainActor
 private func testLaunchRecoveryForceResetsQuarantineAndKeepsHistory() async throws {
     let workspace = try makeRoot("quarantine-launch-reset")
     let historyRoot = workspace.appendingPathComponent("WhisperMate", isDirectory: true)

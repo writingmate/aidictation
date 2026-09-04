@@ -283,6 +283,7 @@ private fun Transcription(recording: Recording, modifier: Modifier = Modifier) {
 @Composable
 private fun ProcessingCard(checkpointText: String) {
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -303,6 +304,7 @@ private fun ProcessingCard(checkpointText: String) {
 @Composable
 private fun ErrorCard(message: String) {
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer,

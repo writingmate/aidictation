@@ -210,6 +210,7 @@ private fun DictionaryTab(
         // Add new entry section
         item {
             Card(
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -295,6 +296,7 @@ private fun DictionaryEntryItem(
     onClick: () -> Unit
 ) {
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
@@ -489,6 +491,7 @@ private fun ToneStyleItem(
     onClick: () -> Unit
 ) {
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
@@ -568,6 +571,7 @@ private fun ShortcutsTab(
 
         item {
             Card(
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -728,6 +732,7 @@ private fun ShortcutItem(
     onClick: () -> Unit
 ) {
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),

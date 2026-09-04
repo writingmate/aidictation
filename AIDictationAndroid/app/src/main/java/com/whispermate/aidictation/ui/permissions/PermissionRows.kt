@@ -46,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.ui.components.SettingsRowGap
 
 /**
  * The three permission rows shared by onboarding and Settings: Microphone and Text field
@@ -74,7 +75,7 @@ fun PermissionRows(
             )
         }
         if (showMicrophone && showOverlayRows) {
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
         }
         if (!showOverlayRows) return@Column
         PermissionRow(
@@ -85,7 +86,7 @@ fun PermissionRows(
             recommended = false,
             onAllow = onAllowAccessibility
         )
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        SettingsRowGap()
         PermissionRow(
             icon = Icons.Default.Layers,
             title = stringResource(R.string.permission_overlay_title),

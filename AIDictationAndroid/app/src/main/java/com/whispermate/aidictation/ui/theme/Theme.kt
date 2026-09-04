@@ -2,6 +2,9 @@ package com.whispermate.aidictation.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -92,42 +95,43 @@ private val DarkColorScheme = darkColorScheme(
     surfaceTint = BrandOrange,
 )
 
-private val FigtreeFontFamily = FontFamily(
-    Font(R.font.figtree_variable, FontWeight.Normal),
-    Font(R.font.figtree_variable, FontWeight.Medium),
-    Font(R.font.figtree_variable, FontWeight.SemiBold),
-    Font(R.font.figtree_variable, FontWeight.Bold),
-    Font(R.font.figtree_variable, FontWeight.ExtraBold),
+// Google Sans Flex, the face Android's own Settings uses on Pixel, on Material 3's
+// default type scale so sizes and line heights match the system screens.
+private val GoogleSansFlexFontFamily = FontFamily(
+    Font(R.font.google_sans_flex, FontWeight.Normal),
+    Font(R.font.google_sans_flex, FontWeight.Medium),
+    Font(R.font.google_sans_flex, FontWeight.SemiBold),
+    Font(R.font.google_sans_flex, FontWeight.Bold),
 )
 
-private fun figtreeStyle(
-    size: Int,
-    lineHeight: Int,
-    weight: FontWeight = FontWeight.SemiBold
-) = TextStyle(
-    fontFamily = FigtreeFontFamily,
-    fontWeight = weight,
-    fontSize = size.sp,
-    lineHeight = lineHeight.sp,
-    letterSpacing = 0.sp
-)
+private val AIDictationTypography: Typography = Typography().let { base ->
+    fun TextStyle.brand() = copy(fontFamily = GoogleSansFlexFontFamily)
+    Typography(
+        displayLarge = base.displayLarge.brand(),
+        displayMedium = base.displayMedium.brand(),
+        displaySmall = base.displaySmall.brand(),
+        headlineLarge = base.headlineLarge.brand(),
+        headlineMedium = base.headlineMedium.brand(),
+        headlineSmall = base.headlineSmall.brand(),
+        titleLarge = base.titleLarge.brand(),
+        titleMedium = base.titleMedium.brand(),
+        titleSmall = base.titleSmall.brand(),
+        bodyLarge = base.bodyLarge.brand(),
+        bodyMedium = base.bodyMedium.brand(),
+        bodySmall = base.bodySmall.brand(),
+        labelLarge = base.labelLarge.brand(),
+        labelMedium = base.labelMedium.brand(),
+        labelSmall = base.labelSmall.brand()
+    )
+}
 
-private val AIDictationTypography = Typography(
-    displayLarge = figtreeStyle(size = 72, lineHeight = 79, weight = FontWeight.Bold),
-    displayMedium = figtreeStyle(size = 48, lineHeight = 53, weight = FontWeight.Bold),
-    displaySmall = figtreeStyle(size = 32, lineHeight = 38),
-    headlineLarge = figtreeStyle(size = 32, lineHeight = 38),
-    headlineMedium = figtreeStyle(size = 24, lineHeight = 29),
-    headlineSmall = figtreeStyle(size = 24, lineHeight = 29),
-    titleLarge = figtreeStyle(size = 20, lineHeight = 24),
-    titleMedium = figtreeStyle(size = 16, lineHeight = 19, weight = FontWeight.Bold),
-    titleSmall = figtreeStyle(size = 14, lineHeight = 17),
-    bodyLarge = figtreeStyle(size = 20, lineHeight = 24),
-    bodyMedium = figtreeStyle(size = 16, lineHeight = 21),
-    bodySmall = figtreeStyle(size = 14, lineHeight = 17),
-    labelLarge = figtreeStyle(size = 16, lineHeight = 19, weight = FontWeight.Bold),
-    labelMedium = figtreeStyle(size = 14, lineHeight = 17),
-    labelSmall = figtreeStyle(size = 12, lineHeight = 14)
+/** Android Settings-style rounding: big outer corners, small inner ones. */
+private val AIDictationShapes = Shapes(
+    extraSmall = RoundedCornerShape(4.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(28.dp)
 )
 
 /**
@@ -175,6 +179,7 @@ fun AIDictationTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = AIDictationTypography,
+        shapes = AIDictationShapes,
         content = content
     )
 }

@@ -70,6 +70,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.ui.components.SettingsRowGap
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
@@ -145,6 +146,7 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_permissions))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -158,7 +160,7 @@ fun SettingsScreen(
             )
 
             if (overlayBubbleSuppressed) {
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsRowGap()
 
                 SettingsItem(
                     icon = Icons.Default.Mic,
@@ -181,6 +183,7 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_transcription))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -192,7 +195,7 @@ fun SettingsScreen(
                 onClick = { showTranscriptionModeScreen = true }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
 
             SettingsItem(
                 icon = Icons.Default.Language,
@@ -207,7 +210,7 @@ fun SettingsScreen(
                 }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
 
             SettingsItem(
                 icon = Icons.Default.Settings,
@@ -224,7 +227,7 @@ fun SettingsScreen(
                 }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
 
             SettingsItem(
                 icon = Icons.Default.Translate,
@@ -246,6 +249,7 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_about))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -268,6 +272,7 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_data))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -330,6 +335,7 @@ private fun AccountSettingsSection(
 ) {
     SectionHeader(stringResource(R.string.settings_account))
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -340,7 +346,7 @@ private fun AccountSettingsSection(
                 email = usageStatus.email ?: stringResource(R.string.account_signed_in),
                 tierName = usageStatus.tierName
             )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
         }
 
         UsageSummary(usageStatus = usageStatus)
@@ -358,7 +364,7 @@ private fun AccountSettingsSection(
                 )
             }
         } else if (!usageStatus.isPro) {
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
             SettingsItem(
                 icon = Icons.Default.AutoAwesome,
                 title = stringResource(R.string.account_upgrade),
@@ -367,11 +373,11 @@ private fun AccountSettingsSection(
                 titleColor = MaterialTheme.colorScheme.primary
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
         }
 
         if (usageStatus.isAuthenticated) {
-            if (usageStatus.isPro) HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            if (usageStatus.isPro) SettingsRowGap()
             SettingsItem(
                 icon = Icons.AutoMirrored.Filled.Logout,
                 title = stringResource(R.string.account_sign_out),

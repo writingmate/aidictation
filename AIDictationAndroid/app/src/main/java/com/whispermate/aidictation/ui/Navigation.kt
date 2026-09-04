@@ -69,8 +69,9 @@ fun AIDictationNavHost(
         composable(Screen.Onboarding.route) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.background,
-                contentColor = MaterialTheme.colorScheme.onBackground
+                // Onboarding sits on the plain surface; its cards carry the light grey.
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface
             ) {
                 OnboardingScreen(
                     onComplete = {

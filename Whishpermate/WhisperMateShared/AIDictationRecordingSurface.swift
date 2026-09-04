@@ -187,3 +187,37 @@ public struct AIDictationRecordingSurface: View {
         .accessibilityLabel(state == .paused ? "Resume recording" : "Pause recording")
     }
 }
+
+/// Live cloud-dictation caption that grows as partial transcripts arrive.
+public struct AIDictationLiveTranscriptCaption: View {
+    public let text: String
+    public let color: Color
+
+    public init(text: String, color: Color = .white) {
+        self.text = text
+        self.color = color
+    }
+
+    public var body: some View {
+        Group {
+            if !text.isEmpty {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        Text(text)
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(color)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .id("liveTranscriptTail")
+                    }
+                    .frame(maxHeight: 96)
+                    .onChange(of: text) { _ in
+                        proxy.scrollTo("liveTranscriptTail", anchor: .bottom)
+                    }
+                }
+                .accessibilityLabel(text)
+                .accessibilityAddTraits(.updatesFrequently)
+            }
+        }
+    }
+}

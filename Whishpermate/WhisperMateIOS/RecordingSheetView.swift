@@ -38,7 +38,7 @@ struct RecordingSheetView: View {
     @State private var cancelledPendingAttemptID: UUID?
 
     private let processingStore = MobileAudioProcessingStore.shared
-    @State private var realtimeTranscription = IOSRealtimeTranscriptionCoordinator()
+    @StateObject private var realtimeTranscription = IOSRealtimeTranscriptionCoordinator()
     private var audioRecorder: AudioRecorder { audioRecorderSlot.current }
 
     private var selectedPreset: ContextRule? {
@@ -199,6 +199,20 @@ struct RecordingSheetView: View {
                 .padding(.top, 18)
                 .padding(.horizontal, 56)
                 .zIndex(3)
+            }
+
+            if shouldShowLiveTranscript {
+                VStack {
+                    Spacer()
+                        .frame(height: 118)
+                    AIDictationLiveTranscriptCaption(
+                        text: realtimeTranscription.partialTranscript
+                    )
+                    .padding(.horizontal, 28)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                .zIndex(2)
             }
 
             Button(action: handleCancel) {
@@ -577,6 +591,15 @@ struct RecordingSheetView: View {
             return selectedOutputMode == .meetings ? "Speaker detection ready" : "Offline mode ready"
         case .downloading, .initializing, .error, .transcribing:
             return nil
+        }
+    }
+
+    private var shouldShowLiveTranscript: Bool {
+        switch sheetState {
+        case .recording, .paused, .processing:
+            return !realtimeTranscription.partialTranscript.isEmpty
+        case .idle, .viewing:
+            return false
         }
     }
 

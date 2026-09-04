@@ -311,7 +311,7 @@ private fun DisclosureVisualCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .background(colors.background)
+            .background(colors.surfaceVariant.copy(alpha = 0.45f))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

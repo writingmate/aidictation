@@ -141,8 +141,6 @@ private data class OnboardingColors(
     val background: Color,
     val surface: Color,
     val surfaceVariant: Color,
-    /** Fill for cards and panels: a light grey on the white page, a lifted tone in the dark. */
-    val panel: Color,
     val onSurface: Color,
     val onSurfaceVariant: Color,
     val outline: Color
@@ -155,7 +153,6 @@ private fun onboardingColors() = OnboardingColors(
     background = MaterialTheme.colorScheme.background,
     surface = MaterialTheme.colorScheme.surface,
     surfaceVariant = MaterialTheme.colorScheme.surfaceVariant,
-    panel = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.background,
     onSurface = MaterialTheme.colorScheme.onSurface,
     onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant,
     outline = MaterialTheme.colorScheme.outlineVariant
@@ -321,7 +318,7 @@ fun OnboardingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.surface)
+            .background(colors.background)
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
@@ -643,7 +640,7 @@ private fun PermissionsStep(
 
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = onboardingColors().panel)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             PermissionRows(
                 state = state,
@@ -769,7 +766,7 @@ private fun ButtonDemoStep(
                 .fillMaxWidth()
                 .height(196.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(colors.panel)
+                .background(colors.surfaceVariant.copy(alpha = 0.45f))
         ) {
             Column(
                 modifier = Modifier
@@ -934,7 +931,7 @@ private fun DemoGuideStrip(activeIndex: Int) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
-                    .background(if (active) colors.onSurface else colors.panel)
+                    .background(if (active) colors.onSurface else colors.surfaceVariant.copy(alpha = 0.55f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
@@ -1061,7 +1058,7 @@ private fun OnboardingLanguageRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (isSelected) colors.onSurface.copy(alpha = 0.06f) else colors.panel)
+            .background(if (isSelected) colors.onSurface.copy(alpha = 0.06f) else colors.surfaceVariant.copy(alpha = 0.45f))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1070,7 +1067,7 @@ private fun OnboardingLanguageRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (isSelected) colors.onSurface.copy(alpha = 0.10f) else colors.surface),
+                .background(if (isSelected) colors.onSurface.copy(alpha = 0.10f) else colors.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -1225,7 +1222,7 @@ private fun TranscriptionModeChoice(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.panel)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1372,7 +1369,7 @@ private fun PlanChoiceCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.panel)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
             .border(
                 BorderStroke(
                     width = if (selected) 2.dp else 1.dp,
@@ -1466,7 +1463,7 @@ private fun SignInStep(signedInEmail: String?) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(colors.panel)
+                    .background(colors.surfaceVariant.copy(alpha = 0.55f))
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

@@ -36,9 +36,9 @@ Setup (done 2026-09-03 in Google Cloud project `aidictation-506107`):
    in `local.properties` locally and in the `pull-request` and `release` GitHub
    environments.
 2. **Android** OAuth clients for package `com.aidictation.app`, one per signing key:
-   the debug keystore (`~/.android/debug.keystore`) and the release keystore. Play App
-   Signing re-signs store builds with its own key, so its SHA-1 (Play Console › Setup ›
-   App signing) needs a third Android client before the Play build can sign in.
+   the debug keystore (`~/.android/debug.keystore`), the release/upload keystore, and
+   the Play App Signing key (Play Console › Protected with Play › Manage Play app
+   signing), since Play re-signs store builds with its own key.
 3. The auth backend's Google provider already trusts that web client (it is the one the
    hosted flow uses).
 

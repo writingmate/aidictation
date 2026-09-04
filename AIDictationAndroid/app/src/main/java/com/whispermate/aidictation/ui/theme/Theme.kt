@@ -23,8 +23,12 @@ private val BrandBlack = Color(0xFF120B00)
 private val BrandBlack15 = Color(0xFFD1CFCC)
 private val BrandGreyPrimary = Color(0xFF645B55)
 private val BrandGreySecondary = Color(0xFFA09D99)
-private val BrandLightGrey = Color(0xFFF2F2F2)
-private val BrandWhite80 = Color(0xFFFAFAFA)
+// Page and card tones follow Android's own Settings: a cool light grey page with
+// near-white cards, close enough in value that the cards sit in the page rather than
+// popping off it.
+private val BrandLightGrey = Color(0xFFEAEEF4)
+private val BrandCardWhite = Color(0xFFF8F9FD)
+private val BrandWhite80 = Color(0xFFEFF2F7)
 
 private val LightColorScheme = lightColorScheme(
     primary = BrandOrange,
@@ -45,7 +49,7 @@ private val LightColorScheme = lightColorScheme(
     onErrorContainer = Color(0xFF410002),
     background = BrandLightGrey,
     onBackground = BrandBlack,
-    surface = Color.White,
+    surface = BrandCardWhite,
     onSurface = BrandBlack,
     surfaceVariant = BrandWhite80,
     onSurfaceVariant = BrandGreyPrimary,

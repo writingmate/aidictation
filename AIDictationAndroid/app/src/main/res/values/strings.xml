@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AIDictation</string>
+    <string name="app_name">AI Dictation</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_welcome_title">Welcome to AIDictation</string>
+    <string name="onboarding_welcome_title">Welcome to AI Dictation</string>
     <string name="onboarding_welcome_subtitle">Your voice, instantly transcribed</string>
     <string name="onboarding_feature_1">Speak naturally</string>
     <string name="onboarding_feature_2">Fast transcription</string>
@@ -21,7 +21,7 @@
     <string name="onboarding_button_demo_stop">Listening. Tap the mic again when you are done.</string>
     <string name="onboarding_button_demo_result">“Send the meeting notes when you can.”</string>
     <string name="onboarding_accessibility_disclosure_title">Allow text field access?</string>
-    <string name="onboarding_accessibility_disclosure_intro">AIDictation uses Android AccessibilityService only so you can dictate into text fields in other apps.</string>
+    <string name="onboarding_accessibility_disclosure_intro">AI Dictation uses Android AccessibilityService only so you can dictate into text fields in other apps.</string>
     <string name="onboarding_accessibility_visual_find_title">Find text fields</string>
     <string name="onboarding_accessibility_visual_find_body">Detects when an editable field is focused so the floating mic can appear.</string>
     <string name="onboarding_accessibility_visual_insert_title">Insert your words</string>
@@ -30,14 +30,14 @@
     <string name="onboarding_accessibility_visual_private_body">Does not read passwords, payment fields, or secure screens.</string>
     <string name="onboarding_accessibility_visual_processing_title">Process only on action</string>
     <string name="onboarding_accessibility_visual_processing_body">Cloud transcription or AI cleanup may send recorded audio and relevant text to complete your request. Offline transcription is available where supported.</string>
-    <string name="onboarding_accessibility_disclosure_use">With your consent, AIDictation can detect editable text fields, read the current text and cursor position in the active field, and replace or insert text only when you start dictation or apply a command.</string>
-    <string name="onboarding_accessibility_disclosure_data">Text from the active field may be processed for dictation insertion, grammar fixes, rewrites, shortcuts, and cleanup. AIDictation does not read passwords, payment fields, or secure screens.</string>
-    <string name="onboarding_accessibility_disclosure_cloud">If cloud mode or AI cleanup is enabled, your recorded audio and relevant text may be sent to AIDictation transcription and AI services to complete the action you requested. Offline mode is available where supported.</string>
+    <string name="onboarding_accessibility_disclosure_use">With your consent, AI Dictation can detect editable text fields, read the current text and cursor position in the active field, and replace or insert text only when you start dictation or apply a command.</string>
+    <string name="onboarding_accessibility_disclosure_data">Text from the active field may be processed for dictation insertion, grammar fixes, rewrites, shortcuts, and cleanup. AI Dictation does not read passwords, payment fields, or secure screens.</string>
+    <string name="onboarding_accessibility_disclosure_cloud">If cloud mode or AI cleanup is enabled, your recorded audio and relevant text may be sent to AI Dictation transcription and AI services to complete the action you requested. Offline mode is available where supported.</string>
     <string name="onboarding_accessibility_disclosure_accept">I agree</string>
     <string name="onboarding_accessibility_disclosure_decline">Not now</string>
-    <string name="onboarding_accessibility_disclosure_settings">After you agree, Android settings will open so you can turn on AIDictation.</string>
+    <string name="onboarding_accessibility_disclosure_settings">After you agree, Android settings will open so you can turn on AI Dictation.</string>
     <string name="onboarding_permissions_title">Set up the floating mic</string>
-    <string name="onboarding_permissions_subtitle">Three permissions let AIDictation work in every app.</string>
+    <string name="onboarding_permissions_subtitle">Three permissions let AI Dictation work in every app.</string>
     <string name="onboarding_skip_for_now">Skip for now</string>
     <string name="permissions_hint_need_both">Microphone and text field access are needed to dictate.</string>
     <string name="permissions_hint_need_mic">Microphone is needed to dictate.</string>

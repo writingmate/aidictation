@@ -60,9 +60,9 @@ fun LanguageSettingsScreen(
             text = {
                 Text(
                     if (isCloudRecommended) {
-                        "${item.language.englishName} has lower offline accuracy. AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}."
+                        "${item.language.englishName} has lower offline accuracy. AI Dictation will switch transcription to cloud mode and then select ${item.language.englishName}."
                     } else {
-                        "${item.language.englishName} is not available in offline mode. AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}."
+                        "${item.language.englishName} is not available in offline mode. AI Dictation will switch transcription to cloud mode and then select ${item.language.englishName}."
                     }
                 )
             },

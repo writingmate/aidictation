@@ -22,7 +22,7 @@ class ShortcutActivity : Activity() {
                 serviceIntent.action = OverlayDictationAccessibilityService.ACTION_START_DICTATION
                 startService(serviceIntent)
             } else {
-                Toast.makeText(this, "Please enable AIDictation accessibility service", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Please enable the AI Dictation accessibility service", Toast.LENGTH_LONG).show()
                 val intent = Intent(this, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }

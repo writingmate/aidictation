@@ -167,6 +167,11 @@ struct ValidateIOSRealtimeTranscription {
         if scheme == "ws" || scheme == "wss" {
             return nil
         }
+        // Newer Foundation parses almost any string as a relative URL; only a
+        // real absolute http(s) endpoint can derive a client_secrets URL.
+        guard scheme == "http" || scheme == "https",
+              let host = components.host, !host.isEmpty
+        else { return nil }
         let path = components.path
         if path.hasSuffix("/audio/transcriptions") {
             components.path = String(path.dropLast("/audio/transcriptions".count)) + "/realtime/client_secrets"

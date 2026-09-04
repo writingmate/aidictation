@@ -33,11 +33,21 @@ struct ValidateIOSRealtimeTranscription {
                 "Derived \(derived ?? "nil") from \(input), expected \(expected)"
             )
         }
-        precondition(endpoint(from: "not a url") == nil)
+        // Darwin URLComponents accepts many non-URLs, including "not a url".
+        // Reject websocket schemes here and source-check the parse-failure path.
+        precondition(
+            endpoint(from: "wss://example.com/v1/audio/transcriptions") == nil,
+            "WebSocket transcription endpoints must not mint a client_secrets URL"
+        )
+        precondition(
+            endpoint(from: "ws://example.com/v1/audio/transcriptions") == nil,
+            "WebSocket transcription endpoints must not mint a client_secrets URL"
+        )
 
         let provider = try contents(
             "Whishpermate/WhisperMateShared/Services/OpenAIRealtimeTranscriptionClient.swift"
         )
+        precondition(provider.contains("guard var components = URLComponents(string: transcriptionEndpoint) else { return nil }"))
         precondition(provider.contains("if scheme == \"ws\" || scheme == \"wss\""))
         precondition(provider.contains("return nil"))
     }

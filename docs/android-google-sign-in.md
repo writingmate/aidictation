@@ -24,22 +24,23 @@ With `GOOGLE_WEB_CLIENT_ID` set, the app instead uses Android's Credential Manag
    `${SUPABASE_URL}/auth/v1/token?grant_type=id_token` with the anon `apikey` header,
    Supabase Auth's ID-token grant, and stores the returned session.
 
-**Do not set the client ID until the auth API implements that grant.** As of this
-writing `aidictation.com/auth/v1/token?grant_type=id_token` answers with the password
-grant's "Email and password are required", so the native exchange would fail. The
-underlying Supabase project (`labs-api.writingmate.ai`) does support it, so proxying
-that route is enough.
+The auth API implements this grant (speak-it-fast `functions/auth/v1/token.ts`,
+`grant_type=id_token`): it verifies the ID token with Google's tokeninfo endpoint,
+requires `aud` to be the web client and `nonce` to be the SHA-256 of the raw nonce, then
+signs the user in or creates the account exactly like the browser callback does.
 
-Setup for the native mode, when the backend is ready:
+Setup (done 2026-09-03 in Google Cloud project `aidictation-506107`):
 
-1. Google Cloud › Credentials (the writingmate project): reuse the existing **Web
-   application** client as `GOOGLE_WEB_CLIENT_ID`, and add an **Android** client for
-   package `com.aidictation.app` per signing key in use (debug SHA-1, release SHA-1,
-   Play App Signing's SHA-1). Without a matching Android client Google refuses to
-   issue the token.
-2. Auth backend: the Web client ID must be among the provider's authorised client IDs.
-3. Put `GOOGLE_WEB_CLIENT_ID` in `local.properties` and in the `pull-request` and
-   `release` GitHub environments.
+1. `GOOGLE_WEB_CLIENT_ID` = the existing **Web application** client
+   `553212855846-amcf79495lvti8fnqr1t7vggophr7k4s.apps.googleusercontent.com`; it is set
+   in `local.properties` locally and in the `pull-request` and `release` GitHub
+   environments.
+2. **Android** OAuth clients for package `com.aidictation.app`, one per signing key:
+   the debug keystore (`~/.android/debug.keystore`) and the release keystore. Play App
+   Signing re-signs store builds with its own key, so its SHA-1 (Play Console › Setup ›
+   App signing) needs a third Android client before the Play build can sign in.
+3. The auth backend's Google provider already trusts that web client (it is the one the
+   hosted flow uses).
 
 ## Code
 

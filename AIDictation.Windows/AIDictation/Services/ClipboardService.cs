@@ -141,7 +141,7 @@ public sealed class ClipboardService
             if (!await SetClipboardTextAsync(textToInsert))
             {
                 System.Diagnostics.Debug.WriteLine("PasteTextAsync: clipboard write failed");
-                SentryTelemetry.CaptureTextInsertFailure(
+                HighValueErrorSink.ReportTextInsertFailure(
                     "Could not write to the clipboard. Another application may be holding it.",
                     nameof(PasteFailureReason.ClipboardLocked));
                 return PasteResult.Failed(
@@ -159,7 +159,7 @@ public sealed class ClipboardService
                 {
                     System.Diagnostics.Debug.WriteLine(
                         "PasteTextAsync: target window no longer exists");
-                    SentryTelemetry.CaptureTextInsertFailure(
+                    HighValueErrorSink.ReportTextInsertFailure(
                         "The window you were typing into has closed.",
                         nameof(PasteFailureReason.TargetWindowGone));
                     return PasteResult.Failed(
@@ -172,7 +172,7 @@ public sealed class ClipboardService
                 {
                     System.Diagnostics.Debug.WriteLine(
                         "PasteTextAsync: target window belongs to an elevated process");
-                    SentryTelemetry.CaptureTextInsertFailure(
+                    HighValueErrorSink.ReportTextInsertFailure(
                         "The target application is running as administrator.",
                         nameof(PasteFailureReason.ElevatedTargetWindow));
                     return PasteResult.Failed(
@@ -189,7 +189,7 @@ public sealed class ClipboardService
                 {
                     System.Diagnostics.Debug.WriteLine(
                         "PasteTextAsync: target window not focusable; transcript left on clipboard");
-                    SentryTelemetry.CaptureTextInsertFailure(
+                    HighValueErrorSink.ReportTextInsertFailure(
                         "Could not bring the target window to the foreground.",
                         nameof(PasteFailureReason.FocusBlocked));
                     return PasteResult.Failed(
@@ -201,7 +201,7 @@ public sealed class ClipboardService
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
-                    SentryTelemetry.CaptureTextInsertFailure(
+                    HighValueErrorSink.ReportTextInsertFailure(
                         sendResult.ErrorMessage ?? "Keyboard input was blocked.",
                         nameof(PasteFailureReason.InputInjectionBlocked));
                     return PasteResult.Failed(
@@ -217,7 +217,7 @@ public sealed class ClipboardService
                 {
                     System.Diagnostics.Debug.WriteLine(
                         $"PasteTextAsync: SendInput failed - {sendResult.ErrorMessage}");
-                    SentryTelemetry.CaptureTextInsertFailure(
+                    HighValueErrorSink.ReportTextInsertFailure(
                         sendResult.ErrorMessage ?? "Keyboard input was blocked.",
                         nameof(PasteFailureReason.InputInjectionBlocked));
                     return PasteResult.Failed(

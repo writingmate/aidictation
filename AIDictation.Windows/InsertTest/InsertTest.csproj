@@ -13,6 +13,7 @@
   <!-- Link to the real ClipboardService and SendInputHelper from the main app -->
   <ItemGroup>
     <Compile Include="..\AIDictation\Services\ClipboardService.cs" Link="ClipboardService.cs" />
+    <Compile Include="..\AIDictation\Services\HighValueErrorSink.cs" Link="HighValueErrorSink.cs" />
     <Compile Include="..\AIDictation\Helpers\SendInputHelper.cs" Link="SendInputHelper.cs" />
   </ItemGroup>
 

@@ -46,6 +46,8 @@ public static class SentryTelemetry
         });
 
         _started = true;
+        HighValueErrorSink.CaptureError = CaptureError;
+        HighValueErrorSink.CaptureTextInsertFailure = CaptureTextInsertFailure;
         SentrySdk.ConfigureScope(scope =>
         {
             scope.SetTag("platform", "windows");

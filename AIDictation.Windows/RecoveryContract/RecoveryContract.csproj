@@ -17,6 +17,7 @@
     <Compile Include="..\AIDictation\Services\AudioHttpRecoveryPolicy.cs" Link="AudioHttpRecoveryPolicy.cs" />
     <Compile Include="..\AIDictation\Services\AudioProcessingContracts.cs" Link="AudioProcessingContracts.cs" />
     <Compile Include="..\AIDictation\Services\AudioProcessingCoordinator.cs" Link="AudioProcessingCoordinator.cs" />
+    <Compile Include="..\AIDictation\Services\HighValueErrorSink.cs" Link="HighValueErrorSink.cs" />
     <Compile Include="..\AIDictation\Services\AudioProcessingStore.cs" Link="AudioProcessingStore.cs" />
     <Compile Include="..\AIDictation\Services\AudioTranscriptionResponseParser.cs" Link="AudioTranscriptionResponseParser.cs" />
     <Compile Include="..\AIDictation\Services\BoundedHttpContentReader.cs" Link="BoundedHttpContentReader.cs" />

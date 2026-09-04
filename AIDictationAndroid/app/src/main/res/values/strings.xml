@@ -38,7 +38,8 @@
     <string name="onboarding_accessibility_disclosure_settings">After you agree, Android settings will open so you can turn on AI Dictation.</string>
     <string name="onboarding_microphone_title">Allow the microphone</string>
     <string name="onboarding_microphone_subtitle">AI Dictation only listens while the mic is on. Nothing is recorded in the background.</string>
-    <string name="onboarding_microphone_hint">Microphone access is required to dictate.</string>
+    <string name="onboarding_microphone_allow">Allow microphone</string>
+    <string name="onboarding_microphone_granted">Microphone is on</string>
     <string name="onboarding_permissions_title">Bring the mic into other apps</string>
     <string name="onboarding_permissions_subtitle">Two more permissions let the floating mic appear wherever you type.</string>
     <string name="onboarding_skip_for_now">Skip for now</string>

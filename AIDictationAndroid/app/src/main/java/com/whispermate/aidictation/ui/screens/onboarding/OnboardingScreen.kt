@@ -356,10 +356,7 @@ fun OnboardingScreen(
                         state = onDeviceModelState,
                         onEnabledChanged = onSetOnDeviceTranscriptionEnabled
                     )
-                    OnboardingStep.Microphone -> MicrophoneStep(
-                        state = permissions,
-                        onAllowMicrophone = requestMicrophone
-                    )
+                    OnboardingStep.Microphone -> MicrophoneStep(granted = permissions.microphone)
                     OnboardingStep.OverlayPermissions -> PermissionsStep(
                         state = permissions,
                         onAllowAccessibility = { showAccessibilityDisclosure = true },
@@ -386,30 +383,24 @@ fun OnboardingScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (currentOnboardingStep == OnboardingStep.Microphone) {
+            // One button: it asks for the permission, and becomes Continue once granted.
             Button(
-                onClick = { goToNextStep() },
+                onClick = { if (permissions.microphone) goToNextStep() else requestMicrophone() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
-                enabled = permissions.microphone,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = colors.primary,
                     contentColor = colors.onPrimary
                 )
             ) {
                 Text(
-                    text = stringResource(R.string.onboarding_continue),
+                    text = if (permissions.microphone) {
+                        stringResource(R.string.onboarding_continue)
+                    } else {
+                        stringResource(R.string.onboarding_microphone_allow)
+                    },
                     style = MaterialTheme.typography.titleMedium
-                )
-            }
-            if (!permissions.microphone) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = stringResource(R.string.onboarding_microphone_hint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
                 )
             }
         } else if (currentOnboardingStep == OnboardingStep.OverlayPermissions) {
@@ -554,10 +545,8 @@ private fun permissionsHintText(state: PermissionsState): Int = when (permission
 }
 
 @Composable
-private fun MicrophoneStep(
-    state: PermissionsState,
-    onAllowMicrophone: () -> Unit
-) {
+private fun MicrophoneStep(granted: Boolean) {
+    val colors = onboardingColors()
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         OnboardingHeroIcon(icon = Icons.Default.Mic)
 
@@ -579,19 +568,28 @@ private fun MicrophoneStep(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            PermissionRows(
-                state = state,
-                onAllowMicrophone = onAllowMicrophone,
-                onAllowAccessibility = {},
-                onAllowOverlay = {},
-                showOverlayRows = false
-            )
+        if (granted) {
+            Spacer(modifier = Modifier.height(32.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(start = 12.dp, top = 8.dp, end = 14.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_microphone_granted),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
         }
     }
 }

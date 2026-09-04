@@ -5,6 +5,7 @@ import android.util.Log
 import com.whispermate.aidictation.data.local.ParakeetModelAssets
 import com.whispermate.aidictation.data.preferences.ApiConfigManager
 import com.whispermate.aidictation.data.repository.RecordingRepository
+import com.whispermate.aidictation.telemetry.SentryTelemetry
 import dagger.hilt.android.HiltAndroidApp
 import java.io.File
 import javax.inject.Inject
@@ -22,9 +23,17 @@ class AIDictationApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        SentryTelemetry.start(this)
         recoveryScope.launch {
             runCatching { recordingRepository.normalizeAbandonedAttempts() }
-                .onFailure { Log.e("AIDictationApp", "Unable to normalize interrupted audio work", it) }
+                .onFailure {
+                    Log.e("AIDictationApp", "Unable to normalize interrupted audio work", it)
+                    SentryTelemetry.captureException(
+                        it,
+                        context = "AIDictationApp",
+                        feature = "transcription"
+                    )
+                }
         }
         removeStaleInternalParakeetCache()
     }

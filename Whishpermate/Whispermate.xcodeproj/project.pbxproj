@@ -35,6 +35,8 @@
 		C12A3A162ED4D0AA002D97E6 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A152ED4D0AA002D97E6 /* Functions */; };
 		C12A3A182ED4D0AA002D97E6 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = C12A3A172ED4D0AA002D97E6 /* PostgREST */; };
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
+		E1A200012F90000100000004 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = E1A200012F90000100000002 /* Sentry */; };
+		E1A200012F90000100000005 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = E1A200012F90000100000003 /* Sentry */; };
 		C3D3AA06BB367CC2B12D382D /* TextInsertionFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */; };
 		D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
@@ -284,6 +286,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C2A100012F2B000000000001 /* Sparkle in Frameworks */,
+				E1A200012F90000100000004 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -303,6 +306,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */,
+				E1A200012F90000100000005 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -542,6 +546,9 @@
 				C18566D52EA0D31000B46F55 /* Whispermate */,
 			);
 			name = Whispermate;
+			packageProductDependencies = (
+				E1A200012F90000100000002 /* Sentry */,
+			);
 			productName = Whishpermate;
 			productReference = C1CE643F2ED8417000D24235 /* AIDictation.app */;
 			productType = "com.apple.product-type.application";
@@ -590,6 +597,9 @@
 				C1E7D2EF2EBA92A500A07338 /* WhisperMateIOS */,
 			);
 			name = WhisperMateIOS;
+			packageProductDependencies = (
+				E1A200012F90000100000003 /* Sentry */,
+			);
 			productName = WhisperMateIOS;
 			productReference = C1CE64402ED8417000D24235 /* WhisperMateIOS.app */;
 			productType = "com.apple.product-type.application";
@@ -692,6 +702,7 @@
 				C1FA00012F0B000000000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
+				E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C18566CA2EA0D31000B46F55;
@@ -1713,6 +1724,14 @@
 				minimumVersion = 2.1.0;
 			};
 		};
+		E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.36.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1750,6 +1769,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */;
 			productName = PermissionFlow;
+		};
+		E1A200012F90000100000002 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+		E1A200012F90000100000003 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -736,6 +736,7 @@ public nonisolated final class OpenAIRealtimeTranscriptionClient: @unchecked Sen
             return
         }
         failedMessage = message
+        CrashReporter.captureError(message, context: "OpenAIRealtime", feature: "transcription")
         DebugLog.warning("Realtime failed message=\(message)", context: "OpenAIRealtime")
         abandonTransportOnQueue()
         finishGate.resolve(with: nil)

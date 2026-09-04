@@ -51,6 +51,7 @@ public enum DebugLog {
             print("❌ \(message)")
             DebugLogFileWriter.shared.append("❌ \(message)")
         }
+        CrashReporter.captureError(message, context: context)
     }
 
     /// Log sensitive data (only in DEBUG, never in Release)

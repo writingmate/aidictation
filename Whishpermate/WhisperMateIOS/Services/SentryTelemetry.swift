@@ -8,7 +8,7 @@ import WhisperMateShared
 #if canImport(Sentry)
 enum SentryTelemetry {
     private enum Constants {
-        static let defaultDSN = "https://4bd0712b408d9e373c528b62fecc2e30@o4505732389470208.ingest.us.sentry.io/4512029576790016"
+        static let defaultDSN = "https://6ed8609739f2bb7b446805e666990c8a@o4505732389470208.ingest.us.sentry.io/4511373194166272"
         static let tracesSampleRate = 0.05
     }
 
@@ -17,7 +17,7 @@ enum SentryTelemetry {
     static func start() {
         guard !started else { return }
 
-        let dsn = SecretsLoader.getValue(for: "SENTRY_DSN_MACOS")
+        let dsn = SecretsLoader.getValue(for: "SENTRY_DSN_IOS")
             ?? SecretsLoader.getValue(for: "SENTRY_DSN")
             ?? SecretsLoader.getValue(for: "SentryDSN")
             ?? Constants.defaultDSN
@@ -74,7 +74,7 @@ enum SentryTelemetry {
             level: .error
         )
         SentrySDK.capture(message: context.map { "[\($0)] \(message)" } ?? message) { scope in
-            scope.setTag(value: "macos", key: "platform")
+            scope.setTag(value: "ios", key: "platform")
             scope.setTag(value: resolvedFeature, key: "feature")
             if let context {
                 scope.setTag(value: context, key: "error.context")
@@ -87,7 +87,7 @@ enum SentryTelemetry {
 
         let resolvedFeature = feature ?? featureName(from: context)
         SentrySDK.capture(error: error) { scope in
-            scope.setTag(value: "macos", key: "platform")
+            scope.setTag(value: "ios", key: "platform")
             scope.setTag(value: resolvedFeature, key: "feature")
             if let context {
                 scope.setTag(value: context, key: "error.context")
@@ -96,70 +96,11 @@ enum SentryTelemetry {
     }
 
     private static func shouldCaptureIssue(_ message: String, context: String?) -> Bool {
-        guard let context else { return true }
-
-        switch context {
-        case "HotkeyDiagnostics":
+        let haystack = "\(context ?? "") \(message)".lowercased()
+        if haystack.contains("hotkey") || haystack.contains("event tap") {
             return false
-        case "FnKeyMonitor":
-            return false
-        case "DockIconManager":
-            return false
-        case "HotkeyManager LOG":
-            return !message.contains("Accessibility permission")
-                && !message.contains("event tap")
-                && !message.contains("hotkey")
-        default:
-            return true
         }
-    }
-
-    static func recordAudioDeviceEvent(
-        _ event: String,
-        device: AudioDeviceManager.AudioDevice?,
-        mode: String? = nil,
-        fallback: Bool = false
-    ) {
-        var data: [String: Any] = [
-            "fallback": fallback,
-            "device_kind": deviceKind(device),
-        ]
-        if let mode {
-            data["mode"] = mode
-        }
-        addBreadcrumb(event, category: "audio.device", data: data)
-
-        guard started else { return }
-        SentrySDK.configureScope { scope in
-            scope.setTag(value: deviceKind(device), key: "audio.input.kind")
-            scope.setTag(value: fallback ? "true" : "false", key: "audio.input.fallback")
-            if let mode {
-                scope.setTag(value: mode, key: "audio.input.mode")
-            }
-        }
-    }
-
-    static func recordAudioEngineEvent(_ event: String, reason: String? = nil) {
-        var data: [String: Any] = [:]
-        if let reason {
-            data["reason"] = reason
-        }
-        addBreadcrumb(event, category: "audio.engine", data: data)
-    }
-
-    static func recordOnboardingStep(_ event: String, step: String, data: [String: Any] = [:]) {
-        var payload = data
-        payload["step"] = step
-        addBreadcrumb(event, category: "onboarding", data: payload)
-
-        guard started else { return }
-        SentrySDK.configureScope { scope in
-            scope.setTag(value: step, key: "onboarding.step")
-            for (key, value) in data {
-                guard let tagValue = tagValue(from: value) else { continue }
-                scope.setTag(value: tagValue, key: "onboarding.\(key)")
-            }
-        }
+        return true
     }
 
     private static func featureName(from context: String?) -> String {
@@ -171,7 +112,7 @@ enum SentryTelemetry {
         if lowered.contains("transcri") || lowered.contains("openai") || lowered.contains("realtime") {
             return "transcription"
         }
-        if lowered.contains("clipboard") || lowered.contains("insert") || lowered.contains("paste") {
+        if lowered.contains("clipboard") || lowered.contains("insert") || lowered.contains("paste") || lowered.contains("keyboard") {
             return "text_insert"
         }
         return context
@@ -179,56 +120,15 @@ enum SentryTelemetry {
 
     private static func configureStaticContext() {
         SentrySDK.configureScope { scope in
-            scope.setTag(value: "macos", key: "platform")
+            scope.setTag(value: "ios", key: "platform")
             scope.setTag(value: architectureName, key: "device.arch")
             scope.setTag(value: ProcessInfo.processInfo.operatingSystemVersionString, key: "os.version")
             scope.setTag(value: Bundle.main.bundleIdentifier ?? "unknown", key: "app.bundle_id")
         }
     }
 
-    private static func tagValue(from value: Any) -> String? {
-        switch value {
-        case let string as String:
-            return string
-        case let bool as Bool:
-            return bool ? "true" : "false"
-        case let int as Int:
-            return String(int)
-        case let double as Double:
-            return String(double)
-        case let float as Float:
-            return String(float)
-        case let strings as [String]:
-            return strings.joined(separator: ",")
-        default:
-            return nil
-        }
-    }
-
-    private static func deviceKind(_ device: AudioDeviceManager.AudioDevice?) -> String {
-        guard let device else { return "none" }
-
-        let name = device.name.lowercased()
-        if name.contains("built-in") || name.contains("macbook") || name.contains("internal microphone") {
-            return "built_in"
-        }
-        if name.contains("airpods") || name.contains("bluetooth") || name.contains("headphone") || name.contains("headset") {
-            return "bluetooth"
-        }
-        if name.contains("blackhole") || name.contains("loopback") || name.contains("soundflower") || name.contains("aggregate") {
-            return "virtual"
-        }
-        if name.contains("usb") {
-            return "usb"
-        }
-        if name.contains("display") || name.contains("monitor") {
-            return "display"
-        }
-        return "external"
-    }
-
     private static var releaseName: String {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.whispermate.macos"
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.whispermate.ios"
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
         return "\(bundleID)@\(version)+\(build)"
@@ -267,16 +167,5 @@ enum SentryTelemetry {
     static func captureError(_: String, context _: String?, feature _: String? = nil) {}
 
     static func captureException(_: Error, context _: String?, feature _: String? = nil) {}
-
-    static func recordAudioDeviceEvent(
-        _: String,
-        device _: AudioDeviceManager.AudioDevice?,
-        mode _: String? = nil,
-        fallback _: Bool = false
-    ) {}
-
-    static func recordAudioEngineEvent(_: String, reason _: String? = nil) {}
-
-    static func recordOnboardingStep(_: String, step _: String, data _: [String: Any] = [:]) {}
 }
 #endif

@@ -241,6 +241,7 @@ public partial class AuthService : ObservableObject
         {
             Debug.WriteLine($"[AuthService] OAuth callback error: {ex.Message}");
             ErrorMessage = "Sign-in failed. Please try again";
+            SentryTelemetry.CaptureException(ex, context: "AuthService", feature: "auth");
             return false;
         }
         finally

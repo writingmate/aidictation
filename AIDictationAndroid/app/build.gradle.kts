@@ -202,6 +202,16 @@ android {
         buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", buildConfigString(stripePaymentLinkAnnual))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_LIFETIME", buildConfigString(stripePaymentLinkLifetime))
+        buildConfigField(
+            "String",
+            "SENTRY_DSN",
+            buildConfigString(
+                configValue(
+                    "SENTRY_DSN",
+                    "https://83e30144be9d9cdf212136edc6962f26@o4505732389470208.ingest.us.sentry.io/4512029576921088"
+                )
+            )
+        )
     }
 
     buildTypes {
@@ -304,6 +314,9 @@ dependencies {
 
     // Security
     implementation(libs.security.crypto)
+
+    // Crash reporting
+    implementation(libs.sentry.android)
 
     // ONNX Runtime for Silero VAD
     implementation(libs.onnx.runtime)

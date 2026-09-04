@@ -509,6 +509,11 @@ public class AuthManager: ObservableObject {
                 "Authentication callback session validation failed (\(category.rawValue))",
                 context: "AuthManager"
             )
+            CrashReporter.captureError(
+                "Authentication callback session validation failed (\(category.rawValue))",
+                context: "AuthManager",
+                feature: "auth"
+            )
             await setSupportSafeCallbackError()
             return callbackOutcome(
                 shape: shape,

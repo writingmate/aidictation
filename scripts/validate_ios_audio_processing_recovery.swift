@@ -1987,6 +1987,123 @@ private func testLegacyHistoryDeletionIntentSurvivesCrash() async throws {
     )
 }
 
+private func testDirectoryCreationSucceedsWhenParentFsyncFails() async throws {
+    try require(
+        MobileAudioLaunchRecoveryPolicy.acceptDirectoryCreationFsync(result: 0, bestEffort: false),
+        "Successful directory fsync must always be accepted"
+    )
+    try require(
+        MobileAudioLaunchRecoveryPolicy.acceptDirectoryCreationFsync(result: -1, bestEffort: true),
+        "iOS store init must accept a failed parent-directory fsync after mkdir"
+    )
+    try require(
+        !MobileAudioLaunchRecoveryPolicy.acceptDirectoryCreationFsync(result: -1, bestEffort: false),
+        "Non-iOS directory-creation fsync failure must remain visible"
+    )
+    #if os(iOS)
+        try require(
+            MobileAudioLaunchRecoveryPolicy.directoryCreationTreatsFsyncAsBestEffort
+                && MobileAudioLaunchRecoveryPolicy.acceptDirectoryCreationFsync(result: -1),
+            "iOS production store init still treats directory fsync as required"
+        )
+    #endif
+
+    let parent = try makeRoot("dir-fsync-best-effort")
+    let whisperMate = try MobileAudioProcessingStore.ensureDirectoryNoFollow(
+        parent: parent,
+        name: "WhisperMate",
+        parentDirectoryFsync: { _ in -1 },
+        treatDirectoryFsyncAsBestEffort: true
+    )
+    let processing = try MobileAudioProcessingStore.ensureDirectoryNoFollow(
+        parent: whisperMate,
+        name: "MobileAudioProcessing",
+        parentDirectoryFsync: { _ in -1 },
+        treatDirectoryFsyncAsBestEffort: true
+    )
+    var isDirectory: ObjCBool = false
+    try require(
+        FileManager.default.fileExists(atPath: whisperMate.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+            && FileManager.default.fileExists(atPath: processing.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue,
+        "App-group WhisperMate/MobileAudioProcessing directories were not created when fsync failed"
+    )
+
+    let store = MobileAudioProcessingStore(rootDirectory: processing)
+    let lease = try await store.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try require(
+        FileManager.default.fileExists(atPath: lease.sourceURL.deletingLastPathComponent().path),
+        "A store rooted in the fsync-failed mkdir path cannot start a recording"
+    )
+}
+
+private func testLaunchRecoveryForceResetsQuarantineAndKeepsHistory() async throws {
+    let workspace = try makeRoot("quarantine-launch-reset")
+    let historyRoot = workspace.appendingPathComponent("WhisperMate", isDirectory: true)
+    let storeRoot = historyRoot.appendingPathComponent("MobileAudioProcessing", isDirectory: true)
+    try FileManager.default.createDirectory(at: storeRoot, withIntermediateDirectories: true)
+
+    let history = HistoryManager(rootDirectory: historyRoot)
+    try await history.reload()
+    let kept = Recording(transcription: "history must survive quarantine reset")
+    try await history.upsertRecording(kept)
+    try await history.reload()
+    try require(
+        history.recordings.contains(where: { $0.id == kept.id }),
+        "History fixture was not persisted before quarantine"
+    )
+
+    let store = MobileAudioProcessingStore(rootDirectory: storeRoot)
+    let lease = try await store.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try Data("source marker".utf8).write(to: lease.sourceURL, options: .atomic)
+    let quarantineURL = storeRoot.appendingPathComponent("QUARANTINED")
+    try Data("leftover".utf8).write(to: quarantineURL, options: .atomic)
+
+    try require(
+        MobileAudioProcessingStore.shouldForceResetQuarantine(
+            MobileAudioProcessingStore.StoreError.quarantined
+        )
+            && !MobileAudioProcessingStore.shouldForceResetQuarantine(
+                MobileAudioProcessingStore.StoreError.unavailable
+            ),
+        "Launch recovery must reset only a quarantined store, not an unavailable stub"
+    )
+    try await requireThrows(.quarantined) {
+        _ = try await store.normalizeInterruptedAttempts()
+    }
+    try require(
+        FileManager.default.fileExists(atPath: quarantineURL.path),
+        "Leftover QUARANTINED flag was cleared by normalize without an explicit reset"
+    )
+
+    _ = try await store.normalizeInterruptedAttemptsRecoveringQuarantine()
+    try require(
+        !FileManager.default.fileExists(atPath: quarantineURL.path),
+        "Launch recovery did not clear the leftover QUARANTINED flag"
+    )
+    try await history.reload()
+    try require(
+        history.recordings.contains(where: { $0.id == kept.id && $0.transcription == kept.transcription }),
+        "forceResetQuarantine deleted HistoryManager recordings"
+    )
+
+    let next = try await store.beginNewAttempt(
+        recordingID: UUID(),
+        deadlineAt: Date().addingTimeInterval(30)
+    )
+    try require(
+        next.recordingID != lease.recordingID,
+        "Store was not writable after quarantine launch recovery"
+    )
+}
+
 private func testCorruptionQuarantinesWithoutOverwrite() async throws {
     let root = try makeRoot("corrupt")
     let store = MobileAudioProcessingStore(rootDirectory: root)
@@ -2357,6 +2474,18 @@ private func testIOSCallerRecoveryContracts() throws {
             && recoverBody.contains("Saved recordings need attention. Try again in a moment."),
         "Failed mobile audio recovery must unblock the app and only show a dismissible warning"
     )
+    guard let performStart = content.range(of: "private static func performMobileAudioRecovery("),
+          let performEnd = content.range(
+            of: "return usageRecordingIDs",
+            range: performStart.upperBound ..< content.endIndex
+          )
+    else { throw ValidationFailure.failed("performMobileAudioRecovery body is missing") }
+    let performBody = String(content[performStart.lowerBound ..< performEnd.upperBound])
+    try require(
+        performBody.contains("normalizeInterruptedAttemptsRecoveringQuarantine()")
+            && !performBody.contains("normalizeInterruptedAttempts()\n"),
+        "Launch recovery still calls normalize without a one-time quarantine reset"
+    )
     try require(
         content.contains("private func reconcileActiveKeyboardAttemptIfNeeded()"),
         "Host does not reconcile a durable keyboard cancel after command expiry"
@@ -2462,6 +2591,33 @@ private func testIOSCallerRecoveryContracts() throws {
             && storeSource.contains("MobileAudioProcessingStore(unavailable: ())")
             && !storeSource.contains("defaultRootDirectory()"),
         "Production mobile audio store still falls back outside the App Group"
+    )
+    try require(
+        storeSource.contains("parentDirectoryFsync")
+            && storeSource.contains("treatDirectoryFsyncAsBestEffort")
+            && storeSource.contains("MobileAudioLaunchRecoveryPolicy.acceptDirectoryCreationFsync(")
+            && !storeSource.contains(
+                "guard Darwin.fsync(parentDescriptor) == 0 else { throw StoreError.unavailable }"
+            ),
+        "Store init directory creation still throws when parent fsync fails on iOS"
+    )
+    let policySource = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(
+            "Whishpermate/WhisperMateShared/Services/MobileAudioLaunchRecoveryPolicy.swift"
+        ),
+        encoding: .utf8
+    )
+    try require(
+        policySource.contains("os(iOS)")
+            && policySource.contains("directoryCreationTreatsFsyncAsBestEffort")
+            && policySource.contains("result == 0 || bestEffort"),
+        "iOS directory-creation fsync policy is no longer best-effort"
+    )
+    try require(
+        storeSource.contains("normalizeInterruptedAttemptsRecoveringQuarantine()")
+            && storeSource.contains("shouldForceResetQuarantine(")
+            && storeSource.contains("forceResetQuarantine()"),
+        "Quarantined launch recovery has no one-time force reset"
     )
     try require(
         storeSource.contains("public final class ChunkWorkspace")
@@ -2572,6 +2728,10 @@ private struct IOSAudioRecoveryValidator {
             try await testUsageClaimIsAtMostOnceAcrossRestartDeleteAndClear()
             print("testLegacyHistoryDeletionIntentSurvivesCrash")
             try await testLegacyHistoryDeletionIntentSurvivesCrash()
+            print("testDirectoryCreationSucceedsWhenParentFsyncFails")
+            try await testDirectoryCreationSucceedsWhenParentFsyncFails()
+            print("testLaunchRecoveryForceResetsQuarantineAndKeepsHistory")
+            try await testLaunchRecoveryForceResetsQuarantineAndKeepsHistory()
             print("testCorruptionQuarantinesWithoutOverwrite")
             try await testCorruptionQuarantinesWithoutOverwrite()
             print("testHistoryDoesNotResurrectEvictedStoreAttempts")

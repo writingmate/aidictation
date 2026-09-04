@@ -1595,7 +1595,8 @@ struct ContentView: View {
         historyManager: HistoryManager
     ) async throws -> [UUID] {
         try await historyManager.reload()
-        _ = try await MobileAudioProcessingStore.shared.normalizeInterruptedAttempts()
+        _ = try await MobileAudioProcessingStore.shared
+            .normalizeInterruptedAttemptsRecoveringQuarantine()
         let snapshots = try await MobileAudioProcessingStore.shared.allSnapshots()
         let usageRecordingIDs = snapshots.compactMap { snapshot -> UUID? in
             guard snapshot.stage == .succeeded,

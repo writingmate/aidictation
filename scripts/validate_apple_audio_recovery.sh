@@ -89,6 +89,7 @@ swiftc -parse-as-library -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Models/TranscriptionOptions.swift \
   Whishpermate/WhisperMateShared/Models/Recording.swift \
   Whishpermate/WhisperMateShared/Services/DebugLog.swift \
+  Whishpermate/WhisperMateShared/Services/MobileAudioLaunchRecoveryPolicy.swift \
   Whishpermate/WhisperMateShared/Services/MobileAudioProcessingStore.swift \
   Whishpermate/WhisperMateShared/Services/IOSAudioProcessingDeadline.swift \
   Whishpermate/WhisperMateShared/Storage/HistoryManager.swift \

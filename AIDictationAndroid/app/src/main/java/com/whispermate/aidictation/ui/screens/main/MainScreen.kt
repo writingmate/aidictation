@@ -135,6 +135,8 @@ fun MainScreen(
     }
 
     Scaffold(
+        // White page; the cards carry the light grey.
+        containerColor = MaterialTheme.colorScheme.surface,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar(
@@ -337,7 +339,7 @@ private fun RecordingItem(
             .fillMaxWidth()
             .clickable(enabled = routeChangesEnabled, onClick = onClick),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.background
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {

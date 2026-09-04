@@ -6,11 +6,7 @@ Remotion pilot for a 1080p, 30 fps, 45–60 second keyword video. The project us
 
 - Source, scene copy, 139-word narration, metadata, claims notes, and a 1920×1080 thumbnail/poster are complete.
 - `npm run typecheck` passes.
-- A current real Mac product capture is still required before publication. The
-  repository's existing Mac screenshot predates the current interface, so this
-  draft uses clearly labeled conceptual motion graphics instead of presenting
-  stale UI as current.
-- The narrated master and YouTube cut still need a render in an environment allowed to launch headless Chrome and reach the OpenAI speech endpoint. The current Codex sandbox denied both operations before any audio or video was produced.
+- 2026-09-03: real System Settings Dictation capture added to the setup scene; narration generated and scene timing re-fit to it (80.8 s); master and YouTube cut rendered locally. Not uploaded.
 
 ## Files
 

@@ -66,9 +66,10 @@ is still up; a closed keyboard or a password field ends it (`bubbleNeedsKeyboard
    Because this list flaps during keyboard animations, hides on this path wait a
    700 ms grace period.
 
-The permission is optional. Onboarding asks for all three permissions (Microphone, Text
-field access, Display over other apps) on one Permissions step (step 4 of 5) with an
-Allow button per row; Continue needs the first two, "Skip for now" is offered otherwise.
+The permission is optional. Onboarding asks for the microphone on its own step before
+the floating-mic demo, then for Text field access and Display over other apps together
+right after the demo, with an Allow button per row; that second step's Continue needs
+Text field access and offers "Skip for now" otherwise.
 Settings > Permissions shows the same rows (`ui/permissions/PermissionRows.kt`), and every
 check and settings intent lives in `ui/permissions/OverlayPermissions.kt`.
 

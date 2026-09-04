@@ -195,8 +195,9 @@ private enum class OnboardingStep {
     Welcome,
     Languages,
     OnDeviceTranscription,
-    Permissions,
+    Microphone,
     ButtonDemo,
+    OverlayPermissions,
     SignIn,
     Paywall
 }
@@ -238,8 +239,11 @@ fun OnboardingScreen(
             add(OnboardingStep.Welcome)
             add(OnboardingStep.Languages)
             add(OnboardingStep.OnDeviceTranscription)
-            add(OnboardingStep.Permissions)
+            // Only the microphone before the demo; the overlay permissions come after
+            // the user has seen the floating mic, so they know what they are allowing.
+            add(OnboardingStep.Microphone)
             add(OnboardingStep.ButtonDemo)
+            add(OnboardingStep.OverlayPermissions)
             // Last, once everything is authorised: sign in so the account follows the user.
             if (signInAvailable) add(OnboardingStep.SignIn)
             // The paywall closes onboarding; it drops out once the account is already Pro.
@@ -352,9 +356,12 @@ fun OnboardingScreen(
                         state = onDeviceModelState,
                         onEnabledChanged = onSetOnDeviceTranscriptionEnabled
                     )
-                    OnboardingStep.Permissions -> PermissionsStep(
+                    OnboardingStep.Microphone -> MicrophoneStep(
                         state = permissions,
-                        onAllowMicrophone = requestMicrophone,
+                        onAllowMicrophone = requestMicrophone
+                    )
+                    OnboardingStep.OverlayPermissions -> PermissionsStep(
+                        state = permissions,
                         onAllowAccessibility = { showAccessibilityDisclosure = true },
                         onAllowOverlay = { OverlayPermissions.openDisplayOverAppsSettings(context) }
                     )
@@ -378,7 +385,34 @@ fun OnboardingScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (currentOnboardingStep == OnboardingStep.Permissions) {
+        if (currentOnboardingStep == OnboardingStep.Microphone) {
+            Button(
+                onClick = { goToNextStep() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = permissions.microphone,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
+            ) {
+                Text(
+                    text = stringResource(R.string.onboarding_continue),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            if (!permissions.microphone) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_microphone_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        } else if (currentOnboardingStep == OnboardingStep.OverlayPermissions) {
             Button(
                 onClick = { goToNextStep() },
                 modifier = Modifier
@@ -520,9 +554,51 @@ private fun permissionsHintText(state: PermissionsState): Int = when (permission
 }
 
 @Composable
+private fun MicrophoneStep(
+    state: PermissionsState,
+    onAllowMicrophone: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.Mic)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_microphone_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_microphone_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            PermissionRows(
+                state = state,
+                onAllowMicrophone = onAllowMicrophone,
+                onAllowAccessibility = {},
+                onAllowOverlay = {},
+                showOverlayRows = false
+            )
+        }
+    }
+}
+
+@Composable
 private fun PermissionsStep(
     state: PermissionsState,
-    onAllowMicrophone: () -> Unit,
     onAllowAccessibility: () -> Unit,
     onAllowOverlay: () -> Unit
 ) {
@@ -557,9 +633,10 @@ private fun PermissionsStep(
         ) {
             PermissionRows(
                 state = state,
-                onAllowMicrophone = onAllowMicrophone,
+                onAllowMicrophone = {},
                 onAllowAccessibility = onAllowAccessibility,
-                onAllowOverlay = onAllowOverlay
+                onAllowOverlay = onAllowOverlay,
+                showMicrophone = false
             )
         }
     }

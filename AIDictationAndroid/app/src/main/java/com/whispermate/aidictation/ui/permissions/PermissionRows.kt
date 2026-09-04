@@ -58,18 +58,25 @@ fun PermissionRows(
     onAllowMicrophone: () -> Unit,
     onAllowAccessibility: () -> Unit,
     onAllowOverlay: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showMicrophone: Boolean = true,
+    showOverlayRows: Boolean = true
 ) {
     Column(modifier = modifier) {
-        PermissionRow(
-            icon = Icons.Default.Mic,
-            title = stringResource(R.string.permission_microphone_title),
-            body = stringResource(R.string.permission_microphone_body),
-            granted = state.microphone,
-            recommended = false,
-            onAllow = onAllowMicrophone
-        )
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        if (showMicrophone) {
+            PermissionRow(
+                icon = Icons.Default.Mic,
+                title = stringResource(R.string.permission_microphone_title),
+                body = stringResource(R.string.permission_microphone_body),
+                granted = state.microphone,
+                recommended = false,
+                onAllow = onAllowMicrophone
+            )
+        }
+        if (showMicrophone && showOverlayRows) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
+        if (!showOverlayRows) return@Column
         PermissionRow(
             icon = Icons.Default.EditNote,
             title = stringResource(R.string.permission_accessibility_title),

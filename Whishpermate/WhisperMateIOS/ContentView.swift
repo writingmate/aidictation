@@ -2427,11 +2427,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
     @Published var frequencyBands: [Float] = Array(repeating: 0.0, count: 10)
     @Published var errorMessage: String?
     @Published var completionText: String?
+    @Published var liveTranscript: String = ""
 
     private let audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
     /// Public accessor for the audio recorder, needed for Quick Dictation standby mode.
     var audioRecorder: AudioRecorder { audioRecorderSlot.current }
     private let realtimeTranscription = IOSRealtimeTranscriptionCoordinator()
+    private var realtimeCancellables = Set<AnyCancellable>()
     private let processingStore = MobileAudioProcessingStore.shared
     private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared
@@ -2482,6 +2484,12 @@ private final class InlineRecordingCoordinator: ObservableObject {
 
     init() {
         bindAudioRecorder(audioRecorder)
+        realtimeTranscription.$partialTranscript
+            .sink { [weak self] text in
+                guard let self, self.liveTranscript != text else { return }
+                self.liveTranscript = text
+            }
+            .store(in: &realtimeCancellables)
     }
 
     private func bindAudioRecorder(_ recorder: AudioRecorder) {
@@ -2695,6 +2703,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             audioLevel = 0
             frequencyBands = Array(repeating: 0.0, count: 10)
             completionText = nil
+            liveTranscript = ""
             errorMessage = nil
             return
         }
@@ -3767,6 +3776,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         audioLevel = 0
         frequencyBands = Array(repeating: 0.0, count: 10)
         completionText = nil
+        liveTranscript = ""
     }
 
     private func showError(_ message: String) {
@@ -3778,6 +3788,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             state = .idle
             errorMessage = message
             completionText = nil
+            liveTranscript = ""
             stopRequestedWhilePreparing = false
             recordingStartTime = nil
             activeTranscriptionRequest = nil
@@ -3858,6 +3869,17 @@ private struct InlineRecordingPanel: View {
     private var activeContent: some View {
         GeometryReader { proxy in
             ZStack {
+                if !recorder.liveTranscript.isEmpty {
+                    AIDictationLiveTranscriptCaption(
+                        text: recorder.liveTranscript
+                    )
+                    .padding(.horizontal, 28)
+                    .position(
+                        x: proxy.size.width / 2,
+                        y: max(86, proxy.size.height * 0.28)
+                    )
+                }
+
                 AIDictationActiveRecordingVisual(
                     state: recorder.visualState,
                     audioLevel: recorder.audioLevel,

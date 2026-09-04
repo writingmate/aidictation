@@ -90,6 +90,13 @@ struct ValidateIOSRealtimeTranscription {
         precondition(coordinator.contains("request?.requestFinish"))
         precondition(coordinator.contains("request?.close()"))
         precondition(coordinator.contains("armDrainDeadline"))
+        precondition(
+            !coordinator.contains("onPartialTranscript: { _ in }"),
+            "iOS must not discard realtime partial transcripts"
+        )
+        precondition(coordinator.contains("handlePartialTranscript("))
+        precondition(coordinator.contains("@Published public private(set) var partialTranscript"))
+        precondition(coordinator.contains("onPartialTranscript: onPartialTranscript"))
     }
 
     private static func validateIOSRecorderStreaming() throws {
@@ -159,6 +166,12 @@ struct ValidateIOSRealtimeTranscription {
         precondition(sheet.contains("shouldUseOnDeviceTranscription"))
         precondition(content.contains("SharedParakeetTranscriptionService"))
         precondition(sheet.contains("SharedParakeetTranscriptionService"))
+        precondition(sheet.contains("realtimeTranscription.partialTranscript"))
+        precondition(sheet.contains("AIDictationLiveTranscriptCaption"))
+        precondition(content.contains("@Published var liveTranscript"))
+        precondition(content.contains("realtimeTranscription.$partialTranscript"))
+        precondition(content.contains("AIDictationLiveTranscriptCaption"))
+        precondition(content.contains("text: recorder.liveTranscript"))
     }
 
     private static func endpoint(from transcriptionEndpoint: String) -> String? {

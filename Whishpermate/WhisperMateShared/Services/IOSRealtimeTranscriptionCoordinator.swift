@@ -1,14 +1,26 @@
 import Foundation
+public import Combine
 
 /// Owns one iOS cloud-mode realtime stream: client_secrets, WebSocket, and
 /// PCM delivery into the shared recorder. Batch upload remains the fallback
 /// when this session is missing or returns an empty transcript.
 @MainActor
-public final class IOSRealtimeTranscriptionCoordinator {
+public final class IOSRealtimeTranscriptionCoordinator: ObservableObject {
+    // MARK: - Published Properties
+
+    @Published public private(set) var partialTranscript: String = ""
+
+    // MARK: - Private Properties
+
     private var client: (any RealtimeTranscriptionStreaming)?
     private var finishRequest: RealtimeTranscriptionFinishRequest?
+    private var streamSessionID = UUID()
+
+    // MARK: - Initialization
 
     public init() {}
+
+    // MARK: - Public API
 
     public var isActive: Bool {
         client != nil || finishRequest != nil
@@ -36,6 +48,9 @@ public final class IOSRealtimeTranscriptionCoordinator {
             overrideModel: context.customRealtimeModel
         )
         let overrideEndpoint = context.customRealtimeEndpoint
+        let sessionID = UUID()
+        streamSessionID = sessionID
+        let onPartialTranscript = makePartialTranscriptHandler(sessionID: sessionID)
         let client: OpenAIRealtimeTranscriptionClient
 
         if let webSocketURL = WritingmateRealtimeSessionSupport.webSocketURL(
@@ -51,7 +66,7 @@ public final class IOSRealtimeTranscriptionCoordinator {
                 keywords: context.keywords,
                 languages: context.languages,
                 prompt: context.prompt,
-                onPartialTranscript: { _ in },
+                onPartialTranscript: onPartialTranscript,
                 onError: { message in
                     DebugLog.warning(message, context: "IOSRealtime")
                 }
@@ -97,7 +112,7 @@ public final class IOSRealtimeTranscriptionCoordinator {
                 language: language,
                 keywords: keywords,
                 languages: languages,
-                onPartialTranscript: { _ in },
+                onPartialTranscript: onPartialTranscript,
                 onError: { message in
                     DebugLog.warning(message, context: "IOSRealtime")
                 }
@@ -133,6 +148,7 @@ public final class IOSRealtimeTranscriptionCoordinator {
     }
 
     public func cancel(recorder: AudioRecorder?) {
+        invalidateStreamSession()
         recorder?.realtimeAudioChunkHandler = nil
         recorder?.detachRealtimeAudioChunkHandlerAndDrain { _ in }
         finishRequest?.close()
@@ -159,6 +175,31 @@ public final class IOSRealtimeTranscriptionCoordinator {
         finishRequest?.close()
         finishRequest = nil
         client = nil
+    }
+
+    // MARK: - Private Methods
+
+    private func makePartialTranscriptHandler(
+        sessionID: UUID
+    ) -> @MainActor (String) -> Void {
+        { [weak self] partial in
+            self?.handlePartialTranscript(partial, sessionID: sessionID)
+        }
+    }
+
+    private func handlePartialTranscript(_ partial: String, sessionID: UUID) {
+        guard streamSessionID == sessionID, isActive else { return }
+        let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        partialTranscript = text
+        DebugLog.info("Realtime transcription partial length=\(text.count)", context: "IOSRealtime")
+    }
+
+    private func invalidateStreamSession() {
+        streamSessionID = UUID()
+        if !partialTranscript.isEmpty {
+            partialTranscript = ""
+        }
     }
 
     private func takeFinishRequest(

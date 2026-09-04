@@ -104,19 +104,38 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     #if os(iOS)
         @discardableResult
         private func configureAudioSession() -> Bool {
-            do {
-                try Self.audioSessionOwnership.claim(self) {
-                    let session = AVAudioSession.sharedInstance()
-                    try session.setCategory(.playAndRecord, mode: .measurement, options: [.allowBluetoothHFP])
-                    try session.setActive(true)
+            // A backgrounded app may not switch to a non-mixable record session
+            // ('!pri', 560557684) even while its standby engine is running. Try
+            // the exclusive session first; if iOS refuses, fall back to a
+            // mixable one so Quick Dictation can still capture from the keyboard.
+            let optionSets: [AVAudioSession.CategoryOptions] = [
+                [.allowBluetoothHFP],
+                [.allowBluetoothHFP, .mixWithOthers],
+            ]
+            var lastError: Error?
+            for options in optionSets {
+                do {
+                    try Self.audioSessionOwnership.claim(self) {
+                        let session = AVAudioSession.sharedInstance()
+                        try session.setCategory(.playAndRecord, mode: .measurement, options: options)
+                        try session.setActive(true)
+                    }
+                    isAudioSessionConfigured = true
+                    DebugLog.info(
+                        "Audio session configured for iOS category=playAndRecord mode=measurement mixWithOthers=\(options.contains(.mixWithOthers))",
+                        context: "AudioRecorder"
+                    )
+                    return true
+                } catch {
+                    lastError = error
+                    DebugLog.info(
+                        "Failed to configure audio session (mixWithOthers=\(options.contains(.mixWithOthers))): \(error)",
+                        context: "AudioRecorder"
+                    )
                 }
-                isAudioSessionConfigured = true
-                DebugLog.info("Audio session configured for iOS category=playAndRecord mode=measurement", context: "AudioRecorder")
-                return true
-            } catch {
-                DebugLog.info("Failed to configure audio session: \(error)", context: "AudioRecorder")
-                return false
             }
+            _ = lastError
+            return false
         }
 
         private func deactivateSession() {

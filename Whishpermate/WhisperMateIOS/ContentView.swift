@@ -3163,9 +3163,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
                    !(error is CancellationError),
                    terminalResult != .superseded
                 {
+                    // A recorder start failure means nothing was captured: omit
+                    // the recording ID so the keyboard shows an operational
+                    // status instead of a silent "transcription failed" idle.
+                    let captureNeverStarted = error is ManagedAudioRecordingError
                     _ = KeyboardDictationHandoff.publishHostFailure(
                         identity: keyboardIdentity,
-                        recordingID: lease?.recordingID.uuidString,
+                        recordingID: captureNeverStarted ? nil : lease?.recordingID.uuidString,
                         userMessage: terminalMessage ?? userMessage(for: error)
                     )
                 }

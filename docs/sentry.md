@@ -35,6 +35,11 @@ build-config secrets. Windows CI can set `SENTRY_DSN` as an MSBuild / env value.
   - `auth`: sign-in and session stickiness failures
   - `text_insert`: paste / accessibility insert failures (especially Windows)
 
+`DebugLog.error` does not report to Sentry. Only explicit `CrashReporter` /
+`SentryTelemetry` / `HighValueErrorSink` calls at those sites do. On Windows,
+InsertTest and RecoveryContract compile production services through a no-op
+`HighValueErrorSink` so they do not need the Sentry package.
+
 Release names come from the app version / build number. Environment is `debug`
 in debug builds and `production` otherwise.
 

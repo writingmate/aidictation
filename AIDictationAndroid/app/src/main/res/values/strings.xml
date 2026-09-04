@@ -66,7 +66,7 @@
     <string name="onboarding_paywall_continue_free">Continue with Free</string>
     <string name="onboarding_paywall_refund">30-day refund on every plan. Checkout opens in your browser.</string>
     <string name="onboarding_on_device_title">Choose transcription mode</string>
-    <string name="onboarding_on_device_subtitle">Cloud is more accurate. Offline never sends audio anywhere. You can switch later.</string>
+    <string name="onboarding_on_device_subtitle">Cloud is more accurate. Offline never sends audio anywhere.</string>
     <string name="onboarding_transcription_cloud_title">Cloud</string>
     <string name="onboarding_transcription_cloud_body">Best accuracy and fastest setup. Audio is sent only when you dictate.</string>
     <string name="onboarding_transcription_offline_title">Offline</string>

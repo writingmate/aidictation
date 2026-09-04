@@ -871,6 +871,9 @@ private func run() throws {
     resetStore(generationSuite)
     setenv("AIDICTATION_KEYBOARD_HANDOFF_TEST_SUITE", suite, 1)
 
+    try validateQuickDictationSecondTapRearm(now: base)
+    try validateKeyboardChromePresentation()
+
     let contentURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -883,8 +886,186 @@ private func run() throws {
         failClosedCallCount >= 4,
         "host journal load/consume failures do not retire active native work"
     )
+    try expect(
+        contentSource.contains("rearmQuickDictationAfterKeyboardSession()"),
+        "host must re-arm Quick Dictation after a completed keyboard session"
+    )
+    try expect(
+        !contentSource.contains("stopping command polling (background, no standby)"),
+        "host must not drop Quick Dictation just because standby was torn down for recording"
+    )
+
+    let keyboardURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Whishpermate/WhisperMateKeyboard/KeyboardViewController.swift")
+    let keyboardSource = try String(contentsOf: keyboardURL, encoding: .utf8)
+    try expect(
+        !keyboardSource.contains("systemRed"),
+        "keyboard chrome must not paint transcription or idle errors in red"
+    )
+    try expect(
+        keyboardSource.contains("chromePresentation"),
+        "keyboard must classify idle outcomes through chromePresentation"
+    )
+    try expect(
+        keyboardSource.contains("idleStartPath()"),
+        "keyboard idle mic path must use the shared Quick Dictation start-path policy"
+    )
 
     print("Keyboard audio recovery validation passed")
+}
+
+/// After one completed keyboard session, availability stays armed (or is
+/// immediately re-armed) so the next idle mic tap is `.startViaReadyApp`.
+private func validateQuickDictationSecondTapRearm(now: Date) throws {
+    KeyboardDictationHandoff.clearQuickDictationAvailability()
+    try expectEqual(
+        KeyboardDictationHandoff.idleStartPath(now: now),
+        .startRequiresApp,
+        "cold start must open the containing app"
+    )
+    try expect(
+        !KeyboardDictationHandoff.isQuickDictationReady(now: now),
+        "cold start must not report Quick Dictation ready"
+    )
+
+    let firstArm = KeyboardDictationHandoff.QuickDictationAvailability(activatedAt: now)
+    KeyboardDictationHandoff.saveQuickDictationAvailability(firstArm)
+    try expect(
+        KeyboardDictationHandoff.isQuickDictationReady(now: now),
+        "first host arm must make Quick Dictation ready"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.idleStartPath(now: now),
+        .startViaReadyApp,
+        "armed Quick Dictation must stay in-keyboard"
+    )
+
+    // The bug: host cleared availability after the first session finished, so
+    // the second tap looked cold and opened the app again.
+    KeyboardDictationHandoff.clearQuickDictationAvailability()
+    try expectEqual(
+        KeyboardDictationHandoff.idleStartPath(now: now.addingTimeInterval(1)),
+        .startRequiresApp,
+        "clearing availability after a session forces another open-app dance"
+    )
+
+    KeyboardDictationHandoff.saveQuickDictationAvailability(firstArm)
+    let afterSession = now.addingTimeInterval(30)
+    switch KeyboardDictationHandoff.rearmDecisionAfterIdleSession(
+        current: KeyboardDictationHandoff.loadQuickDictationAvailability(),
+        now: afterSession
+    ) {
+    case .rearm(let refreshed):
+        try expectEqual(
+            refreshed.expiresAt,
+            firstArm.expiresAt,
+            "re-arm must preserve the original Quick Dictation window"
+        )
+        KeyboardDictationHandoff.saveQuickDictationAvailability(refreshed)
+    case .clear:
+        throw ValidationFailure.assertion("in-window session must re-arm, not clear")
+    }
+
+    try expect(
+        KeyboardDictationHandoff.isQuickDictationReady(now: afterSession),
+        "after one completed keyboard session, isQuickDictationReady must remain true"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.idleStartPath(now: afterSession),
+        .startViaReadyApp,
+        "second tap must use the in-keyboard start path"
+    )
+    try expect(
+        KeyboardDictationHandoff.shouldKeepHostAlive(
+            hasActiveKeyboardWork: false,
+            availability: KeyboardDictationHandoff.loadQuickDictationAvailability(),
+            now: afterSession
+        ),
+        "host must keep polling/heartbeat after the keyboard session returns to idle"
+    )
+    try expect(
+        !KeyboardDictationHandoff.shouldOpenAppAfterQuickDictationFallback(now: afterSession),
+        "fallback must not open the app while Quick Dictation is still ready"
+    )
+
+    let expiredAt = firstArm.expiresAt.addingTimeInterval(1)
+    try expectEqual(
+        KeyboardDictationHandoff.rearmDecisionAfterIdleSession(
+            current: KeyboardDictationHandoff.loadQuickDictationAvailability(),
+            now: expiredAt
+        ),
+        .clear,
+        "expired Quick Dictation window must not re-arm"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.idleStartPath(now: expiredAt),
+        .startRequiresApp,
+        "expired window is a cold start"
+    )
+
+    KeyboardDictationHandoff.saveQuickDictationAvailability(firstArm)
+    let staleHeartbeat = now.addingTimeInterval(
+        KeyboardDictationHandoff.QuickDictationAvailability.heartbeatMaximumAge + 1
+    )
+    try expect(
+        !KeyboardDictationHandoff.isQuickDictationReady(now: staleHeartbeat),
+        "stale heartbeat without re-arm is not ready"
+    )
+    try expect(
+        KeyboardDictationHandoff.shouldOpenAppAfterQuickDictationFallback(now: staleHeartbeat),
+        "stale heartbeat may open the app"
+    )
+    try expect(
+        KeyboardDictationHandoff.hasValidQuickDictationWindow(now: staleHeartbeat),
+        "stale heartbeat still has a valid window until expiry"
+    )
+
+    KeyboardDictationHandoff.clearQuickDictationAvailability()
+}
+
+private func validateKeyboardChromePresentation() throws {
+    try expectEqual(
+        KeyboardDictationHandoff.chromePresentation(
+            for: .transcriptionFailed,
+            userMessage: "Transcription failed. Your recording is saved in the app."
+        ),
+        .silentIdle,
+        "transcription failure must not show keyboard error chrome"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.chromePresentation(
+            for: .transcriptionTimeout,
+            userMessage: "Transcription took too long. Your recording is saved in the app."
+        ),
+        .silentIdle,
+        "transcription timeout must not show keyboard error chrome"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.chromePresentation(
+            for: .insertFailed,
+            userMessage: "Couldn't insert the transcript. It is saved in AI Dictation."
+        ),
+        .silentIdle,
+        "insert failure must not show a red couldn't-transcribe banner"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.chromePresentation(
+            for: .cancelled,
+            userMessage: "Recording cancelled."
+        ),
+        .silentIdle,
+        "cancel returns to idle without an error banner"
+    )
+    try expectEqual(
+        KeyboardDictationHandoff.chromePresentation(
+            for: .openAppFailed,
+            userMessage: "Couldn't open AI Dictation. Try again."
+        ),
+        .operational("Couldn't open AI Dictation. Try again."),
+        "deep-link failure may show a minimal operational status"
+    )
 }
 
 @main

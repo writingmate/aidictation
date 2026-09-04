@@ -132,7 +132,12 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         /// The audio engine runs with a tap but doesn't capture to disk.
         public func startStandby() throws {
             guard !isRecording else { return }
-            guard standbyEngine?.isRunning != true else { return }
+            if standbyEngine?.isRunning == true { return }
+            // A prior recording can leave a stopped engine behind. Replace it
+            // so Quick Dictation can re-arm after the session returns to idle.
+            if standbyEngine != nil {
+                stopStandby(deactivateAudioSession: false)
+            }
 
             DebugLog.info("Starting audio standby mode", context: "AudioRecorder")
 
@@ -313,6 +318,12 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
 
     private func startRecordingOnQueue(destinationURL: URL?, attemptID: UUID?) {
         DebugLog.info("startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
+
+        #if os(iOS)
+            // Tear down standby without deactivating the session so the real
+            // recorder can take over. Availability stays published by the host.
+            stopStandby(deactivateAudioSession: false)
+        #endif
 
         // Guard against multiple recording sessions
         if audioRecorder != nil || audioEngine != nil {

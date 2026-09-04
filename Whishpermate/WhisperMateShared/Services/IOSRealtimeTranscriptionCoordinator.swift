@@ -65,6 +65,15 @@ public final class IOSRealtimeTranscriptionCoordinator {
                 return
             }
 
+            // Writingmate realtime needs a signed-in first-party session. Without
+            // one the token fetch always fails; skip the doomed stream and let
+            // batch upload (free local quota) carry the recording.
+            if WritingmateRealtimeSessionSupport.isWritingmateSessionEndpoint(endpoint),
+               !AuthManager.shared.isAuthenticated {
+                DebugLog.info("Skipping realtime start: not signed in; using batch upload", context: "IOSRealtime")
+                return
+            }
+
             let prompt = context.prompt
             let language = context.language
             let keywords = context.keywords

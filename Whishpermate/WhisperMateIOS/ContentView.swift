@@ -45,6 +45,7 @@ struct ContentView: View {
     @State private var referralCodeToRedeem = ""
     @State private var referralError: String?
     @State private var activeKeyboardDictationIdentity: KeyboardDictationHandoff.AttemptIdentity?
+    @State private var quickDictationArmRetryAt = Date.distantPast
     @State private var showKeyboardReturnScreen = false
     @State private var keyboardBridgeAliveUntil: Date?
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
@@ -1179,9 +1180,9 @@ struct ContentView: View {
         }
 
         activeKeyboardDictationIdentity = identity
-        // Real recording takes the audio session. Keep the published window so
-        // the next tap can re-arm without opening the app.
-        inlineRecording.audioRecorder.stopStandby(deactivateAudioSession: false)
+        // Do not stop standby here. AudioRecorder configures the record session
+        // while standby is still running and only then tears it down; stopping
+        // it first fails with '!pri' when the app is in the background.
         refreshQuickDictationHeartbeat()
         keepKeyboardBridgeAlive()
         dismissAllSheetsForKeyboardDictation()
@@ -1335,7 +1336,8 @@ struct ContentView: View {
 
                 // A finished keyboard session tears down the recorder. Re-arm
                 // standby immediately so the next tap stays in-keyboard.
-                if inlineRecording.state == .idle, windowValid, !inlineRecording.audioRecorder.isStandbyActive {
+                if inlineRecording.state == .idle, windowValid, !inlineRecording.audioRecorder.isStandbyActive,
+                   quickDictationArmRetryAt <= Date() {
                     armQuickDictation()
                 }
 
@@ -1387,7 +1389,9 @@ struct ContentView: View {
             DebugLog.info("armed Quick Dictation with audio standby until \(availability.expiresAt)", context: "KEYBOARD_DIAG")
         } catch {
             DebugLog.info("failed to arm Quick Dictation: \(error)", context: "KEYBOARD_DIAG")
-            // Fall back to non-standby mode - the heartbeat will expire quickly
+            // Fall back to non-standby mode - the heartbeat will expire quickly.
+            // Back off so the 250ms poll loop does not hammer the audio session.
+            quickDictationArmRetryAt = Date().addingTimeInterval(3)
             KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
         }
     }

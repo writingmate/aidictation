@@ -799,10 +799,19 @@ class KeyboardViewController: UIInputViewController {
 
         case .failed:
             stopHandoffDeadlineTimer()
-            presentIdleOutcome(
-                .transcriptionFailed,
-                userMessage: snapshot.userMessage ?? "Transcription failed. Your recording is saved in the app."
-            )
+            if snapshot.recordingID == nil {
+                // Nothing was captured: the host could not start (audio session,
+                // sign-in, mode selection). Tell the user, do not fail silently.
+                presentIdleOutcome(
+                    .startFailed,
+                    userMessage: snapshot.userMessage ?? "Recording couldn't start. Try again."
+                )
+            } else {
+                presentIdleOutcome(
+                    .transcriptionFailed,
+                    userMessage: snapshot.userMessage ?? "Transcription failed. Your recording is saved in the app."
+                )
+            }
 
         case .cancelled:
             stopHandoffDeadlineTimer()

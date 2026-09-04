@@ -326,12 +326,6 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     private func startRecordingOnQueue(destinationURL: URL?, attemptID: UUID?) {
         DebugLog.info("startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
 
-        #if os(iOS)
-            // Tear down standby without deactivating the session so the real
-            // recorder can take over. Availability stays published by the host.
-            stopStandby(deactivateAudioSession: false)
-        #endif
-
         // Guard against multiple recording sessions
         if audioRecorder != nil || audioEngine != nil || realtimeCaptureEngine != nil {
             #if os(iOS)
@@ -358,10 +352,17 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         let fileManager = FileManager.default
 
         #if os(iOS)
+            // Configure the record session while the standby engine is still
+            // running. In the background, iOS only lets an app that is currently
+            // running audio re-activate a non-mixable session; tearing standby
+            // down first fails with '!pri' (560557684) and kills Quick Dictation.
             guard configureAudioSession() else {
                 abortManagedStartOnQueue(.audioSessionUnavailable)
                 return
             }
+            // Now hand the session over to the real recorder. Keep it active so
+            // the host stays alive; availability remains published by the host.
+            stopStandby(deactivateAudioSession: false)
         #endif
 
         DispatchQueue.main.async {

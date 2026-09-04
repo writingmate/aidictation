@@ -1547,8 +1547,8 @@ struct ContentView: View {
     private func requireMobileAudioRecoveryReady() -> Bool {
         guard mobileAudioRecoveryReady else {
             historyActionMessage = "Saved recordings are still being checked. Try again in a moment."
-            // A previous pass may have failed or is still running; make sure another one is
-            // under way so the next tap can succeed.
+            // Only the in-flight first pass can still block. Kick it so the next
+            // tap proceeds after that pass finishes — success or failure.
             Task { @MainActor in await recoverMobileAudioProcessingIfNeeded() }
             return false
         }
@@ -1582,7 +1582,9 @@ struct ContentView: View {
             }
         }
 
-        mobileAudioRecoveryReady = succeeded
+        // A completed pass must never brick recording, history, or delete.
+        // Offline model download is a separate path and must not keep this false.
+        mobileAudioRecoveryReady = true
         if !succeeded {
             historyActionMessage = "Saved recordings need attention. Try again in a moment."
         }

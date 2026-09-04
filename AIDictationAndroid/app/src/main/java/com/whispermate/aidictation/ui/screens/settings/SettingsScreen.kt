@@ -71,6 +71,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.ui.components.SettingsRowGap
+import com.whispermate.aidictation.ui.components.SettingsIconTile
 import com.whispermate.aidictation.ui.components.GoogleSignInButton
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
@@ -396,16 +397,11 @@ private fun AccountIdentityItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
+            .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = Icons.Default.AccountCircle,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
+        SettingsIconTile(icon = Icons.Default.AccountCircle)
+        Spacer(modifier = Modifier.width(12.dp))
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -732,7 +728,7 @@ private fun SettingsItem(
                     Modifier
                 }
             )
-            .padding(16.dp),
+            .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -740,13 +736,8 @@ private fun SettingsItem(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (enabled) iconTint else iconTint.copy(alpha = 0.38f),
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
+            SettingsIconTile(icon = icon, tint = iconTint, enabled = enabled)
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,

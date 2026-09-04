@@ -46,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.ui.components.SettingsIconTile
 import com.whispermate.aidictation.ui.components.SettingsRowGap
 
 /**
@@ -108,8 +109,6 @@ private fun PermissionRow(
     onAllow: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
-    // Neutral tiles in both states: the row's status is carried by the chip or button.
-    val accent = colors.onSurface
 
     Row(
         modifier = Modifier
@@ -117,20 +116,7 @@ private fun PermissionRow(
             .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(accent.copy(alpha = 0.06f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(22.dp),
-                tint = accent
-            )
-        }
+        SettingsIconTile(icon = icon)
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -316,20 +302,7 @@ private fun DisclosureVisualCard(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(colors.onSurface.copy(alpha = 0.06f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(21.dp),
-                tint = colors.onSurface
-            )
-        }
+        SettingsIconTile(icon = icon)
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(

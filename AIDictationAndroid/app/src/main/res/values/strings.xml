@@ -3,16 +3,16 @@
     <string name="app_name">AI Dictation</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_welcome_title">Welcome to AI Dictation</string>
-    <string name="onboarding_welcome_subtitle">Your voice, instantly transcribed</string>
-    <string name="onboarding_feature_1">Speak naturally</string>
-    <string name="onboarding_feature_2">Fast transcription</string>
-    <string name="onboarding_feature_3">Secure &amp; private</string>
+    <string name="onboarding_welcome_title">Type with your voice. Anywhere.</string>
+    <string name="onboarding_welcome_subtitle">Speak into any app. AI Dictation writes it down, cleaned up.</string>
+    <string name="onboarding_feature_1">Works in every app</string>
+    <string name="onboarding_feature_2">Filler words and typos removed</string>
+    <string name="onboarding_feature_3">Offline mode keeps audio on your phone</string>
     <string name="onboarding_continue">Continue</string>
     <string name="onboarding_languages_title">Choose your languages</string>
-    <string name="onboarding_languages_subtitle">Select the languages you speak to improve transcription.</string>
+    <string name="onboarding_languages_subtitle">We ticked your phone’s languages. Add any others you speak.</string>
     <string name="onboarding_languages_change_later">You can change this later in Settings.</string>
-    <string name="onboarding_button_demo_title">Meet the floating mic</string>
+    <string name="onboarding_button_demo_title">Try it now</string>
     <string name="onboarding_button_demo_subtitle">First tap where you want to type. The mic appears, you speak, and your words land there.</string>
     <string name="onboarding_button_demo_hint">Tap the text area, then use the mic.</string>
     <string name="onboarding_button_demo_tap_area">Tap a text area</string>
@@ -50,10 +50,10 @@
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
     <string name="onboarding_sign_in_title">Keep your account in sync</string>
-    <string name="onboarding_sign_in_subtitle">Sign in so your purchases and word usage follow you across devices.</string>
+    <string name="onboarding_sign_in_subtitle">Sign in to keep your plan and history when you switch phones.</string>
     <string name="onboarding_sign_in_signed_in_as">Signed in as %1$s</string>
     <string name="onboarding_paywall_title">Go unlimited with Pro</string>
-    <string name="onboarding_paywall_subtitle">Free includes 2,000 words a month. Pro removes the limit and keeps AI cleanup on every dictation.</string>
+    <string name="onboarding_paywall_subtitle">Free gives you 2,000 words a month. Pro is unlimited.</string>
     <string name="onboarding_paywall_monthly">Monthly</string>
     <string name="onboarding_paywall_monthly_price">$8.49 / month</string>
     <string name="onboarding_paywall_annual">Annual</string>
@@ -66,7 +66,7 @@
     <string name="onboarding_paywall_continue_free">Continue with Free</string>
     <string name="onboarding_paywall_refund">30-day refund on every plan. Checkout opens in your browser.</string>
     <string name="onboarding_on_device_title">Choose transcription mode</string>
-    <string name="onboarding_on_device_subtitle">Pick Cloud for the best accuracy, or Offline when you want transcription to stay on your phone.</string>
+    <string name="onboarding_on_device_subtitle">Cloud is more accurate. Offline never sends audio anywhere. You can switch later.</string>
     <string name="onboarding_transcription_cloud_title">Cloud</string>
     <string name="onboarding_transcription_cloud_body">Best accuracy and fastest setup. Audio is sent only when you dictate.</string>
     <string name="onboarding_transcription_offline_title">Offline</string>

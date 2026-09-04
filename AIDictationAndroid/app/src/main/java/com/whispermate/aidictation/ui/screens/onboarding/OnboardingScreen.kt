@@ -728,7 +728,7 @@ private fun ButtonDemoStep(
                 .fillMaxWidth()
                 .height(196.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(colors.surfaceVariant.copy(alpha = 0.45f))
+                .background(colors.surface)
         ) {
             Column(
                 modifier = Modifier
@@ -743,7 +743,7 @@ private fun ButtonDemoStep(
                         color = colors.onSurface,
                         modifier = Modifier
                             .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp))
-                            .background(colors.surface)
+                            .background(Color.White)
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                 }
@@ -760,7 +760,7 @@ private fun ButtonDemoStep(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(24.dp))
-                        .background(colors.surface)
+                        .background(Color.White)
                         .border(
                             BorderStroke(1.dp, if (demoStage >= 1) colors.onSurface.copy(alpha = 0.35f) else colors.outline),
                             RoundedCornerShape(24.dp)
@@ -893,7 +893,7 @@ private fun DemoGuideStrip(activeIndex: Int) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
-                    .background(if (active) colors.onSurface else colors.surfaceVariant.copy(alpha = 0.55f))
+                    .background(if (active) colors.onSurface else colors.surface)
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
@@ -1185,7 +1185,7 @@ private fun TranscriptionModeChoice(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.large)
-            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surface)
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1332,7 +1332,7 @@ private fun PlanChoiceCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.large)
-            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surface)
             .border(
                 BorderStroke(
                     width = if (selected) 2.dp else 1.dp,
@@ -1426,7 +1426,7 @@ private fun SignInStep(signedInEmail: String?) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(MaterialTheme.shapes.large)
-                    .background(colors.surfaceVariant.copy(alpha = 0.55f))
+                    .background(colors.surface)
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

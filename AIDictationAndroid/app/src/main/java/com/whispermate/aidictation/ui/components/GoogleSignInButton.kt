@@ -1,6 +1,5 @@
 package com.whispermate.aidictation.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -22,9 +21,9 @@ import com.whispermate.aidictation.R
 
 /**
  * "Continue with Google" per Google's sign-in branding guidelines: the untinted "G" at
- * 20 dp with 12 dp to the label, medium-weight text, and the light theme's white fill with
- * a #747775 outline (dark: #131314 fill, #8E918F outline, #E3E3E3 text). Pill shape is one
- * of the three permitted variants.
+ * 20 dp with 12 dp to the label, medium-weight text, and the light theme's white fill
+ * (dark: #131314 fill, #E3E3E3 text). No outline: it sits on a card already, and the pill
+ * shape is one of the three permitted variants.
  */
 @Composable
 fun GoogleSignInButton(
@@ -34,14 +33,13 @@ fun GoogleSignInButton(
 ) {
     val dark = isSystemInDarkTheme()
     val fill = if (dark) Color(0xFF131314) else Color.White
-    val outline = if (dark) Color(0xFF8E918F) else Color(0xFF747775)
     val label = if (dark) Color(0xFFE3E3E3) else Color(0xFF1F1F1F)
     OutlinedButton(
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
         shape = RoundedCornerShape(50),
-        border = BorderStroke(1.dp, outline),
+        border = null,
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = fill,
             contentColor = label,

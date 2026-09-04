@@ -104,6 +104,16 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     #if os(iOS)
         @discardableResult
         private func configureAudioSession() -> Bool {
+            // Standby already holds an active, mixable playAndRecord session.
+            // Reuse it untouched: a backgrounded app cannot change category
+            // options or re-activate the session ('!pri', 560557684), and any
+            // setCategory here would do exactly that. Just take ownership.
+            if standbyEngine?.isRunning == true {
+                Self.audioSessionOwnership.claim(self) {}
+                isAudioSessionConfigured = true
+                DebugLog.info("Audio session reused from standby (no reconfigure)", context: "AudioRecorder")
+                return true
+            }
             // A backgrounded app may not switch to a non-mixable record session
             // ('!pri', 560557684) even while its standby engine is running. Try
             // the exclusive session first; if iOS refuses, fall back to a
@@ -168,12 +178,16 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             DebugLog.info("Starting audio standby mode", context: "AudioRecorder")
 
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(
-                .playAndRecord,
-                mode: .default,
-                options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
-            )
-            try session.setActive(true)
+            // Claim ownership so a retired recorder's deinit cannot deactivate
+            // the session standby is now keeping alive.
+            try Self.audioSessionOwnership.claim(self) {
+                try session.setCategory(
+                    .playAndRecord,
+                    mode: .default,
+                    options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
+                )
+                try session.setActive(true)
+            }
 
             let engine = AVAudioEngine()
             let inputNode = engine.inputNode

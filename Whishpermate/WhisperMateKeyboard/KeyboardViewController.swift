@@ -799,7 +799,10 @@ class KeyboardViewController: UIInputViewController {
 
         case .failed:
             stopHandoffDeadlineTimer()
-            if snapshot.recordingID == nil {
+            KeyboardDictationHandoff.appendDiagnostic(
+                "host failed attemptID=\(snapshot.identity.attemptID) lastPhase=\(String(describing: handoffPhase)) message=\(snapshot.userMessage ?? "-")"
+            )
+            if snapshot.recordingID == nil || handoffPhase == .preparing {
                 // Nothing was captured: the host could not start (audio session,
                 // sign-in, mode selection). Tell the user, do not fail silently.
                 presentIdleOutcome(
@@ -815,6 +818,9 @@ class KeyboardViewController: UIInputViewController {
 
         case .cancelled:
             stopHandoffDeadlineTimer()
+            KeyboardDictationHandoff.appendDiagnostic(
+                "attempt cancelled attemptID=\(snapshot.identity.attemptID) lastPhase=\(String(describing: handoffPhase)) message=\(snapshot.userMessage ?? "-")"
+            )
             presentIdleOutcome(
                 .cancelled,
                 userMessage: snapshot.userMessage ?? "Recording cancelled."

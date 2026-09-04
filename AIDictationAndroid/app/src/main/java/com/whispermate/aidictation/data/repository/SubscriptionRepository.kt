@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.data.repository
 
 import android.content.Context
+import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Intent
 import android.util.Log
 import com.whispermate.aidictation.BuildConfig
@@ -55,6 +56,7 @@ class SubscriptionRepository @Inject constructor(
                 isPro = tier.isPaid,
                 isAuthenticated = true,
                 email = user.email,
+                avatarUrl = authState.avatarUrl,
                 tierName = tier.displayName,
                 referralCode = user.referralCode,
                 referralBonusWords = user.referralBonusWords
@@ -176,9 +178,17 @@ class SubscriptionRepository @Inject constructor(
         authRepository.openLogin(context)
     }
 
-    fun openUpgrade() {
-        authRepository.openUpgrade(context)
+    fun isGoogleSignInConfigured(): Boolean = authRepository.isGoogleSignInConfigured()
+
+    /** [activityContext] must be an Activity; see [AuthRepository.signInWithGoogle]. */
+    suspend fun signInWithGoogle(activityContext: Context): Boolean =
+        authRepository.signInWithGoogle(activityContext)
+
+    fun openUpgrade(plan: PaymentPlan? = null) {
+        authRepository.openUpgrade(context, plan)
     }
+
+    fun hasPaymentLinks(): Boolean = authRepository.hasPaymentLinks()
 
     suspend fun signOut() {
         authRepository.signOut()

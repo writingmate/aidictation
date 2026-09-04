@@ -2,6 +2,8 @@ package com.whispermate.aidictation.ui.screens.language
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
@@ -36,11 +39,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.ui.components.groupedItemShape
+import com.whispermate.aidictation.ui.components.GroupedListGap
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,9 +67,9 @@ fun LanguageSettingsScreen(
             text = {
                 Text(
                     if (isCloudRecommended) {
-                        "${item.language.englishName} has lower offline accuracy. AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}."
+                        "${item.language.englishName} has lower offline accuracy. AI Dictation will switch transcription to cloud mode and then select ${item.language.englishName}."
                     } else {
-                        "${item.language.englishName} is not available in offline mode. AIDictation will switch transcription to cloud mode and then select ${item.language.englishName}."
+                        "${item.language.englishName} is not available in offline mode. AI Dictation will switch transcription to cloud mode and then select ${item.language.englishName}."
                     }
                 )
             },
@@ -141,9 +148,13 @@ fun LanguageSettingsScreen(
                     )
                 }
             } else {
-                LazyColumn {
-                    items(languages, key = { it.language.code }) { item ->
+                LazyColumn(
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(GroupedListGap)
+                ) {
+                    itemsIndexed(languages, key = { _, it -> it.language.code }) { index, item ->
                         LanguageRow(
+                            shape = groupedItemShape(index, languages.size),
                             englishName = item.language.englishName,
                             nativeName = item.language.nativeName,
                             isSelected = item.isSelected,
@@ -156,7 +167,6 @@ fun LanguageSettingsScreen(
                                 }
                             }
                         )
-                        HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
                     }
                 }
             }
@@ -166,6 +176,7 @@ fun LanguageSettingsScreen(
 
 @Composable
 private fun LanguageRow(
+    shape: Shape,
     englishName: String,
     nativeName: String,
     isSelected: Boolean,
@@ -176,9 +187,11 @@ private fun LanguageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
             .alpha(if (switchesToCloud && !isSelected) 0.72f else 1f)
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -208,7 +221,7 @@ private fun LanguageRow(
                             "Cloud only"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

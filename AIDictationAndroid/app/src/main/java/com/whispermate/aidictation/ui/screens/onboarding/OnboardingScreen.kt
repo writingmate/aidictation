@@ -1,20 +1,12 @@
 package com.whispermate.aidictation.ui.screens.onboarding
 
-import android.Manifest
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,41 +30,61 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.KeyboardVoice
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
+import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AutoAwesome
+import com.whispermate.aidictation.domain.model.PaymentPlan
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -80,24 +92,32 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
-import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
-import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.components.KeepScreenOn
+import com.whispermate.aidictation.ui.components.GroupedListGap
+import com.whispermate.aidictation.ui.components.groupedItemShape
+import com.whispermate.aidictation.ui.components.SettingsIconTile
+import com.whispermate.aidictation.ui.components.GoogleSignInButton
+import com.whispermate.aidictation.ui.permissions.AccessibilityDisclosureSheet
+import com.whispermate.aidictation.ui.permissions.OverlayPermissions
+import com.whispermate.aidictation.ui.permissions.PermissionRows
+import com.whispermate.aidictation.ui.permissions.PermissionsHint
+import com.whispermate.aidictation.ui.permissions.PermissionsState
+import com.whispermate.aidictation.ui.permissions.permissionsHint
+import com.whispermate.aidictation.ui.permissions.rememberMicrophonePermissionLauncher
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 import kotlinx.coroutines.launch
 
-private val OnboardingSupportedLanguageCodes = listOf(
+/** Languages offered on the onboarding step; also what device locales are matched against. */
+internal val OnboardingSupportedLanguageCodes = listOf(
     // Mirrors the macOS app's Language enum. Empty selection means auto-detect.
     "en",
     "ru",
@@ -154,14 +174,14 @@ private fun OnboardingHeroIcon(
         modifier = modifier
             .size(72.dp)
             .clip(CircleShape)
-            .background(colors.primary.copy(alpha = 0.10f)),
+            .background(colors.onSurface.copy(alpha = 0.06f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(36.dp),
-            tint = colors.primary
+            tint = colors.onSurface
         )
     }
 }
@@ -171,32 +191,19 @@ private fun OnboardingSmallIcon(
     icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
-    val colors = onboardingColors()
-
-    Box(
-        modifier = modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .background(colors.primary.copy(alpha = 0.10f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = colors.primary
-        )
-    }
+    // Same tile as every settings row, so onboarding and Settings read as one system.
+    SettingsIconTile(icon = icon, modifier = modifier)
 }
 
 private enum class OnboardingStep {
     Welcome,
-    Color,
     Languages,
     OnDeviceTranscription,
     Microphone,
     ButtonDemo,
-    AccessibilityDisclosure
+    OverlayPermissions,
+    SignIn,
+    Paywall
 }
 
 @Composable
@@ -211,31 +218,43 @@ fun OnboardingScreen(
     demoState: OnboardingDemoUiState = OnboardingDemoUiState(),
     onStartDemoRecording: () -> Unit = {},
     onStopDemoRecording: () -> Unit = {},
-    onCancelDemoRecording: () -> Unit = {}
+    onCancelDemoRecording: () -> Unit = {},
+    signInAvailable: Boolean = false,
+    signedInEmail: String? = null,
+    isSigningIn: Boolean = false,
+    onSignInWithGoogle: (Context) -> Unit = {},
+    paywallAvailable: Boolean = false,
+    onUpgrade: (PaymentPlan) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var currentStep by remember { mutableIntStateOf(0) }
-    var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
-    var isOverlayServiceEnabled by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
-    var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
+    var permissions by remember { mutableStateOf(OverlayPermissions.read(context)) }
+    var showAccessibilityDisclosure by remember { mutableStateOf(false) }
     var demoLaunchRequested by remember { mutableStateOf(false) }
     val colors = onboardingColors()
 
     OnboardingSystemBars()
 
-    val onboardingSteps = remember {
+    var selectedPlan by remember { mutableStateOf(PaymentPlan.Annual) }
+    val onboardingSteps = remember(signInAvailable, paywallAvailable) {
         buildList {
             add(OnboardingStep.Welcome)
-            add(OnboardingStep.Color)
             add(OnboardingStep.Languages)
             add(OnboardingStep.OnDeviceTranscription)
+            // Only the microphone before the demo; the overlay permissions come after
+            // the user has seen the floating mic, so they know what they are allowing.
             add(OnboardingStep.Microphone)
             add(OnboardingStep.ButtonDemo)
-            add(OnboardingStep.AccessibilityDisclosure)
+            add(OnboardingStep.OverlayPermissions)
+            // Last, once everything is authorised: sign in so the account follows the user.
+            if (signInAvailable) add(OnboardingStep.SignIn)
+            // The paywall closes onboarding; it drops out once the account is already Pro.
+            if (paywallAvailable) add(OnboardingStep.Paywall)
         }
     }
+    val isLastStep = currentStep >= onboardingSteps.lastIndex
     val currentOnboardingStep = onboardingSteps[currentStep.coerceAtMost(onboardingSteps.lastIndex)]
 
     val contextRulesEnabled = remember {
@@ -264,15 +283,8 @@ fun OnboardingScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasMicPermission = hasMicrophonePermission(context)
-                val overlayEnabled = isOverlayAccessibilityEnabled(context)
-                isOverlayServiceEnabled = overlayEnabled
-                if (
-                    currentOnboardingStep == OnboardingStep.AccessibilityDisclosure &&
-                    overlayEnabled
-                ) {
-                    currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
-                }
+                // Back from a system settings page or the runtime prompt: re-read all three.
+                permissions = OverlayPermissions.read(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -281,17 +293,17 @@ fun OnboardingScreen(
         }
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasMicPermission = granted
-        if (granted) {
-            currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
-        }
+    val requestMicrophone = rememberMicrophonePermissionLauncher { granted ->
+        permissions = permissions.copy(microphone = granted)
     }
 
     fun goToNextStep() {
         currentStep = (currentStep + 1).coerceAtMost(onboardingSteps.lastIndex)
+    }
+
+    fun finishOnboarding() {
+        onSaveContextRules(contextRulesEnabled.toList())
+        onComplete()
     }
 
     Column(
@@ -315,7 +327,7 @@ fun OnboardingScreen(
                         .size(8.dp)
                         .clip(CircleShape)
                         .background(
-                            if (index <= currentStep) colors.primary
+                            if (index <= currentStep) colors.onSurface
                             else MaterialTheme.colorScheme.outlineVariant
                         )
                 )
@@ -339,13 +351,6 @@ fun OnboardingScreen(
             ) { step ->
                 when (step) {
                     OnboardingStep.Welcome -> WelcomeStep()
-                    OnboardingStep.Color -> BubbleColorStep(
-                        selectedColor = selectedBubbleColor,
-                        onColorSelected = { color ->
-                            selectedBubbleColor = color
-                            OverlayBubblePreferences.setBubbleColor(context, color)
-                        }
-                    )
                     OnboardingStep.Languages -> LanguageSelectionStep(
                         selectedLanguageCodes = selectedLanguageCodes,
                         onToggleLanguage = onToggleLanguage
@@ -355,9 +360,13 @@ fun OnboardingScreen(
                         state = onDeviceModelState,
                         onEnabledChanged = onSetOnDeviceTranscriptionEnabled
                     )
-                    OnboardingStep.Microphone -> MicrophonePermissionStep(hasPermission = hasMicPermission)
+                    OnboardingStep.Microphone -> MicrophoneStep(granted = permissions.microphone)
+                    OnboardingStep.OverlayPermissions -> PermissionsStep(
+                        state = permissions,
+                        onAllowAccessibility = { showAccessibilityDisclosure = true },
+                        onAllowOverlay = { OverlayPermissions.openDisplayOverAppsSettings(context) }
+                    )
                     OnboardingStep.ButtonDemo -> ButtonDemoStep(
-                        selectedColor = selectedBubbleColor,
                         demoState = demoState,
                         onStartRecording = {
                             demoLaunchRequested = true
@@ -366,67 +375,105 @@ fun OnboardingScreen(
                         onStopRecording = onStopDemoRecording,
                         onCancelRecording = onCancelDemoRecording
                     )
-                    OnboardingStep.AccessibilityDisclosure -> AccessibilityDisclosureStep()
+                    OnboardingStep.SignIn -> SignInStep(signedInEmail = signedInEmail)
+                    OnboardingStep.Paywall -> PaywallStep(
+                        selectedPlan = selectedPlan,
+                        onSelectPlan = { selectedPlan = it }
+                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (currentOnboardingStep == OnboardingStep.AccessibilityDisclosure && !isOverlayServiceEnabled) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        if (currentOnboardingStep == OnboardingStep.Microphone) {
+            // One button: it asks for the permission, and becomes Continue once granted.
+            Button(
+                onClick = { if (permissions.microphone) goToNextStep() else requestMicrophone() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
             ) {
-                OutlinedButton(
-                    onClick = { goToNextStep() },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(56.dp)
-                ) {
-                    Text(
-                        text = stringResource(R.string.onboarding_accessibility_disclosure_decline),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-                Button(
-                    onClick = { openAccessibilitySettings(context) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.primary,
-                        contentColor = colors.onPrimary
-                    )
-                ) {
-                    Text(
-                        text = stringResource(R.string.onboarding_accessibility_disclosure_accept),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
+                Text(
+                    text = if (permissions.microphone) {
+                        stringResource(R.string.onboarding_continue)
+                    } else {
+                        stringResource(R.string.onboarding_microphone_allow)
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
+        } else if (currentOnboardingStep == OnboardingStep.OverlayPermissions) {
+            Button(
+                onClick = { goToNextStep() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = permissions.canContinue,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
+            ) {
+                Text(
+                    text = stringResource(R.string.onboarding_continue),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = stringResource(permissionsHintText(permissions)),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (currentOnboardingStep == OnboardingStep.Paywall) {
+            Button(
+                onClick = { onUpgrade(selectedPlan) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
+            ) {
+                Text(
+                    text = stringResource(R.string.onboarding_paywall_cta),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.onboarding_paywall_refund),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            TextButton(
+                onClick = { finishOnboarding() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.onboarding_paywall_continue_free))
+            }
+        } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
+            // The Google button is the one action here; finishing without an account stays possible.
+            GoogleSignInButton(
+                onClick = { onSignInWithGoogle(context) },
+                enabled = !isSigningIn,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            )
         } else {
             Button(
-                onClick = {
-                    when (currentOnboardingStep) {
-                        OnboardingStep.Welcome -> goToNextStep()
-                        OnboardingStep.Color -> goToNextStep()
-                        OnboardingStep.Languages -> goToNextStep()
-                        OnboardingStep.OnDeviceTranscription -> goToNextStep()
-                        OnboardingStep.Microphone -> {
-                            if (hasMicPermission) {
-                                goToNextStep()
-                            } else {
-                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        }
-                        OnboardingStep.ButtonDemo -> goToNextStep()
-                        OnboardingStep.AccessibilityDisclosure -> {
-                            onSaveContextRules(contextRulesEnabled.toList())
-                            onComplete()
-                        }
-                    }
-                },
+                onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -442,22 +489,128 @@ fun OnboardingScreen(
                 )
             ) {
                 Text(
-                    text = when (currentOnboardingStep) {
-                        OnboardingStep.Welcome -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.Color -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.Languages -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.Microphone -> if (hasMicPermission) {
-                            stringResource(R.string.onboarding_continue)
-                        } else {
-                            stringResource(R.string.onboarding_mic_enable)
-                        }
-                        OnboardingStep.ButtonDemo -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.OnDeviceTranscription -> stringResource(R.string.onboarding_continue)
-                        OnboardingStep.AccessibilityDisclosure -> stringResource(R.string.onboarding_get_started)
+                    text = if (isLastStep) {
+                        stringResource(R.string.onboarding_get_started)
+                    } else {
+                        stringResource(R.string.onboarding_continue)
                     },
                     style = MaterialTheme.typography.titleMedium
                 )
             }
+        }
+    }
+
+    if (showAccessibilityDisclosure) {
+        AccessibilityDisclosureSheet(
+            onAgree = {
+                showAccessibilityDisclosure = false
+                OverlayPermissions.openAccessibilitySettings(context)
+            },
+            onDismiss = { showAccessibilityDisclosure = false }
+        )
+    }
+}
+
+private fun permissionsHintText(state: PermissionsState): Int = when (permissionsHint(state)) {
+    PermissionsHint.NeedMicAndAccessibility -> R.string.permissions_hint_need_both
+    PermissionsHint.NeedMic -> R.string.permissions_hint_need_mic
+    PermissionsHint.NeedAccessibility -> R.string.permissions_hint_need_accessibility
+    PermissionsHint.OverlayLater -> R.string.permissions_hint_overlay_later
+    PermissionsHint.AllSet -> R.string.permissions_hint_all_set
+}
+
+@Composable
+private fun MicrophoneStep(granted: Boolean) {
+    val colors = onboardingColors()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.Mic)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_microphone_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_microphone_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        if (granted) {
+            Spacer(modifier = Modifier.height(32.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(start = 12.dp, top = 8.dp, end = 14.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_microphone_granted),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionsStep(
+    state: PermissionsState,
+    onAllowAccessibility: () -> Unit,
+    onAllowOverlay: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        OnboardingHeroIcon(icon = Icons.Default.Shield)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_permissions_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_permissions_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            PermissionRows(
+                state = state,
+                onAllowMicrophone = {},
+                onAllowAccessibility = onAllowAccessibility,
+                onAllowOverlay = onAllowOverlay,
+                showMicrophone = false
+            )
         }
     }
 }
@@ -487,203 +640,14 @@ private fun OnboardingSystemBars() {
     }
 }
 
-private data class OnboardingBubbleColorOption(
-    val color: Int,
-    val resolvedColor: Int,
-    val label: String
-)
-
-@Composable
-private fun BubbleColorStep(
-    selectedColor: Int,
-    onColorSelected: (Int) -> Unit
-) {
-    val colors = onboardingColors()
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        OnboardingHeroIcon(icon = Icons.Default.Tune)
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_color_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_color_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        OnboardingBubbleColorSelector(
-            selectedColor = selectedColor,
-            onColorSelected = onColorSelected
-        )
-    }
-}
-
-@Composable
-private fun OnboardingBubbleColorSelector(
-    selectedColor: Int,
-    onColorSelected: (Int) -> Unit
-) {
-    val context = LocalContext.current
-    val options = listOf(
-        OnboardingBubbleColorOption(
-            color = OverlayBubblePreferences.SYSTEM_COLOR,
-            resolvedColor = OverlayBubblePreferences.getResolvedSystemColor(context),
-            label = stringResource(R.string.settings_bubble_color_system)
-        ),
-        OnboardingBubbleColorOption(
-            color = OverlayBubblePreferences.DEFAULT_COLOR,
-            resolvedColor = OverlayBubblePreferences.DEFAULT_COLOR,
-            label = stringResource(R.string.settings_bubble_color_default)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFFE11D48.toInt(),
-            resolvedColor = 0xFFE11D48.toInt(),
-            label = stringResource(R.string.settings_bubble_color_red)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFF7C3AED.toInt(),
-            resolvedColor = 0xFF7C3AED.toInt(),
-            label = stringResource(R.string.settings_bubble_color_purple)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFF2563EB.toInt(),
-            resolvedColor = 0xFF2563EB.toInt(),
-            label = stringResource(R.string.settings_bubble_color_blue)
-        ),
-        OnboardingBubbleColorOption(
-            color = 0xFF0D9488.toInt(),
-            resolvedColor = 0xFF0D9488.toInt(),
-            label = stringResource(R.string.settings_bubble_color_teal)
-        ),
-        OnboardingBubbleColorOption(
-            color = OverlayBubblePreferences.BLACK_COLOR,
-            resolvedColor = OverlayBubblePreferences.BLACK_COLOR,
-            label = stringResource(R.string.settings_bubble_color_black)
-        )
-    )
-
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        options.chunked(4).forEach { rowOptions ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                rowOptions.forEach { option ->
-                    OnboardingBubbleColorSwatchOption(
-                        option = option,
-                        selected = option.color == selectedColor,
-                        onClick = { onColorSelected(option.color) }
-                    )
-                }
-                repeat(4 - rowOptions.size) {
-                    Spacer(modifier = Modifier.width(62.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OnboardingBubbleColorSwatchOption(
-    option: OnboardingBubbleColorOption,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val colors = onboardingColors()
-
-    Column(
-        modifier = Modifier.width(62.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        OnboardingBubbleColorSwatch(
-            color = option.resolvedColor,
-            selected = selected,
-            onClick = onClick
-        )
-        Text(
-            text = option.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) colors.onSurface else colors.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun OnboardingBubbleColorSwatch(
-    color: Int,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val colors = onboardingColors()
-    val composeColor = Color(color)
-    // onSurface keeps the selection ring visible in both light and dark themes.
-    val borderColor = if (selected) {
-        colors.onSurface
-    } else {
-        colors.outline
-    }
-
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(composeColor)
-            .border(BorderStroke(if (selected) 3.dp else 1.dp, borderColor), CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        if (selected) {
-            // Dark badge on light swatches, light badge on dark ones.
-            val lightSwatch = composeColor.luminance() > 0.7f
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (lightSwatch) Color.Black.copy(alpha = 0.65f)
-                        else Color.White.copy(alpha = 0.94f)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = composeColor,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-    }
-}
-
 @Composable
 private fun ButtonDemoStep(
-    selectedColor: Int,
     demoState: OnboardingDemoUiState,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onCancelRecording: () -> Unit
 ) {
     val colors = onboardingColors()
-    val context = LocalContext.current
     var demoStage by remember { mutableIntStateOf(0) }
     val audioLevel = demoState.audioLevel
     val frequencyBands = demoState.frequencyBands
@@ -693,10 +657,7 @@ private fun ButtonDemoStep(
         isRecording -> OverlayMicButtonView.State.Recording
         else -> OverlayMicButtonView.State.Idle
     }
-    val resolvedColor = when (selectedColor) {
-        OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(context)
-        else -> selectedColor
-    }
+    val hasResult = demoStage == 3 && !demoState.isProcessing && demoState.resultText != null
 
     // Keep the screen awake while the demo dictation is recording or processing
     KeepScreenOn(enabled = isRecording || demoState.isProcessing)
@@ -723,6 +684,14 @@ private fun ButtonDemoStep(
         }
     }
 
+    // Which of tap / speak / tap again the user is on right now.
+    val activeGuide = when {
+        demoStage < 1 -> -1
+        isRecording -> 1
+        demoStage >= 3 -> 2
+        else -> 0
+    }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -740,92 +709,241 @@ private fun ButtonDemoStep(
         Spacer(modifier = Modifier.height(6.dp))
 
         Text(
-            text = stringResource(R.string.onboarding_button_demo_subtitle),
+            text = boldActions(stringResource(R.string.onboarding_button_demo_subtitle)),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
+        DemoGuideStrip(activeIndex = activeGuide)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // A slice of a chat screen: an incoming message and the composer, with the
+        // floating mic sitting above the composer the way it does over a keyboard.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(176.dp)
+                .height(196.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(colors.surfaceVariant.copy(alpha = 0.45f))
+                .background(colors.surface)
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(colors.surface)
-                    .clickable {
-                        if (demoStage == 0) {
-                            demoStage = 1
-                        }
-                    }
-                    .padding(14.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.Bottom
             ) {
-                Text(
-                    text = when (demoStage) {
-                        0 -> stringResource(R.string.onboarding_button_demo_tap_area)
-                        1 -> stringResource(R.string.onboarding_button_demo_mic_appears)
-                        2 -> if (isRecording) {
-                            stringResource(R.string.onboarding_button_demo_stop)
-                        } else {
-                            stringResource(R.string.onboarding_button_demo_speak)
-                        }
-                        else -> when {
-                            demoState.isProcessing -> stringResource(R.string.processing)
-                            demoState.resultText != null -> demoState.resultText
-                            demoState.errorMessage != null -> demoState.errorMessage
-                            else -> stringResource(R.string.onboarding_button_demo_result)
-                        }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (demoStage == 3 || isRecording) colors.onSurface else colors.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(32.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.onboarding_button_demo_incoming),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurface,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp))
+                            .background(Color.White)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Composer: placeholder until the words land, then the dictated text.
+                val composerText = when {
+                    hasResult -> demoState.resultText.orEmpty()
+                    demoStage == 3 && demoState.errorMessage != null -> demoState.errorMessage
+                    else -> null
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color.White)
+                        .border(
+                            BorderStroke(1.dp, if (demoStage >= 1) colors.onSurface.copy(alpha = 0.35f) else colors.outline),
+                            RoundedCornerShape(24.dp)
+                        )
+                        .clickable { if (demoStage == 0) demoStage = 1 }
+                        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (demoStage >= 1 && composerText == null) {
+                        // Caret: the field is focused and waiting for words.
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .height(18.dp)
+                                .background(colors.onSurface)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = composerText ?: stringResource(R.string.onboarding_button_demo_composer_placeholder),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (composerText != null) colors.onSurface else colors.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null,
+                        tint = if (composerText != null) colors.primary else colors.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .padding(8.dp)
+                    )
+                }
             }
 
             if (demoStage >= 1) {
-                AndroidView(
+                val bubbleSurface = MaterialTheme.colorScheme.surface.toArgb()
+                val bubbleGlyph = MaterialTheme.colorScheme.onSurface.toArgb()
+                val bubbleWidth = OverlayMicButtonView.widthDp(previewState).dp
+                val bubbleHeight = OverlayMicButtonView.heightDp().dp
+                Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(16.dp)
-                        .width(if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp)
-                        .height(55.dp),
-                    factory = { androidContext ->
-                        OverlayMicButtonView(androidContext).apply {
-                            setOnClickCallback { handleDemoMicTap() }
-                            isHapticFeedbackEnabled = true
-                            setColors(resolvedColor, resolvedColor)
-                            setState(previewState)
-                            setAudioLevel(audioLevel)
-                            setFrequencyBands(frequencyBands)
-                        }
-                    },
-                    update = { view ->
-                        view.setOnClickCallback { handleDemoMicTap() }
-                        view.setColors(resolvedColor, resolvedColor)
-                        view.setState(previewState)
-                        view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) audioLevel else 0f)
-                        view.setFrequencyBands(frequencyBands)
+                        .padding(end = 6.dp, bottom = 66.dp)
+                        .width(bubbleWidth)
+                        .height(bubbleHeight)
+                ) {
+                    // Waves invite the tap while the bubble is idle and nothing has been dictated yet.
+                    if (previewState == OverlayMicButtonView.State.Idle && !hasResult) {
+                        PulseWaves(
+                            color = colors.onSurface,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
-                )
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { androidContext ->
+                            OverlayMicButtonView(androidContext).apply {
+                                setOnClickCallback { handleDemoMicTap() }
+                                isHapticFeedbackEnabled = true
+                                setPalette(bubbleSurface, bubbleGlyph)
+                                setState(previewState)
+                                setAudioLevel(audioLevel)
+                                setFrequencyBands(frequencyBands)
+                            }
+                        },
+                        update = { view ->
+                            view.setOnClickCallback { handleDemoMicTap() }
+                            view.setPalette(bubbleSurface, bubbleGlyph)
+                            view.setState(previewState)
+                            view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) audioLevel else 0f)
+                            view.setFrequencyBands(frequencyBands)
+                        }
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = stringResource(R.string.onboarding_button_demo_hint),
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.onSurfaceVariant,
+            text = boldActions(
+                when {
+                    demoStage == 0 -> stringResource(R.string.onboarding_button_demo_tap_area)
+                    demoState.isProcessing -> stringResource(R.string.processing)
+                    hasResult -> stringResource(R.string.onboarding_button_demo_done)
+                    isRecording -> stringResource(R.string.onboarding_button_demo_stop)
+                    else -> stringResource(R.string.onboarding_button_demo_speak)
+                }
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurface,
             textAlign = TextAlign.Center
         )
+    }
+}
+
+/** Renders `*action*` markers in a string as bold, so instructions highlight what to do. */
+private fun boldActions(text: String): AnnotatedString = buildAnnotatedString {
+    text.split("*").forEachIndexed { index, part ->
+        if (index % 2 == 1) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(part) }
+        } else {
+            append(part)
+        }
+    }
+}
+
+/** Tap · Speak · Tap again, with the current one highlighted. */
+@Composable
+private fun DemoGuideStrip(activeIndex: Int) {
+    val colors = onboardingColors()
+    val labels = listOf(
+        stringResource(R.string.onboarding_demo_guide_tap),
+        stringResource(R.string.onboarding_demo_guide_speak),
+        stringResource(R.string.onboarding_demo_guide_tap_again)
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        labels.forEachIndexed { index, label ->
+            val active = index == activeIndex
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (active) colors.onSurface else colors.surface)
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "${index + 1}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (active) colors.surface else colors.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (active) colors.surface else colors.onSurfaceVariant
+                )
+            }
+            if (index < labels.lastIndex) Spacer(modifier = Modifier.width(8.dp))
+        }
+    }
+}
+
+/** Two rings expanding out of the bubble's centre, the classic "tap me" pulse. */
+@Composable
+private fun PulseWaves(color: Color, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val durationMs = 1600
+    val first by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(durationMs, easing = LinearEasing)),
+        label = "pulse_first"
+    )
+    val second by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(durationMs, easing = LinearEasing),
+            initialStartOffset = StartOffset(durationMs / 2)
+        ),
+        label = "pulse_second"
+    )
+    Canvas(modifier = modifier) {
+        val centre = Offset(size.width / 2f, size.height / 2f)
+        val base = size.minDimension * 0.42f
+        listOf(first, second).forEach { progress ->
+            drawCircle(
+                color = color.copy(alpha = (1f - progress) * 0.28f),
+                radius = base * (1f + progress * 0.9f),
+                center = centre
+            )
+        }
     }
 }
 
@@ -870,13 +988,14 @@ private fun LanguageSelectionStep(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        visibleLanguages.forEach { language ->
+        visibleLanguages.forEachIndexed { index, language ->
             OnboardingLanguageRow(
+                shape = groupedItemShape(index, visibleLanguages.size),
                 language = language,
                 isSelected = language.code in selectedSet,
                 onClick = { onToggleLanguage(language.code) }
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(if (index == visibleLanguages.lastIndex) 12.dp else GroupedListGap))
         }
 
         Text(
@@ -891,18 +1010,18 @@ private fun LanguageSelectionStep(
 
 @Composable
 private fun OnboardingLanguageRow(
+    shape: Shape,
     language: WhisperLanguage,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
     val colors = onboardingColors()
-    val shape = MaterialTheme.shapes.small
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (isSelected) colors.primary.copy(alpha = 0.12f) else colors.surfaceVariant.copy(alpha = 0.45f))
+            .background(colors.surface)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -911,13 +1030,13 @@ private fun OnboardingLanguageRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (isSelected) colors.primary.copy(alpha = 0.18f) else colors.surfaceVariant),
+                .background(if (isSelected) colors.onSurface.copy(alpha = 0.10f) else colors.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = language.code.uppercase(),
                 style = MaterialTheme.typography.labelSmall,
-                color = colors.primary,
+                color = colors.onSurface,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -947,224 +1066,16 @@ private fun OnboardingLanguageRow(
                 modifier = Modifier
                     .size(24.dp)
                     .clip(CircleShape)
-                    .background(colors.primary),
+                    .background(colors.onSurface),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp),
-                    tint = colors.onPrimary
+                    tint = colors.surface
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun AccessibilityDisclosureStep() {
-    val colors = onboardingColors()
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        AccessibilityDisclosureHero()
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_disclosure_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = colors.onSurface,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_disclosure_intro),
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        DisclosureVisualCard(
-            icon = Icons.Default.FindInPage,
-            title = stringResource(R.string.onboarding_accessibility_visual_find_title),
-            body = stringResource(R.string.onboarding_accessibility_visual_find_body)
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        DisclosureVisualCard(
-            icon = Icons.Default.KeyboardVoice,
-            title = stringResource(R.string.onboarding_accessibility_visual_insert_title),
-            body = stringResource(R.string.onboarding_accessibility_visual_insert_body)
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        DisclosureVisualCard(
-            icon = Icons.Default.PrivacyTip,
-            title = stringResource(R.string.onboarding_accessibility_visual_private_title),
-            body = stringResource(R.string.onboarding_accessibility_visual_private_body)
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        DisclosureVisualCard(
-            icon = Icons.Default.CloudDone,
-            title = stringResource(R.string.onboarding_accessibility_visual_processing_title),
-            body = stringResource(R.string.onboarding_accessibility_visual_processing_body)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_disclosure_use),
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_disclosure_data),
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_disclosure_cloud),
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.onboarding_accessibility_disclosure_settings),
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-    }
-}
-
-@Composable
-private fun AccessibilityDisclosureHero() {
-    val colors = onboardingColors()
-
-    Box(
-        modifier = Modifier.size(width = 176.dp, height = 92.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(22.dp))
-                .background(colors.surfaceVariant.copy(alpha = 0.55f))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.68f)
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(100.dp))
-                    .background(colors.outline.copy(alpha = 0.7f))
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .height(20.dp)
-                        .clip(RoundedCornerShape(100.dp))
-                        .background(colors.primary)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.78f)
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(100.dp))
-                        .background(colors.primary.copy(alpha = 0.16f))
-                )
-            }
-        }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(colors.surface),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.PrivacyTip,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = colors.onSurfaceVariant
-            )
-        }
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(colors.primary),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = colors.onPrimary
-            )
-        }
-    }
-}
-
-@Composable
-private fun DisclosureVisualCard(
-    icon: ImageVector,
-    title: String,
-    body: String
-) {
-    val colors = onboardingColors()
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .background(colors.surfaceVariant.copy(alpha = 0.45f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(colors.primary.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(21.dp),
-                tint = colors.primary
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = colors.onSurface
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = body,
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurfaceVariant
-            )
         }
     }
 }
@@ -1273,8 +1184,8 @@ private fun TranscriptionModeChoice(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) colors.primary.copy(alpha = 0.10f) else colors.surfaceVariant.copy(alpha = 0.55f))
+            .clip(MaterialTheme.shapes.large)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surface)
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1346,7 +1257,192 @@ private fun RatingRow(
                     imageVector = Icons.Default.Star,
                     contentDescription = null,
                     modifier = Modifier.size(13.dp),
-                    tint = if (index < stars.coerceIn(0, 5)) colors.primary else colors.outline
+                    tint = if (index < stars.coerceIn(0, 5)) colors.onSurfaceVariant else colors.outline
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PaywallStep(
+    selectedPlan: PaymentPlan,
+    onSelectPlan: (PaymentPlan) -> Unit
+) {
+    val colors = onboardingColors()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.AutoAwesome)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_paywall_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_paywall_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        PlanChoiceCard(
+            title = stringResource(R.string.onboarding_paywall_annual),
+            price = stringResource(R.string.onboarding_paywall_annual_price),
+            badge = stringResource(R.string.onboarding_paywall_annual_badge),
+            selected = selectedPlan == PaymentPlan.Annual,
+            onClick = { onSelectPlan(PaymentPlan.Annual) }
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        PlanChoiceCard(
+            title = stringResource(R.string.onboarding_paywall_monthly),
+            price = stringResource(R.string.onboarding_paywall_monthly_price),
+            badge = null,
+            selected = selectedPlan == PaymentPlan.Monthly,
+            onClick = { onSelectPlan(PaymentPlan.Monthly) }
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        PlanChoiceCard(
+            title = stringResource(R.string.onboarding_paywall_lifetime),
+            price = stringResource(R.string.onboarding_paywall_lifetime_price),
+            badge = stringResource(R.string.onboarding_paywall_lifetime_badge),
+            selected = selectedPlan == PaymentPlan.Lifetime,
+            onClick = { onSelectPlan(PaymentPlan.Lifetime) }
+        )
+    }
+}
+
+@Composable
+private fun PlanChoiceCard(
+    title: String,
+    price: String,
+    badge: String?,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = onboardingColors()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surface)
+            .border(
+                BorderStroke(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant
+                ),
+                MaterialTheme.shapes.large
+            )
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .border(
+                    width = 2.dp,
+                    color = if (selected) colors.primary else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(colors.primary)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface
+            )
+            Text(
+                text = price,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.onSurfaceVariant
+            )
+        }
+
+        if (badge != null) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = badge,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SignInStep(signedInEmail: String?) {
+    val colors = onboardingColors()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.AccountCircle)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_sign_in_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_sign_in_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        if (signedInEmail != null) {
+            Spacer(modifier = Modifier.height(32.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.large)
+                    .background(colors.surface)
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_sign_in_signed_in_as, signedInEmail),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -1393,33 +1489,6 @@ private fun WelcomeStep() {
         FeatureItem(
             icon = Icons.Default.Security,
             text = stringResource(R.string.onboarding_feature_3)
-        )
-    }
-}
-
-@Composable
-private fun MicrophonePermissionStep(hasPermission: Boolean) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        OnboardingHeroIcon(icon = if (hasPermission) Icons.Default.Check else Icons.Default.Mic)
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_mic_title),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = stringResource(R.string.onboarding_mic_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
         )
     }
 }
@@ -1504,40 +1573,6 @@ private fun FeatureItem(icon: ImageVector, text: String) {
             text = text,
             style = MaterialTheme.typography.bodyMedium
         )
-    }
-}
-
-private fun hasMicrophonePermission(context: Context): Boolean {
-    return ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
-}
-
-private fun openAccessibilitySettings(context: Context) {
-    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-    }
-    context.startActivity(intent)
-}
-
-private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
-    val enabled = Settings.Secure.getInt(
-        context.contentResolver,
-        Settings.Secure.ACCESSIBILITY_ENABLED,
-        0
-    ) == 1
-
-    if (!enabled) return false
-
-    val enabledServices = Settings.Secure.getString(
-        context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-
-    val expected = ComponentName(context, OverlayDictationAccessibilityService::class.java)
-    return enabledServices.split(':').any { serviceId ->
-        ComponentName.unflattenFromString(serviceId) == expected
     }
 }
 

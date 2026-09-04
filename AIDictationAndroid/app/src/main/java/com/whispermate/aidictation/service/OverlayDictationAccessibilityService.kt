@@ -2,14 +2,10 @@ package com.whispermate.aidictation.service
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.res.ColorStateList
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -30,13 +26,13 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.widget.ImageButton
+import android.view.ViewTreeObserver
+import android.view.animation.AccelerateInterpolator
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
@@ -46,6 +42,8 @@ import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
+import com.whispermate.aidictation.ui.views.OverlayRewritePanelView
+import com.whispermate.aidictation.ui.views.RewriteAction
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -60,7 +58,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 
 internal enum class OverlayRecordingState {
     Idle,
@@ -89,6 +86,30 @@ internal fun canStartSelectionCommand(
 ): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive
 
 /**
+ * The wand button is either shown and tappable, or not shown at all: there is no
+ * disabled state. It appears beside an idle bubble, with no dictation delivery in
+ * flight, while the focused field has a non-blank selection and its panel is closed.
+ */
+/**
+ * The bubble belongs with the keyboard: without one there is nothing to dictate into.
+ * The exceptions are while dictation is under way (recording, processing or delivering)
+ * and while the edit panel is open, so a keyboard that hides mid-task never tears the
+ * task down.
+ */
+internal fun bubbleNeedsKeyboard(
+    recordingState: OverlayRecordingState,
+    workflowActive: Boolean,
+    panelOpen: Boolean
+): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive && !panelOpen
+
+internal fun shouldShowWandButton(
+    recordingState: OverlayRecordingState,
+    workflowActive: Boolean,
+    hasSelection: Boolean,
+    panelOpen: Boolean
+): Boolean = hasSelection && !panelOpen && canStartSelectionCommand(recordingState, workflowActive)
+
+/**
  * Accessibility-based dictation service that shows a draggable bubble overlay when an editable
  * text field is focused, while keeping the user's regular keyboard (e.g. Gboard).
  */
@@ -101,10 +122,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val MIN_RECORDING_MS = 500L
         private const val ACCESS_CHECK_TIMEOUT_MS = 15_000L
         private const val SETTINGS_SNAPSHOT_TIMEOUT_MS = 5_000L
-        private const val BUBBLE_SIZE_DP = 55
-        private const val BUBBLE_MARGIN_DP = 20
+        /** Whole bubble window while idle: the 55 dp circle plus its shadow margin on every side. */
+        private const val BUBBLE_SIZE_DP = OverlayMicButtonView.IDLE_SIZE_DP
+        /**
+         * Gap between the bubble window and the screen edges or the keyboard. The window already
+         * carries a transparent shadow margin, so the visible circle sits a little further in.
+         */
+        private const val BUBBLE_MARGIN_DP = 8
         private const val BUBBLE_SNOOZE_MS = 10 * 60 * 1000L
         private const val BUBBLE_HIDE_DEBOUNCE_MS = 250L
+        /** IME window reports lag and flap while the keyboard animates; wait this long before trusting an absence. */
+        private const val KEYBOARD_HIDE_GRACE_MS = 700L
+        private const val EVENT_COALESCE_MS = 120L
         private const val FOCUS_RECOVERY_ATTEMPTS = 15
         private const val FOCUS_RECOVERY_RETRY_MS = 200L
         private const val INSERT_RESOLVE_ATTEMPTS = 3
@@ -112,15 +141,24 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val INSERT_VERIFY_ATTEMPTS = 5
         private const val INSERT_VERIFY_RETRY_MS = 150L
         private const val BUBBLE_DISMISS_DROP_HEIGHT_DP = 180
-        private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 8
+        /** Both the wand and the bubble windows carry transparent shadow margins, so the gap stays small. */
+        private const val COMMAND_ACTION_HORIZONTAL_MARGIN_DP = 2
         private const val COMMAND_ACTION_GAP_DP = 8
         private const val COMMAND_ACTION_BUTTON_SIZE_DP = 55
         private const val COMMAND_ACTION_CONTAINER_PADDING_DP = 6
-        private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 130
+        private const val COMMAND_ACTION_ESTIMATED_WIDTH_DP = 67
         private const val COMMAND_ACTION_ESTIMATED_HEIGHT_DP = 67
         private const val DISMISS_ACTION_HEIGHT_DP = 104
+        private const val COMMAND_ACTION_ICON_PADDING_DP = 15
+        /** Kept low so the wand, like the bubble, shows only a faint hint of lift. */
+        private const val COMMAND_ACTION_ELEVATION_DP = 2
+        /** Material pressed state layer. */
+        private const val COMMAND_ACTION_RIPPLE_ALPHA = 0.12f
+        private const val COMMAND_ACTIONS_FADE_IN_MS = 150L
+        private const val WAND_ABSORB_MS = 220L
+        private const val WAND_ABSORB_SCALE = 1.6f
+        private const val REWRITE_PANEL_MARGIN_DP = 12
         private const val COMMAND_CLEANUP_ID = "cleanup"
-        private const val COMMAND_REWRITE_ID = "rewrite"
 
         private val TRACKED_EVENT_TYPES = setOf(
             AccessibilityEvent.TYPE_VIEW_FOCUSED,
@@ -132,16 +170,32 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         )
-    }
 
-    private enum class RecordingMode {
-        Dictation,
-        RewriteInstruction
-    }
+        /**
+         * Events caused directly by the user touching or focusing a field. These are rare
+         * and the overlay should react to them at once. Everything else in
+         * [TRACKED_EVENT_TYPES] (window and content changes) arrives in bursts during
+         * animations, scrolling and WebView tree rebuilds and is coalesced instead.
+         */
+        private val IMMEDIATE_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+        )
 
-    private enum class CommandAction {
-        FixGrammar,
-        RewriteWithAi
+        private val FOCUS_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED
+        )
+
+        /** Windows that never host a dictation target and are not worth a round trip. */
+        private val SKIPPED_WINDOW_TYPES = setOf(
+            AccessibilityWindowInfo.TYPE_SYSTEM,
+            AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY,
+            AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER
+        )
     }
 
     private enum class BubbleDismissTarget {
@@ -158,6 +212,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private data class SelectionCommandTarget(
         val selectedText: String,
         val contextBefore: String
+    )
+
+    /** The text being edited in the rewrite panel, from the wand tap to apply or close. */
+    private class RewriteSession(
+        val originalText: String,
+        val contextBefore: String,
+        val targetNode: AccessibilityNodeInfo?,
+        var workingText: String,
+        var job: Job? = null
     )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -183,7 +246,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private var recordingState: OverlayRecordingState = OverlayRecordingState.Idle
     private var stopRequestedDuringStart = false
-    private var recordingMode: RecordingMode = RecordingMode.Dictation
     private val overlayWorkflowFence = ReplaceableDeliveryFence()
     private var audioWorkflowLease: AudioAttemptLease? = null
     private var audioWorkflowJob: Job? = null
@@ -192,36 +254,32 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var autoStopOnSilenceEnabled = false
     private var bubbleAnimationJob: Job? = null
     private var pendingHideJob: Job? = null
+    private var overlayRefreshJob: Job? = null
     private var focusRecoveryJob: Job? = null
     private var isServiceDestroyed = false
     private var stickyEditableFocusArmed = false
     private var dictationTargetNode: AccessibilityNodeInfo? = null
-    private var activeCommandAction: CommandAction? = null
-    private var pendingRewriteTarget: SelectionCommandTarget? = null
-    private var fixGrammarButton: ImageButton? = null
-    private var rewriteButton: ImageButton? = null
-
-    private var bubbleIdleColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var bubbleDictationActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var bubbleRewriteActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var bubbleFixActiveColor: Int = OverlayBubblePreferences.DEFAULT_COLOR
-    private var commandChipIdleTextColor: Int = Color.WHITE
-    private var commandChipIdleBackgroundColor: Int = 0x24FFFFFF
-    private var commandChipFixTextColor: Int = Color.WHITE
-    private var commandChipFixBackgroundColor: Int = 0xFFFF6300.toInt()
-    private var commandChipRewriteTextColor: Int = Color.WHITE
-    private var commandChipRewriteBackgroundColor: Int = 0xFFFF6300.toInt()
+    private var wandButton: ImageView? = null
+    private var wandAbsorbing = false
+    private var rewritePanel: OverlayRewritePanelView? = null
+    private var rewritePanelParams: WindowManager.LayoutParams? = null
+    private var isRewritePanelAttached = false
+    private var rewriteSession: RewriteSession? = null
+    /** Where the bubble sat before it was moved up out of the panel's way; null when not moved. */
 
     private var lastFocusedPackage: String? = null
     private var lastDictatedText: String = ""
+    /** Exact keyboard signal when "display over other apps" is granted; null reports fall back to the window list. */
+    private var keyboardProbe: KeyboardProbeWindow? = null
+    /** Last keyboard state seen in the accessibility window list, to spot changes between coalesced passes. */
+    private var lastInputMethodWindowVisible = false
 
     private val bubblePrefs by lazy { OverlayBubblePreferences.prefs(this) }
-    private var bubblePrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        registerBubblePreferenceListener()
+        keyboardProbe = KeyboardProbeWindow(this, windowManager, ::onKeyboardProbeChanged).also { it.attach() }
 
         serviceScope.launch {
             appPreferences.autoStopOnSilenceEnabled.collectLatest { enabled ->
@@ -239,13 +297,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     recordingState != OverlayRecordingState.Idle
                 ) {
                     failedToken ?: return@collect
-                    val failedMode = recordingMode
                     Toast.makeText(
                         this@OverlayDictationAccessibilityService,
                         event.message,
                         Toast.LENGTH_LONG
                     ).show()
-                    resetAfterRecording(failedMode, failedToken)
+                    resetAfterRecording(failedToken)
                 }
             }
         }
@@ -269,62 +326,61 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.eventType !in TRACKED_EVENT_TYPES) return
+        val eventType = event.eventType
+        if (eventType !in TRACKED_EVENT_TYPES) return
 
         lastFocusedPackage = event.packageName?.toString()
-        refreshOverlayVisibility(event.source)
-        scheduleFocusRecoveryIfNeeded(force = isPotentialEditableFocusEvent(event))
+
+        // Every overlay refresh makes synchronous round trips into the focused app, and
+        // this service runs on the app's main thread. Reacting to each event of a burst
+        // stalls both the queried app and our own UI, so only direct user interaction is
+        // handled immediately; window and content changes are coalesced into one pass.
+        if (eventType in IMMEDIATE_EVENT_TYPES) {
+            overlayRefreshJob?.cancel()
+            overlayRefreshJob = null
+            val source = event.source
+            refreshOverlayVisibility(source)
+            scheduleFocusRecoveryIfNeeded(
+                force = eventType in FOCUS_EVENT_TYPES && source?.isEditable == true
+            )
+            return
+        }
+
+        // The keyboard window coming or going is the one window change the bubble must
+        // follow at once; other window bursts still wait for the coalesced pass.
+        if (eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED && keyboardProbe?.keyboardVisible == null) {
+            val inputMethodVisible = inputMethodBounds() != null
+            if (inputMethodVisible != lastInputMethodWindowVisible) {
+                lastInputMethodWindowVisible = inputMethodVisible
+                overlayRefreshJob?.cancel()
+                overlayRefreshJob = null
+                refreshOverlayVisibility(null)
+                scheduleFocusRecoveryIfNeeded()
+                return
+            }
+        }
+
+        if (overlayRefreshJob?.isActive == true) return
+        overlayRefreshJob = serviceScope.launch {
+            delay(EVENT_COALESCE_MS)
+            overlayRefreshJob = null
+            refreshOverlayVisibility(null)
+            scheduleFocusRecoveryIfNeeded()
+        }
     }
 
     override fun onInterrupt() {
         cancelOverlayAudio("Dictation was interrupted")
         dictationTargetNode = null
+        dismissRewritePanel()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
+        overlayRefreshJob?.cancel()
+        overlayRefreshJob = null
         focusRecoveryJob?.cancel()
         focusRecoveryJob = null
-    }
-
-    private fun registerBubblePreferenceListener() {
-        if (bubblePrefsListener != null) return
-
-        bubblePrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == OverlayBubblePreferences.COLOR_KEY) {
-                serviceScope.launch {
-                    refreshBubbleBrandColor()
-                    updateBubbleUi()
-                }
-            }
-        }
-        bubblePrefs.registerOnSharedPreferenceChangeListener(bubblePrefsListener)
-    }
-
-    private fun unregisterBubblePreferenceListener() {
-        val listener = bubblePrefsListener ?: return
-        bubblePrefs.unregisterOnSharedPreferenceChangeListener(listener)
-        bubblePrefsListener = null
-    }
-
-    private fun refreshBubbleBrandColor() {
-        val color = OverlayBubblePreferences.getResolvedBubbleColor(this)
-        bubbleIdleColor = color
-        bubbleDictationActiveColor = color
-        bubbleRewriteActiveColor = color
-        bubbleFixActiveColor = color
-        refreshCommandActionColors(color)
-        updateCommandActionButtons()
-    }
-
-    private fun refreshCommandActionColors(accent: Int) {
-        val onAccent = preferredOnColor(accent)
-        commandChipIdleTextColor = onAccent
-        commandChipIdleBackgroundColor = accent
-        commandChipFixTextColor = onAccent
-        commandChipFixBackgroundColor = accent
-        commandChipRewriteTextColor = onAccent
-        commandChipRewriteBackgroundColor = accent
     }
 
     override fun onDestroy() {
@@ -340,25 +396,52 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         )
         serviceScope.cancel()
         dictationTargetNode = null
+        dismissRewritePanel()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
         focusRecoveryJob?.cancel()
         focusRecoveryJob = null
-        unregisterBubblePreferenceListener()
+        keyboardProbe?.detach()
+        keyboardProbe = null
+    }
+
+    /** The probe saw the keyboard appear or leave: refresh at once, no coalescing. */
+    private fun onKeyboardProbeChanged() {
+        if (isServiceDestroyed) return
+        overlayRefreshJob?.cancel()
+        overlayRefreshJob = null
+        refreshOverlayVisibility(null)
+        scheduleFocusRecoveryIfNeeded()
+    }
+
+    /**
+     * Whether the keyboard is showing: the probe window when it has proven itself on this
+     * device, else the accessibility window list.
+     */
+    private fun isKeyboardVisible(): Boolean {
+        val probe = keyboardProbe
+        // The permission can be granted after the service connected; attach lazily.
+        if (probe != null && !probe.isAttached) probe.attach()
+        return probe?.keyboardVisible ?: (inputMethodBounds() != null)
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
         if (isServiceDestroyed) return
-        if (shouldShowBubble(source)) {
+        // Resolve the focused field once per pass; the bubble and the wand both decide
+        // from the same node.
+        val node = resolveFocusedEditableNode(source)
+        val keyboardVisible = isKeyboardVisible()
+        if (shouldShowBubble(source, node, keyboardVisible)) {
             bubbleShouldBeVisible = true
             showBubble()
             // IME window-list updates can arrive after the accessibility event.
-            // Reposition only when fresh keyboard bounds are available; never
-            // remove the bubble just because the IME is temporarily absent.
-            if (inputMethodBounds() != null) updateBubblePosition()
-            updateCommandActionsVisibility(source)
+            // Reposition only when fresh keyboard bounds are available.
+            if (keyboardVisible) updateBubblePosition()
+            // The panel follows the keyboard in both directions, including when it hides.
+            updateRewritePanelPosition()
+            updateCommandActionsVisibility(node)
             return
         }
 
@@ -378,9 +461,19 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
 
         if (pendingHideJob?.isActive == true) return
+        // A field that still has focus while the keyboard is gone gets a longer grace
+        // period: the IME window in the accessibility list often disappears briefly while
+        // it animates or switches. The probe window does not flap, so it needs only the
+        // normal debounce.
+        val keyboardGone = !isKeyboardVisible()
+        val hideDelayMs = when {
+            keyboardGone && keyboardProbe?.keyboardVisible != null -> BUBBLE_HIDE_DEBOUNCE_MS
+            keyboardGone && resolveFocusedEditableNode(null) != null -> KEYBOARD_HIDE_GRACE_MS
+            else -> BUBBLE_HIDE_DEBOUNCE_MS
+        }
         pendingHideJob = serviceScope.launch {
-            delay(BUBBLE_HIDE_DEBOUNCE_MS)
-            if (hasEditableDictationTarget(null) && !isBubbleSuppressed()) {
+            delay(hideDelayMs)
+            if (shouldShowBubble(null)) {
                 showBubble()
                 return@launch
             }
@@ -397,12 +490,18 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         pendingHideJob = null
     }
 
-    private fun shouldShowBubble(source: AccessibilityNodeInfo?): Boolean {
-        // The editable target owns bubble visibility. The IME is an independent
-        // window and may disappear briefly while it animates or switches; using
-        // it as a hard visibility gate causes the bubble to flicker or vanish.
-        if (!hasEditableDictationTarget(source)) return false
+    private fun shouldShowBubble(
+        source: AccessibilityNodeInfo?,
+        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source),
+        keyboardVisible: Boolean = isKeyboardVisible()
+    ): Boolean {
+        if (!hasEditableDictationTarget(source, node, keyboardVisible)) return false
         if (isBubbleSuppressed()) return false
+        // The IME window may disappear briefly while it animates or switches, so this
+        // is never acted on immediately: hides go through scheduleDeferredHide's grace.
+        if (!keyboardVisible && bubbleNeedsKeyboard(recordingState, hasOverlayWorkflow(), rewriteSession != null)) {
+            return false
+        }
         return true
     }
 
@@ -425,30 +524,24 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun isPotentialEditableFocusEvent(event: AccessibilityEvent): Boolean {
-        if (
-            event.eventType != AccessibilityEvent.TYPE_VIEW_FOCUSED &&
-            event.eventType != AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED &&
-            event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED
-        ) {
-            return false
-        }
-        return event.source?.isEditable == true
-    }
-
     /**
      * Editable-focus check with a sticky fallback. WebView-backed fields (LinkedIn,
      * Chrome, in-app browsers) drop FOCUS_INPUT for seconds while their virtual
      * accessibility tree rebuilds, so a failed lookup is not evidence the field was
      * left. Once an eligible field has been seen, the target is considered present while
-     * the keyboard catches up, until the keyboard closes or a password field takes focus.
+     * the keyboard is still up. The keyboard closing or a password field taking focus
+     * ends the fallback; without that, a bubble that has appeared once would never leave.
      */
-    private fun hasEditableDictationTarget(source: AccessibilityNodeInfo?): Boolean {
-        if (resolveFocusedEditableNode(source) != null) {
+    private fun hasEditableDictationTarget(
+        source: AccessibilityNodeInfo?,
+        node: AccessibilityNodeInfo? = resolveFocusedEditableNode(source),
+        keyboardVisible: Boolean = isKeyboardVisible()
+    ): Boolean {
+        if (node != null) {
             stickyEditableFocusArmed = true
             return true
         }
-        if (isPasswordFieldFocused(source)) {
+        if (isPasswordFieldFocused(source) || !keyboardVisible) {
             stickyEditableFocusArmed = false
             return false
         }
@@ -491,7 +584,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun keyboardTop(): Int {
-        return inputMethodBounds()?.top ?: resources.displayMetrics.heightPixels
+        return inputMethodBounds()?.top
+            ?: keyboardProbe?.keyboardTop
+            ?: resources.displayMetrics.heightPixels
     }
 
     private fun dismissAreaTop(): Int {
@@ -504,19 +599,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .filter { window -> window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
             .mapNotNull { window ->
                 Rect().also { window.getBoundsInScreen(it) }
-                    .takeIf { bounds -> isVisibleInputMethodWindow(window, bounds) }
+                    .takeIf { bounds -> isVisibleInputMethodWindow(bounds) }
             }
             .minByOrNull { bounds -> bounds.top }
     }
 
-    private fun isVisibleInputMethodWindow(window: AccessibilityWindowInfo, bounds: Rect): Boolean {
-        if (bounds.height() <= 0 || bounds.width() <= 0) return false
-        if (window.isActive || window.isFocused) return true
-
-        val root = window.root ?: return false
-        @Suppress("DEPRECATION")
-        root.recycle()
-        return true
+    /**
+     * An input-method window with real bounds is a keyboard on screen. Keyboards are
+     * neither active nor focused windows, and many expose no accessibility tree at all
+     * (incognito and password modes, floating layouts, some third-party keyboards), so
+     * neither of those is evidence either way; asking for the root was a round trip that
+     * hid the bubble exactly when such a keyboard was up.
+     */
+    private fun isVisibleInputMethodWindow(bounds: Rect): Boolean {
+        return bounds.height() > 0 && bounds.width() > 0
     }
 
     private fun isBubbleSuppressed(): Boolean {
@@ -565,10 +661,20 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         @Suppress("DEPRECATION")
         sourceFocused?.recycle()
 
-        // Search across all windows. On foldables (Flip/Fold), the target app
+        // The active window answers with a single round trip; try it before fetching
+        // the root of every window on screen.
+        val activeFocused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (activeFocused != null && isEligibleEditableNode(activeFocused)) {
+            return activeFocused
+        }
+        @Suppress("DEPRECATION")
+        activeFocused?.recycle()
+
+        // Search across the remaining windows. On foldables (Flip/Fold), the target app
         // might be in a different window type when closed/on cover screen.
         val windows = windows
         for (window in windows) {
+            if (window.type in SKIPPED_WINDOW_TYPES) continue
             val root = window.root ?: continue
             val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             if (focused != null && isEligibleEditableNode(focused)) {
@@ -580,11 +686,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             root.recycle()
             @Suppress("DEPRECATION")
             focused?.recycle()
-        }
-
-        val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (focused != null && isEligibleEditableNode(focused)) {
-            return focused
         }
 
         return null
@@ -692,6 +793,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         } finally {
             isBubbleAttached = false
             bubble.alpha = 1f
+            dismissRewritePanel()
             hideCommandActions()
             stopBubbleAnimation()
         }
@@ -700,23 +802,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun ensureBubbleCreated() {
         if (bubbleView != null) return
 
-        refreshBubbleBrandColor()
-
         bubbleView = OverlayMicButtonView(this).apply {
-            elevation = dp(8).toFloat()
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             isHapticFeedbackEnabled = true
-            setColors(bubbleIdleColor, resolveBubbleActiveColor())
+            setPalette(overlaySurfaceColor(), overlayOnSurfaceColor())
             setState(OverlayMicButtonView.State.Idle)
         }
 
-        val size = dp(BUBBLE_SIZE_DP)
+        val width = currentBubbleWidthPx()
+        val height = currentBubbleHeightPx()
+        // A position saved with an older window size or margin is pulled back inside the edges.
         val startX = bubblePrefs.getInt(OverlayBubblePreferences.X_KEY, defaultBubbleX())
+            .coerceIn(dp(BUBBLE_MARGIN_DP), maxBubbleX(width))
         val startY = bubblePrefs.getInt(OverlayBubblePreferences.Y_KEY, defaultBubbleY())
 
         bubbleParams = WindowManager.LayoutParams(
-            size,
-            size,
+            width,
+            height,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -735,26 +837,23 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (commandActionsView != null) return
 
         val containerPadding = dp(COMMAND_ACTION_CONTAINER_PADDING_DP)
-        val buttonGap = dp(COMMAND_ACTION_GAP_DP)
         val buttonSize = dp(COMMAND_ACTION_BUTTON_SIZE_DP)
-        refreshCommandActionColors(bubbleIdleColor)
-        bubbleFixActiveColor = bubbleDictationActiveColor
-        bubbleRewriteActiveColor = bubbleDictationActiveColor
+        val label = getString(R.string.overlay_action_edit_with_ai)
 
-        fixGrammarButton = createCommandActionButton(
-            label = getString(R.string.overlay_action_fix_grammar),
-            iconRes = R.drawable.ic_cleanup,
-            textColor = commandChipIdleTextColor,
-            backgroundColor = commandChipIdleBackgroundColor,
-            onClick = { executeSelectionCommand(COMMAND_CLEANUP_ID, CommandAction.FixGrammar) }
-        )
-        rewriteButton = createCommandActionButton(
-            label = getString(R.string.overlay_action_rewrite_ai),
-            iconRes = R.drawable.ic_command_mic,
-            textColor = commandChipIdleTextColor,
-            backgroundColor = commandChipIdleBackgroundColor,
-            onClick = { startRewriteInstructionRecording() }
-        )
+        val wand = ImageView(this).apply {
+            styleWandButton(this)
+            contentDescription = label
+            tooltipText = label
+            isClickable = true
+            isFocusable = true
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            isHapticFeedbackEnabled = true
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                openRewritePanel()
+            }
+        }
+        wandButton = wand
 
         commandActionsView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -763,14 +862,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             clipChildren = false
             clipToPadding = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-
-            addView(fixGrammarButton, LinearLayout.LayoutParams(buttonSize, buttonSize))
-            addView(rewriteButton, LinearLayout.LayoutParams(
-                buttonSize,
-                buttonSize
-            ).apply {
-                leftMargin = buttonGap
-            })
+            addView(wand, LinearLayout.LayoutParams(buttonSize, buttonSize))
         }
 
         commandActionsParams = WindowManager.LayoutParams(
@@ -786,43 +878,30 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             y = defaultBubbleY()
             windowAnimations = 0
         }
-
-        updateCommandActionButtons()
-        updateBubbleUi()
     }
 
-    private fun createCommandActionButton(
-        label: String,
-        iconRes: Int,
-        textColor: Int,
-        backgroundColor: Int,
-        onClick: () -> Unit
-    ): ImageButton {
-        return ImageButton(this).apply {
-            setImageResource(iconRes)
-            imageTintList = ColorStateList.valueOf(textColor)
-            contentDescription = label
-            tooltipText = label
-            scaleType = ImageView.ScaleType.CENTER
-            minimumWidth = 0
-            minimumHeight = 0
-            isFocusable = true
-            setPadding(dp(15), dp(15), dp(15), dp(15))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            isHapticFeedbackEnabled = true
-            elevation = dp(6).toFloat()
-            background = commandActionBackground(backgroundColor, textColor)
-            setOnClickListener {
-                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                onClick()
-            }
-        }
+    /**
+     * Borderless secondary button: slightly translucent themed surface fill (same as the bubble),
+     * themed-black wand icon, standard shadow underneath.
+     */
+    private fun styleWandButton(view: ImageView) {
+        val padding = dp(COMMAND_ACTION_ICON_PADDING_DP)
+        val glyph = overlayOnSurfaceColor()
+        view.setImageResource(R.drawable.ic_command_mic)
+        view.imageTintList = ColorStateList.valueOf(glyph)
+        view.scaleType = ImageView.ScaleType.CENTER
+        view.setPadding(padding, padding, padding, padding)
+        view.elevation = dp(COMMAND_ACTION_ELEVATION_DP).toFloat()
+        view.background = circleBackground(
+            fillColor = withAlpha(overlaySurfaceColor(), OverlayMicButtonView.SURFACE_ALPHA),
+            contentColor = glyph
+        )
     }
 
-    private fun commandActionBackground(backgroundColor: Int, rippleColor: Int): RippleDrawable {
+    private fun circleBackground(fillColor: Int, contentColor: Int): RippleDrawable {
         val content = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(backgroundColor)
+            setColor(fillColor)
         }
         val mask = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -830,43 +909,56 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         val surfaceInset = dp(4)
         return RippleDrawable(
-            ColorStateList.valueOf(withAlpha(rippleColor, 0.24f)),
+            ColorStateList.valueOf(withAlpha(contentColor, COMMAND_ACTION_RIPPLE_ALPHA)),
             InsetDrawable(content, surfaceInset),
             InsetDrawable(mask, surfaceInset)
         )
     }
 
-    private fun updateCommandActionsVisibility(source: AccessibilityNodeInfo?) {
+    private fun overlaySurfaceColor(): Int = resolveThemeColor(
+        android.R.attr.colorBackgroundFloating,
+        resolveThemeColor(android.R.attr.colorBackground, 0xFF1A1A1A.toInt())
+    )
+
+    /** Themed black for glyphs: the theme's primary text colour made opaque over the surface. */
+    private fun overlayOnSurfaceColor(): Int {
+        val text = resolveThemeColor(android.R.attr.textColorPrimary, Color.WHITE)
+        val surface = overlaySurfaceColor()
+        val alpha = Color.alpha(text) / 255f
+        fun mix(channel: (Int) -> Int) = (channel(text) * alpha + channel(surface) * (1f - alpha)).toInt().coerceIn(0, 255)
+        return Color.rgb(mix(Color::red), mix(Color::green), mix(Color::blue))
+    }
+
+
+    private fun updateCommandActionsVisibility(node: AccessibilityNodeInfo?) {
         if (!isBubbleAttached) {
             hideCommandActions()
             return
         }
+        // The wand is mid-absorb into the panel; let that animation finish.
+        if (wandAbsorbing) return
 
-        if (recordingState != OverlayRecordingState.Idle) {
-            if (activeCommandAction != null) {
-                showCommandActions()
-            } else {
-                hideCommandActions()
-            }
-            updateCommandActionButtons()
-            return
-        }
-
-        val node = resolveFocusedEditableNode(source)
-        if (node == null) {
-            hideCommandActions()
-            return
-        }
-
-        val snapshot = captureEditableTextSnapshot(node)
-
-        val hasSelection = snapshot.selectionEnd > snapshot.selectionStart && snapshot.text.isNotBlank()
-        if (hasSelection) {
+        val workflowActive = hasOverlayWorkflow()
+        // The panel counts as open until its window is gone: the session is cleared when
+        // the close or apply animation starts, and a wand re-added during that animation
+        // would land on top of the withering panel.
+        val panelOpen = rewriteSession != null || isRewritePanelAttached
+        // Only inspect the field when the wand could be shown at all.
+        val hasSelection = !panelOpen &&
+            canStartSelectionCommand(recordingState, workflowActive) &&
+            hasSelectedEditableText(node)
+        if (shouldShowWandButton(recordingState, workflowActive, hasSelection, panelOpen)) {
             showCommandActions()
         } else {
             hideCommandActions()
         }
-        updateCommandActionButtons()
+    }
+
+    private fun hasSelectedEditableText(node: AccessibilityNodeInfo?): Boolean {
+        node ?: return false
+        val snapshot = captureEditableTextSnapshot(node)
+        if (snapshot.selectionEnd <= snapshot.selectionStart) return false
+        return snapshot.text.substring(snapshot.selectionStart, snapshot.selectionEnd).isNotBlank()
     }
 
     private fun showCommandActions() {
@@ -874,23 +966,24 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val actions = commandActionsView ?: return
         val params = commandActionsParams ?: return
         if (!isBubbleAttached) return
+        // Never stack the wand over a panel that is still on screen.
+        if (isRewritePanelAttached) return
 
         if (isCommandActionsAttached) {
-            actions.alpha = 1f
             updateCommandActionsPosition()
-            actions.post { updateCommandActionsPosition() }
-            updateCommandActionButtons()
             return
         }
 
         try {
-            actions.alpha = 1f
+            actions.alpha = 0f
+            wandButton?.let(::styleWandButton)
             windowManager.addView(actions, params)
             isCommandActionsAttached = true
             updateCommandActionsPosition()
             actions.post { updateCommandActionsPosition() }
-            updateCommandActionButtons()
+            actions.animate().alpha(1f).setDuration(COMMAND_ACTIONS_FADE_IN_MS).start()
         } catch (e: Exception) {
+            actions.alpha = 1f
             Log.w(TAG, "Failed to attach command actions overlay", e)
         }
     }
@@ -905,6 +998,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         if (!isCommandActionsAttached) return
         val actions = commandActionsView ?: return
         try {
+            actions.animate().cancel()
+            wandButton?.animate()?.cancel()
             windowManager.removeView(actions)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to remove command actions overlay", e)
@@ -1044,14 +1139,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         setDismissZoneState(
             view = dismissSnoozeZone,
             selected = target == BubbleDismissTarget.Snooze,
-            selectedColor = bubbleRewriteActiveColor,
+            selectedColor = overlayOnSurfaceColor(),
             idleColor = idleZoneColor,
             idleTextColor = onSurfaceColor
         )
         setDismissZoneState(
             view = dismissHideZone,
             selected = target == BubbleDismissTarget.Hide,
-            selectedColor = bubbleDictationActiveColor,
+            selectedColor = overlayOnSurfaceColor(),
             idleColor = idleZoneColor,
             idleTextColor = onSurfaceColor
         )
@@ -1220,7 +1315,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private fun onBubbleTapped() {
         hideDismissActions()
         when (recordingState) {
-            OverlayRecordingState.Idle -> startRecording(mode = RecordingMode.Dictation)
+            OverlayRecordingState.Idle -> startRecording()
             OverlayRecordingState.Recording -> stopRecording(discard = false)
             OverlayRecordingState.Processing -> Unit
         }
@@ -1258,6 +1353,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             windowManager.updateViewLayout(bubble, params)
             updateCommandActionsPosition()
             updateDismissActionsPosition()
+            updateRewritePanelPosition()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update bubble position", e)
         }
@@ -1287,81 +1383,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .putInt(OverlayBubblePreferences.X_KEY, x)
             .putInt(OverlayBubblePreferences.Y_KEY, y)
             .apply()
-    }
-
-    private fun executeSelectionCommand(commandId: String, action: CommandAction) {
-        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
-
-        val target = resolveSelectionCommandTarget()
-        if (target == null) {
-            hideCommandActions()
-            return
-        }
-
-        dictationTargetNode = resolveFocusedEditableNode(null)
-        activeCommandAction = action
-        recordingMode = RecordingMode.Dictation
-        recordingState = OverlayRecordingState.Processing
-        updateBubbleUi()
-        showCommandActions()
-
-        serviceScope.launch {
-            try {
-                subscriptionRepository.checkCanTranscribe().onFailure { error ->
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        error.message ?: getString(R.string.usage_limit_reached),
-                        Toast.LENGTH_LONG
-                    ).show()
-                    return@launch
-                }
-
-                val command = resolveCommand(commandId)
-                if (command == null) {
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        R.string.overlay_command_unavailable,
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    return@launch
-                }
-
-                val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
-                val result = CommandClient.execute(
-                    command = command,
-                    targetText = target.selectedText,
-                    context = target.contextBefore,
-                    additionalInstructions = contextRules
-                )
-                result.onSuccess { transformed ->
-                    if (transformed.isBlank()) return@onSuccess
-                    val applied = replaceSelectionOrMatchedText(target.selectedText, transformed)
-                    if (!applied) {
-                        Toast.makeText(
-                            this@OverlayDictationAccessibilityService,
-                            R.string.overlay_command_apply_failed,
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    } else {
-                        lastDictatedText = transformed
-                        subscriptionRepository.recordWords(transformed)
-                    }
-                }.onFailure { error ->
-                    Log.e(TAG, "Command '${command.name}' failed", error)
-                    Toast.makeText(
-                        this@OverlayDictationAccessibilityService,
-                        getString(R.string.overlay_command_failed, command.name),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            } finally {
-                recordingState = OverlayRecordingState.Idle
-                activeCommandAction = null
-                dictationTargetNode = null
-                updateBubbleUi()
-                refreshOverlayVisibility(null)
-            }
-        }
     }
 
     private suspend fun resolveCommand(commandId: String): Command? {
@@ -1442,39 +1463,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startRewriteInstructionRecording() {
-        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
-
-        val target = resolveSelectionCommandTarget()
-        if (target == null) {
-            hideCommandActions()
-            return
-        }
-
-        pendingRewriteTarget = target
-        activeCommandAction = CommandAction.RewriteWithAi
-        startRecording(mode = RecordingMode.RewriteInstruction)
-    }
-
-    private fun startRecording(mode: RecordingMode) {
+    private fun startRecording() {
         if (recordingState != OverlayRecordingState.Idle) return
 
-        if (mode == RecordingMode.Dictation) {
-            pendingRewriteTarget = null
-            activeCommandAction = null
-            hideCommandActions()
-        } else {
-            showCommandActions()
-            updateCommandActionButtons()
-        }
+        // Starting dictation is how the user ignores an open edit panel.
+        dismissRewritePanel()
+        hideCommandActions()
 
         val focusedNode = resolveFocusedEditableNode(null)
         if (focusedNode == null && !stickyEditableFocusArmed) {
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-                updateBubbleUi()
-            }
             Toast.makeText(this, "Focus a text field first", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1482,30 +1479,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // insert-time acquisition re-resolves with retries.
         dictationTargetNode = focusedNode
 
-        if (mode == RecordingMode.RewriteInstruction && pendingRewriteTarget == null) {
-            activeCommandAction = null
-            Toast.makeText(this, R.string.overlay_command_apply_failed, Toast.LENGTH_SHORT).show()
-            updateBubbleUi()
-            return
-        }
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            if (mode == RecordingMode.RewriteInstruction) {
-                activeCommandAction = null
-                pendingRewriteTarget = null
-                updateBubbleUi()
-            }
             Toast.makeText(this, "Microphone permission is required", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val startSnapshot = if (mode == RecordingMode.Dictation) {
-            focusedNode?.let { captureEditableTextSnapshot(it) }
-        } else {
-            null
-        }
+        val startSnapshot = focusedNode?.let { captureEditableTextSnapshot(it) }
         val cursorContext = startSnapshot
             ?.text
             ?.take(startSnapshot.selectionStart)
@@ -1515,7 +1496,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         cancelDeliveryForReplacement()
         val token = overlayWorkflowFence.beginAudio()
-        recordingMode = mode
         stopRequestedDuringStart = false
         // Show recording immediately. Recorder initialization and settings
         // loading happen asynchronously below and must not present as a
@@ -1525,8 +1505,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         audioWorkflowJob = serviceScope.launch {
             try {
-                val contextRules = if (mode == RecordingMode.Dictation) {
-                    try {
+                val contextRules = try {
                         withTimeout(SETTINGS_SNAPSHOT_TIMEOUT_MS) {
                             appPreferences.getInstructionsForApp(contextPackageAtStart)
                         }
@@ -1537,7 +1516,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                                 "Your transcription settings could not be loaded. Try again.",
                                 Toast.LENGTH_LONG
                             ).show()
-                            resetAfterRecording(mode, token)
+                            resetAfterRecording(token)
                             return@launch
                         }
                         throw error
@@ -1547,12 +1526,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                             "Your transcription settings could not be loaded. Try again.",
                             Toast.LENGTH_LONG
                         ).show()
-                        resetAfterRecording(mode, token)
+                        resetAfterRecording(token)
                         return@launch
                     }
-                } else {
-                    null
-                }
                 val started = audioProcessingCoordinator.startCapture(
                     owner = AndroidAudioAttemptOwner.OVERLAY,
                     workflowToken = token,
@@ -1577,7 +1553,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         R.string.dictation_recording_not_saved,
                         Toast.LENGTH_LONG
                     ).show()
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                     return@launch
                 }
                 val lease = started.getOrThrow()
@@ -1595,7 +1571,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                             expectedWorkflowToken = token
                         )
                     }
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                     return@launch
                 }
 
@@ -1625,7 +1601,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         expectedLease = audioWorkflowLease,
                         expectedWorkflowToken = token
                     )
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                 }
                 throw error
             }
@@ -1634,7 +1610,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     private fun stopRecording(discard: Boolean) {
         if (recordingState != OverlayRecordingState.Recording) return
-        val mode = recordingMode
         val token = overlayWorkflowFence.currentToken() ?: return
         if (!ownsAudioPhase(token)) return
 
@@ -1645,7 +1620,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             stopRequestedDuringStart = true
             if (discard) {
                 audioWorkflowJob?.cancel()
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
             }
             return
         }
@@ -1660,7 +1635,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 expectedLease = audioWorkflowLease,
                 expectedWorkflowToken = token
             )
-            resetAfterRecording(mode, token)
+            resetAfterRecording(token)
             return
         }
 
@@ -1679,7 +1654,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                         R.string.dictation_recording_not_saved,
                         Toast.LENGTH_LONG
                     ).show()
-                    resetAfterRecording(mode, token)
+                    resetAfterRecording(token)
                     return@launch
                 }
             audioWorkflowLease = finalized.lease
@@ -1691,14 +1666,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 )
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
-                    if (mode == RecordingMode.RewriteInstruction) {
-                        R.string.overlay_command_no_instruction
-                    } else {
-                        R.string.dictation_no_speech_heard
-                    },
+                    R.string.dictation_no_speech_heard,
                     Toast.LENGTH_LONG
                 ).show()
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
                 return@launch
             }
 
@@ -1713,19 +1684,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     R.string.dictation_text_field_lost,
                     Toast.LENGTH_LONG
                 ).show()
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
                 return@launch
             }
 
             try {
-                when (mode) {
-                    RecordingMode.Dictation -> processRecording(finalized, token)
-                    RecordingMode.RewriteInstruction -> processRewriteInstructionRecording(
-                        finalized = finalized,
-                        target = pendingRewriteTarget,
-                        token = token
-                    )
-                }
+                processRecording(finalized, token)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -1736,7 +1700,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                     Toast.LENGTH_LONG
                 ).show()
             } finally {
-                resetAfterRecording(mode, token)
+                resetAfterRecording(token)
             }
         }
     }
@@ -1767,18 +1731,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         previous?.cancel(CancellationException("A new dictation replaced the previous delivery"))
     }
 
-    private fun resetAfterRecording(mode: RecordingMode, token: Long) {
+    private fun resetAfterRecording(token: Long) {
         if (!overlayWorkflowFence.finish(token)) return
         audioWorkflowJob = null
         deliveryJob = null
         audioWorkflowLease = null
         recordingState = OverlayRecordingState.Idle
         dictationTargetNode = null
-        if (mode == RecordingMode.RewriteInstruction) {
-            activeCommandAction = null
-            pendingRewriteTarget = null
-        }
-        recordingMode = RecordingMode.Dictation
         updateBubbleUi()
         refreshOverlayVisibility(null)
     }
@@ -1787,7 +1746,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val token = overlayWorkflowFence.currentToken() ?: return
         val lease = audioWorkflowLease
         val wasAudio = overlayWorkflowFence.currentPhase() == ReplaceableDeliveryFence.Phase.AUDIO
-        val mode = recordingMode
         audioWorkflowJob?.cancel()
         audioWorkflowJob = null
         deliveryJob?.cancel(CancellationException(reason))
@@ -1802,7 +1760,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 expectedWorkflowToken = token
             )
         }
-        resetAfterRecording(mode, token)
+        resetAfterRecording(token)
     }
 
     private suspend fun processRecording(finalized: FinalizedAndroidCapture, token: Long) {
@@ -1884,100 +1842,6 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 R.string.dictation_text_not_inserted,
                 Toast.LENGTH_LONG
             ).show()
-        }
-    }
-
-    private suspend fun processRewriteInstructionRecording(
-        finalized: FinalizedAndroidCapture,
-        target: SelectionCommandTarget?,
-        token: Long
-    ) {
-        val access = checkAccessForFinalizedRecording(finalized)
-        access.onFailure { error ->
-            audioProcessingCoordinator.failBeforeRecognition(
-                finalized,
-                error.message ?: "Transcription is not available right now. Your audio was saved."
-            )
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                error.message ?: getString(R.string.usage_limit_reached),
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-
-        if (target == null) {
-            audioProcessingCoordinator.failBeforeRecognition(
-                finalized,
-                "The selected text was no longer available. Your audio was saved."
-            )
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                R.string.overlay_command_apply_failed,
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val processing = audioProcessingCoordinator.processRecognition(finalized)
-            .getOrElse { error ->
-                Log.e(TAG, "Instruction transcription failed", error)
-                Toast.makeText(
-                    this@OverlayDictationAccessibilityService,
-                    error.message ?: "Transcription failed. Your audio is available in History.",
-                    Toast.LENGTH_LONG
-                ).show()
-                return
-            }
-        subscriptionRepository.recordUsageClaim(processing.usageClaimId)
-        if (!beginDeliveryPhase(token)) return
-
-        val instruction = processing.text
-        if (instruction.isBlank()) {
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                R.string.overlay_command_no_instruction,
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
-        if (!ownsDelivery(token)) return
-        val commandResult = CommandClient.executeInstruction(
-            instruction = instruction,
-            targetText = target.selectedText,
-            context = target.contextBefore,
-            additionalInstructions = contextRules
-        )
-        if (!ownsDelivery(token)) return
-
-        val transformed = commandResult.getOrElse { error ->
-            if (!ownsDelivery(token)) return
-            Log.e(TAG, "Rewrite instruction failed", error)
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                getString(R.string.overlay_command_failed, getString(R.string.overlay_action_rewrite_ai)),
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-        if (transformed.isBlank() || !ownsDelivery(token)) return
-
-        val applied = replaceSelectionOrMatchedText(
-            targetText = target.selectedText,
-            replacement = transformed,
-            requiredDeliveryToken = token
-        )
-        if (!ownsDelivery(token)) return
-        if (!applied) {
-            Toast.makeText(
-                this@OverlayDictationAccessibilityService,
-                R.string.overlay_command_apply_failed,
-                Toast.LENGTH_SHORT
-            ).show()
-        } else {
-            lastDictatedText = transformed
         }
     }
 
@@ -2393,63 +2257,350 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .lowercase()
     }
 
-    private fun resolveBubbleActiveColor(): Int {
-        return when (activeCommandAction) {
-            CommandAction.FixGrammar -> bubbleFixActiveColor
-            CommandAction.RewriteWithAi -> bubbleRewriteActiveColor
-            null -> bubbleDictationActiveColor
+    // MARK: - Rewrite panel
+
+    /**
+     * Opens the panel from the wand: the wand swells and fades while the panel blooms
+     * out of the wand's centre. The selection is captured now; the panel then edits its
+     * own working copy until the user applies or closes it.
+     */
+    private fun openRewritePanel() {
+        if (rewriteSession != null || !isBubbleAttached) return
+        if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
+
+        val target = resolveSelectionCommandTarget()
+        if (target == null) {
+            hideCommandActions()
+            return
+        }
+
+        val session = RewriteSession(
+            originalText = target.selectedText,
+            contextBefore = target.contextBefore,
+            targetNode = resolveFocusedEditableNode(null),
+            workingText = target.selectedText
+        )
+        rewriteSession = session
+        val wandCenter = wandCenterOnScreen()
+
+        val panel = OverlayRewritePanelView(this).apply {
+            setText(session.workingText, animate = false)
+            onAction = { action -> runRewriteAction(action) }
+            onClose = { closeRewritePanel() }
+            onApply = { applyRewritePanel() }
+        }
+        val margin = dp(REWRITE_PANEL_MARGIN_DP)
+        val params = WindowManager.LayoutParams(
+            (resources.displayMetrics.widthPixels - 2 * margin).coerceAtLeast(margin),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = margin
+            y = margin
+            windowAnimations = 0
+        }
+        rewritePanel = panel
+        rewritePanelParams = params
+        updateRewritePanelPosition()
+
+        try {
+            panel.alpha = 0f
+            windowManager.addView(panel, params)
+            isRewritePanelAttached = true
+            setBubbleHiddenByPanel(true)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach rewrite panel overlay", e)
+            rewritePanel = null
+            rewritePanelParams = null
+            rewriteSession = null
+            return
+        }
+
+        absorbWandButton()
+        // Bloom once the panel has a size: the pivot is the wand's centre in panel coordinates.
+        panel.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                panel.viewTreeObserver.removeOnPreDrawListener(this)
+                if (rewritePanel !== panel) return true
+                updateRewritePanelPosition()
+                panel.playOpen(
+                    pivotX = (wandCenter[0] - params.x).toFloat().coerceIn(0f, panel.width.toFloat()),
+                    pivotY = (wandCenter[1] - params.y).toFloat().coerceIn(0f, panel.height.toFloat())
+                )
+                return true
+            }
+        })
+        announceOverlayState(getString(R.string.overlay_panel_opened))
+    }
+
+    private fun wandCenterOnScreen(): IntArray {
+        val location = IntArray(2)
+        val wand = wandButton
+        if (wand != null && isCommandActionsAttached && wand.width > 0) {
+            wand.getLocationOnScreen(location)
+            location[0] += wand.width / 2
+            location[1] += wand.height / 2
+        } else {
+            val bubble = bubbleParams
+            location[0] = (bubble?.x ?: 0) + currentBubbleWidthPx() / 2
+            location[1] = (bubble?.y ?: 0) + currentBubbleHeightPx() / 2
+        }
+        return location
+    }
+
+    /** The wand swells and fades as the panel takes over, then its window goes away. */
+    private fun absorbWandButton() {
+        val wand = wandButton
+        if (wand == null || !isCommandActionsAttached) {
+            hideCommandActions()
+            return
+        }
+        wandAbsorbing = true
+        wand.animate().cancel()
+        wand.animate()
+            .scaleX(WAND_ABSORB_SCALE)
+            .scaleY(WAND_ABSORB_SCALE)
+            .alpha(0f)
+            .setDuration(WAND_ABSORB_MS)
+            .setInterpolator(AccelerateInterpolator())
+            .withEndAction {
+                wandAbsorbing = false
+                hideCommandActions()
+                wand.scaleX = 1f
+                wand.scaleY = 1f
+                wand.alpha = 1f
+            }
+            .start()
+    }
+
+    /** Runs one action on the panel's working text. Actions chain on the current text. */
+    private fun runRewriteAction(action: RewriteAction) {
+        val session = rewriteSession ?: return
+        val panel = rewritePanel ?: return
+        if (session.job?.isActive == true) return
+
+        val label = getString(action.labelRes)
+        panel.setWorking(action)
+        announceOverlayState(getString(R.string.overlay_panel_working, label))
+        session.job = serviceScope.launch {
+            val result = try {
+                transformWorkingText(action, session)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                Result.failure(error)
+            }
+            if (rewriteSession !== session || rewritePanel !== panel) return@launch
+
+            val transformed = result.getOrNull()
+            if (transformed.isNullOrBlank()) {
+                val error = result.exceptionOrNull()
+                Log.e(TAG, "Rewrite action $action failed", error)
+                Toast.makeText(
+                    this@OverlayDictationAccessibilityService,
+                    error?.message ?: getString(R.string.overlay_command_failed, label),
+                    Toast.LENGTH_SHORT
+                ).show()
+                panel.setWorking(null)
+                return@launch
+            }
+
+            session.workingText = transformed
+            panel.setWorking(null)
+            panel.setText(transformed, animate = true)
+            panel.nod(action)
+            announceOverlayState(getString(R.string.overlay_panel_updated))
         }
     }
 
-    private fun updateCommandActionButtons() {
-        val hasActiveCommand = activeCommandAction != null
-        val workflowActive = hasOverlayWorkflow()
-        val isBusy = recordingState != OverlayRecordingState.Idle || workflowActive
-        val canTap = canStartSelectionCommand(recordingState, workflowActive)
-
-        val fixActive = hasActiveCommand && activeCommandAction == CommandAction.FixGrammar
-        val rewriteActive = hasActiveCommand && activeCommandAction == CommandAction.RewriteWithAi
-
-        applyCommandButtonStyle(
-            button = fixGrammarButton,
-            textColor = if (fixActive) commandChipFixTextColor else commandChipIdleTextColor,
-            backgroundColor = if (fixActive) commandChipFixBackgroundColor else commandChipIdleBackgroundColor,
-            enabled = canTap,
-            subdued = isBusy && !fixActive,
-            stateDescription = if (fixActive) getString(R.string.overlay_action_fix_grammar_state_active) else null
-        )
-        applyCommandButtonStyle(
-            button = rewriteButton,
-            textColor = if (rewriteActive) commandChipRewriteTextColor else commandChipIdleTextColor,
-            backgroundColor = if (rewriteActive) commandChipRewriteBackgroundColor else commandChipIdleBackgroundColor,
-            enabled = canTap,
-            subdued = isBusy && !rewriteActive,
-            stateDescription = when {
-                !rewriteActive -> null
-                recordingState == OverlayRecordingState.Recording -> {
-                    getString(R.string.overlay_action_rewrite_ai_state_listening)
-                }
-                else -> getString(R.string.overlay_action_rewrite_ai_state_processing)
+    private suspend fun transformWorkingText(action: RewriteAction, session: RewriteSession): Result<String> {
+        subscriptionRepository.checkCanTranscribe().onFailure { error ->
+            return Result.failure(IllegalStateException(error.message ?: getString(R.string.usage_limit_reached), error))
+        }
+        val contextRules = appPreferences.getInstructionsForApp(lastFocusedPackage)
+        return when (action) {
+            RewriteAction.FixGrammar -> {
+                val command = resolveCommand(COMMAND_CLEANUP_ID)
+                    ?: return Result.failure(IllegalStateException(getString(R.string.overlay_command_unavailable)))
+                CommandClient.execute(
+                    command = command,
+                    targetText = session.workingText,
+                    context = session.contextBefore,
+                    additionalInstructions = contextRules
+                )
             }
-        )
+            RewriteAction.Rephrase,
+            RewriteAction.Shorter,
+            RewriteAction.Longer -> CommandClient.executeInstruction(
+                instruction = rewriteInstruction(action),
+                targetText = session.workingText,
+                context = session.contextBefore,
+                additionalInstructions = contextRules
+            )
+        }
     }
 
-    private fun applyCommandButtonStyle(
-        button: ImageButton?,
-        textColor: Int,
-        backgroundColor: Int,
-        enabled: Boolean,
-        subdued: Boolean,
-        stateDescription: String?
-    ) {
-        button ?: return
-        button.isEnabled = enabled
-        button.alpha = if (subdued) 0.55f else 1f
-        button.imageTintList = ColorStateList.valueOf(textColor)
-        button.background = commandActionBackground(backgroundColor, textColor)
-        ViewCompat.setStateDescription(button, stateDescription)
+    private fun rewriteInstruction(action: RewriteAction): String = when (action) {
+        RewriteAction.FixGrammar -> "Fix grammar, spelling and punctuation. Keep the wording and meaning."
+        RewriteAction.Rephrase -> "Rephrase the text naturally. Keep its meaning, tone and roughly its length."
+        RewriteAction.Shorter -> "Make the text noticeably shorter while keeping its meaning and tone."
+        RewriteAction.Longer -> "Make the text longer by expanding it naturally, keeping its meaning and tone."
     }
 
+    /** Apply: the panel settles towards the field while the working text replaces the selection. */
+    private fun applyRewritePanel() {
+        val session = rewriteSession ?: return
+        val panel = rewritePanel ?: return
+        if (session.job?.isActive == true) return
+        if (session.workingText == session.originalText) {
+            closeRewritePanel()
+            return
+        }
+
+        rewriteSession = null
+        if (isRewritePanelAttached) {
+            panel.playApply {
+                removeRewritePanel()
+                // The wand may return only now that the panel's window is gone.
+                refreshOverlayVisibility(null)
+            }
+        } else {
+            removeRewritePanel()
+        }
+
+        serviceScope.launch {
+            dictationTargetNode = session.targetNode
+            try {
+                val applied = replaceSelectionOrMatchedText(session.originalText, session.workingText)
+                if (applied) {
+                    lastDictatedText = session.workingText
+                    subscriptionRepository.recordWords(session.workingText)
+                } else {
+                    Toast.makeText(
+                        this@OverlayDictationAccessibilityService,
+                        R.string.overlay_command_apply_failed,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } finally {
+                if (recordingState == OverlayRecordingState.Idle) dictationTargetNode = null
+                refreshOverlayVisibility(null)
+            }
+        }
+    }
+
+    /** Close: wither back towards the wand's place without touching the field. */
+    private fun closeRewritePanel() {
+        val session = rewriteSession ?: return
+        session.job?.cancel()
+        rewriteSession = null
+        val panel = rewritePanel
+        val params = rewritePanelParams
+        if (panel == null || params == null || !isRewritePanelAttached) {
+            removeRewritePanel()
+            refreshOverlayVisibility(null)
+            return
+        }
+        val center = wandCenterOnScreen()
+        panel.playClose(
+            pivotX = (center[0] - params.x).toFloat().coerceIn(0f, panel.width.toFloat()),
+            pivotY = (center[1] - params.y).toFloat().coerceIn(0f, panel.height.toFloat())
+        ) {
+            removeRewritePanel()
+            refreshOverlayVisibility(null)
+        }
+    }
+
+    /** Immediate teardown, no animation: bubble hidden, dictation starting, service stopping. */
+    private fun dismissRewritePanel() {
+        rewriteSession?.job?.cancel()
+        rewriteSession = null
+        removeRewritePanel()
+    }
+
+    private fun removeRewritePanel() {
+        val panel = rewritePanel
+        rewritePanel = null
+        rewritePanelParams = null
+        panel ?: return
+        panel.cancelAnimations()
+        if (!isRewritePanelAttached) {
+            setBubbleHiddenByPanel(false)
+            return
+        }
+        try {
+            windowManager.removeViewImmediate(panel)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove rewrite panel overlay", e)
+        } finally {
+            isRewritePanelAttached = false
+            setBubbleHiddenByPanel(false)
+        }
+    }
+
+    /**
+     * Keeps the panel just above the keyboard, or at the bottom of the screen without one.
+     */
+    private fun updateRewritePanelPosition() {
+        val panel = rewritePanel ?: return
+        val params = rewritePanelParams ?: return
+        val margin = dp(REWRITE_PANEL_MARGIN_DP)
+        val panelHeight = panel.height.takeIf { it > 0 } ?: run {
+            panel.measure(
+                View.MeasureSpec.makeMeasureSpec(params.width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            )
+            panel.measuredHeight
+        }
+        params.y = (keyboardTop() - panelHeight - margin).coerceAtLeast(margin)
+        if (!isRewritePanelAttached) return
+        try {
+            windowManager.updateViewLayout(panel, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update rewrite panel position", e)
+        }
+    }
+
+    /**
+     * The panel spans the screen just above the keyboard, exactly where the bubble usually
+     * sits, so while the panel is open the bubble is hidden (invisible and untouchable,
+     * its window kept so nothing else changes) and shown again when the panel goes.
+     */
+    private fun setBubbleHiddenByPanel(hidden: Boolean) {
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        val wanted = if (hidden) View.INVISIBLE else View.VISIBLE
+        if (bubble.visibility == wanted) return
+        bubble.visibility = wanted
+        params.flags = if (hidden) {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        if (!isBubbleAttached) return
+        try {
+            windowManager.updateViewLayout(bubble, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to toggle bubble under the panel", e)
+        }
+    }
+
+    /**
+     * The bubble is hidden from accessibility services, so overlay state changes are
+     * announced explicitly.
+     */
+    private fun announceOverlayState(message: String) {
+        // Deprecated in favour of live regions, which need an accessible host view; the
+        // bubble deliberately has none, so a one-off announcement is the right tool here.
+        @Suppress("DEPRECATION")
+        (rewritePanel ?: bubbleView)?.announceForAccessibility(message)
+    }
+
+    /** Content colour for an accent-filled surface, matching the app theme. */
     private fun preferredOnColor(backgroundColor: Int): Int {
         fun linearChannel(channel: Int): Double {
             val normalized = channel / 255.0
@@ -2464,15 +2615,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             0.2126 * linearChannel(Color.red(backgroundColor)) +
                 0.7152 * linearChannel(Color.green(backgroundColor)) +
                 0.0722 * linearChannel(Color.blue(backgroundColor))
-        val whiteContrast = 1.05 / (luminance + 0.05)
-        val blackContrast = (luminance + 0.05) / 0.05
-        return if (whiteContrast >= blackContrast) Color.WHITE else Color.BLACK
+        // Same rule as the app theme's onColorFor: only light accents get dark content.
+        // Choosing by WCAG ratio instead would put black on the default orange, unlike
+        // the bubble and every themed screen, which draw white on it.
+        return if (luminance > 0.5) Color.BLACK else Color.WHITE
     }
 
     private fun updateBubbleUi() {
-        updateCommandActionButtons()
         val bubble = bubbleView ?: return
-        bubble.setColors(bubbleIdleColor, resolveBubbleActiveColor())
+        bubble.setPalette(overlaySurfaceColor(), overlayOnSurfaceColor())
         // Keep the screen awake while dictation is recording or processing
         bubble.keepScreenOn = recordingState != OverlayRecordingState.Idle
 
@@ -2525,8 +2676,37 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 windowManager.removeViewImmediate(bubble)
                 windowManager.addView(bubble, params)
                 updateCommandActionsPosition()
+                restackAboveBubble()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to update bubble overlay size", e)
+            }
+        }
+    }
+
+    /**
+     * Overlay windows stack in the order they were added, so re-adding the bubble puts it
+     * on top of the wand and the panel. Both must stay above the bubble: re-add whichever
+     * is attached so the stack is bubble, wand, panel again.
+     */
+    private fun restackAboveBubble() {
+        val actions = commandActionsView
+        val actionsParams = commandActionsParams
+        if (isCommandActionsAttached && actions != null && actionsParams != null) {
+            try {
+                windowManager.removeViewImmediate(actions)
+                windowManager.addView(actions, actionsParams)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to restack command actions overlay", e)
+            }
+        }
+        val panel = rewritePanel
+        val panelParams = rewritePanelParams
+        if (isRewritePanelAttached && panel != null && panelParams != null) {
+            try {
+                windowManager.removeViewImmediate(panel)
+                windowManager.addView(panel, panelParams)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to restack rewrite panel overlay", e)
             }
         }
     }
@@ -2561,10 +2741,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return (color and 0x00FFFFFF) or (alpha shl 24)
     }
 
-    private fun defaultBubbleX(): Int {
-        val screenWidth = resources.displayMetrics.widthPixels
-        return (screenWidth - dp(BUBBLE_SIZE_DP + BUBBLE_MARGIN_DP)).coerceAtLeast(dp(BUBBLE_MARGIN_DP))
-    }
+    private fun defaultBubbleX(): Int = maxBubbleX(dp(BUBBLE_SIZE_DP))
 
     private fun defaultBubbleY(): Int {
         val screenHeight = resources.displayMetrics.heightPixels

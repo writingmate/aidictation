@@ -17,6 +17,8 @@ ksp = "2.0.21-1.0.27"
 coroutines = "1.9.0"
 coil = "2.7.0"
 securityCrypto = "1.1.0-alpha06"
+credentials = "1.5.0"
+googleId = "1.1.1"
 onnxRuntime = "1.25.1"
 playAssetDelivery = "2.3.0"
 litert = "2.0.3"
@@ -63,6 +65,9 @@ coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutin
 
 # Security
 security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+google-identity-googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleId" }
 
 # Image loading
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }

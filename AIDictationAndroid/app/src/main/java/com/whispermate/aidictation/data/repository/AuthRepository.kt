@@ -2,12 +2,23 @@ package com.whispermate.aidictation.data.repository
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.util.Base64
+import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.core.net.toUri
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.whispermate.aidictation.R
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.whispermate.aidictation.BuildConfig
@@ -16,6 +27,8 @@ import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.UserProfile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.URLEncoder
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,6 +55,7 @@ class AuthRepository @Inject constructor(
         const val ACCESS_TOKEN = "access_token"
         const val REFRESH_TOKEN = "refresh_token"
         const val CACHED_PROFILE = "cached_profile"
+        const val AVATAR_URL = "avatar_url"
     }
 
     /** Thrown when the backend actively rejects the session, as opposed to a
@@ -86,6 +100,137 @@ class AuthRepository @Inject constructor(
         return preferredPaymentLink().isNotBlank()
     }
 
+    /**
+     * Google sign-in is offered whenever the auth API is configured: its hosted OAuth
+     * flow (`/auth/v1/authorize?provider=google`) already carries the Google client.
+     */
+    fun isGoogleSignInConfigured(): Boolean = isAuthConfigured()
+
+    /** The native account picker needs the Google web client ID and an auth API that accepts ID tokens. */
+    private fun isNativeGoogleSignInConfigured(): Boolean = BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()
+
+    /**
+     * Signs in with Google. Without [BuildConfig.GOOGLE_WEB_CLIENT_ID] this opens the auth
+     * API's hosted Google OAuth flow in the browser, which ends in the same
+     * `aidictation://auth-callback` deep link as the web sign-in. With a client ID it uses
+     * Android's Credential Manager and trades the Google ID token for a session at the
+     * auth API (Supabase's `grant_type=id_token` contract; the raw nonce goes to the API
+     * and its SHA-256 to Google).
+     *
+     * [activityContext] must be an Activity: the account picker is shown from it.
+     * Returns true when a session was established, false when the flow was handed to the
+     * browser or the user dismissed the picker; failures are surfaced through
+     * [authState] and a toast.
+     */
+    suspend fun signInWithGoogle(activityContext: Context): Boolean {
+        if (!isGoogleSignInConfigured()) {
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_not_configured))
+            return false
+        }
+        if (!isNativeGoogleSignInConfigured()) {
+            openHostedGoogleSignIn(activityContext)
+            return false
+        }
+
+        val rawNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }.toHex()
+        val hashedNonce = MessageDigest.getInstance("SHA-256")
+            .digest(rawNonce.toByteArray(Charsets.UTF_8))
+            .toHex()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(
+                GetGoogleIdOption.Builder()
+                    .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID)
+                    .setFilterByAuthorizedAccounts(false)
+                    .setAutoSelectEnabled(false)
+                    .setNonce(hashedNonce)
+                    .build()
+            )
+            .build()
+
+        val credential = try {
+            CredentialManager.create(activityContext).getCredential(activityContext, request).credential
+        } catch (error: GetCredentialCancellationException) {
+            return false
+        } catch (error: NoCredentialException) {
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_no_account))
+            return false
+        } catch (error: GetCredentialException) {
+            Log.w(TAG, "Google credential request failed", error)
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_failed))
+            return false
+        }
+
+        val idToken = (credential as? CustomCredential)
+            ?.takeIf { it.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL }
+            ?.let { runCatching { GoogleIdTokenCredential.createFrom(it.data).idToken }.getOrNull() }
+        if (idToken.isNullOrBlank()) {
+            reportGoogleFailure(activityContext, context.getString(R.string.account_google_failed))
+            return false
+        }
+
+        // Do not expose the previous user while the secure token is being replaced.
+        val previousState = _authState.value
+        _authState.value = AuthState(isLoading = true)
+        idTokenClaim(idToken, "picture")?.let { securePrefs.edit().putString(SecureKeys.AVATAR_URL, it).apply() }
+        val session = exchangeGoogleIdToken(idToken, rawNonce)
+        val tokens = session.getOrElse { error ->
+            Log.w(TAG, "Google ID token exchange failed", error)
+            _authState.value = previousState
+            reportGoogleFailure(
+                activityContext,
+                error.message ?: context.getString(R.string.account_google_failed)
+            )
+            return false
+        }
+        storeTokens(tokens.first, tokens.second)
+        refreshUser()
+        return _authState.value.user != null
+    }
+
+    private suspend fun exchangeGoogleIdToken(idToken: String, rawNonce: String): Result<Pair<String, String?>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val body = JSONObject()
+                    .put("provider", "google")
+                    .put("id_token", idToken)
+                    .put("nonce", rawNonce)
+                    .toString()
+                    .toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/auth/v1/token?grant_type=id_token")
+                    .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                    .post(body)
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw sessionFailure(
+                            runCatching { JSONObject(text) }.getOrNull()
+                                ?.let { it.optString("error_description").ifBlank { it.optString("msg") } }
+                                ?.ifBlank { null }
+                                ?: context.getString(R.string.account_google_failed),
+                            response.code
+                        )
+                    }
+                    val json = JSONObject(text)
+                    json.getString("access_token") to json.optString("refresh_token").ifBlank { null }
+                }
+            }
+        }
+
+    private fun openHostedGoogleSignIn(activityContext: Context) {
+        val redirectTo = URLEncoder.encode("aidictation://auth-callback", Charsets.UTF_8.name())
+        val url = "${BuildConfig.SUPABASE_URL.trimEnd('/')}/auth/v1/authorize?provider=google&redirect_to=$redirectTo"
+        openExternally(activityContext, url, "Could not open Google sign-in")
+    }
+
+    private fun reportGoogleFailure(activityContext: Context, message: String) {
+        _authState.value = _authState.value.copy(error = message)
+        Toast.makeText(activityContext, message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
     fun openLogin(context: Context) {
         if (!isAuthConfigured()) {
             _authState.value = _authState.value.copy(error = "Auth is not configured")
@@ -115,7 +260,11 @@ class AuthRepository @Inject constructor(
         }
     }
 
-    fun openUpgrade(context: Context) {
+    /** Whether any checkout link is configured, so a paywall has somewhere to send the user. */
+    fun hasPaymentLinks(): Boolean = preferredPaymentLink().isNotBlank()
+
+    /** Opens checkout for [plan], or the preferred configured link when null. */
+    fun openUpgrade(context: Context, plan: PaymentPlan? = null) {
         // Signing in comes first and needs no payment link. Checking the link
         // before the session made the "Sign in to upgrade" entry point dead for
         // signed-out users whenever no production Stripe link was configured.
@@ -125,7 +274,7 @@ class AuthRepository @Inject constructor(
             return
         }
 
-        val link = preferredPaymentLink()
+        val link = paymentLinkFor(plan).ifBlank { preferredPaymentLink() }
         if (link.isBlank()) {
             _authState.value = _authState.value.copy(error = "Purchase link is not configured")
             Toast.makeText(context, "Purchase link is not configured", Toast.LENGTH_SHORT).show()
@@ -175,7 +324,7 @@ class AuthRepository @Inject constructor(
         val activeToken = fetchProfile(accessToken).fold(
             onSuccess = {
                 cacheProfile(it)
-                _authState.value = AuthState(user = it, isLoading = false)
+                _authState.value = signedInState(it)
                 return@withContext
             },
             onFailure = { fetchError ->
@@ -212,6 +361,7 @@ class AuthRepository @Inject constructor(
             Log.w(TAG, "Keeping session after a non-rejecting refresh failure; cached profile: ${cached != null}")
             _authState.value = AuthState(
                 user = cached,
+                avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),
                 isLoading = false,
                 error = if (cached == null) "Could not reach your account. Please try again." else null
             )
@@ -221,7 +371,7 @@ class AuthRepository @Inject constructor(
         fetchProfile(activeToken).fold(
             onSuccess = {
                 cacheProfile(it)
-                _authState.value = AuthState(user = it, isLoading = false)
+                _authState.value = signedInState(it)
             },
             onFailure = { error ->
                 Log.w(TAG, "Failed to fetch profile", error)
@@ -230,6 +380,7 @@ class AuthRepository @Inject constructor(
                 val cached = cachedProfile()
                 _authState.value = AuthState(
                     user = cached,
+                    avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),
                     isLoading = false,
                     error = if (cached == null) error.message else null
                 )
@@ -238,7 +389,7 @@ class AuthRepository @Inject constructor(
     }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
-        securePrefs.edit().remove(SecureKeys.CACHED_PROFILE).apply()
+        securePrefs.edit().remove(SecureKeys.CACHED_PROFILE).remove(SecureKeys.AVATAR_URL).apply()
         clearTokens()
         _authState.value = AuthState(isLoading = false)
     }
@@ -430,6 +581,20 @@ class AuthRepository @Inject constructor(
         )
     }
 
+    /** The signed-in state, carrying the Google photo remembered from the last native sign-in. */
+    private fun signedInState(user: UserProfile) = AuthState(
+        user = user,
+        avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),
+        isLoading = false
+    )
+
+    /** Reads one string claim from a JWT payload without verifying it; the backend does that. */
+    private fun idTokenClaim(idToken: String, name: String): String? = runCatching {
+        val payload = idToken.split(".").getOrNull(1) ?: return null
+        val json = String(Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP), Charsets.UTF_8)
+        JSONObject(json).optString(name).ifBlank { null }
+    }.getOrNull()
+
     private fun storeTokens(accessToken: String, refreshToken: String?) {
         securePrefs.edit()
             .putString(SecureKeys.ACCESS_TOKEN, accessToken)
@@ -446,6 +611,13 @@ class AuthRepository @Inject constructor(
             .remove(SecureKeys.ACCESS_TOKEN)
             .remove(SecureKeys.REFRESH_TOKEN)
             .apply()
+    }
+
+    private fun paymentLinkFor(plan: PaymentPlan?): String = when (plan) {
+        PaymentPlan.Monthly -> BuildConfig.STRIPE_PAYMENT_LINK_MONTHLY
+        PaymentPlan.Annual -> BuildConfig.STRIPE_PAYMENT_LINK_ANNUAL
+        PaymentPlan.Lifetime -> BuildConfig.STRIPE_PAYMENT_LINK_LIFETIME
+        null -> ""
     }
 
     private fun preferredPaymentLink(): String {

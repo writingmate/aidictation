@@ -18,12 +18,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import com.whispermate.aidictation.data.repository.SubscriptionRepository
+import com.whispermate.aidictation.domain.model.UsageStatus
+import com.whispermate.aidictation.domain.model.PaymentPlan
+import android.content.Context
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import dagger.hilt.android.qualifiers.ApplicationContext
 
 data class OnboardingOnDeviceModelState(
     val isInstalled: Boolean = false,
@@ -46,8 +51,41 @@ class OnboardingViewModel @Inject constructor(
     private val appPreferences: AppPreferences,
     private val parakeetModelAssets: ParakeetModelAssets,
     private val transcriptionRepository: TranscriptionRepository,
-    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator
+    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator,
+    private val subscriptionRepository: SubscriptionRepository,
+    @ApplicationContext private val appContext: Context
 ) : ViewModel() {
+
+    /** Account state for the closing sign-in step. */
+    val usageStatus: StateFlow<UsageStatus> = subscriptionRepository.usageStatus
+
+    val isGoogleSignInConfigured: Boolean
+        get() = subscriptionRepository.isGoogleSignInConfigured()
+
+    val hasPaymentLinks: Boolean
+        get() = subscriptionRepository.hasPaymentLinks()
+
+    /** Opens Stripe checkout for [plan] in the browser; the user comes back to finish onboarding. */
+    fun openUpgrade(plan: PaymentPlan) {
+        subscriptionRepository.openUpgrade(plan)
+    }
+
+    private val _isSigningIn = MutableStateFlow(false)
+    val isSigningIn: StateFlow<Boolean> = _isSigningIn.asStateFlow()
+
+    /** [activityContext] must be an Activity: the Google account picker is shown from it. */
+    fun signInWithGoogle(activityContext: Context) {
+        if (_isSigningIn.value) return
+        viewModelScope.launch {
+            _isSigningIn.value = true
+            try {
+                subscriptionRepository.signInWithGoogle(activityContext)
+            } finally {
+                _isSigningIn.value = false
+            }
+        }
+    }
+
     private companion object {
         const val TAG = "OnboardingViewModel"
     }
@@ -68,6 +106,29 @@ class OnboardingViewModel @Inject constructor(
 
     private val _onDeviceModelState = MutableStateFlow(OnboardingOnDeviceModelState())
     val onDeviceModelState: StateFlow<OnboardingOnDeviceModelState> = _onDeviceModelState.asStateFlow()
+
+    init {
+        preselectDeviceLanguages()
+    }
+
+    /**
+     * First run: start the language step with the phone's own languages ticked, so most
+     * people can just continue. Only fills an empty choice, and only before onboarding is
+     * done, so a deliberate empty selection later is left alone.
+     */
+    private fun preselectDeviceLanguages() {
+        viewModelScope.launch {
+            if (appPreferences.hasCompletedOnboarding.first()) return@launch
+            if (appPreferences.selectedLanguages.first().isNotEmpty()) return@launch
+            val locales = appContext.resources.configuration.locales
+            val supported = OnboardingSupportedLanguageCodes.toSet()
+            val fromDevice = (0 until locales.size())
+                .map { locales.get(it).language.lowercase() }
+                .filter { it in supported && WhisperLanguages.getLanguage(it) != null }
+                .distinct()
+            appPreferences.saveSelectedLanguages(fromDevice.ifEmpty { listOf("en") })
+        }
+    }
 
     private val _demoState = MutableStateFlow(OnboardingDemoUiState())
     val demoState: StateFlow<OnboardingDemoUiState> = _demoState.asStateFlow()

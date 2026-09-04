@@ -1,6 +1,7 @@
 package com.whispermate.aidictation.ui.screens.main
 
 import android.util.Log
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.whispermate.aidictation.BuildConfig
@@ -473,6 +474,16 @@ class MainViewModel @Inject constructor(
 
     fun openLogin() {
         subscriptionRepository.openLogin()
+    }
+
+    val isGoogleSignInConfigured: Boolean
+        get() = subscriptionRepository.isGoogleSignInConfigured()
+
+    /** [activityContext] must be an Activity: the Google account picker is shown from it. */
+    fun signInWithGoogle(activityContext: Context) {
+        viewModelScope.launch {
+            subscriptionRepository.signInWithGoogle(activityContext)
+        }
     }
 
     fun openUpgrade() {

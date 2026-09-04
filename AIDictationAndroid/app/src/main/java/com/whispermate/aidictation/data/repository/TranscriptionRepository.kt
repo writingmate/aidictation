@@ -167,20 +167,9 @@ class TranscriptionRepository @Inject constructor(
             }
         }
 
-        if (configuration.provider == ApiProvider.WRITINGMATE) {
-            return TranscriptionClient.transcribe(
-                audioFile = audioFile,
-                prompt = transcriptionPrompt,
-                language = null,
-                sttPrompt = transcriptionPrompt,
-                postProcessingPrompt = null,
-                oneStageCleanup = false,
-                requestSnapshot = configuration.requestSnapshot,
-                checkpoint = checkpoint,
-                rawComplete = rawComplete
-            )
-        }
-
+        // The writingmate endpoint runs speech-to-text only (post_processing off) and
+        // drops any STT prompt, so cleanup has to happen here, the same as on the Mac.
+        // The August "gpt transcribe" change had switched this path to raw output.
         return if (configuration.cleanupEnabled) {
             val raw = TranscriptionClient.transcribe(
                 audioFile,

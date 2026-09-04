@@ -46,9 +46,6 @@ private fun List<String>.cleanedSnapshot(): List<String> =
 
 /** One generic correction contract for server-side one-stage and client-side two-stage cleanup. */
 object TranscriptionCleanupPrompt {
-    private const val RECOGNITION_INSTRUCTIONS =
-        "Produce polished dictation text. Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\". Remove false starts, stutters, accidental word repetitions, and explicit self-corrections, keeping the speaker's intended wording. Add natural punctuation, capitalization, paragraph breaks, and spacing. Preserve meaning, tone, uncertainty, slang, profanity, including language switching within a sentence. Keep each supported word in its spoken language and script. Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses. Output only the transcript."
-
     fun systemPrompt(context: CapturedTranscriptionCleanupContext): String = buildString {
         append(
             """
@@ -91,24 +88,26 @@ object TranscriptionCleanupPrompt {
     fun userMessage(transcription: String): String =
         "<transcription>\n${escapeBlockText(transcription)}\n</transcription>"
 
-    /** Generic fidelity contract plus the captured vocabulary and formatting context. */
+    /**
+     * The speech-to-text prompt: vocabulary and phrases only, in the style Whisper-class
+     * models treat as a spelling sample, the same as the Mac app sends. Instructions do
+     * not belong here; a recogniser does not follow them and may transcribe them instead.
+     * Cleanup rules live in [systemPrompt]. Returns null when there is nothing to hint.
+     */
     fun speechRecognitionHints(context: CapturedTranscriptionCleanupContext): String? {
-        val hints = buildList {
+        val vocabulary = buildList {
             addAll(context.vocabulary)
-            addAll(context.phrases)
-            context.explicitReplacements.forEach {
-                add("${it.trigger} → ${it.replacement}")
-            }
-            context.shortcutExpansions.forEach { add("${it.trigger} → ${it.replacement}") }
-            addAll(context.formattingInstructions)
+            context.explicitReplacements.forEach { add(it.replacement) }
         }.cleanedSnapshot()
-        val dynamicHints = hints.joinToString(", ")
-        val languageHints = context.languageContext.joinToString(", ")
-        return buildString {
-            append(RECOGNITION_INSTRUCTIONS)
-            if (languageHints.isNotBlank()) append("\n\n").append(languageHints)
-            if (dynamicHints.isNotBlank()) append("\n\n").append(dynamicHints)
+        val phrases = buildList {
+            addAll(context.phrases)
+            context.shortcutExpansions.forEach { add(it.trigger) }
+        }.cleanedSnapshot()
+        val parts = buildList {
+            if (vocabulary.isNotEmpty()) add("Vocabulary: " + vocabulary.joinToString(", "))
+            if (phrases.isNotEmpty()) add("Phrases: " + phrases.joinToString(", "))
         }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("\n")
     }
 
     private fun StringBuilder.appendReferenceBlock(name: String, values: List<String>) {

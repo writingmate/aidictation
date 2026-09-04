@@ -1,11 +1,7 @@
 package com.whispermate.aidictation.ui.screens.settings
 
-import android.Manifest
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -38,53 +34,55 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.whispermate.aidictation.ui.components.SettingsRowGap
+import com.whispermate.aidictation.ui.components.SettingsIconTile
+import com.whispermate.aidictation.ui.components.GoogleSignInButton
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
-import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
+import com.whispermate.aidictation.ui.permissions.AccessibilityDisclosureSheet
+import com.whispermate.aidictation.ui.permissions.OverlayPermissions
+import com.whispermate.aidictation.ui.permissions.PermissionRows
+import com.whispermate.aidictation.ui.permissions.rememberMicrophonePermissionLauncher
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
-import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 
 @Composable
 fun SettingsScreen(
@@ -95,12 +93,10 @@ fun SettingsScreen(
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
-    autoStopOnSilenceEnabled: Boolean = false,
-    onAutoStopOnSilenceToggled: (Boolean) -> Unit = {},
     usageStatus: UsageStatus,
-    onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
+    onSignInWithGoogle: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -108,16 +104,16 @@ fun SettingsScreen(
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showAccessibilityDisclosureDialog by remember { mutableStateOf(false) }
     var overlayBubbleSuppressed by remember { mutableStateOf(OverlayBubblePreferences.isSuppressed(context)) }
-    var selectedBubbleColor by remember { mutableIntStateOf(OverlayBubblePreferences.getBubbleColor(context)) }
     var showTranscriptionModeScreen by remember { mutableStateOf(false) }
-    var hasMicPermission by remember { mutableStateOf(hasMicrophonePermission(context)) }
-    var hasOverlayPermission by remember { mutableStateOf(isOverlayAccessibilityEnabled(context)) }
+    var permissions by remember { mutableStateOf(OverlayPermissions.read(context)) }
+    val requestMicrophone = rememberMicrophonePermissionLauncher { granted ->
+        permissions = permissions.copy(microphone = granted)
+    }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasMicPermission = hasMicrophonePermission(context)
-                hasOverlayPermission = isOverlayAccessibilityEnabled(context)
+                permissions = OverlayPermissions.read(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -145,7 +141,7 @@ fun SettingsScreen(
     ) {
         AccountSettingsSection(
             usageStatus = usageStatus,
-            onSignIn = onSignIn,
+            onSignInWithGoogle = onSignInWithGoogle,
             onSignOut = onSignOut,
             onUpgrade = onUpgrade
         )
@@ -154,46 +150,21 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_permissions))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
-            SettingsItem(
-                icon = Icons.Default.Mic,
-                title = stringResource(R.string.settings_microphone),
-                trailingContent = {
-                    StatusIcon(isEnabled = hasMicPermission)
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.Security,
-                title = stringResource(R.string.settings_overlay_access),
-                onClick = {
-                    if (hasOverlayPermission) {
-                        openAccessibilitySettings(context)
-                    } else {
-                        showAccessibilityDisclosureDialog = true
-                    }
-                },
-                trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusIcon(isEnabled = hasOverlayPermission)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+            PermissionRows(
+                state = permissions,
+                onAllowMicrophone = requestMicrophone,
+                onAllowAccessibility = { showAccessibilityDisclosureDialog = true },
+                onAllowOverlay = { OverlayPermissions.openDisplayOverAppsSettings(context) }
             )
 
             if (overlayBubbleSuppressed) {
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsRowGap()
 
                 SettingsItem(
                     icon = Icons.Default.Mic,
@@ -206,37 +177,17 @@ fun SettingsScreen(
                             R.string.overlay_restored,
                             Toast.LENGTH_SHORT
                         ).show()
-                    },
-                    iconTint = MaterialTheme.colorScheme.primary,
-                    titleColor = MaterialTheme.colorScheme.primary
+                    }
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        SectionHeader(stringResource(R.string.settings_appearance))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            BubbleColorSelector(
-                selectedColor = selectedBubbleColor,
-                onColorSelected = { color ->
-                    selectedBubbleColor = color
-                    OverlayBubblePreferences.setBubbleColor(context, color)
-                }
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            OverlayPreviewCard(selectedColor = selectedBubbleColor)
-        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
         SectionHeader(stringResource(R.string.settings_transcription))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -248,20 +199,7 @@ fun SettingsScreen(
                 onClick = { showTranscriptionModeScreen = true }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.Mic,
-                title = stringResource(R.string.settings_auto_stop_on_silence),
-                trailingContent = {
-                    Switch(
-                        checked = autoStopOnSilenceEnabled,
-                        onCheckedChange = onAutoStopOnSilenceToggled
-                    )
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
 
             SettingsItem(
                 icon = Icons.Default.Language,
@@ -276,7 +214,7 @@ fun SettingsScreen(
                 }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
 
             SettingsItem(
                 icon = Icons.Default.Settings,
@@ -293,24 +231,7 @@ fun SettingsScreen(
                 }
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-            SettingsItem(
-                icon = Icons.Default.AutoAwesome,
-                title = stringResource(R.string.transcription_tone_style),
-                onClick = { onNavigateToPostProcessingSettings(1) },
-                enabled = !onDeviceTranscriptionEnabled,
-                trailingContent = {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
-                               else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                    )
-                }
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
 
             SettingsItem(
                 icon = Icons.Default.Translate,
@@ -332,6 +253,7 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_about))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -354,6 +276,7 @@ fun SettingsScreen(
 
         SectionHeader(stringResource(R.string.settings_data))
         Card(
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
@@ -397,33 +320,12 @@ fun SettingsScreen(
     }
 
     if (showAccessibilityDisclosureDialog) {
-        AlertDialog(
-            onDismissRequest = { showAccessibilityDisclosureDialog = false },
-            title = { Text(stringResource(R.string.onboarding_accessibility_disclosure_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_intro))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_use))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_data))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_cloud))
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_settings))
-                }
+        AccessibilityDisclosureSheet(
+            onAgree = {
+                showAccessibilityDisclosureDialog = false
+                OverlayPermissions.openAccessibilitySettings(context)
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showAccessibilityDisclosureDialog = false
-                        openAccessibilitySettings(context)
-                    }
-                ) {
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_accept))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAccessibilityDisclosureDialog = false }) {
-                    Text(stringResource(R.string.onboarding_accessibility_disclosure_decline))
-                }
-            }
+            onDismiss = { showAccessibilityDisclosureDialog = false }
         )
     }
 }
@@ -431,14 +333,13 @@ fun SettingsScreen(
 @Composable
 private fun AccountSettingsSection(
     usageStatus: UsageStatus,
-    onSignIn: () -> Unit,
+    onSignInWithGoogle: (() -> Unit)?,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit
 ) {
-    val showsIdentityRow = usageStatus.isAuthenticated || usageStatus.isPro
-
     SectionHeader(stringResource(R.string.settings_account))
     Card(
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -447,45 +348,41 @@ private fun AccountSettingsSection(
         if (usageStatus.isAuthenticated) {
             AccountIdentityItem(
                 email = usageStatus.email ?: stringResource(R.string.account_signed_in),
-                tierName = usageStatus.tierName
+                tierName = usageStatus.tierName,
+                avatarUrl = usageStatus.avatarUrl
             )
-        } else if (usageStatus.isPro) {
-            SettingsItem(
-                icon = Icons.Default.AccountCircle,
-                title = stringResource(R.string.account_sign_in),
-                onClick = onSignIn,
-                iconTint = MaterialTheme.colorScheme.primary,
-                titleColor = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        if (showsIdentityRow) {
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
         }
 
         UsageSummary(usageStatus = usageStatus)
 
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
-        if (!usageStatus.isPro) {
+        // Google is the only way in. Upgrading needs an account, so an anonymous user
+        // sees the Google button where a signed-in free user sees Upgrade. The button
+        // is the card's last element and carries its own outline, so no rule around it.
+        if (!usageStatus.isAuthenticated) {
+            if (onSignInWithGoogle != null) {
+                GoogleSignInButton(
+                    onClick = onSignInWithGoogle,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
+                )
+            }
+        } else if (!usageStatus.isPro) {
+            SettingsRowGap()
             SettingsItem(
                 icon = Icons.Default.AutoAwesome,
-                title = if (usageStatus.isAuthenticated) {
-                    stringResource(R.string.account_upgrade)
-                } else {
-                    stringResource(R.string.account_sign_in_or_upgrade)
-                },
+                title = stringResource(R.string.account_upgrade),
                 onClick = onUpgrade,
                 iconTint = MaterialTheme.colorScheme.primary,
                 titleColor = MaterialTheme.colorScheme.primary
             )
 
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsRowGap()
         }
 
-
         if (usageStatus.isAuthenticated) {
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            if (usageStatus.isPro) SettingsRowGap()
             SettingsItem(
                 icon = Icons.AutoMirrored.Filled.Logout,
                 title = stringResource(R.string.account_sign_out),
@@ -496,258 +393,30 @@ private fun AccountSettingsSection(
 }
 
 @Composable
-private fun BubbleColorSelector(
-    selectedColor: Int,
-    onColorSelected: (Int) -> Unit
-) {
-    val context = LocalContext.current
-    val options = listOf(
-        BubbleColorOption(
-            color = OverlayBubblePreferences.SYSTEM_COLOR,
-            resolvedColor = OverlayBubblePreferences.getResolvedSystemColor(context),
-            label = stringResource(R.string.settings_bubble_color_system)
-        ),
-        BubbleColorOption(
-            color = OverlayBubblePreferences.DEFAULT_COLOR,
-            resolvedColor = OverlayBubblePreferences.DEFAULT_COLOR,
-            label = stringResource(R.string.settings_bubble_color_default)
-        ),
-        BubbleColorOption(
-            color = 0xFFE11D48.toInt(),
-            resolvedColor = 0xFFE11D48.toInt(),
-            label = stringResource(R.string.settings_bubble_color_red)
-        ),
-        BubbleColorOption(
-            color = 0xFF7C3AED.toInt(),
-            resolvedColor = 0xFF7C3AED.toInt(),
-            label = stringResource(R.string.settings_bubble_color_purple)
-        ),
-        BubbleColorOption(
-            color = 0xFF2563EB.toInt(),
-            resolvedColor = 0xFF2563EB.toInt(),
-            label = stringResource(R.string.settings_bubble_color_blue)
-        ),
-        BubbleColorOption(
-            color = 0xFF0D9488.toInt(),
-            resolvedColor = 0xFF0D9488.toInt(),
-            label = stringResource(R.string.settings_bubble_color_teal)
-        ),
-        BubbleColorOption(
-            color = OverlayBubblePreferences.BLACK_COLOR,
-            resolvedColor = OverlayBubblePreferences.BLACK_COLOR,
-            label = stringResource(R.string.settings_bubble_color_black)
-        )
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.settings_bubble_color),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-
-        options.chunked(4).forEach { rowOptions ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                rowOptions.forEach { option ->
-                    BubbleColorSwatchOption(
-                        option = option,
-                        selected = option.color == selectedColor,
-                        onClick = { onColorSelected(option.color) }
-                    )
-                }
-                repeat(4 - rowOptions.size) {
-                    Spacer(modifier = Modifier.width(62.dp))
-                }
-            }
-        }
-    }
-}
-
-private data class BubbleColorOption(
-    val color: Int,
-    val resolvedColor: Int,
-    val label: String
-)
-
-@Composable
-private fun BubbleColorSwatchOption(
-    option: BubbleColorOption,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier.width(62.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        BubbleColorSwatch(
-            color = option.resolvedColor,
-            selected = selected,
-            onClick = onClick
-        )
-        Text(
-            text = option.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun BubbleColorSwatch(
-    color: Int,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val shape = CircleShape
-    val composeColor = Color(color)
-    // onSurface keeps the selection ring visible in both light and dark themes.
-    val borderColor = if (selected) {
-        MaterialTheme.colorScheme.onSurface
-    } else {
-        MaterialTheme.colorScheme.outlineVariant
-    }
-
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(shape)
-            .background(composeColor)
-            .border(
-                BorderStroke(if (selected) 3.dp else 1.dp, borderColor),
-                shape
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        if (selected) {
-            // Dark badge on light swatches, light badge on dark ones.
-            val lightSwatch = composeColor.luminance() > 0.7f
-            Box(
-                modifier = Modifier
-                    .size(18.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (lightSwatch) Color.Black.copy(alpha = 0.65f)
-                        else Color.White.copy(alpha = 0.94f)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = composeColor,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun OverlayPreviewCard(selectedColor: Int) {
-    var previewStateIndex by remember { mutableIntStateOf(0) }
-    val previewStates = remember {
-        listOf(
-            OverlayMicButtonView.State.Idle,
-            OverlayMicButtonView.State.Recording,
-            OverlayMicButtonView.State.Processing
-        )
-    }
-    val previewState = previewStates[previewStateIndex]
-    val previewWidth = if (previewState == OverlayMicButtonView.State.Idle) 55.dp else 250.dp
-    val resolvedColor = when (selectedColor) {
-        OverlayBubblePreferences.SYSTEM_COLOR -> OverlayBubblePreferences.getResolvedSystemColor(LocalContext.current)
-        else -> selectedColor
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = "Overlay preview",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = "Tap the control to switch states.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(74.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                .clickable {
-                    previewStateIndex = (previewStateIndex + 1) % previewStates.size
-                },
-            contentAlignment = Alignment.CenterEnd
-        ) {
-            AndroidView(
-                modifier = Modifier
-                    .width(previewWidth)
-                    .height(55.dp)
-                    .padding(end = 10.dp),
-                factory = { context ->
-                    OverlayMicButtonView(context).apply {
-                        setColors(resolvedColor, resolvedColor)
-                        setState(previewState)
-                        setAudioLevel(0.72f)
-                        setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
-                        setOnClickCallback {
-                            previewStateIndex = (previewStateIndex + 1) % previewStates.size
-                        }
-                    }
-                },
-                update = { view ->
-                    view.setColors(resolvedColor, resolvedColor)
-                    view.setState(previewState)
-                    view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) 0.72f else 0f)
-                    view.setFrequencyBands(floatArrayOf(0.34f, 0.9f, 0.52f, 0.86f, 0.42f))
-                }
-            )
-        }
-    }
-}
-
-@Composable
 private fun AccountIdentityItem(
     email: String,
-    tierName: String
+    tierName: String,
+    avatarUrl: String? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
+            .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = Icons.Default.AccountCircle,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
+        if (avatarUrl != null) {
+            AsyncImage(
+                model = avatarUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+            )
+        } else {
+            SettingsIconTile(icon = Icons.Default.AccountCircle)
+        }
+        Spacer(modifier = Modifier.width(12.dp))
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -764,7 +433,7 @@ private fun AccountIdentityItem(
             Text(
                 text = tierName,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -929,17 +598,17 @@ private fun TranscriptionModeChoiceCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.large)
             .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                if (selected) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
             )
             .border(
                 BorderStroke(
                     width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                    color = if (selected) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant
                 ),
-                RoundedCornerShape(12.dp)
+                MaterialTheme.shapes.large
             )
             .clickable(onClick = onClick)
             .padding(16.dp),
@@ -1017,7 +686,7 @@ private fun SettingsRatingRow(
                     contentDescription = null,
                     modifier = Modifier.size(13.dp),
                     tint = if (index < stars.coerceIn(0, 5)) {
-                        MaterialTheme.colorScheme.primary
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
                         MaterialTheme.colorScheme.outlineVariant
                     }
@@ -1045,21 +714,11 @@ private fun transcriptionModeStatus(
 }
 
 @Composable
-private fun StatusIcon(isEnabled: Boolean) {
-    Icon(
-        imageVector = if (isEnabled) Icons.Default.Check else Icons.Default.Close,
-        contentDescription = null,
-        tint = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        modifier = Modifier.size(20.dp)
-    )
-}
-
-@Composable
 private fun SectionHeader(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
     )
 }
@@ -1084,7 +743,7 @@ private fun SettingsItem(
                     Modifier
                 }
             )
-            .padding(16.dp),
+            .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -1092,13 +751,8 @@ private fun SettingsItem(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (enabled) iconTint else iconTint.copy(alpha = 0.38f),
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
+            SettingsIconTile(icon = icon, tint = iconTint, enabled = enabled)
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
@@ -1109,39 +763,5 @@ private fun SettingsItem(
         }
         Spacer(modifier = Modifier.width(12.dp))
         trailingContent()
-    }
-}
-
-private fun openAccessibilitySettings(context: Context) {
-    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-    }
-    context.startActivity(intent)
-}
-
-private fun hasMicrophonePermission(context: Context): Boolean {
-    return ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
-}
-
-private fun isOverlayAccessibilityEnabled(context: Context): Boolean {
-    val enabled = Settings.Secure.getInt(
-        context.contentResolver,
-        Settings.Secure.ACCESSIBILITY_ENABLED,
-        0
-    ) == 1
-
-    if (!enabled) return false
-
-    val enabledServices = Settings.Secure.getString(
-        context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-
-    val expected = ComponentName(context, OverlayDictationAccessibilityService::class.java)
-    return enabledServices.split(':').any { serviceId ->
-        ComponentName.unflattenFromString(serviceId) == expected
     }
 }

@@ -5,6 +5,8 @@
     <!-- Permissions -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Optional: a hidden overlay window gives an exact keyboard show/hide signal for the bubble. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".AIDictationApp"

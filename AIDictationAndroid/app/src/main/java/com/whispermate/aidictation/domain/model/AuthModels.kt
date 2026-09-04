@@ -1,6 +1,9 @@
 package com.whispermate.aidictation.domain.model
 
 const val FREE_MONTHLY_WORD_LIMIT = 2_000
+
+/** A Stripe payment link the app can open; each maps to one STRIPE_PAYMENT_LINK_* build value. */
+enum class PaymentPlan { Monthly, Annual, Lifetime }
 const val REFERRAL_BONUS_WORDS = 2_000
 
 enum class SubscriptionTier {
@@ -57,6 +60,7 @@ data class UserProfile(
 
 data class AuthState(
     val user: UserProfile? = null,
+    val avatarUrl: String? = null,
     val isLoading: Boolean = false,
     val error: String? = null
 ) {
@@ -70,6 +74,8 @@ data class UsageStatus(
     val isPro: Boolean,
     val isAuthenticated: Boolean,
     val email: String? = null,
+    /** Google profile photo from the last native sign-in, if any. */
+    val avatarUrl: String? = null,
     val tierName: String = SubscriptionTier.Free.displayName,
     val referralCode: String? = null,
     val referralBonusWords: Int = 0

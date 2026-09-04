@@ -27,6 +27,7 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="Sentry" Version="5.16.2" />
   </ItemGroup>
 
   <!-- Backend configuration injected at build time (CI secrets) with env-var passthrough.
@@ -42,6 +43,7 @@
     <AssemblyMetadata Include="SUPABASE_ANON_KEY" Value="$(SUPABASE_ANON_KEY)" />
     <AssemblyMetadata Include="AUTH_WEB_URL" Value="$(AUTH_WEB_URL)" />
     <AssemblyMetadata Include="STRIPE_PAYMENT_LINK" Value="$(STRIPE_PAYMENT_LINK)" />
+    <AssemblyMetadata Include="SENTRY_DSN" Value="$(SENTRY_DSN)" />
   </ItemGroup>
 
   <ItemGroup>

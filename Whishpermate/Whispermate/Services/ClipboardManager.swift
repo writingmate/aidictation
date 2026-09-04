@@ -289,11 +289,21 @@ class ClipboardManager {
 
         guard AXIsProcessTrusted() else {
             DebugLog.warning("Accessibility permission missing; cannot live-insert dictation", context: "ClipboardManager")
+            SentryTelemetry.captureError(
+                "Accessibility permission missing; cannot live-insert dictation",
+                context: "ClipboardManager",
+                feature: "text_insert"
+            )
             return false
         }
 
         guard let app = previousApp ?? NSWorkspace.shared.frontmostApplication else {
             DebugLog.warning("No target app available for live dictation insertion", context: "ClipboardManager")
+            SentryTelemetry.captureError(
+                "No target app available for live dictation insertion",
+                context: "ClipboardManager",
+                feature: "text_insert"
+            )
             return false
         }
 

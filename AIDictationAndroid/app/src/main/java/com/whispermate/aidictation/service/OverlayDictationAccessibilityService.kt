@@ -38,6 +38,7 @@ import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
+import com.whispermate.aidictation.telemetry.SentryTelemetry
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
@@ -1811,6 +1812,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val transcription = result.getOrElse { error ->
             if (!ownsDelivery(token)) return
             Log.e(TAG, "Transcription failed", error)
+            SentryTelemetry.captureException(error, context = "OverlayDictation", feature = "transcription")
             Toast.makeText(this@OverlayDictationAccessibilityService, "Transcription failed", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1837,6 +1839,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             lastDictatedText = finalText
         } else {
             copyTextForManualPaste(finalText)
+            SentryTelemetry.captureError(
+                "Dictation text could not be inserted into the target field",
+                context = "OverlayDictation",
+                feature = "text_insert"
+            )
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
                 R.string.dictation_text_not_inserted,

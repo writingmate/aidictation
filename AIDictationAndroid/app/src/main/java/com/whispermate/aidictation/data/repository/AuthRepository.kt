@@ -23,6 +23,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.domain.model.AuthState
+import com.whispermate.aidictation.telemetry.SentryTelemetry
 import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.UserProfile
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -226,6 +227,7 @@ class AuthRepository @Inject constructor(
 
     private fun reportGoogleFailure(activityContext: Context, message: String) {
         _authState.value = _authState.value.copy(error = message)
+        SentryTelemetry.captureError(message, context = "AuthRepository", feature = "auth")
         Toast.makeText(activityContext, message, Toast.LENGTH_LONG).show()
     }
 
@@ -256,6 +258,9 @@ class AuthRepository @Inject constructor(
             })
         } catch (error: ActivityNotFoundException) {
             _authState.value = _authState.value.copy(error = failureMessage)
+            if (failureMessage.contains("sign-in", ignoreCase = true)) {
+                SentryTelemetry.captureException(error, context = "AuthRepository", feature = "auth")
+            }
             Toast.makeText(context, failureMessage, Toast.LENGTH_LONG).show()
         }
     }
@@ -359,6 +364,13 @@ class AuthRepository @Inject constructor(
             // signed in nor signed out, so a sign-in appeared to do nothing at all.
             val cached = cachedProfile()
             Log.w(TAG, "Keeping session after a non-rejecting refresh failure; cached profile: ${cached != null}")
+            if (cached == null) {
+                SentryTelemetry.captureError(
+                    "Sign-in session could not be restored after a refresh failure",
+                    context = "AuthRepository",
+                    feature = "auth"
+                )
+            }
             _authState.value = AuthState(
                 user = cached,
                 avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),

@@ -53,6 +53,11 @@ public partial class App : Application
 
     // MARK: - Application Lifecycle
 
+    public App()
+    {
+        SentryTelemetry.Start();
+    }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         if (TryGetReleaseValidationReportPath(e.Args, "--validate-release-config", out var configReportPath))
@@ -450,6 +455,7 @@ public partial class App : Application
 
             var logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}\n{exception}\n\n";
             File.AppendAllText(logPath, logEntry);
+            SentryTelemetry.CaptureException(exception, context: source, feature: "crash");
         }
         catch
         {

@@ -72,6 +72,7 @@ runs, matching the local-developer layout described in
 | `STRIPE_PAYMENT_LINK_ANNUAL` | Optional annual checkout link. |
 | `STRIPE_PAYMENT_LINK_LIFETIME` | Optional lifetime checkout link. |
 | `SECRETS_PLIST` | Optional. Base64-encoded Mac `Secrets.plist` — the same secret used by `release-macos.yml`. When present, the workflow extracts `CustomTranscription*`, `AIDictationPostProcessing*`, and `STRIPE_PAYMENT_LINK*` values shared by both platforms. |
+| `SENTRY_DSN` | Optional. Overrides the default `ai-dictation-android` Sentry DSN used for crash and high-value error reporting. |
 
 Android CI pins browser sign-in to `https://aidictation.com/auth`, account/profile
 requests to `https://aidictation.com`, and the public compatibility key expected by

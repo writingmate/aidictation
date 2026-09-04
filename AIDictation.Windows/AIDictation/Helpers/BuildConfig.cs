@@ -56,6 +56,7 @@ public static class BuildConfig
 
     public static string AuthWebUrl => Get("AUTH_WEB_URL", Defaults.AuthWebUrl);
     public static string StripePaymentLink => Get("STRIPE_PAYMENT_LINK", string.Empty);
+    public static string SentryDsn => Get("SENTRY_DSN", string.Empty);
 
     public static bool IsAuthConfigured =>
         !string.IsNullOrWhiteSpace(SupabaseUrl) &&

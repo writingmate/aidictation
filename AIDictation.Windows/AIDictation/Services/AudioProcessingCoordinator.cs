@@ -1163,6 +1163,7 @@ public sealed class AudioProcessingCoordinator
         if (!result.IsSuccess || string.IsNullOrWhiteSpace(result.Text))
         {
             var message = result.ErrorMessage ?? "Transcription failed. The recording was kept for retry.";
+            HighValueErrorSink.ReportError(message, context: "AudioProcessingCoordinator", feature: "transcription");
             AbandonForegroundAttempt(active, message, cancelled: false, AudioSourceIntegrity.Complete, duration);
             return TranscriptionResult.Failure(message);
         }

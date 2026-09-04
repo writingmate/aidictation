@@ -42,6 +42,9 @@ STRIPE_PAYMENT_LINK_MONTHLY=
 STRIPE_PAYMENT_LINK_ANNUAL=
 STRIPE_PAYMENT_LINK_LIFETIME=
 
+# Optional Sentry crash reporting. Leave empty to use the ai-dictation-android DSN.
+# SENTRY_DSN=
+
 # Optional Google Play publishing configuration for local Gradle Play Publisher runs.
 # CI normally writes PLAY_SERVICE_ACCOUNT_CREDENTIALS from a GitHub secret.
 PLAY_TRACK=internal

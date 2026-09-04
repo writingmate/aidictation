@@ -409,7 +409,7 @@ struct ValidateMacOSRealtimeFinalization {
         precondition(lateClient.requestCount == 0)
 
         let clientSource = try String(
-            contentsOfFile: "Whishpermate/Whispermate/Services/OpenAIRealtimeTranscriptionClient.swift",
+            contentsOfFile: "Whishpermate/WhisperMateShared/Services/OpenAIRealtimeTranscriptionClient.swift",
             encoding: .utf8
         )
         precondition(clientSource.contains("func requestFinish(timeout: TimeInterval = 1.5)"))

@@ -8,11 +8,23 @@ public enum SharedTranscriptionService {
         fileprivate let useOnDeviceRecognition: Bool
         fileprivate let cloud: CloudRequestConfiguration?
         fileprivate let cleanup: CleanupRequestConfiguration?
+        fileprivate let realtime: RealtimeRequestConfiguration?
         fileprivate let outputMode: TranscriptionOutputMode
         fileprivate let transcriptionOptions: TranscriptionOptions
         fileprivate let sttPrompt: String
         fileprivate let postProcessingPrompt: String
         fileprivate let serverPostProcessingPrompt: String
+
+        public var prefersRealtimeRecognition: Bool {
+            !useOnDeviceRecognition
+                && realtime != nil
+                && outputMode == .dictation
+                && !transcriptionOptions.diarization
+        }
+
+        public var realtimeContext: RealtimeRequestConfiguration? {
+            prefersRealtimeRecognition ? realtime : nil
+        }
 
         public static func capture(
             dictionaryManager: DictionaryManager = .shared,
@@ -36,8 +48,10 @@ public enum SharedTranscriptionService {
 
             let useOnDevice = providerManager.shouldUseOnDeviceTranscription
             let cloud: CloudRequestConfiguration?
+            let realtime: RealtimeRequestConfiguration?
             if useOnDevice {
                 cloud = nil
+                realtime = nil
             } else {
                 let provider = providerManager.selectedProvider == .onDevice
                     ? TranscriptionProvider.custom
@@ -48,20 +62,40 @@ public enum SharedTranscriptionService {
                 else {
                     throw error("API key not configured")
                 }
+                let endpoint = providerManager.effectiveEndpoint.isEmpty
+                    ? provider.defaultEndpoint
+                    : providerManager.effectiveEndpoint
+                let isCustomWritingmate = provider == .custom
                 cloud = CloudRequestConfiguration(
-                    endpoint: providerManager.effectiveEndpoint.isEmpty
-                        ? provider.defaultEndpoint
-                        : providerManager.effectiveEndpoint,
+                    endpoint: endpoint,
                     model: providerManager.effectiveModel,
                     apiKey: apiKey,
-                    isOneStage: provider == .custom
+                    isOneStage: isCustomWritingmate
                 )
+                if isCustomWritingmate {
+                    let languageManager = LanguageManager.shared
+                    realtime = RealtimeRequestConfiguration(
+                        transcriptionEndpoint: endpoint,
+                        apiKey: apiKey,
+                        configuredModel: SecretsLoader.customTranscriptionRealtimeModel()
+                            ?? WritingmateRealtimeSessionSupport.defaultModel,
+                        prompt: prompts.stt,
+                        language: languageManager.apiLanguageCode,
+                        keywords: Array(Set(dictionaryManager.transcriptionKeywords)),
+                        languages: languageManager.apiLanguageCodes,
+                        customRealtimeEndpoint: WritingmateRealtimeSessionSupport.configuredOverrideEndpoint(),
+                        customRealtimeModel: WritingmateRealtimeSessionSupport.configuredOverrideModel()
+                    )
+                } else {
+                    realtime = nil
+                }
             }
 
             return RequestSnapshot(
                 useOnDeviceRecognition: useOnDevice,
                 cloud: cloud,
                 cleanup: captureCleanupConfiguration(),
+                realtime: realtime,
                 outputMode: selectedOutputMode,
                 transcriptionOptions: transcriptionOptions,
                 sttPrompt: prompts.stt,
@@ -72,6 +106,18 @@ public enum SharedTranscriptionService {
                 )
             )
         }
+    }
+
+    public struct RealtimeRequestConfiguration: Sendable {
+        public let transcriptionEndpoint: String
+        public let apiKey: String
+        public let configuredModel: String
+        public let prompt: String
+        public let language: String?
+        public let keywords: [String]
+        public let languages: [String]
+        public let customRealtimeEndpoint: URL?
+        public let customRealtimeModel: String?
     }
 
     fileprivate struct CloudRequestConfiguration: Sendable {
@@ -219,6 +265,53 @@ public enum SharedTranscriptionService {
                 DebugLog.warning("Mode post-processing unavailable within time limit - using transcript", context: "SharedTranscriptionService")
                 modeResult = durableRawTranscript
             }
+        }
+        let nonemptyModeResult = modeResult.trimmingCharacters(in: .whitespacesAndNewlines)
+        return nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult
+    }
+
+    /// Completes a live realtime transcript through the same durable checkpoint
+    /// and optional cleanup path used after batch recognition.
+    public static func completeRealtimeTranscript(
+        _ transcript: String,
+        request: RequestSnapshot,
+        onRecognitionCheckpoint: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onRawTranscript: @escaping @Sendable (String) async throws -> Void = { _ in },
+        onCleanupStarted: @escaping @Sendable () async throws -> Void = {}
+    ) async throws -> String {
+        let durableRawTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !durableRawTranscript.isEmpty else {
+            throw error("No speech was recognized. Your recording was kept.")
+        }
+        try await onRecognitionCheckpoint(durableRawTranscript)
+        try Task.checkCancellation()
+        try await onRawTranscript(durableRawTranscript)
+        try Task.checkCancellation()
+        try await onCleanupStarted()
+        try Task.checkCancellation()
+
+        if request.cloud?.isOneStage == true {
+            return durableRawTranscript
+        }
+
+        let modeResult: String
+        do {
+            modeResult = try await withTimeout(seconds: llmPostProcessingTimeoutSeconds) {
+                try await applyLLMPassIfAvailable(
+                    transcript: durableRawTranscript,
+                    outputMode: request.outputMode,
+                    postProcessingPrompt: request.postProcessingPrompt,
+                    cleanupConfiguration: request.cleanup
+                )
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            DebugLog.warning(
+                "Mode post-processing unavailable within time limit - using realtime transcript",
+                context: "SharedTranscriptionService"
+            )
+            modeResult = durableRawTranscript
         }
         let nonemptyModeResult = modeResult.trimmingCharacters(in: .whitespacesAndNewlines)
         return nonemptyModeResult.isEmpty ? durableRawTranscript : nonemptyModeResult

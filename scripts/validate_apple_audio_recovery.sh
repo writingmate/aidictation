@@ -71,10 +71,17 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/Services/RealtimeTranscriptionSupport.swift \
   Whishpermate/Whispermate/Services/RealtimeTranscriptionFinishGate.swift \
   scripts/validate_macos_realtime_finalization.swift \
   -o "$work_dir/validate-macos-realtime-finalization"
 "$work_dir/validate-macos-realtime-finalization"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
+  scripts/validate_ios_realtime_transcription.swift \
+  -o "$work_dir/validate-ios-realtime-transcription"
+"$work_dir/validate-ios-realtime-transcription"
 
 swiftc -parse-as-library -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/WhisperMateShared.swift \
@@ -82,6 +89,7 @@ swiftc -parse-as-library -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Models/TranscriptionOptions.swift \
   Whishpermate/WhisperMateShared/Models/Recording.swift \
   Whishpermate/WhisperMateShared/Services/DebugLog.swift \
+  Whishpermate/WhisperMateShared/Services/MobileAudioLaunchRecoveryPolicy.swift \
   Whishpermate/WhisperMateShared/Services/MobileAudioProcessingStore.swift \
   Whishpermate/WhisperMateShared/Services/IOSAudioProcessingDeadline.swift \
   Whishpermate/WhisperMateShared/Storage/HistoryManager.swift \

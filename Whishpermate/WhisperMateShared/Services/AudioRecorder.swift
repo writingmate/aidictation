@@ -54,9 +54,16 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     @Published public var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published public var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount)
     @Published public private(set) var managedAttemptFailure: ManagedAudioRecordingFailure?
+    public var realtimeAudioChunkHandler: (@Sendable (Data) -> Void)? {
+        get { realtimeAudioDelivery.handler }
+        set { realtimeAudioDelivery.handler = newValue }
+    }
 
     private var audioRecorder: AVAudioRecorder?
     private var audioEngine: AVAudioEngine?
+    private var realtimeCaptureEngine: AVAudioEngine?
+    private let realtimeAudioDelivery = RealtimeAudioDeliveryQueue()
+    private let realtimePCMConverter = RealtimePCMConverter()
     private var standbyEngine: AVAudioEngine?
     private var recordingURL: URL?
     private var isMonitoringOnly = false
@@ -97,19 +104,63 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     #if os(iOS)
         @discardableResult
         private func configureAudioSession() -> Bool {
-            do {
-                try Self.audioSessionOwnership.claim(self) {
-                    let session = AVAudioSession.sharedInstance()
-                    try session.setCategory(.playAndRecord, mode: .measurement, options: [.allowBluetoothHFP])
-                    try session.setActive(true)
-                }
+            // Standby already holds an active, mixable playAndRecord session.
+            // Reuse it untouched: a backgrounded app cannot change category
+            // options or re-activate the session ('!pri', 560557684), and any
+            // setCategory here would do exactly that. Just take ownership.
+            if standbyEngine?.isRunning == true {
+                Self.audioSessionOwnership.claim(self) {}
                 isAudioSessionConfigured = true
-                DebugLog.info("Audio session configured for iOS category=playAndRecord mode=measurement", context: "AudioRecorder")
+                DebugLog.info("Audio session reused from standby (no reconfigure)", context: "AudioRecorder")
                 return true
-            } catch {
-                DebugLog.info("Failed to configure audio session: \(error)", context: "AudioRecorder")
-                return false
             }
+            // A backgrounded app may not switch to a non-mixable record session
+            // ('!pri', 560557684) even while its standby engine is running. Try
+            // the exclusive session first; if iOS refuses, fall back to a
+            // mixable one so Quick Dictation can still capture from the keyboard.
+            let optionSets: [AVAudioSession.CategoryOptions] = [
+                [.allowBluetoothHFP],
+                [.allowBluetoothHFP, .mixWithOthers],
+            ]
+            var lastError: Error?
+            for options in optionSets {
+                do {
+                    try Self.audioSessionOwnership.claim(self) {
+                        let session = AVAudioSession.sharedInstance()
+                        try session.setCategory(.playAndRecord, mode: .measurement, options: options)
+                        try session.setActive(true)
+                    }
+                    isAudioSessionConfigured = true
+                    DebugLog.info(
+                        "Audio session configured for iOS category=playAndRecord mode=measurement mixWithOthers=\(options.contains(.mixWithOthers))",
+                        context: "AudioRecorder"
+                    )
+                    return true
+                } catch {
+                    lastError = error
+                    DebugLog.info(
+                        "Failed to configure audio session (mixWithOthers=\(options.contains(.mixWithOthers))): \(error)",
+                        context: "AudioRecorder"
+                    )
+                }
+            }
+            _ = lastError
+            // Background rule: iOS refuses any category change or re-activation
+            // while the app is not frontmost. If the process already holds a
+            // playAndRecord session (standby or a previous recording), keep it
+            // as-is and let the recorder try; a truly dead session fails at
+            // record() with a clear error instead of here.
+            let session = AVAudioSession.sharedInstance()
+            if session.category == .playAndRecord {
+                Self.audioSessionOwnership.claim(self) {}
+                isAudioSessionConfigured = true
+                DebugLog.info(
+                    "Keeping existing playAndRecord session mode=\(session.mode.rawValue) options=\(session.categoryOptions.rawValue)",
+                    context: "AudioRecorder"
+                )
+                return true
+            }
+            return false
         }
 
         private func deactivateSession() {
@@ -132,17 +183,38 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         /// The audio engine runs with a tap but doesn't capture to disk.
         public func startStandby() throws {
             guard !isRecording else { return }
-            guard standbyEngine?.isRunning != true else { return }
+            if standbyEngine?.isRunning == true { return }
+            // A prior recording can leave a stopped engine behind. Replace it
+            // so Quick Dictation can re-arm after the session returns to idle.
+            if standbyEngine != nil {
+                stopStandby(deactivateAudioSession: false)
+            }
 
             DebugLog.info("Starting audio standby mode", context: "AudioRecorder")
 
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(
-                .playAndRecord,
-                mode: .default,
-                options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
-            )
-            try session.setActive(true)
+            // Claim ownership so a retired recorder's deinit cannot deactivate
+            // the session standby is now keeping alive.
+            do {
+                try Self.audioSessionOwnership.claim(self) {
+                    try session.setCategory(
+                        .playAndRecord,
+                        mode: .default,
+                        options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
+                    )
+                    try session.setActive(true)
+                }
+            } catch {
+                // Backgrounded: no category change allowed. Reuse whatever
+                // playAndRecord session is already there; engine.start() will
+                // fail below if it is really gone.
+                guard session.category == .playAndRecord else { throw error }
+                Self.audioSessionOwnership.claim(self) {}
+                DebugLog.info(
+                    "Standby reusing existing playAndRecord session after configure failure: \(error)",
+                    context: "AudioRecorder"
+                )
+            }
 
             let engine = AVAudioEngine()
             let inputNode = engine.inputNode
@@ -315,7 +387,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         DebugLog.info("startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
 
         // Guard against multiple recording sessions
-        if audioRecorder != nil || audioEngine != nil {
+        if audioRecorder != nil || audioEngine != nil || realtimeCaptureEngine != nil {
             #if os(iOS)
                 if isMonitoringOnly {
                     stopMonitoringOnQueue(deactivateAudioSession: false)
@@ -340,10 +412,17 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         let fileManager = FileManager.default
 
         #if os(iOS)
+            // Configure the record session while the standby engine is still
+            // running. In the background, iOS only lets an app that is currently
+            // running audio re-activate a non-mixable session; tearing standby
+            // down first fails with '!pri' (560557684) and kills Quick Dictation.
             guard configureAudioSession() else {
                 abortManagedStartOnQueue(.audioSessionUnavailable)
                 return
             }
+            // Now hand the session over to the real recorder. Keep it active so
+            // the host stays alive; availability remains published by the host.
+            stopStandby(deactivateAudioSession: false)
         #endif
 
         DispatchQueue.main.async {
@@ -385,7 +464,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         }
 
         private func startMonitoringOnQueue() {
-            guard audioRecorder == nil, audioEngine == nil else {
+            guard audioRecorder == nil, audioEngine == nil, realtimeCaptureEngine == nil else {
                 return
             }
 
@@ -578,6 +657,61 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             self.isRecording = true
         }
         continuation.resume(returning: recordingURL)
+        startRealtimeCaptureTapOnQueueIfNeeded()
+    }
+
+    /// Best-effort PCM tap for cloud realtime. Started only after the durable
+    /// AVAudioRecorder has written audio, so a tap failure cannot lock out
+    /// recording. If the tap cannot start, batch fallback still has the file.
+    private func startRealtimeCaptureTapOnQueueIfNeeded() {
+        guard realtimeAudioDelivery.handler != nil else { return }
+        guard realtimeCaptureEngine == nil else { return }
+        guard audioRecorder != nil else { return }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            DebugLog.info("Realtime PCM tap unavailable: invalid input format", context: "AudioRecorder")
+            return
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+            self?.deliverRealtimeChunk(from: buffer)
+        }
+
+        do {
+            try engine.start()
+            realtimeCaptureEngine = engine
+            DebugLog.info("Realtime PCM tap started", context: "AudioRecorder")
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            DebugLog.info("Realtime PCM tap unavailable: \(error)", context: "AudioRecorder")
+        }
+    }
+
+    private func deliverRealtimeChunk(from buffer: AVAudioPCMBuffer) {
+        let lease = realtimeAudioDelivery.beginDelivery()
+        defer { lease?.discard() }
+        guard let lease else { return }
+        if let chunk = realtimePCMConverter.chunk(from: buffer), !chunk.isEmpty {
+            lease.deliver(chunk)
+        } else {
+            lease.failCoverage()
+        }
+    }
+
+    private func stopRealtimeCaptureTapOnQueue() {
+        guard let engine = realtimeCaptureEngine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        realtimeCaptureEngine = nil
+    }
+
+    public func detachRealtimeAudioChunkHandlerAndDrain(
+        _ completion: @escaping @Sendable (Bool) -> Void
+    ) {
+        realtimeAudioDelivery.detachAndDrain(completion)
     }
 
     private func terminallyFailManagedCaptureOnQueue(
@@ -698,6 +832,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
                     self.audioRecorder?.pause()
                     self.levelTimer?.cancel()
                     self.levelTimer = nil
+                    self.realtimeCaptureEngine?.pause()
                 } else if self.audioEngine?.isRunning == true {
                     self.audioEngine?.pause()
                 } else {
@@ -736,6 +871,16 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
                         return
                     }
                     self.startMeteringTimer()
+                    if let realtimeEngine = self.realtimeCaptureEngine, !realtimeEngine.isRunning {
+                        do {
+                            try realtimeEngine.start()
+                        } catch {
+                            DebugLog.info(
+                                "Failed to resume realtime PCM tap: \(error)",
+                                context: "AudioRecorder LOG"
+                            )
+                        }
+                    }
                 } else if let audioEngine = self.audioEngine, !audioEngine.isRunning {
                     do {
                         try audioEngine.start()
@@ -832,6 +977,9 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         audioRecorder?.stop()
         audioRecorder = nil
 
+        stopRealtimeCaptureTapOnQueue()
+        realtimeAudioDelivery.detachAndDrain { _ in }
+
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -870,6 +1018,11 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             removeManagedAudioSessionObserversOnQueue()
         #endif
         audioRecorder = nil
+        if let engine = realtimeCaptureEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        realtimeCaptureEngine = nil
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()

@@ -202,6 +202,19 @@ struct KeyboardRecordingView: View {
     private var recordingStateView: some View {
         VStack(spacing: 12) {
             HStack {
+                Button(action: onCancelAction) {
+                    Label("Cancel", systemImage: "xmark")
+                        .font(.subheadline.weight(.medium))
+                        .labelStyle(.titleAndIcon)
+                        .foregroundColor(.primary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 34)
+                        .background(Color(uiColor: KeyboardPalette.utilityKeyColor))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel recording")
+                .padding(.leading, 4)
                 Spacer()
             }
             .frame(height: 42)

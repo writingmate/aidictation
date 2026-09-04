@@ -1,4 +1,7 @@
-This update keeps you signed in.
+Keyboard dictation is back on its feet.
 
-• Your session is now restored when the app returns to the foreground or when the network comes back, instead of only once at launch — a cold start without connectivity no longer leaves you looking signed out.
-• More reliable storage of your login, so signing in sticks between launches.
+• The keyboard mic works again after the first session: later taps start recording right inside the keyboard instead of failing or bouncing to the app.
+• New Cancel button on the keyboard while recording or transcribing.
+• Clearer status when a recording can't start, instead of silently returning to the keys.
+• Cloud dictation streams live through Writingmate when you're signed in; otherwise it falls back to standard upload.
+• Fixes for the app getting stuck behind storage checks at launch.

@@ -345,21 +345,20 @@ private fun AccountSettingsSection(
 
         UsageSummary(usageStatus = usageStatus)
 
-        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-
         // Google is the only way in. Upgrading needs an account, so an anonymous user
-        // sees the Google button where a signed-in free user sees Upgrade.
+        // sees the Google button where a signed-in free user sees Upgrade. The button
+        // is the card's last element and carries its own outline, so no rule around it.
         if (!usageStatus.isAuthenticated) {
             if (onSignInWithGoogle != null) {
                 GoogleSignInButton(
                     onClick = onSignInWithGoogle,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
                 )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             }
         } else if (!usageStatus.isPro) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SettingsItem(
                 icon = Icons.Default.AutoAwesome,
                 title = stringResource(R.string.account_upgrade),
@@ -372,6 +371,7 @@ private fun AccountSettingsSection(
         }
 
         if (usageStatus.isAuthenticated) {
+            if (usageStatus.isPro) HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SettingsItem(
                 icon = Icons.AutoMirrored.Filled.Logout,
                 title = stringResource(R.string.account_sign_out),

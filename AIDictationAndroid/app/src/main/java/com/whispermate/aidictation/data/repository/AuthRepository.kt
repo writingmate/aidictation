@@ -2,6 +2,7 @@ package com.whispermate.aidictation.data.repository
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
@@ -256,7 +257,11 @@ class AuthRepository @Inject constructor(
         }
     }
 
-    fun openUpgrade(context: Context) {
+    /** Whether any checkout link is configured, so a paywall has somewhere to send the user. */
+    fun hasPaymentLinks(): Boolean = preferredPaymentLink().isNotBlank()
+
+    /** Opens checkout for [plan], or the preferred configured link when null. */
+    fun openUpgrade(context: Context, plan: PaymentPlan? = null) {
         // Signing in comes first and needs no payment link. Checking the link
         // before the session made the "Sign in to upgrade" entry point dead for
         // signed-out users whenever no production Stripe link was configured.
@@ -266,7 +271,7 @@ class AuthRepository @Inject constructor(
             return
         }
 
-        val link = preferredPaymentLink()
+        val link = paymentLinkFor(plan).ifBlank { preferredPaymentLink() }
         if (link.isBlank()) {
             _authState.value = _authState.value.copy(error = "Purchase link is not configured")
             Toast.makeText(context, "Purchase link is not configured", Toast.LENGTH_SHORT).show()
@@ -587,6 +592,13 @@ class AuthRepository @Inject constructor(
             .remove(SecureKeys.ACCESS_TOKEN)
             .remove(SecureKeys.REFRESH_TOKEN)
             .apply()
+    }
+
+    private fun paymentLinkFor(plan: PaymentPlan?): String = when (plan) {
+        PaymentPlan.Monthly -> BuildConfig.STRIPE_PAYMENT_LINK_MONTHLY
+        PaymentPlan.Annual -> BuildConfig.STRIPE_PAYMENT_LINK_ANNUAL
+        PaymentPlan.Lifetime -> BuildConfig.STRIPE_PAYMENT_LINK_LIFETIME
+        null -> ""
     }
 
     private fun preferredPaymentLink(): String {

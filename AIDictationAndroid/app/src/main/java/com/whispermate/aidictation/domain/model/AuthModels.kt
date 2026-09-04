@@ -1,6 +1,9 @@
 package com.whispermate.aidictation.domain.model
 
 const val FREE_MONTHLY_WORD_LIMIT = 2_000
+
+/** A Stripe payment link the app can open; each maps to one STRIPE_PAYMENT_LINK_* build value. */
+enum class PaymentPlan { Monthly, Annual, Lifetime }
 const val REFERRAL_BONUS_WORDS = 2_000
 
 enum class SubscriptionTier {

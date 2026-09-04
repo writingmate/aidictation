@@ -18,6 +18,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import com.whispermate.aidictation.data.repository.SubscriptionRepository
+import com.whispermate.aidictation.domain.model.UsageStatus
+import com.whispermate.aidictation.domain.model.PaymentPlan
+import android.content.Context
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -46,8 +50,40 @@ class OnboardingViewModel @Inject constructor(
     private val appPreferences: AppPreferences,
     private val parakeetModelAssets: ParakeetModelAssets,
     private val transcriptionRepository: TranscriptionRepository,
-    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator
+    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator,
+    private val subscriptionRepository: SubscriptionRepository
 ) : ViewModel() {
+
+    /** Account state for the closing sign-in step. */
+    val usageStatus: StateFlow<UsageStatus> = subscriptionRepository.usageStatus
+
+    val isGoogleSignInConfigured: Boolean
+        get() = subscriptionRepository.isGoogleSignInConfigured()
+
+    val hasPaymentLinks: Boolean
+        get() = subscriptionRepository.hasPaymentLinks()
+
+    /** Opens Stripe checkout for [plan] in the browser; the user comes back to finish onboarding. */
+    fun openUpgrade(plan: PaymentPlan) {
+        subscriptionRepository.openUpgrade(plan)
+    }
+
+    private val _isSigningIn = MutableStateFlow(false)
+    val isSigningIn: StateFlow<Boolean> = _isSigningIn.asStateFlow()
+
+    /** [activityContext] must be an Activity: the Google account picker is shown from it. */
+    fun signInWithGoogle(activityContext: Context) {
+        if (_isSigningIn.value) return
+        viewModelScope.launch {
+            _isSigningIn.value = true
+            try {
+                subscriptionRepository.signInWithGoogle(activityContext)
+            } finally {
+                _isSigningIn.value = false
+            }
+        }
+    }
+
     private companion object {
         const val TAG = "OnboardingViewModel"
     }

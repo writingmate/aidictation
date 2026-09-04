@@ -49,6 +49,8 @@ fun AIDictationNavHost(
     val onboardingOnDeviceModelState by onboardingViewModel.onDeviceModelState.collectAsState()
     val onboardingSelectedLanguages by onboardingViewModel.selectedLanguages.collectAsState()
     val onboardingDemoState by onboardingViewModel.demoState.collectAsState()
+    val onboardingUsageStatus by onboardingViewModel.usageStatus.collectAsState()
+    val onboardingIsSigningIn by onboardingViewModel.isSigningIn.collectAsState()
 
     val startDestination = if (hasCompletedOnboarding) Screen.Main.route else Screen.Onboarding.route
 
@@ -88,7 +90,13 @@ fun AIDictationNavHost(
                     demoState = onboardingDemoState,
                     onStartDemoRecording = onboardingViewModel::startDemoRecording,
                     onStopDemoRecording = onboardingViewModel::stopDemoRecording,
-                    onCancelDemoRecording = onboardingViewModel::cancelDemoRecording
+                    onCancelDemoRecording = onboardingViewModel::cancelDemoRecording,
+                    signInAvailable = onboardingViewModel.isGoogleSignInConfigured,
+                    signedInEmail = onboardingUsageStatus.email?.takeIf { onboardingUsageStatus.isAuthenticated },
+                    isSigningIn = onboardingIsSigningIn,
+                    onSignInWithGoogle = onboardingViewModel::signInWithGoogle,
+                    paywallAvailable = onboardingViewModel.hasPaymentLinks && !onboardingUsageStatus.isPro,
+                    onUpgrade = onboardingViewModel::openUpgrade
                 )
             }
         }

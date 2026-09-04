@@ -41,6 +41,13 @@ import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AutoAwesome
+import com.whispermate.aidictation.domain.model.PaymentPlan
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -62,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -187,7 +195,9 @@ private enum class OnboardingStep {
     Languages,
     OnDeviceTranscription,
     Permissions,
-    ButtonDemo
+    ButtonDemo,
+    SignIn,
+    Paywall
 }
 
 @Composable
@@ -202,7 +212,13 @@ fun OnboardingScreen(
     demoState: OnboardingDemoUiState = OnboardingDemoUiState(),
     onStartDemoRecording: () -> Unit = {},
     onStopDemoRecording: () -> Unit = {},
-    onCancelDemoRecording: () -> Unit = {}
+    onCancelDemoRecording: () -> Unit = {},
+    signInAvailable: Boolean = false,
+    signedInEmail: String? = null,
+    isSigningIn: Boolean = false,
+    onSignInWithGoogle: (Context) -> Unit = {},
+    paywallAvailable: Boolean = false,
+    onUpgrade: (PaymentPlan) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -215,15 +231,21 @@ fun OnboardingScreen(
 
     OnboardingSystemBars()
 
-    val onboardingSteps = remember {
+    var selectedPlan by remember { mutableStateOf(PaymentPlan.Annual) }
+    val onboardingSteps = remember(signInAvailable, paywallAvailable) {
         buildList {
             add(OnboardingStep.Welcome)
             add(OnboardingStep.Languages)
             add(OnboardingStep.OnDeviceTranscription)
             add(OnboardingStep.Permissions)
             add(OnboardingStep.ButtonDemo)
+            // Last, once everything is authorised: sign in so the account follows the user.
+            if (signInAvailable) add(OnboardingStep.SignIn)
+            // The paywall closes onboarding; it drops out once the account is already Pro.
+            if (paywallAvailable) add(OnboardingStep.Paywall)
         }
     }
+    val isLastStep = currentStep >= onboardingSteps.lastIndex
     val currentOnboardingStep = onboardingSteps[currentStep.coerceAtMost(onboardingSteps.lastIndex)]
 
     val contextRulesEnabled = remember {
@@ -344,6 +366,11 @@ fun OnboardingScreen(
                         onStopRecording = onStopDemoRecording,
                         onCancelRecording = onCancelDemoRecording
                     )
+                    OnboardingStep.SignIn -> SignInStep(signedInEmail = signedInEmail)
+                    OnboardingStep.Paywall -> PaywallStep(
+                        selectedPlan = selectedPlan,
+                        onSelectPlan = { selectedPlan = it }
+                    )
                 }
             }
         }
@@ -383,17 +410,69 @@ fun OnboardingScreen(
                     Text(stringResource(R.string.onboarding_skip_for_now))
                 }
             }
+        } else if (currentOnboardingStep == OnboardingStep.Paywall) {
+            Button(
+                onClick = { onUpgrade(selectedPlan) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
+            ) {
+                Text(
+                    text = stringResource(R.string.onboarding_paywall_cta),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.onboarding_paywall_refund),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            TextButton(
+                onClick = { finishOnboarding() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.onboarding_paywall_continue_free))
+            }
+        } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
+            // The Google button is the one action here; finishing without an account stays possible.
+            OutlinedButton(
+                onClick = { onSignInWithGoogle(context) },
+                enabled = !isSigningIn,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = RoundedCornerShape(28.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_google_g),
+                    contentDescription = null,
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = stringResource(R.string.account_continue_with_google),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            TextButton(
+                onClick = { finishOnboarding() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.onboarding_skip_for_now))
+            }
         } else {
             Button(
-                onClick = {
-                    when (currentOnboardingStep) {
-                        OnboardingStep.Welcome,
-                        OnboardingStep.Languages,
-                        OnboardingStep.OnDeviceTranscription,
-                        OnboardingStep.Permissions -> goToNextStep()
-                        OnboardingStep.ButtonDemo -> finishOnboarding()
-                    }
-                },
+                onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -409,7 +488,7 @@ fun OnboardingScreen(
                 )
             ) {
                 Text(
-                    text = if (currentOnboardingStep == OnboardingStep.ButtonDemo) {
+                    text = if (isLastStep) {
                         stringResource(R.string.onboarding_get_started)
                     } else {
                         stringResource(R.string.onboarding_continue)
@@ -972,6 +1051,191 @@ private fun RatingRow(
                     contentDescription = null,
                     modifier = Modifier.size(13.dp),
                     tint = if (index < stars.coerceIn(0, 5)) colors.onSurfaceVariant else colors.outline
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PaywallStep(
+    selectedPlan: PaymentPlan,
+    onSelectPlan: (PaymentPlan) -> Unit
+) {
+    val colors = onboardingColors()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.AutoAwesome)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_paywall_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_paywall_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        PlanChoiceCard(
+            title = stringResource(R.string.onboarding_paywall_annual),
+            price = stringResource(R.string.onboarding_paywall_annual_price),
+            badge = stringResource(R.string.onboarding_paywall_annual_badge),
+            selected = selectedPlan == PaymentPlan.Annual,
+            onClick = { onSelectPlan(PaymentPlan.Annual) }
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        PlanChoiceCard(
+            title = stringResource(R.string.onboarding_paywall_monthly),
+            price = stringResource(R.string.onboarding_paywall_monthly_price),
+            badge = null,
+            selected = selectedPlan == PaymentPlan.Monthly,
+            onClick = { onSelectPlan(PaymentPlan.Monthly) }
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        PlanChoiceCard(
+            title = stringResource(R.string.onboarding_paywall_lifetime),
+            price = stringResource(R.string.onboarding_paywall_lifetime_price),
+            badge = stringResource(R.string.onboarding_paywall_lifetime_badge),
+            selected = selectedPlan == PaymentPlan.Lifetime,
+            onClick = { onSelectPlan(PaymentPlan.Lifetime) }
+        )
+    }
+}
+
+@Composable
+private fun PlanChoiceCard(
+    title: String,
+    price: String,
+    badge: String?,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = onboardingColors()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
+            .border(
+                BorderStroke(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant
+                ),
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .border(
+                    width = 2.dp,
+                    color = if (selected) colors.primary else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(colors.primary)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface
+            )
+            Text(
+                text = price,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.onSurfaceVariant
+            )
+        }
+
+        if (badge != null) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = badge,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SignInStep(signedInEmail: String?) {
+    val colors = onboardingColors()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.AccountCircle)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_sign_in_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_sign_in_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        if (signedInEmail != null) {
+            Spacer(modifier = Modifier.height(32.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colors.surfaceVariant.copy(alpha = 0.55f))
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = stringResource(R.string.onboarding_sign_in_signed_in_as, signedInEmail),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

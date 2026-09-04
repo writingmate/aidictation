@@ -54,9 +54,16 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
     @Published public var audioLevel: Float = 0.0 // Audio level for visualization (0.0 to 1.0)
     @Published public var frequencyBands: [Float] = Array(repeating: 0.0, count: frequencyBandCount)
     @Published public private(set) var managedAttemptFailure: ManagedAudioRecordingFailure?
+    public var realtimeAudioChunkHandler: (@Sendable (Data) -> Void)? {
+        get { realtimeAudioDelivery.handler }
+        set { realtimeAudioDelivery.handler = newValue }
+    }
 
     private var audioRecorder: AVAudioRecorder?
     private var audioEngine: AVAudioEngine?
+    private var realtimeCaptureEngine: AVAudioEngine?
+    private let realtimeAudioDelivery = RealtimeAudioDeliveryQueue()
+    private let realtimePCMConverter = RealtimePCMConverter()
     private var standbyEngine: AVAudioEngine?
     private var recordingURL: URL?
     private var isMonitoringOnly = false
@@ -315,7 +322,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         DebugLog.info("startRecording called - isRecording before: \(isRecording)", context: "AudioRecorder LOG")
 
         // Guard against multiple recording sessions
-        if audioRecorder != nil || audioEngine != nil {
+        if audioRecorder != nil || audioEngine != nil || realtimeCaptureEngine != nil {
             #if os(iOS)
                 if isMonitoringOnly {
                     stopMonitoringOnQueue(deactivateAudioSession: false)
@@ -385,7 +392,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         }
 
         private func startMonitoringOnQueue() {
-            guard audioRecorder == nil, audioEngine == nil else {
+            guard audioRecorder == nil, audioEngine == nil, realtimeCaptureEngine == nil else {
                 return
             }
 
@@ -578,6 +585,61 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             self.isRecording = true
         }
         continuation.resume(returning: recordingURL)
+        startRealtimeCaptureTapOnQueueIfNeeded()
+    }
+
+    /// Best-effort PCM tap for cloud realtime. Started only after the durable
+    /// AVAudioRecorder has written audio, so a tap failure cannot lock out
+    /// recording. If the tap cannot start, batch fallback still has the file.
+    private func startRealtimeCaptureTapOnQueueIfNeeded() {
+        guard realtimeAudioDelivery.handler != nil else { return }
+        guard realtimeCaptureEngine == nil else { return }
+        guard audioRecorder != nil else { return }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            DebugLog.info("Realtime PCM tap unavailable: invalid input format", context: "AudioRecorder")
+            return
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+            self?.deliverRealtimeChunk(from: buffer)
+        }
+
+        do {
+            try engine.start()
+            realtimeCaptureEngine = engine
+            DebugLog.info("Realtime PCM tap started", context: "AudioRecorder")
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            DebugLog.info("Realtime PCM tap unavailable: \(error)", context: "AudioRecorder")
+        }
+    }
+
+    private func deliverRealtimeChunk(from buffer: AVAudioPCMBuffer) {
+        let lease = realtimeAudioDelivery.beginDelivery()
+        defer { lease?.discard() }
+        guard let lease else { return }
+        if let chunk = realtimePCMConverter.chunk(from: buffer), !chunk.isEmpty {
+            lease.deliver(chunk)
+        } else {
+            lease.failCoverage()
+        }
+    }
+
+    private func stopRealtimeCaptureTapOnQueue() {
+        guard let engine = realtimeCaptureEngine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        realtimeCaptureEngine = nil
+    }
+
+    public func detachRealtimeAudioChunkHandlerAndDrain(
+        _ completion: @escaping @Sendable (Bool) -> Void
+    ) {
+        realtimeAudioDelivery.detachAndDrain(completion)
     }
 
     private func terminallyFailManagedCaptureOnQueue(
@@ -698,6 +760,7 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
                     self.audioRecorder?.pause()
                     self.levelTimer?.cancel()
                     self.levelTimer = nil
+                    self.realtimeCaptureEngine?.pause()
                 } else if self.audioEngine?.isRunning == true {
                     self.audioEngine?.pause()
                 } else {
@@ -736,6 +799,16 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
                         return
                     }
                     self.startMeteringTimer()
+                    if let realtimeEngine = self.realtimeCaptureEngine, !realtimeEngine.isRunning {
+                        do {
+                            try realtimeEngine.start()
+                        } catch {
+                            DebugLog.info(
+                                "Failed to resume realtime PCM tap: \(error)",
+                                context: "AudioRecorder LOG"
+                            )
+                        }
+                    }
                 } else if let audioEngine = self.audioEngine, !audioEngine.isRunning {
                     do {
                         try audioEngine.start()
@@ -832,6 +905,9 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
         audioRecorder?.stop()
         audioRecorder = nil
 
+        stopRealtimeCaptureTapOnQueue()
+        realtimeAudioDelivery.detachAndDrain { _ in }
+
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -870,6 +946,11 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             removeManagedAudioSessionObserversOnQueue()
         #endif
         audioRecorder = nil
+        if let engine = realtimeCaptureEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        realtimeCaptureEngine = nil
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()

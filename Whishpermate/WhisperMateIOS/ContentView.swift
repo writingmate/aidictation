@@ -2432,6 +2432,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
     private let audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
     /// Public accessor for the audio recorder, needed for Quick Dictation standby mode.
     var audioRecorder: AudioRecorder { audioRecorderSlot.current }
+    private let realtimeTranscription = IOSRealtimeTranscriptionCoordinator()
     private let processingStore = MobileAudioProcessingStore.shared
     private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared
@@ -2619,6 +2620,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         activeAttemptTask?.cancel()
         captureDeadlineTask?.cancel()
         let abandonedRecorder = audioRecorder
+        realtimeTranscription.cancel(recorder: abandonedRecorder)
         retireAudioRecorderIfCurrent(abandonedRecorder)
         let identity = keyboardAttemptIdentity
         activeAttemptTask = Task { @MainActor in
@@ -2668,6 +2670,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     func stopListening() {
+        realtimeTranscription.cancel(recorder: audioRecorder)
         activeAttemptTask?.cancel()
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
@@ -2789,6 +2792,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         let recorder = audioRecorder
+        realtimeTranscription.cancel(recorder: recorder)
         let outputMode = activeOutputMode ?? .dictation
         let transcriptionOptions = activeTranscriptionOptions ?? .default
         let fallbackDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
@@ -3040,6 +3044,10 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     }
                 }
 
+                self.realtimeTranscription.startIfAvailable(
+                    recorder: recorder,
+                    request: request
+                )
                 _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
                     try await recorder.startRecording(
                         at: prepared.sourceURL,
@@ -3078,6 +3086,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     )
                 }
             } catch {
+                realtimeTranscription.cancel(recorder: recorder)
                 var terminalResult: MobileAudioProcessingStore.TerminalCommitResult?
                 if let lease {
                     retireAudioRecorderIfCurrent(recorder)
@@ -3187,6 +3196,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
 
         let recorder = audioRecorder
+        realtimeTranscription.beginFinish(recorder: recorder)
         let capturedDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
         let finalizationSeconds = max(
             minimumFinalizationDeadline,
@@ -3387,23 +3397,38 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 recognitionSeconds: deadline,
                 cleanupSeconds: cleanupStageDeadline
             ) { cleanupDidStart in
-                try await SharedTranscriptionService.transcribe(
+                let checkpoint = { (text: String) async throws in
+                    try await self.processingStore.checkpointRecognitionPartial(text, lease: lease)
+                }
+                let rawCheckpoint = { (raw: String) async throws in
+                    try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
+                }
+                let cleanupStarted = { () async throws in
+                    try await self.processingStore.cleanupStarted(
+                        lease,
+                        deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
+                    )
+                    cleanupDidStart()
+                }
+                if request.prefersRealtimeRecognition,
+                   let realtimeText = await self.realtimeTranscription.completedTranscript()
+                {
+                    return try await SharedTranscriptionService.completeRealtimeTranscript(
+                        realtimeText,
+                        request: request,
+                        onRecognitionCheckpoint: checkpoint,
+                        onRawTranscript: rawCheckpoint,
+                        onCleanupStarted: cleanupStarted
+                    )
+                }
+                self.realtimeTranscription.closeFinishRequest()
+                return try await SharedTranscriptionService.transcribe(
                     audioURL: recognitionURL,
                     request: request,
                     chunkWorkspace: chunkWorkspace,
-                    onRecognitionCheckpoint: { checkpoint in
-                        try await self.processingStore.checkpointRecognitionPartial(checkpoint, lease: lease)
-                    },
-                    onRawTranscript: { raw in
-                        try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
-                    },
-                    onCleanupStarted: {
-                        try await self.processingStore.cleanupStarted(
-                            lease,
-                            deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
-                        )
-                        cleanupDidStart()
-                    }
+                    onRecognitionCheckpoint: checkpoint,
+                    onRawTranscript: rawCheckpoint,
+                    onCleanupStarted: cleanupStarted
                 )
             }
             guard activeAttempt == lease, !Task.isCancelled else { throw CancellationError() }

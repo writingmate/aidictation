@@ -1,4 +1,5 @@
 import Foundation
+import WhisperMateShared
 
 nonisolated final class SonioxRealtimeTranscriptionClient: @unchecked Sendable, RealtimeTranscriptionStreaming {
     typealias AuthorizationProvider = @Sendable () async throws -> WritingmateRealtimeClientSecretProvider.Authorization

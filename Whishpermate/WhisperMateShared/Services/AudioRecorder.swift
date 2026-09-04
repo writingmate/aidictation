@@ -145,6 +145,21 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
                 }
             }
             _ = lastError
+            // Background rule: iOS refuses any category change or re-activation
+            // while the app is not frontmost. If the process already holds a
+            // playAndRecord session (standby or a previous recording), keep it
+            // as-is and let the recorder try; a truly dead session fails at
+            // record() with a clear error instead of here.
+            let session = AVAudioSession.sharedInstance()
+            if session.category == .playAndRecord {
+                Self.audioSessionOwnership.claim(self) {}
+                isAudioSessionConfigured = true
+                DebugLog.info(
+                    "Keeping existing playAndRecord session mode=\(session.mode.rawValue) options=\(session.categoryOptions.rawValue)",
+                    context: "AudioRecorder"
+                )
+                return true
+            }
             return false
         }
 
@@ -180,13 +195,25 @@ public final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDel
             let session = AVAudioSession.sharedInstance()
             // Claim ownership so a retired recorder's deinit cannot deactivate
             // the session standby is now keeping alive.
-            try Self.audioSessionOwnership.claim(self) {
-                try session.setCategory(
-                    .playAndRecord,
-                    mode: .default,
-                    options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
+            do {
+                try Self.audioSessionOwnership.claim(self) {
+                    try session.setCategory(
+                        .playAndRecord,
+                        mode: .default,
+                        options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP]
+                    )
+                    try session.setActive(true)
+                }
+            } catch {
+                // Backgrounded: no category change allowed. Reuse whatever
+                // playAndRecord session is already there; engine.start() will
+                // fail below if it is really gone.
+                guard session.category == .playAndRecord else { throw error }
+                Self.audioSessionOwnership.claim(self) {}
+                DebugLog.info(
+                    "Standby reusing existing playAndRecord session after configure failure: \(error)",
+                    context: "AudioRecorder"
                 )
-                try session.setActive(true)
             }
 
             let engine = AVAudioEngine()

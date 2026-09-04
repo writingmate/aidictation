@@ -85,8 +85,6 @@ fun LanguageSettingsScreen(
     }
 
     Scaffold(
-        // White page; the cards carry the light grey.
-        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_languages)) },

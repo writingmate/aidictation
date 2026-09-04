@@ -71,6 +71,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
 import com.whispermate.aidictation.ui.components.SettingsRowGap
+import com.whispermate.aidictation.ui.components.GoogleSignInButton
 import com.whispermate.aidictation.data.preferences.OverlayBubblePreferences
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.UsageStatus
@@ -384,36 +385,6 @@ private fun AccountSettingsSection(
                 onClick = onSignOut
             )
         }
-    }
-}
-
-/**
- * Google's sign-in button per its branding guidelines: outlined, the untinted "G" mark,
- * "Continue with Google". Material outlined emphasis, so it sits below the accent-filled
- * primary actions.
- */
-@Composable
-private fun GoogleSignInButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = MaterialTheme.colorScheme.onSurface
-        )
-    ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_google_g),
-            contentDescription = null,
-            tint = Color.Unspecified,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = stringResource(R.string.account_continue_with_google),
-            fontWeight = FontWeight.Medium
-        )
     }
 }
 

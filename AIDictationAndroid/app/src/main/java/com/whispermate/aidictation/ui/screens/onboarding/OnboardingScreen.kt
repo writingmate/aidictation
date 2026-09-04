@@ -101,6 +101,7 @@ import com.whispermate.aidictation.data.preferences.AppPreferences
 import com.whispermate.aidictation.domain.model.WhisperLanguage
 import com.whispermate.aidictation.domain.model.WhisperLanguages
 import com.whispermate.aidictation.ui.components.KeepScreenOn
+import com.whispermate.aidictation.ui.components.GoogleSignInButton
 import com.whispermate.aidictation.ui.permissions.AccessibilityDisclosureSheet
 import com.whispermate.aidictation.ui.permissions.OverlayPermissions
 import com.whispermate.aidictation.ui.permissions.PermissionRows
@@ -481,28 +482,13 @@ fun OnboardingScreen(
             }
         } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
             // The Google button is the one action here; finishing without an account stays possible.
-            OutlinedButton(
+            GoogleSignInButton(
                 onClick = { onSignInWithGoogle(context) },
                 enabled = !isSigningIn,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(28.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_google_g),
-                    contentDescription = null,
-                    tint = Color.Unspecified,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = stringResource(R.string.account_continue_with_google),
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
+                    .height(56.dp)
+            )
             TextButton(
                 onClick = { finishOnboarding() },
                 modifier = Modifier.fillMaxWidth()

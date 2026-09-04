@@ -65,15 +65,9 @@ public final class IOSRealtimeTranscriptionCoordinator {
                 return
             }
 
-            // Writingmate realtime needs a signed-in first-party session. Without
-            // one the token fetch always fails; skip the doomed stream and let
-            // batch upload (free local quota) carry the recording.
-            if WritingmateRealtimeSessionSupport.isWritingmateSessionEndpoint(endpoint),
-               !AuthManager.shared.isAuthenticated {
-                DebugLog.info("Skipping realtime start: not signed in; using batch upload", context: "IOSRealtime")
-                return
-            }
-
+            // Writingmate realtime mints a client_secret with the signed-in
+            // user token when available, otherwise the bundled app API key
+            // already used for unsigned cloud transcription.
             let prompt = context.prompt
             let language = context.language
             let keywords = context.keywords
@@ -83,12 +77,14 @@ public final class IOSRealtimeTranscriptionCoordinator {
                 authorizationProvider: {
                     let token: String
                     if WritingmateRealtimeSessionSupport.isWritingmateSessionEndpoint(endpoint) {
-                        token = try await AuthManager.shared.accessToken()
-                    } else if !apiKey.isEmpty {
-                        token = apiKey
+                        token = try await WritingmateRealtimeSessionSupport.resolveClientSecretAPIKey(
+                            fallbackAPIKey: apiKey
+                        )
+                    } else if let fallback = WritingmateRealtimeSessionSupport.usableClientSecretAPIKey(apiKey) {
+                        token = fallback
                     } else {
                         throw OpenAIRealtimeTranscriptionClientError.clientSecretRequestFailed(
-                            "Cloud transcription credentials are unavailable"
+                            WritingmateRealtimeSessionSupport.missingClientSecretCredentialsMessage
                         )
                     }
                     return try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(

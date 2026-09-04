@@ -2661,10 +2661,12 @@ class AppState: ObservableObject {
             }
             client = SonioxRealtimeTranscriptionClient(
                 authorizationProvider: {
-                    let accessToken = try await AuthManager.shared.accessToken()
+                    let apiKey = try await WritingmateRealtimeSessionSupport.resolveClientSecretAPIKey(
+                        fallbackAPIKey: snapshot.transcriptionAPIKey
+                    )
                     return try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(
                         endpoint: endpoint,
-                        apiKey: accessToken,
+                        apiKey: apiKey,
                         model: SonioxRealtimeProtocol.model,
                         prompt: realtimePrompt,
                         language: languageCode,
@@ -2731,12 +2733,16 @@ class AppState: ObservableObject {
                     authorizationProvider: {
                         let token: String
                         if Self.isWritingmateRealtimeSessionEndpoint(endpoint) {
-                            token = try await AuthManager.shared.accessToken()
-                        } else if let apiKey = snapshot.transcriptionAPIKey, !apiKey.isEmpty {
+                            token = try await WritingmateRealtimeSessionSupport.resolveClientSecretAPIKey(
+                                fallbackAPIKey: snapshot.transcriptionAPIKey
+                            )
+                        } else if let apiKey = WritingmateRealtimeSessionSupport.usableClientSecretAPIKey(
+                            snapshot.transcriptionAPIKey
+                        ) {
                             token = apiKey
                         } else {
                             throw OpenAIRealtimeTranscriptionClientError.clientSecretRequestFailed(
-                                "Cloud transcription credentials are unavailable"
+                                WritingmateRealtimeSessionSupport.missingClientSecretCredentialsMessage
                             )
                         }
                         return try await WritingmateRealtimeClientSecretProvider.fetchAuthorization(

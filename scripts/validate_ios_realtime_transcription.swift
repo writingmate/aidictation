@@ -8,6 +8,7 @@ struct ValidateIOSRealtimeTranscription {
         try validateSharedClientContract()
         try validateIOSRecorderStreaming()
         try validateIOSCloudFlowWiring()
+        try validateClientSecretAPIKeyFallback()
         print("iOS realtime transcription uses Writingmate client_secrets/WebSocket with batch fallback")
     }
 
@@ -74,13 +75,22 @@ struct ValidateIOSRealtimeTranscription {
         )
         precondition(support.contains("isWritingmateSessionEndpoint"))
         precondition(support.contains("/api/openai/v1/realtime/client_secrets"))
-        precondition(support.contains("AuthManager") == false)
+        precondition(support.contains("resolveClientSecretAPIKey"))
+        precondition(support.contains("usableClientSecretAPIKey"))
+        precondition(support.contains("AuthManager.shared.isAuthenticated"))
+        precondition(support.contains("AuthManager.shared.accessToken()"))
+        precondition(support.contains("SecretsLoader.transcriptionKey(for: .custom)"))
+        precondition(support.contains("missingClientSecretCredentialsMessage"))
+        precondition(support.contains("Cloud transcription credentials are unavailable"))
 
         let coordinator = try contents(
             "Whishpermate/WhisperMateShared/Services/IOSRealtimeTranscriptionCoordinator.swift"
         )
         precondition(coordinator.contains("WritingmateRealtimeClientSecretProvider.fetchAuthorization"))
-        precondition(coordinator.contains("AuthManager.shared.accessToken()"))
+        precondition(coordinator.contains("WritingmateRealtimeSessionSupport.resolveClientSecretAPIKey"))
+        precondition(coordinator.contains("fallbackAPIKey: apiKey"))
+        precondition(!coordinator.contains("AuthManager.shared.accessToken()"))
+        precondition(!coordinator.contains("Skipping realtime start: not signed in"))
         precondition(coordinator.contains("OpenAIRealtimeTranscriptionClient"))
         precondition(coordinator.contains("prefersRealtimeRecognition"))
         precondition(coordinator.contains("CloudTranscriptionConsent.isGranted"))
@@ -159,6 +169,44 @@ struct ValidateIOSRealtimeTranscription {
         precondition(sheet.contains("shouldUseOnDeviceTranscription"))
         precondition(content.contains("SharedParakeetTranscriptionService"))
         precondition(sheet.contains("SharedParakeetTranscriptionService"))
+    }
+
+    private static func validateClientSecretAPIKeyFallback() throws {
+        precondition(usableClientSecretAPIKey("wm-app-key") == "wm-app-key")
+        precondition(usableClientSecretAPIKey("  wm-app-key  ") == "wm-app-key")
+        precondition(usableClientSecretAPIKey(nil) == nil)
+        precondition(usableClientSecretAPIKey("") == nil)
+        precondition(usableClientSecretAPIKey("   ") == nil)
+        precondition(usableClientSecretAPIKey("not-needed") == nil)
+
+        let appState = try contents("Whishpermate/Whispermate/Services/AppState.swift")
+        guard let sonioxStart = appState.range(of: "case .soniox:"),
+              let aidictationStart = appState.range(
+                of: "case .aidictation:",
+                range: sonioxStart.upperBound..<appState.endIndex
+              )
+        else {
+            throw ValidationFailure.failed("Could not isolate Mac Soniox realtime authorization")
+        }
+        let sonioxSource = String(appState[sonioxStart.lowerBound..<aidictationStart.lowerBound])
+        precondition(sonioxSource.contains("WritingmateRealtimeSessionSupport.resolveClientSecretAPIKey"))
+        precondition(sonioxSource.contains("fallbackAPIKey: snapshot.transcriptionAPIKey"))
+        precondition(!sonioxSource.contains("AuthManager.shared.accessToken()"))
+
+        let sonioxClient = try contents(
+            "Whishpermate/Whispermate/Services/SonioxRealtimeTranscriptionClient.swift"
+        )
+        precondition(sonioxClient.contains("authorizationFailureMessage(for:"))
+        precondition(sonioxClient.contains("clientSecretRequestFailed"))
+    }
+
+    private static func usableClientSecretAPIKey(_ key: String?) -> String? {
+        guard let key else { return nil }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "not-needed" else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func endpoint(from transcriptionEndpoint: String) -> String? {

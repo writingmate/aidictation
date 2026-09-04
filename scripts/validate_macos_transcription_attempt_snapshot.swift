@@ -244,6 +244,13 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
                 "Realtime attempt still reads mutable state: \(forbidden)"
             )
         }
+        precondition(
+            realtimeSource.contains("WritingmateRealtimeSessionSupport.resolveClientSecretAPIKey")
+        )
+        precondition(
+            realtimeSource.contains("fallbackAPIKey: snapshot.transcriptionAPIKey")
+        )
+        precondition(!realtimeSource.contains("AuthManager.shared.accessToken()"))
         precondition(source.contains("if let realtimeResult"))
         precondition(!source.contains("usingBatchFallback"))
         precondition(!source.contains("groq/whisper-large-v3-turbo"))

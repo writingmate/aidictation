@@ -79,4 +79,63 @@ public enum WritingmateRealtimeSessionSupport {
         }
         return model
     }
+
+    /// Bearer token for minting a Writingmate realtime `client_secret`.
+    /// Prefers a signed-in user access token; otherwise uses the bundled app
+    /// API key already used for unsigned cloud transcription.
+    public static func resolveClientSecretAPIKey(
+        fallbackAPIKey: String? = nil
+    ) async throws -> String {
+        if let userToken = await userAccessTokenIfAvailable() {
+            return userToken
+        }
+
+        if let fallback = usableClientSecretAPIKey(fallbackAPIKey) {
+            return fallback
+        }
+
+        if let keychainKey = usableClientSecretAPIKey(
+            KeychainHelper.get(key: TranscriptionProvider.custom.apiKeyName)
+        ) {
+            return keychainKey
+        }
+
+        if let bundledKey = usableClientSecretAPIKey(
+            SecretsLoader.transcriptionKey(for: .custom)
+        ) {
+            return bundledKey
+        }
+
+        throw OpenAIRealtimeTranscriptionClientError.clientSecretRequestFailed(
+            Self.missingClientSecretCredentialsMessage
+        )
+    }
+
+    public static let missingClientSecretCredentialsMessage =
+        "Cloud transcription credentials are unavailable"
+
+    public static func usableClientSecretAPIKey(_ key: String?) -> String? {
+        guard let key else { return nil }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "not-needed" else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func userAccessTokenIfAvailable() async -> String? {
+        guard AuthManager.shared.isAuthenticated else {
+            return nil
+        }
+        do {
+            let token = try await AuthManager.shared.accessToken()
+            return usableClientSecretAPIKey(token)
+        } catch {
+            DebugLog.warning(
+                "User access token unavailable for realtime mint; using app key if configured",
+                context: "WritingmateRealtime"
+            )
+            return nil
+        }
+    }
 }

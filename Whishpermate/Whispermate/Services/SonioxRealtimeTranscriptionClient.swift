@@ -64,8 +64,9 @@ nonisolated final class SonioxRealtimeTranscriptionClient: @unchecked Sendable, 
                 } catch is CancellationError {
                     return
                 } catch {
+                    let message = self.authorizationFailureMessage(for: error)
                     self.queue.async { [weak self] in
-                        self?.failOnQueue("Fast streaming could not start.")
+                        self?.failOnQueue(message)
                     }
                 }
             }
@@ -258,6 +259,16 @@ nonisolated final class SonioxRealtimeTranscriptionClient: @unchecked Sendable, 
         } catch {
             failOnQueue("Fast streaming could not read the transcript.")
         }
+    }
+
+    private func authorizationFailureMessage(for error: Error) -> String {
+        if let realtimeError = error as? OpenAIRealtimeTranscriptionClientError,
+           case .clientSecretRequestFailed(let detail) = realtimeError,
+           !detail.isEmpty
+        {
+            return detail
+        }
+        return "Fast streaming could not start."
     }
 
     private func failOnQueue(_ message: String) {

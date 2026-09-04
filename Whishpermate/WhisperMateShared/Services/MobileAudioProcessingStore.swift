@@ -535,6 +535,8 @@ public actor MobileAudioProcessingStore {
                     trustedContainerDirectory: container
                 )
             } catch {
+                // Directory fsync after mkdir is best-effort on iOS. Only a missing
+                // app group or mkdir/open failure should land in this stub.
                 return MobileAudioProcessingStore(unavailable: ())
             }
         #else
@@ -1228,9 +1230,34 @@ public actor MobileAudioProcessingStore {
         }
     }
 
+    /// True when launch recovery should wipe the processing journal and retry.
+    /// Leftover `QUARANTINED` (and normalize blocked by that flag) is the only wipe.
+    /// A missing app-group / unavailable stub is not a history wipe.
+    public static func shouldForceResetQuarantine(_ error: Error) -> Bool {
+        (error as? StoreError) == .quarantined
+    }
+
+    /// Launch recovery: normalize interrupted attempts. If the store is quarantined,
+    /// clear the quarantine once and retry. History files are not touched.
+    @discardableResult
+    public func normalizeInterruptedAttemptsRecoveringQuarantine() throws -> [Snapshot] {
+        do {
+            return try normalizeInterruptedAttempts()
+        } catch {
+            guard Self.shouldForceResetQuarantine(error) else { throw error }
+            DebugLog.warning(
+                "Mobile audio store is quarantined; attempting one-time reset",
+                context: "MobileAudioProcessingStore"
+            )
+            try forceResetQuarantine()
+            return try normalizeInterruptedAttempts()
+        }
+    }
+
     /// Removes the quarantine flag and resets the store to allow recovery from a locked state.
     /// This is a last-resort recovery option that clears all pending attempts and quarantine state.
     /// Call this when the store is permanently locked and no other recovery is possible.
+    /// HistoryManager recordings (`history.json` / `Recordings/`) are not deleted.
     public func forceResetQuarantine() throws {
         let fm = FileManager.default
 
@@ -2830,7 +2857,13 @@ public actor MobileAudioProcessingStore {
     }
 
     @discardableResult
-    static func ensureDirectoryNoFollow(parent: URL, name: String) throws -> URL {
+    static func ensureDirectoryNoFollow(
+        parent: URL,
+        name: String,
+        parentDirectoryFsync: (@Sendable (Int32) -> Int32)? = nil,
+        treatDirectoryFsyncAsBestEffort: Bool = MobileAudioLaunchRecoveryPolicy
+            .directoryCreationTreatsFsyncAsBestEffort
+    ) throws -> URL {
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
             throw StoreError.quarantined
         }
@@ -2861,7 +2894,16 @@ public actor MobileAudioProcessingStore {
             guard Darwin.fstat(childDescriptor, &status) == 0,
                   (status.st_mode & S_IFMT) == S_IFDIR
             else { throw StoreError.quarantined }
-            guard Darwin.fsync(parentDescriptor) == 0 else { throw StoreError.unavailable }
+            // mkdirat/openat already proved the directory exists. iOS/APFS directory
+            // fsync is unreliable and must not brick shared-store initialization.
+            let fsyncImpl = parentDirectoryFsync ?? { Darwin.fsync($0) }
+            let fsyncResult = fsyncImpl(parentDescriptor)
+            guard MobileAudioLaunchRecoveryPolicy.acceptDirectoryCreationFsync(
+                result: fsyncResult,
+                bestEffort: treatDirectoryFsyncAsBestEffort
+            ) else {
+                throw StoreError.unavailable
+            }
         #else
             try FileManager.default.createDirectory(
                 at: directory,

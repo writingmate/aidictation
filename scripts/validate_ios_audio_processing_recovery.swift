@@ -2341,6 +2341,23 @@ private func testIOSCallerRecoveryContracts() throws {
         "Keyboard recording can start before mobile audio recovery"
     )
     try require(
+        !content.contains("mobileAudioRecoveryReady = succeeded"),
+        "A failed launch recovery pass permanently bricks the app behind mobileAudioRecoveryReady"
+    )
+    guard let recoverStart = content.range(of: "private func recoverMobileAudioProcessingIfNeeded()"),
+          let recoverEnd = content.range(
+            of: "private static func performMobileAudioRecovery(",
+            range: recoverStart.upperBound ..< content.endIndex
+          )
+    else { throw ValidationFailure.failed("Mobile audio launch recovery function is missing") }
+    let recoverBody = String(content[recoverStart.lowerBound ..< recoverEnd.lowerBound])
+    try require(
+        recoverBody.contains("mobileAudioRecoveryReady = true")
+            && recoverBody.contains("if !succeeded")
+            && recoverBody.contains("Saved recordings need attention. Try again in a moment."),
+        "Failed mobile audio recovery must unblock the app and only show a dismissible warning"
+    )
+    try require(
         content.contains("private func reconcileActiveKeyboardAttemptIfNeeded()"),
         "Host does not reconcile a durable keyboard cancel after command expiry"
     )

@@ -38,6 +38,7 @@ struct RecordingSheetView: View {
     @State private var cancelledPendingAttemptID: UUID?
 
     private let processingStore = MobileAudioProcessingStore.shared
+    @State private var realtimeTranscription = IOSRealtimeTranscriptionCoordinator()
     private var audioRecorder: AudioRecorder { audioRecorderSlot.current }
 
     private var selectedPreset: ContextRule? {
@@ -678,6 +679,10 @@ struct RecordingSheetView: View {
                 pendingAttemptRecorder = nil
                 activeAttempt = prepared
 
+                realtimeTranscription.startIfAvailable(
+                    recorder: recorder,
+                    request: request
+                )
                 _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
                     try await recorder.startRecording(
                         at: prepared.sourceURL,
@@ -700,6 +705,7 @@ struct RecordingSheetView: View {
                 scheduleCaptureDeadline(for: prepared, deadlineAt: captureDeadline)
                 updateRecordingSurface(animated: true)
             } catch {
+                realtimeTranscription.cancel(recorder: recorder)
                 var terminalResult: MobileAudioProcessingStore.TerminalCommitResult?
                 if let lease {
                     _ = audioRecorderSlot.retire(ifCurrent: recorder)
@@ -789,6 +795,7 @@ struct RecordingSheetView: View {
         updateRecordingSurface(animated: true)
 
         let recorder = audioRecorder
+        realtimeTranscription.beginFinish(recorder: recorder)
         let capturedDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
         let finalizationSeconds = max(
             minimumFinalizationDeadline,
@@ -941,23 +948,38 @@ struct RecordingSheetView: View {
                 recognitionSeconds: deadline,
                 cleanupSeconds: cleanupStageDeadline
             ) { cleanupDidStart in
-                try await SharedTranscriptionService.transcribe(
+                let checkpoint = { (text: String) async throws in
+                    try await self.processingStore.checkpointRecognitionPartial(text, lease: lease)
+                }
+                let rawCheckpoint = { (raw: String) async throws in
+                    try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
+                }
+                let cleanupStarted = { () async throws in
+                    try await self.processingStore.cleanupStarted(
+                        lease,
+                        deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
+                    )
+                    cleanupDidStart()
+                }
+                if request.prefersRealtimeRecognition,
+                   let realtimeText = await self.realtimeTranscription.completedTranscript()
+                {
+                    return try await SharedTranscriptionService.completeRealtimeTranscript(
+                        realtimeText,
+                        request: request,
+                        onRecognitionCheckpoint: checkpoint,
+                        onRawTranscript: rawCheckpoint,
+                        onCleanupStarted: cleanupStarted
+                    )
+                }
+                self.realtimeTranscription.closeFinishRequest()
+                return try await SharedTranscriptionService.transcribe(
                     audioURL: recognitionURL,
                     request: request,
                     chunkWorkspace: chunkWorkspace,
-                    onRecognitionCheckpoint: { checkpoint in
-                        try await self.processingStore.checkpointRecognitionPartial(checkpoint, lease: lease)
-                    },
-                    onRawTranscript: { raw in
-                        try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
-                    },
-                    onCleanupStarted: {
-                        try await self.processingStore.cleanupStarted(
-                            lease,
-                            deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
-                        )
-                        cleanupDidStart()
-                    }
+                    onRecognitionCheckpoint: checkpoint,
+                    onRawTranscript: rawCheckpoint,
+                    onCleanupStarted: cleanupStarted
                 )
             }
             guard activeAttempt == lease, !Task.isCancelled else {
@@ -1272,6 +1294,7 @@ struct RecordingSheetView: View {
         activeAttemptTask?.cancel()
         captureDeadlineTask?.cancel()
         let abandonedRecorder = audioRecorder
+        realtimeTranscription.cancel(recorder: abandonedRecorder)
         _ = audioRecorderSlot.retire(ifCurrent: abandonedRecorder)
         activeAttemptTask = Task { @MainActor in
             let terminalResult = await processingStore.commitTerminalState(
@@ -1312,6 +1335,7 @@ struct RecordingSheetView: View {
         }
 
         cancellationReconciliationStarted = true
+        realtimeTranscription.cancel(recorder: audioRecorder)
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         activeAttemptTask?.cancel()

@@ -174,7 +174,7 @@ require(
 )
 for field in ('transcription["keywords"]', 'transcription["languages"]'):
     require(
-        field in (ROOT / "Whishpermate/Whispermate/Services/OpenAIRealtimeTranscriptionClient.swift").read_text(),
+        field in (ROOT / "Whishpermate/WhisperMateShared/Services/OpenAIRealtimeTranscriptionClient.swift").read_text(),
         f"realtime request mapping lost {field}",
     )
 for field in ('name: "keywords"', 'name: "languages"'):

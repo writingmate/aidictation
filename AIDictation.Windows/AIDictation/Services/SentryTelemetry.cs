@@ -80,8 +80,19 @@ public static class SentryTelemetry
 
     public static void CaptureTextInsertFailure(string message, string reason)
     {
-        CaptureError(message, context: "ClipboardService", feature: "text_insert");
-        SentrySdk.ConfigureScope(scope => scope.SetTag("text_insert.reason", reason));
+        if (!_started || string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        SentrySdk.CaptureMessage(
+            $"[ClipboardService] {message}",
+            scope =>
+            {
+                ApplyTags(scope, "ClipboardService", "text_insert");
+                scope.SetTag("text_insert.reason", reason);
+            },
+            SentryLevel.Error);
     }
 
     private static void ApplyTags(Scope scope, string? context, string? feature)

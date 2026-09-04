@@ -2,6 +2,7 @@ package com.whispermate.aidictation.data.repository
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.util.Base64
 import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Intent
 import android.content.SharedPreferences
@@ -54,6 +55,7 @@ class AuthRepository @Inject constructor(
         const val ACCESS_TOKEN = "access_token"
         const val REFRESH_TOKEN = "refresh_token"
         const val CACHED_PROFILE = "cached_profile"
+        const val AVATAR_URL = "avatar_url"
     }
 
     /** Thrown when the backend actively rejects the session, as opposed to a
@@ -169,6 +171,7 @@ class AuthRepository @Inject constructor(
         // Do not expose the previous user while the secure token is being replaced.
         val previousState = _authState.value
         _authState.value = AuthState(isLoading = true)
+        idTokenClaim(idToken, "picture")?.let { securePrefs.edit().putString(SecureKeys.AVATAR_URL, it).apply() }
         val session = exchangeGoogleIdToken(idToken, rawNonce)
         val tokens = session.getOrElse { error ->
             Log.w(TAG, "Google ID token exchange failed", error)
@@ -321,7 +324,7 @@ class AuthRepository @Inject constructor(
         val activeToken = fetchProfile(accessToken).fold(
             onSuccess = {
                 cacheProfile(it)
-                _authState.value = AuthState(user = it, isLoading = false)
+                _authState.value = signedInState(it)
                 return@withContext
             },
             onFailure = { fetchError ->
@@ -358,6 +361,7 @@ class AuthRepository @Inject constructor(
             Log.w(TAG, "Keeping session after a non-rejecting refresh failure; cached profile: ${cached != null}")
             _authState.value = AuthState(
                 user = cached,
+                avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),
                 isLoading = false,
                 error = if (cached == null) "Could not reach your account. Please try again." else null
             )
@@ -367,7 +371,7 @@ class AuthRepository @Inject constructor(
         fetchProfile(activeToken).fold(
             onSuccess = {
                 cacheProfile(it)
-                _authState.value = AuthState(user = it, isLoading = false)
+                _authState.value = signedInState(it)
             },
             onFailure = { error ->
                 Log.w(TAG, "Failed to fetch profile", error)
@@ -376,6 +380,7 @@ class AuthRepository @Inject constructor(
                 val cached = cachedProfile()
                 _authState.value = AuthState(
                     user = cached,
+                    avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),
                     isLoading = false,
                     error = if (cached == null) error.message else null
                 )
@@ -384,7 +389,7 @@ class AuthRepository @Inject constructor(
     }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
-        securePrefs.edit().remove(SecureKeys.CACHED_PROFILE).apply()
+        securePrefs.edit().remove(SecureKeys.CACHED_PROFILE).remove(SecureKeys.AVATAR_URL).apply()
         clearTokens()
         _authState.value = AuthState(isLoading = false)
     }
@@ -575,6 +580,20 @@ class AuthRepository @Inject constructor(
             referralBonusWords = item.optInt("referral_bonus_words", 0)
         )
     }
+
+    /** The signed-in state, carrying the Google photo remembered from the last native sign-in. */
+    private fun signedInState(user: UserProfile) = AuthState(
+        user = user,
+        avatarUrl = securePrefs.getString(SecureKeys.AVATAR_URL, null),
+        isLoading = false
+    )
+
+    /** Reads one string claim from a JWT payload without verifying it; the backend does that. */
+    private fun idTokenClaim(idToken: String, name: String): String? = runCatching {
+        val payload = idToken.split(".").getOrNull(1) ?: return null
+        val json = String(Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP), Charsets.UTF_8)
+        JSONObject(json).optString(name).ifBlank { null }
+    }.getOrNull()
 
     private fun storeTokens(accessToken: String, refreshToken: String?) {
         securePrefs.edit()

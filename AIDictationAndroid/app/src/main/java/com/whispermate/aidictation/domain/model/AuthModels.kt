@@ -60,6 +60,7 @@ data class UserProfile(
 
 data class AuthState(
     val user: UserProfile? = null,
+    val avatarUrl: String? = null,
     val isLoading: Boolean = false,
     val error: String? = null
 ) {
@@ -73,6 +74,8 @@ data class UsageStatus(
     val isPro: Boolean,
     val isAuthenticated: Boolean,
     val email: String? = null,
+    /** Google profile photo from the last native sign-in, if any. */
+    val avatarUrl: String? = null,
     val tierName: String = SubscriptionTier.Free.displayName,
     val referralCode: String? = null,
     val referralBonusWords: Int = 0

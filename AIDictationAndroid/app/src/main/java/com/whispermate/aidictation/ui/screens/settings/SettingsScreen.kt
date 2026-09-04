@@ -70,6 +70,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.R
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import com.whispermate.aidictation.ui.components.SettingsRowGap
 import com.whispermate.aidictation.ui.components.SettingsIconTile
 import com.whispermate.aidictation.ui.components.GoogleSignInButton
@@ -346,7 +348,8 @@ private fun AccountSettingsSection(
         if (usageStatus.isAuthenticated) {
             AccountIdentityItem(
                 email = usageStatus.email ?: stringResource(R.string.account_signed_in),
-                tierName = usageStatus.tierName
+                tierName = usageStatus.tierName,
+                avatarUrl = usageStatus.avatarUrl
             )
             SettingsRowGap()
         }
@@ -392,7 +395,8 @@ private fun AccountSettingsSection(
 @Composable
 private fun AccountIdentityItem(
     email: String,
-    tierName: String
+    tierName: String,
+    avatarUrl: String? = null
 ) {
     Row(
         modifier = Modifier
@@ -400,7 +404,18 @@ private fun AccountIdentityItem(
             .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SettingsIconTile(icon = Icons.Default.AccountCircle)
+        if (avatarUrl != null) {
+            AsyncImage(
+                model = avatarUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+            )
+        } else {
+            SettingsIconTile(icon = Icons.Default.AccountCircle)
+        }
         Spacer(modifier = Modifier.width(12.dp))
         Column(
             modifier = Modifier.weight(1f),

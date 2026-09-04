@@ -432,14 +432,6 @@ fun OnboardingScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
-            if (!permissions.canContinue) {
-                TextButton(
-                    onClick = { goToNextStep() },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.onboarding_skip_for_now))
-                }
-            }
         } else if (currentOnboardingStep == OnboardingStep.Paywall) {
             Button(
                 onClick = { onUpgrade(selectedPlan) },
@@ -479,12 +471,6 @@ fun OnboardingScreen(
                     .fillMaxWidth()
                     .height(56.dp)
             )
-            TextButton(
-                onClick = { finishOnboarding() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.onboarding_skip_for_now))
-            }
         } else {
             Button(
                 onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },

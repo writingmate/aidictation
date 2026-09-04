@@ -56,6 +56,7 @@ class SubscriptionRepository @Inject constructor(
                 isPro = tier.isPaid,
                 isAuthenticated = true,
                 email = user.email,
+                avatarUrl = authState.avatarUrl,
                 tierName = tier.displayName,
                 referralCode = user.referralCode,
                 referralBonusWords = user.referralBonusWords

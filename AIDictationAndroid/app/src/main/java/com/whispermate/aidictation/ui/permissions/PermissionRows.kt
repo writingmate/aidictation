@@ -4,7 +4,6 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,22 +41,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whispermate.aidictation.R
 
-/** Green used only to mark a granted permission; not a theme role. */
-@Composable
-fun permissionGrantedColor(): Color =
-    if (isSystemInDarkTheme()) Color(0xFF6FCF8A) else Color(0xFF1E8E3E)
-
 /**
  * The three permission rows shared by onboarding and Settings: Microphone and Text field
  * access (required), Display over other apps (recommended). A missing permission shows a
- * tonal Allow button; a granted one a green "On" chip.
+ * tonal Allow button; a granted one a neutral "On" chip.
  */
 @Composable
 fun PermissionRows(
@@ -107,8 +100,8 @@ private fun PermissionRow(
     onAllow: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
-    val green = permissionGrantedColor()
-    val accent = if (granted) green else colors.primary
+    // Neutral tiles in both states: the row's status is carried by the chip or button.
+    val accent = colors.onSurface
 
     Row(
         modifier = Modifier
@@ -120,7 +113,7 @@ private fun PermissionRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(accent.copy(alpha = if (granted) 0.12f else 0.10f)),
+                .background(accent.copy(alpha = 0.06f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -159,7 +152,7 @@ private fun PermissionRow(
         }
         Spacer(modifier = Modifier.width(12.dp))
         if (granted) {
-            GrantedChip(green = green)
+            GrantedChip()
         } else {
             FilledTonalButton(onClick = onAllow) {
                 Text(stringResource(R.string.permission_allow))
@@ -169,11 +162,12 @@ private fun PermissionRow(
 }
 
 @Composable
-private fun GrantedChip(green: Color) {
+private fun GrantedChip() {
+    val colors = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(18.dp))
-            .background(green.copy(alpha = 0.12f))
+            .background(colors.secondaryContainer)
             .padding(start = 8.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -181,13 +175,13 @@ private fun GrantedChip(green: Color) {
             imageVector = Icons.Default.Check,
             contentDescription = null,
             modifier = Modifier.size(18.dp),
-            tint = green
+            tint = colors.onSecondaryContainer
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = stringResource(R.string.permission_tag_on),
             style = MaterialTheme.typography.labelLarge,
-            color = green
+            color = colors.onSecondaryContainer
         )
     }
 }
@@ -318,14 +312,14 @@ private fun DisclosureVisualCard(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(colors.primary.copy(alpha = 0.12f)),
+                .background(colors.onSurface.copy(alpha = 0.06f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 modifier = Modifier.size(21.dp),
-                tint = colors.primary
+                tint = colors.onSurface
             )
         }
         Spacer(modifier = Modifier.width(12.dp))

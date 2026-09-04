@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import dagger.hilt.android.qualifiers.ApplicationContext
 
 data class OnboardingOnDeviceModelState(
     val isInstalled: Boolean = false,
@@ -51,7 +52,8 @@ class OnboardingViewModel @Inject constructor(
     private val parakeetModelAssets: ParakeetModelAssets,
     private val transcriptionRepository: TranscriptionRepository,
     private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator,
-    private val subscriptionRepository: SubscriptionRepository
+    private val subscriptionRepository: SubscriptionRepository,
+    @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
     /** Account state for the closing sign-in step. */
@@ -104,6 +106,29 @@ class OnboardingViewModel @Inject constructor(
 
     private val _onDeviceModelState = MutableStateFlow(OnboardingOnDeviceModelState())
     val onDeviceModelState: StateFlow<OnboardingOnDeviceModelState> = _onDeviceModelState.asStateFlow()
+
+    init {
+        preselectDeviceLanguages()
+    }
+
+    /**
+     * First run: start the language step with the phone's own languages ticked, so most
+     * people can just continue. Only fills an empty choice, and only before onboarding is
+     * done, so a deliberate empty selection later is left alone.
+     */
+    private fun preselectDeviceLanguages() {
+        viewModelScope.launch {
+            if (appPreferences.hasCompletedOnboarding.first()) return@launch
+            if (appPreferences.selectedLanguages.first().isNotEmpty()) return@launch
+            val locales = appContext.resources.configuration.locales
+            val supported = OnboardingSupportedLanguageCodes.toSet()
+            val fromDevice = (0 until locales.size())
+                .map { locales.get(it).language.lowercase() }
+                .filter { it in supported && WhisperLanguages.getLanguage(it) != null }
+                .distinct()
+            appPreferences.saveSelectedLanguages(fromDevice.ifEmpty { listOf("en") })
+        }
+    }
 
     private val _demoState = MutableStateFlow(OnboardingDemoUiState())
     val demoState: StateFlow<OnboardingDemoUiState> = _demoState.asStateFlow()

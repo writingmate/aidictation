@@ -98,7 +98,8 @@ import com.whispermate.aidictation.ui.permissions.rememberMicrophonePermissionLa
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
 import kotlinx.coroutines.launch
 
-private val OnboardingSupportedLanguageCodes = listOf(
+/** Languages offered on the onboarding step; also what device locales are matched against. */
+internal val OnboardingSupportedLanguageCodes = listOf(
     // Mirrors the macOS app's Language enum. Empty selection means auto-detect.
     "en",
     "ru",

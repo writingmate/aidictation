@@ -8,6 +8,7 @@ on:
       - 'scripts/validate_apple_http_audio_recovery.swift'
       - 'scripts/validate_apple_audio_recovery.sh'
       - 'scripts/validate_ios_audio_processing_recovery.swift'
+      - 'scripts/validate_ios_realtime_transcription.swift'
       - 'scripts/validate_keyboard_audio_recovery.swift'
       - 'scripts/validate_macos_audio_processing_store.swift'
       - 'scripts/validate_macos_lifecycle_guards.swift'

@@ -45,6 +45,7 @@ struct ContentView: View {
     @State private var referralCodeToRedeem = ""
     @State private var referralError: String?
     @State private var activeKeyboardDictationIdentity: KeyboardDictationHandoff.AttemptIdentity?
+    @State private var quickDictationArmRetryAt = Date.distantPast
     @State private var showKeyboardReturnScreen = false
     @State private var keyboardBridgeAliveUntil: Date?
     @State private var selectedRecordingMode: TranscriptionOutputMode = .dictation
@@ -1116,13 +1117,14 @@ struct ContentView: View {
             keyboardIdentity: activeKeyboardDictationIdentity,
             keepAudioBridgeAliveAfterStop: activeKeyboardDictationIdentity != nil
         ) { recording in
-            if let activeKeyboardDictationIdentity {
+                if let activeKeyboardDictationIdentity {
                 DebugLog.info("completed keyboard attemptID=\(activeKeyboardDictationIdentity.attemptID) length=\(recording.transcription.count)", context: "KEYBOARD_DIAG")
                 self.activeKeyboardDictationIdentity = nil
                 self.showKeyboardReturnScreen = false
                 self.keyboardBridgeAliveUntil = nil
                 self.inlineRecording.setKeyboardAttemptIdentity(nil)
                 self.inlineRecording.stopListening()
+                self.rearmQuickDictationAfterKeyboardSession()
             }
             markRecordingAsNew(recording)
         }
@@ -1178,6 +1180,10 @@ struct ContentView: View {
         }
 
         activeKeyboardDictationIdentity = identity
+        // Do not stop standby here. AudioRecorder configures the record session
+        // while standby is still running and only then tears it down; stopping
+        // it first fails with '!pri' when the app is in the background.
+        refreshQuickDictationHeartbeat()
         keepKeyboardBridgeAlive()
         dismissAllSheetsForKeyboardDictation()
         showKeyboardReturnScreen = true
@@ -1276,6 +1282,7 @@ struct ContentView: View {
         else { return }
         _ = KeyboardDictationHandoff.cancelAttempt(identity: identity)
         cancelActiveKeyboardHostWork()
+        rearmQuickDictationAfterKeyboardSession()
     }
 
     /// Fails closed without touching the handoff journal. This is used when persistence itself
@@ -1296,11 +1303,18 @@ struct ContentView: View {
         }
     }
 
-    private var shouldKeepKeyboardCommandPolling: Bool {
+    private var hasActiveKeyboardRecordingOrBridge: Bool {
         let hasActiveKeyboardRecording = activeKeyboardDictationIdentity != nil
             && (inlineRecording.state == .recording || inlineRecording.state == .paused || inlineRecording.state == .processing)
         let hasLiveKeyboardBridge = keyboardBridgeAliveUntil.map { $0 > Date() } ?? false
         return hasActiveKeyboardRecording || hasLiveKeyboardBridge
+    }
+
+    private var shouldKeepKeyboardCommandPolling: Bool {
+        KeyboardDictationHandoff.shouldKeepHostAlive(
+            hasActiveKeyboardWork: hasActiveKeyboardRecordingOrBridge,
+            availability: KeyboardDictationHandoff.loadQuickDictationAvailability()
+        )
     }
 
     private func startKeyboardCommandPolling() {
@@ -1317,31 +1331,31 @@ struct ContentView: View {
                 tearDownExpiredKeyboardBridge()
                 try? await Task.sleep(nanoseconds: 250_000_000)
 
-                // Check if we should keep polling
-                let isQuickDictationActive = inlineRecording.audioRecorder.isStandbyActive
-                let hasActiveKeyboardWork = shouldKeepKeyboardCommandPolling
+                let hasActiveKeyboardWork = hasActiveKeyboardRecordingOrBridge
+                let windowValid = KeyboardDictationHandoff.hasValidQuickDictationWindow()
 
-                if scenePhase != .active, !hasActiveKeyboardWork, !isQuickDictationActive {
-                    // App is in background, no active keyboard work, and no Quick Dictation standby
-                    // Stop polling and let iOS suspend the app
-                    DebugLog.info("stopping command polling (background, no standby)", context: "KEYBOARD_DIAG")
-                    clearQuickDictation()
-                    keyboardCommandPollTask = nil
-                    break
+                // A finished keyboard session tears down the recorder. Re-arm
+                // standby immediately so the next tap stays in-keyboard.
+                if inlineRecording.state == .idle, windowValid, !inlineRecording.audioRecorder.isStandbyActive,
+                   quickDictationArmRetryAt <= Date() {
+                    armQuickDictation()
                 }
 
-                // If Quick Dictation is active, check if it has expired
-                if isQuickDictationActive {
-                    if let availability = KeyboardDictationHandoff.loadQuickDictationAvailability(),
-                       availability.expiresAt <= Date() {
-                        // Quick Dictation window expired - stop standby
-                        DebugLog.info("Quick Dictation window expired; stopping standby", context: "KEYBOARD_DIAG")
-                        clearQuickDictation()
-                        if scenePhase != .active, !hasActiveKeyboardWork {
-                            keyboardCommandPollTask = nil
-                            break
-                        }
+                if let availability = KeyboardDictationHandoff.loadQuickDictationAvailability(),
+                   availability.expiresAt <= Date() {
+                    DebugLog.info("Quick Dictation window expired; stopping standby", context: "KEYBOARD_DIAG")
+                    clearQuickDictation()
+                    if scenePhase != .active, !hasActiveKeyboardWork {
+                        keyboardCommandPollTask = nil
+                        break
                     }
+                    continue
+                }
+
+                if scenePhase != .active, !hasActiveKeyboardWork, !windowValid {
+                    DebugLog.info("stopping command polling (background, no Quick Dictation window)", context: "KEYBOARD_DIAG")
+                    keyboardCommandPollTask = nil
+                    break
                 }
             }
         }
@@ -1349,23 +1363,59 @@ struct ContentView: View {
 
     /// Arms Quick Dictation with a 10-minute window using audio standby mode.
     /// The audio standby keeps iOS from suspending the app, enabling in-place dictation.
+    /// Re-arming after a session preserves the existing expiry so the window cannot
+    /// extend forever.
     private func armQuickDictation() {
+        guard inlineRecording.state == .idle else {
+            refreshQuickDictationHeartbeat()
+            return
+        }
         guard !inlineRecording.audioRecorder.isStandbyActive else {
-            // Already in standby - just refresh the availability
             refreshQuickDictationHeartbeat()
             return
         }
 
+        let existing = KeyboardDictationHandoff.loadQuickDictationAvailability()
+        let availability: KeyboardDictationHandoff.QuickDictationAvailability
+        if let existing, existing.expiresAt > Date() {
+            availability = existing.refreshingHeartbeat()
+        } else {
+            availability = KeyboardDictationHandoff.QuickDictationAvailability()
+        }
+
         do {
             try inlineRecording.audioRecorder.startStandby()
-            let availability = KeyboardDictationHandoff.QuickDictationAvailability()
             KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
             DebugLog.info("armed Quick Dictation with audio standby until \(availability.expiresAt)", context: "KEYBOARD_DIAG")
         } catch {
             DebugLog.info("failed to arm Quick Dictation: \(error)", context: "KEYBOARD_DIAG")
-            // Fall back to non-standby mode - the heartbeat will expire quickly
-            let availability = KeyboardDictationHandoff.QuickDictationAvailability()
+            // Fall back to non-standby mode - the heartbeat will expire quickly.
+            // Back off so the 250ms poll loop does not hammer the audio session.
+            quickDictationArmRetryAt = Date().addingTimeInterval(3)
             KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+        }
+    }
+
+    /// After a keyboard dictation returns to idle, keep (or immediately re-arm)
+    /// Quick Dictation so the next mic tap uses `.startViaReadyApp`.
+    private func rearmQuickDictationAfterKeyboardSession() {
+        switch KeyboardDictationHandoff.rearmDecisionAfterIdleSession(
+            current: KeyboardDictationHandoff.loadQuickDictationAvailability()
+        ) {
+        case .rearm(let availability):
+            KeyboardDictationHandoff.saveQuickDictationAvailability(availability)
+            DebugLog.info(
+                "re-armed Quick Dictation after keyboard session until \(availability.expiresAt)",
+                context: "KEYBOARD_DIAG"
+            )
+            KeyboardDictationHandoff.appendDiagnostic(
+                "re-armed Quick Dictation after keyboard session until \(availability.expiresAt)"
+            )
+            startKeyboardCommandPolling()
+            armQuickDictation()
+        case .clear:
+            DebugLog.info("Quick Dictation window expired after keyboard session; not re-arming", context: "KEYBOARD_DIAG")
+            clearQuickDictation()
         }
     }
 
@@ -2432,6 +2482,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
     private let audioRecorderSlot = IOSRetirableResourceSlot(factory: AudioRecorder.init)
     /// Public accessor for the audio recorder, needed for Quick Dictation standby mode.
     var audioRecorder: AudioRecorder { audioRecorderSlot.current }
+    private let realtimeTranscription = IOSRealtimeTranscriptionCoordinator()
     private let processingStore = MobileAudioProcessingStore.shared
     private let recordingStatus = RecordingNowPlayingStatus()
     private let subscriptionManager = SubscriptionManager.shared
@@ -2619,6 +2670,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         activeAttemptTask?.cancel()
         captureDeadlineTask?.cancel()
         let abandonedRecorder = audioRecorder
+        realtimeTranscription.cancel(recorder: abandonedRecorder)
         retireAudioRecorderIfCurrent(abandonedRecorder)
         let identity = keyboardAttemptIdentity
         activeAttemptTask = Task { @MainActor in
@@ -2668,6 +2720,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     func stopListening() {
+        realtimeTranscription.cancel(recorder: audioRecorder)
         activeAttemptTask?.cancel()
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
@@ -2789,6 +2842,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         let recorder = audioRecorder
+        realtimeTranscription.cancel(recorder: recorder)
         let outputMode = activeOutputMode ?? .dictation
         let transcriptionOptions = activeTranscriptionOptions ?? .default
         let fallbackDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
@@ -3040,6 +3094,10 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     }
                 }
 
+                self.realtimeTranscription.startIfAvailable(
+                    recorder: recorder,
+                    request: request
+                )
                 _ = try await IOSAudioProcessingDeadline.run(seconds: recordingStartDeadline) {
                     try await recorder.startRecording(
                         at: prepared.sourceURL,
@@ -3078,6 +3136,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
                     )
                 }
             } catch {
+                realtimeTranscription.cancel(recorder: recorder)
                 var terminalResult: MobileAudioProcessingStore.TerminalCommitResult?
                 if let lease {
                     retireAudioRecorderIfCurrent(recorder)
@@ -3104,9 +3163,13 @@ private final class InlineRecordingCoordinator: ObservableObject {
                    !(error is CancellationError),
                    terminalResult != .superseded
                 {
+                    // A recorder start failure means nothing was captured: omit
+                    // the recording ID so the keyboard shows an operational
+                    // status instead of a silent "transcription failed" idle.
+                    let captureNeverStarted = error is ManagedAudioRecordingError
                     _ = KeyboardDictationHandoff.publishHostFailure(
                         identity: keyboardIdentity,
-                        recordingID: lease?.recordingID.uuidString,
+                        recordingID: captureNeverStarted ? nil : lease?.recordingID.uuidString,
                         userMessage: terminalMessage ?? userMessage(for: error)
                     )
                 }
@@ -3187,6 +3250,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         }
 
         let recorder = audioRecorder
+        realtimeTranscription.beginFinish(recorder: recorder)
         let capturedDuration = max(0, Date().timeIntervalSince(recordingStartTime ?? Date()))
         let finalizationSeconds = max(
             minimumFinalizationDeadline,
@@ -3387,23 +3451,38 @@ private final class InlineRecordingCoordinator: ObservableObject {
                 recognitionSeconds: deadline,
                 cleanupSeconds: cleanupStageDeadline
             ) { cleanupDidStart in
-                try await SharedTranscriptionService.transcribe(
+                let checkpoint = { (text: String) async throws in
+                    try await self.processingStore.checkpointRecognitionPartial(text, lease: lease)
+                }
+                let rawCheckpoint = { (raw: String) async throws in
+                    try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
+                }
+                let cleanupStarted = { () async throws in
+                    try await self.processingStore.cleanupStarted(
+                        lease,
+                        deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
+                    )
+                    cleanupDidStart()
+                }
+                if request.prefersRealtimeRecognition,
+                   let realtimeText = await self.realtimeTranscription.completedTranscript()
+                {
+                    return try await SharedTranscriptionService.completeRealtimeTranscript(
+                        realtimeText,
+                        request: request,
+                        onRecognitionCheckpoint: checkpoint,
+                        onRawTranscript: rawCheckpoint,
+                        onCleanupStarted: cleanupStarted
+                    )
+                }
+                self.realtimeTranscription.closeFinishRequest()
+                return try await SharedTranscriptionService.transcribe(
                     audioURL: recognitionURL,
                     request: request,
                     chunkWorkspace: chunkWorkspace,
-                    onRecognitionCheckpoint: { checkpoint in
-                        try await self.processingStore.checkpointRecognitionPartial(checkpoint, lease: lease)
-                    },
-                    onRawTranscript: { raw in
-                        try await self.processingStore.checkpointRawTranscript(raw, lease: lease)
-                    },
-                    onCleanupStarted: {
-                        try await self.processingStore.cleanupStarted(
-                            lease,
-                            deadlineAt: Date().addingTimeInterval(cleanupStageDeadline)
-                        )
-                        cleanupDidStart()
-                    }
+                    onRecognitionCheckpoint: checkpoint,
+                    onRawTranscript: rawCheckpoint,
+                    onCleanupStarted: cleanupStarted
                 )
             }
             guard activeAttempt == lease, !Task.isCancelled else { throw CancellationError() }

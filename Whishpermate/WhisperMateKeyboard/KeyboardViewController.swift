@@ -334,9 +334,15 @@ class KeyboardViewController: UIInputViewController {
 
     private func handlePrimaryAction() {
         let buttonState = primaryButtonState
+        let startPath = KeyboardDictationHandoff.idleStartPath()
         let quickDictationReady = KeyboardDictationHandoff.isQuickDictationReady()
-        DebugLog.info("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) quickDictationReady=\(quickDictationReady)", context: "KEYBOARD_DIAG")
-        KeyboardDictationHandoff.appendDiagnostic("primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) quickDictationReady=\(quickDictationReady)")
+        DebugLog.info(
+            "primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) startPath=\(startPath.rawValue) quickDictationReady=\(quickDictationReady)",
+            context: "KEYBOARD_DIAG"
+        )
+        KeyboardDictationHandoff.appendDiagnostic(
+            "primary button pressed state=\(keyboardState) buttonState=\(buttonState.rawValue) startPath=\(startPath.rawValue) quickDictationReady=\(quickDictationReady)"
+        )
         switch buttonState {
         case .startRequiresApp:
             startRecording(openAppIfNeeded: true)
@@ -354,7 +360,12 @@ class KeyboardViewController: UIInputViewController {
     private var primaryButtonState: PrimaryButtonState {
         switch keyboardState {
         case .idle:
-            return KeyboardDictationHandoff.isQuickDictationReady() ? .startViaReadyApp : .startRequiresApp
+            switch KeyboardDictationHandoff.idleStartPath() {
+            case .startViaReadyApp:
+                return .startViaReadyApp
+            case .startRequiresApp:
+                return .startRequiresApp
+            }
         case .recording, .paused:
             return .finishRecording
         case .processing:
@@ -371,7 +382,10 @@ class KeyboardViewController: UIInputViewController {
         do {
             identity = try KeyboardDictationHandoff.beginAttempt()
         } catch {
-            showIdleError("Couldn't save this recording. Try again.")
+            presentIdleOutcome(
+                .persistenceFailed,
+                userMessage: "Couldn't save this recording. Try again."
+            )
             return
         }
         guard KeyboardDictationHandoff.publish(command: .start, identity: identity) else {
@@ -379,7 +393,10 @@ class KeyboardViewController: UIInputViewController {
                 identity: identity,
                 reason: "Recording could not start."
             )
-            showIdleError("Recording couldn't start. Try again.")
+            presentIdleOutcome(
+                .startFailed,
+                userMessage: "Recording couldn't start. Try again."
+            )
             return
         }
 
@@ -428,6 +445,18 @@ class KeyboardViewController: UIInputViewController {
                       KeyboardDictationHandoff.snapshot(for: identity)?.phase == .preparing
                 else { return }
 
+                if !KeyboardDictationHandoff.shouldOpenAppAfterQuickDictationFallback() {
+                    DebugLog.info(
+                        "Quick Dictation fallback: host still ready; waiting sessionID=\(identity.sessionID)",
+                        context: "KEYBOARD_DIAG"
+                    )
+                    KeyboardDictationHandoff.appendDiagnostic(
+                        "Quick Dictation fallback: host still ready; waiting sessionID=\(identity.sessionID)"
+                    )
+                    self.startQuickDictationFallbackTimer(identity: identity)
+                    return
+                }
+
                 DebugLog.info("Quick Dictation fallback: app did not respond; opening app sessionID=\(identity.sessionID)", context: "KEYBOARD_DIAG")
                 KeyboardDictationHandoff.appendDiagnostic("Quick Dictation fallback: app did not respond; opening app sessionID=\(identity.sessionID)")
                 self.openAppForRecording(identity: identity)
@@ -446,6 +475,7 @@ class KeyboardViewController: UIInputViewController {
             failActiveAttempt(
                 identity: identity,
                 handoffReason: "The app could not be opened.",
+                failure: .openAppFailed,
                 userMessage: "Couldn't open AI Dictation. Try again."
             )
             return
@@ -461,6 +491,7 @@ class KeyboardViewController: UIInputViewController {
                 self.failActiveAttempt(
                     identity: identity,
                     handoffReason: "The app could not be opened.",
+                    failure: .openAppFailed,
                     userMessage: "Couldn't open AI Dictation. Try again."
                 )
                 return
@@ -565,6 +596,7 @@ class KeyboardViewController: UIInputViewController {
                 failActiveAttempt(
                     identity: identity,
                     handoffReason: "The recording could not be finished.",
+                    failure: .startFailed,
                     userMessage: "Couldn't finish recording. Try again."
                 )
             }
@@ -617,11 +649,13 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private func showError(_ message: String) {
+    /// Operational status only. Never red — transcription failures must not
+    /// paint a scary error on the keyboard chrome.
+    private func showOperationalStatus(_ message: String) {
         let token = UUID()
         statusMessageToken = token
         statusLabel?.text = message
-        statusLabel?.textColor = UIColor.systemRed
+        statusLabel?.textColor = UIColor.secondaryLabel
         statusLabel?.isHidden = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
@@ -653,7 +687,10 @@ class KeyboardViewController: UIInputViewController {
         do {
             _ = try KeyboardDictationHandoff.expireStaleAttempt()
         } catch {
-            showIdleError("Couldn't restore this recording. Open AI Dictation to recover it.")
+            presentIdleOutcome(
+                .restoreFailed,
+                userMessage: "Couldn't restore this recording. Open AI Dictation to recover it."
+            )
             return
         }
         guard activeHandoffIdentity == nil,
@@ -691,11 +728,17 @@ class KeyboardViewController: UIInputViewController {
             _ = try KeyboardDictationHandoff.expireStaleAttempt()
             snapshot = try KeyboardDictationHandoff.loadSnapshot(for: identity)
         } catch {
-            showIdleError("Couldn't update this recording. Open AI Dictation to recover it.")
+            presentIdleOutcome(
+                .persistenceFailed,
+                userMessage: "Couldn't update this recording. Open AI Dictation to recover it."
+            )
             return
         }
         guard let snapshot else {
-            showIdleError("This recording is no longer active. Try again.")
+            presentIdleOutcome(
+                .startFailed,
+                userMessage: "This recording is no longer active. Try again."
+            )
             return
         }
 
@@ -746,20 +789,47 @@ class KeyboardViewController: UIInputViewController {
                     textDocumentProxy.insertText(textForInsertion(text))
                 }
             } catch {
-                showIdleError("Couldn't insert the transcript. It is saved in AI Dictation.")
+                presentIdleOutcome(
+                    .insertFailed,
+                    userMessage: "Couldn't insert the transcript. It is saved in AI Dictation."
+                )
                 return
             }
             finishAttempt()
 
         case .failed:
             stopHandoffDeadlineTimer()
-            showIdleError(snapshot.userMessage ?? "Transcription failed. Your recording is saved in the app.")
+            KeyboardDictationHandoff.appendDiagnostic(
+                "host failed attemptID=\(snapshot.identity.attemptID) lastPhase=\(String(describing: handoffPhase)) message=\(snapshot.userMessage ?? "-")"
+            )
+            if snapshot.recordingID == nil || handoffPhase == .preparing {
+                // Nothing was captured: the host could not start (audio session,
+                // sign-in, mode selection). Tell the user, do not fail silently.
+                presentIdleOutcome(
+                    .startFailed,
+                    userMessage: snapshot.userMessage ?? "Recording couldn't start. Try again."
+                )
+            } else {
+                presentIdleOutcome(
+                    .transcriptionFailed,
+                    userMessage: snapshot.userMessage ?? "Transcription failed. Your recording is saved in the app."
+                )
+            }
 
         case .cancelled:
             stopHandoffDeadlineTimer()
-            showIdleError(snapshot.userMessage ?? "Recording cancelled.")
+            KeyboardDictationHandoff.appendDiagnostic(
+                "attempt cancelled attemptID=\(snapshot.identity.attemptID) lastPhase=\(String(describing: handoffPhase)) message=\(snapshot.userMessage ?? "-")"
+            )
+            presentIdleOutcome(
+                .cancelled,
+                userMessage: snapshot.userMessage ?? "Recording cancelled."
+            )
         @unknown default:
-            showIdleError("This recording couldn't continue. Try again.")
+            presentIdleOutcome(
+                .startFailed,
+                userMessage: "This recording couldn't continue. Try again."
+            )
         }
     }
 
@@ -769,27 +839,34 @@ class KeyboardViewController: UIInputViewController {
             if reconcileTerminalAttemptIfAvailable(identity: identity) {
                 return
             }
-            showIdleError("Couldn't cancel this recording. Open AI Dictation to recover it.")
+            presentIdleOutcome(
+                .persistenceFailed,
+                userMessage: "Couldn't cancel this recording. Open AI Dictation to recover it."
+            )
             return
         }
         KeyboardDictationHandoff.appendDiagnostic(
             "keyboard cancelled sessionID=\(identity.sessionID) attemptID=\(identity.attemptID)"
         )
-        showIdleError("Recording cancelled.")
+        presentIdleOutcome(.cancelled, userMessage: "Recording cancelled.")
     }
 
     private func failActiveAttempt(
         identity: KeyboardDictationHandoff.AttemptIdentity,
         handoffReason: String,
+        failure: KeyboardDictationHandoff.KeyboardChromeFailure,
         userMessage: String
     ) {
         guard activeHandoffIdentity == identity || activeHandoffIdentity == nil else { return }
         if KeyboardDictationHandoff.cancelAttempt(identity: identity, reason: handoffReason) {
-            showIdleError(userMessage)
+            presentIdleOutcome(failure, userMessage: userMessage)
         } else if reconcileTerminalAttemptIfAvailable(identity: identity) {
             return
         } else {
-            showIdleError("Couldn't update this recording. Open AI Dictation to recover it.")
+            presentIdleOutcome(
+                .persistenceFailed,
+                userMessage: "Couldn't update this recording. Open AI Dictation to recover it."
+            )
         }
     }
 
@@ -811,18 +888,22 @@ class KeyboardViewController: UIInputViewController {
 
         let handoffReason: String
         let userMessage: String
+        let failure: KeyboardDictationHandoff.KeyboardChromeFailure
         switch snapshot.phase {
         case .preparing:
             handoffReason = "Recording did not start in time."
             userMessage = "Recording didn't start. Try again."
+            failure = .startFailed
         case .finalizing:
             handoffReason = "Recording did not finish in time."
             userMessage = snapshot.recordingID == nil
                 ? "Recording didn't finish. Try again."
                 : "Recording took too long to finish. Your audio is saved in the app."
+            failure = snapshot.recordingID == nil ? .startFailed : .transcriptionTimeout
         case .processing:
             handoffReason = "Transcription did not finish in time."
             userMessage = "Transcription took too long. Your recording is saved in the app."
+            failure = .transcriptionTimeout
         case .recording, .succeeded, .failed, .cancelled:
             return
         @unknown default:
@@ -835,6 +916,7 @@ class KeyboardViewController: UIInputViewController {
         failActiveAttempt(
             identity: snapshot.identity,
             handoffReason: handoffReason,
+            failure: failure,
             userMessage: userMessage
         )
     }
@@ -889,15 +971,18 @@ class KeyboardViewController: UIInputViewController {
         setHandoffPhase(nil, animated: true)
     }
 
-    private func showIdleError(_ message: String) {
-        activeHandoffIdentity = nil
-        stopStartFallbackTimer()
-        stopRecordingMeter()
-        stopHandoffDeadlineTimer()
-        displayedAudioLevel = 0
-        displayedFrequencyBands = Array(repeating: 0.0, count: 10)
-        setHandoffPhase(nil, animated: true)
-        showError(message)
+    private func presentIdleOutcome(
+        _ failure: KeyboardDictationHandoff.KeyboardChromeFailure,
+        userMessage: String
+    ) {
+        finishAttempt()
+        switch KeyboardDictationHandoff.chromePresentation(for: failure, userMessage: userMessage) {
+        case .silentIdle:
+            DebugLog.info("keyboard chrome silent failure=\(failure.rawValue)", context: "KEYBOARD_DIAG")
+            KeyboardDictationHandoff.appendDiagnostic("keyboard chrome silent failure=\(failure.rawValue)")
+        case .operational(let message):
+            showOperationalStatus(message)
+        }
     }
 
     private func textForInsertion(_ text: String) -> String {

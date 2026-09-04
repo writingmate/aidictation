@@ -33,7 +33,7 @@ enum SentryTelemetry {
             options.releaseName = releaseName
             options.maxBreadcrumbs = 100
             options.enableAutoSessionTracking = true
-            options.tracesSampleRate = Constants.tracesSampleRate
+            options.tracesSampleRate = NSNumber(value: Constants.tracesSampleRate)
             options.diagnosticLevel = .warning
         }
 

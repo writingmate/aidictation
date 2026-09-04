@@ -57,7 +57,7 @@ public nonisolated final class RealtimeTranscriptionFinishRequest: @unchecked Se
         previousDeadline?.cancel()
     }
 
-    func requestFinish(timeout: TimeInterval) {
+    public func requestFinish(timeout: TimeInterval) {
         lock.lock()
         guard !isClosed, !didRequestFinish else {
             lock.unlock()

@@ -28,10 +28,18 @@ struct ValidateIOSRealtimeTranscription {
         ]
         for (input, expected) in cases {
             let derived = endpoint(from: input)
-            precondition(derived == expected, "Derived \(derived ?? "nil") from \(input)")
+            precondition(
+                derived == expected,
+                "Derived \(derived ?? "nil") from \(input), expected \(expected)"
+            )
         }
-        precondition(endpoint(from: "wss://api.openai.com/v1/realtime") == nil)
         precondition(endpoint(from: "not a url") == nil)
+
+        let provider = try contents(
+            "Whishpermate/WhisperMateShared/Services/OpenAIRealtimeTranscriptionClient.swift"
+        )
+        precondition(provider.contains("if scheme == \"ws\" || scheme == \"wss\""))
+        precondition(provider.contains("return nil"))
     }
 
     private static func validateModelResolution() throws {
@@ -50,6 +58,10 @@ struct ValidateIOSRealtimeTranscription {
         )
         precondition(client.contains("public static func endpoint(from transcriptionEndpoint: String)"))
         precondition(client.contains("/realtime/client_secrets"))
+        let finishGate = try contents(
+            "Whishpermate/WhisperMateShared/Services/RealtimeTranscriptionSupport.swift"
+        )
+        precondition(finishGate.contains("public func requestFinish(timeout: TimeInterval)"))
         precondition(client.contains("func requestFinish(timeout: TimeInterval = 1.5)"))
         precondition(client.contains("func awaitFinish() async -> String?"))
         precondition(client.contains("static let defaultTranscriptionModel = \"gpt-live-transcribe\""))

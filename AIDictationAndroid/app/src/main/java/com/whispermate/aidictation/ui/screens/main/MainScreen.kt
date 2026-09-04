@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ContentCopy
@@ -49,12 +50,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.ui.components.groupedItemShape
+import com.whispermate.aidictation.ui.components.GroupedListGap
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.ui.components.CircularMicButton
 import com.whispermate.aidictation.ui.components.KeepScreenOn
@@ -259,12 +263,13 @@ private fun HistoryTab(
         LazyColumn(
             modifier = modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(GroupedListGap)
         ) {
-            items(
+            itemsIndexed(
                 items = recordings,
-                key = { it.id }
-            ) { recording ->
+                key = { _, recording -> recording.id }
+            ) { index, recording ->
+                val itemShape = groupedItemShape(index, recordings.size)
                 val dismissState = rememberSwipeToDismissBoxState(
                     confirmValueChange = { value ->
                         when (value) {
@@ -298,7 +303,7 @@ private fun HistoryTab(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(color, MaterialTheme.shapes.medium)
+                                .background(color, itemShape)
                                 .padding(horizontal = 20.dp),
                             contentAlignment = when (direction) {
                                 SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
@@ -316,6 +321,7 @@ private fun HistoryTab(
                     }
                 ) {
                     RecordingItem(
+                        shape = itemShape,
                         recording = recording,
                         onClick = { onSelect(recording) },
                         routeChangesEnabled = routeChangesEnabled
@@ -330,16 +336,18 @@ private fun HistoryTab(
 private fun RecordingItem(
     recording: Recording,
     onClick: () -> Unit,
-    routeChangesEnabled: Boolean
+    routeChangesEnabled: Boolean,
+    shape: Shape = MaterialTheme.shapes.large
 ) {
     Card(
+        shape = shape,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = routeChangesEnabled, onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp)

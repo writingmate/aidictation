@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -57,12 +58,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.ui.components.groupedItemShape
+import com.whispermate.aidictation.ui.components.GroupedListGap
 import com.whispermate.aidictation.domain.model.DictionaryEntry
 import com.whispermate.aidictation.domain.model.Shortcut
 import com.whispermate.aidictation.domain.model.ToneStyle
@@ -205,7 +209,7 @@ private fun DictionaryTab(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(GroupedListGap)
     ) {
         // Add new entry section
         item {
@@ -274,12 +278,15 @@ private fun DictionaryTab(
             }
         }
 
-        items(entries, key = { it.id }) { entry ->
+        item { Spacer(modifier = Modifier.height(6.dp)) }
+        itemsIndexed(entries, key = { _, it -> it.id }) { index, entry ->
+            val itemShape = groupedItemShape(index, entries.size)
             SwipeActionRow(
                 onCopy = { onCopy(entry) },
                 onDelete = { onDelete(entry) }
             ) {
                 DictionaryEntryItem(
+                    shape = itemShape,
                     entry = entry,
                     onToggle = { onToggle(entry) },
                     onClick = { onDetail(entry) }
@@ -291,12 +298,13 @@ private fun DictionaryTab(
 
 @Composable
 private fun DictionaryEntryItem(
+    shape: Shape,
     entry: DictionaryEntry,
     onToggle: () -> Unit,
     onClick: () -> Unit
 ) {
     Card(
-        shape = MaterialTheme.shapes.large,
+        shape = shape,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
@@ -354,7 +362,7 @@ private fun ToneStyleTab(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(GroupedListGap)
     ) {
         item {
             Row(
@@ -375,12 +383,15 @@ private fun ToneStyleTab(
             }
         }
 
-        items(styles, key = { it.id }) { style ->
+        item { Spacer(modifier = Modifier.height(6.dp)) }
+        itemsIndexed(styles, key = { _, it -> it.id }) { index, style ->
+            val itemShape = groupedItemShape(index, styles.size)
             SwipeActionRow(
                 onCopy = { onCopy(style) },
                 onDelete = { onDelete(style) }
             ) {
                 ToneStyleItem(
+                    shape = itemShape,
                     style = style,
                     onToggle = { onToggle(style) },
                     onClick = { onDetail(style) }
@@ -486,12 +497,13 @@ private fun AddToneStyleSheet(
 
 @Composable
 private fun ToneStyleItem(
+    shape: Shape,
     style: ToneStyle,
     onToggle: () -> Unit,
     onClick: () -> Unit
 ) {
     Card(
-        shape = MaterialTheme.shapes.large,
+        shape = shape,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
@@ -558,7 +570,7 @@ private fun ShortcutsTab(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(GroupedListGap)
     ) {
         item {
             Button(
@@ -615,12 +627,15 @@ private fun ShortcutsTab(
             }
         }
 
-        items(shortcuts, key = { it.id }) { shortcut ->
+        item { Spacer(modifier = Modifier.height(6.dp)) }
+        itemsIndexed(shortcuts, key = { _, it -> it.id }) { index, shortcut ->
+            val itemShape = groupedItemShape(index, shortcuts.size)
             SwipeActionRow(
                 onCopy = { onCopy(shortcut) },
                 onDelete = { onDelete(shortcut) }
             ) {
                 ShortcutItem(
+                    shape = itemShape,
                     shortcut = shortcut,
                     onToggle = { onToggle(shortcut) },
                     onClick = { onDetail(shortcut) }
@@ -675,7 +690,7 @@ private fun SwipeActionRow(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(color, MaterialTheme.shapes.medium)
+                    .background(color, MaterialTheme.shapes.large)
                     .padding(horizontal = 20.dp),
                 contentAlignment = when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
@@ -727,12 +742,13 @@ private fun DetailSheet(
 
 @Composable
 private fun ShortcutItem(
+    shape: Shape,
     shortcut: Shortcut,
     onToggle: () -> Unit,
     onClick: () -> Unit
 ) {
     Card(
-        shape = MaterialTheme.shapes.large,
+        shape = shape,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),

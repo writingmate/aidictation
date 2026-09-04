@@ -587,7 +587,7 @@ private fun TranscriptionModeChoiceCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.large)
             .background(
                 if (selected) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
@@ -597,7 +597,7 @@ private fun TranscriptionModeChoiceCard(
                     width = if (selected) 2.dp else 1.dp,
                     color = if (selected) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant
                 ),
-                RoundedCornerShape(12.dp)
+                MaterialTheme.shapes.large
             )
             .clickable(onClick = onClick)
             .padding(16.dp),

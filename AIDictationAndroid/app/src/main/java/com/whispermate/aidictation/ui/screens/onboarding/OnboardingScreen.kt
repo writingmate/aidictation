@@ -40,6 +40,19 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
+import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.BorderStroke
@@ -673,7 +686,6 @@ private fun ButtonDemoStep(
     onCancelRecording: () -> Unit
 ) {
     val colors = onboardingColors()
-    val context = LocalContext.current
     var demoStage by remember { mutableIntStateOf(0) }
     val audioLevel = demoState.audioLevel
     val frequencyBands = demoState.frequencyBands
@@ -683,6 +695,7 @@ private fun ButtonDemoStep(
         isRecording -> OverlayMicButtonView.State.Recording
         else -> OverlayMicButtonView.State.Idle
     }
+    val hasResult = demoStage == 3 && !demoState.isProcessing && demoState.resultText != null
 
     // Keep the screen awake while the demo dictation is recording or processing
     KeepScreenOn(enabled = isRecording || demoState.isProcessing)
@@ -709,6 +722,14 @@ private fun ButtonDemoStep(
         }
     }
 
+    // Which of tap / speak / tap again the user is on right now.
+    val activeGuide = when {
+        demoStage < 1 -> -1
+        isRecording -> 1
+        demoStage >= 3 -> 2
+        else -> 0
+    }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -726,94 +747,241 @@ private fun ButtonDemoStep(
         Spacer(modifier = Modifier.height(6.dp))
 
         Text(
-            text = stringResource(R.string.onboarding_button_demo_subtitle),
+            text = boldActions(stringResource(R.string.onboarding_button_demo_subtitle)),
             style = MaterialTheme.typography.bodyMedium,
             color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
+        DemoGuideStrip(activeIndex = activeGuide)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // A slice of a chat screen: an incoming message and the composer, with the
+        // floating mic sitting above the composer the way it does over a keyboard.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(176.dp)
+                .height(196.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(colors.surfaceVariant.copy(alpha = 0.45f))
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(colors.surface)
-                    .clickable {
-                        if (demoStage == 0) {
-                            demoStage = 1
-                        }
-                    }
-                    .padding(14.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.Bottom
             ) {
-                Text(
-                    text = when (demoStage) {
-                        0 -> stringResource(R.string.onboarding_button_demo_tap_area)
-                        1 -> stringResource(R.string.onboarding_button_demo_mic_appears)
-                        2 -> if (isRecording) {
-                            stringResource(R.string.onboarding_button_demo_stop)
-                        } else {
-                            stringResource(R.string.onboarding_button_demo_speak)
-                        }
-                        else -> when {
-                            demoState.isProcessing -> stringResource(R.string.processing)
-                            demoState.resultText != null -> demoState.resultText
-                            demoState.errorMessage != null -> demoState.errorMessage
-                            else -> stringResource(R.string.onboarding_button_demo_result)
-                        }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (demoStage == 3 || isRecording) colors.onSurface else colors.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(32.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.onboarding_button_demo_incoming),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurface,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp))
+                            .background(colors.surface)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Composer: placeholder until the words land, then the dictated text.
+                val composerText = when {
+                    hasResult -> demoState.resultText.orEmpty()
+                    demoStage == 3 && demoState.errorMessage != null -> demoState.errorMessage
+                    else -> null
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(colors.surface)
+                        .border(
+                            BorderStroke(1.dp, if (demoStage >= 1) colors.onSurface.copy(alpha = 0.35f) else colors.outline),
+                            RoundedCornerShape(24.dp)
+                        )
+                        .clickable { if (demoStage == 0) demoStage = 1 }
+                        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (demoStage >= 1 && composerText == null) {
+                        // Caret: the field is focused and waiting for words.
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .height(18.dp)
+                                .background(colors.onSurface)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = composerText ?: stringResource(R.string.onboarding_button_demo_composer_placeholder),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (composerText != null) colors.onSurface else colors.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null,
+                        tint = if (composerText != null) colors.primary else colors.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .padding(8.dp)
+                    )
+                }
             }
 
             if (demoStage >= 1) {
                 val bubbleSurface = MaterialTheme.colorScheme.surface.toArgb()
                 val bubbleGlyph = MaterialTheme.colorScheme.onSurface.toArgb()
-                AndroidView(
+                val bubbleWidth = OverlayMicButtonView.widthDp(previewState).dp
+                val bubbleHeight = OverlayMicButtonView.heightDp().dp
+                Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(10.dp)
-                        .width(OverlayMicButtonView.widthDp(previewState).dp)
-                        .height(OverlayMicButtonView.heightDp().dp),
-                    factory = { androidContext ->
-                        OverlayMicButtonView(androidContext).apply {
-                            setOnClickCallback { handleDemoMicTap() }
-                            isHapticFeedbackEnabled = true
-                            setPalette(bubbleSurface, bubbleGlyph)
-                            setState(previewState)
-                            setAudioLevel(audioLevel)
-                            setFrequencyBands(frequencyBands)
-                        }
-                    },
-                    update = { view ->
-                        view.setOnClickCallback { handleDemoMicTap() }
-                        view.setPalette(bubbleSurface, bubbleGlyph)
-                        view.setState(previewState)
-                        view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) audioLevel else 0f)
-                        view.setFrequencyBands(frequencyBands)
+                        .padding(end = 6.dp, bottom = 66.dp)
+                        .width(bubbleWidth)
+                        .height(bubbleHeight)
+                ) {
+                    // Waves invite the tap while the bubble is idle and nothing has been dictated yet.
+                    if (previewState == OverlayMicButtonView.State.Idle && !hasResult) {
+                        PulseWaves(
+                            color = colors.onSurface,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
-                )
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { androidContext ->
+                            OverlayMicButtonView(androidContext).apply {
+                                setOnClickCallback { handleDemoMicTap() }
+                                isHapticFeedbackEnabled = true
+                                setPalette(bubbleSurface, bubbleGlyph)
+                                setState(previewState)
+                                setAudioLevel(audioLevel)
+                                setFrequencyBands(frequencyBands)
+                            }
+                        },
+                        update = { view ->
+                            view.setOnClickCallback { handleDemoMicTap() }
+                            view.setPalette(bubbleSurface, bubbleGlyph)
+                            view.setState(previewState)
+                            view.setAudioLevel(if (previewState == OverlayMicButtonView.State.Recording) audioLevel else 0f)
+                            view.setFrequencyBands(frequencyBands)
+                        }
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = stringResource(R.string.onboarding_button_demo_hint),
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.onSurfaceVariant,
+            text = boldActions(
+                when {
+                    demoStage == 0 -> stringResource(R.string.onboarding_button_demo_tap_area)
+                    demoState.isProcessing -> stringResource(R.string.processing)
+                    hasResult -> stringResource(R.string.onboarding_button_demo_done)
+                    isRecording -> stringResource(R.string.onboarding_button_demo_stop)
+                    else -> stringResource(R.string.onboarding_button_demo_speak)
+                }
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurface,
             textAlign = TextAlign.Center
         )
+    }
+}
+
+/** Renders `*action*` markers in a string as bold, so instructions highlight what to do. */
+private fun boldActions(text: String): AnnotatedString = buildAnnotatedString {
+    text.split("*").forEachIndexed { index, part ->
+        if (index % 2 == 1) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(part) }
+        } else {
+            append(part)
+        }
+    }
+}
+
+/** Tap · Speak · Tap again, with the current one highlighted. */
+@Composable
+private fun DemoGuideStrip(activeIndex: Int) {
+    val colors = onboardingColors()
+    val labels = listOf(
+        stringResource(R.string.onboarding_demo_guide_tap),
+        stringResource(R.string.onboarding_demo_guide_speak),
+        stringResource(R.string.onboarding_demo_guide_tap_again)
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        labels.forEachIndexed { index, label ->
+            val active = index == activeIndex
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (active) colors.onSurface else colors.surfaceVariant.copy(alpha = 0.55f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "${index + 1}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (active) colors.surface else colors.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (active) colors.surface else colors.onSurfaceVariant
+                )
+            }
+            if (index < labels.lastIndex) Spacer(modifier = Modifier.width(8.dp))
+        }
+    }
+}
+
+/** Two rings expanding out of the bubble's centre, the classic "tap me" pulse. */
+@Composable
+private fun PulseWaves(color: Color, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val durationMs = 1600
+    val first by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(durationMs, easing = LinearEasing)),
+        label = "pulse_first"
+    )
+    val second by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(durationMs, easing = LinearEasing),
+            initialStartOffset = StartOffset(durationMs / 2)
+        ),
+        label = "pulse_second"
+    )
+    Canvas(modifier = modifier) {
+        val centre = Offset(size.width / 2f, size.height / 2f)
+        val base = size.minDimension * 0.42f
+        listOf(first, second).forEach { progress ->
+            drawCircle(
+                color = color.copy(alpha = (1f - progress) * 0.28f),
+                radius = base * (1f + progress * 0.9f),
+                center = centre
+            )
+        }
     }
 }
 

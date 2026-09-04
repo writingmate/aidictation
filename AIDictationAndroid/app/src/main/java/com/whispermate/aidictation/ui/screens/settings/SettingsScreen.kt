@@ -171,9 +171,7 @@ fun SettingsScreen(
                             R.string.overlay_restored,
                             Toast.LENGTH_SHORT
                         ).show()
-                    },
-                    iconTint = MaterialTheme.colorScheme.primary,
-                    titleColor = MaterialTheme.colorScheme.primary
+                    }
                 )
             }
         }
@@ -447,7 +445,7 @@ private fun AccountIdentityItem(
             Text(
                 text = tierName,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -614,13 +612,13 @@ private fun TranscriptionModeChoiceCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                if (selected) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
             )
             .border(
                 BorderStroke(
                     width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                    color = if (selected) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant
                 ),
                 RoundedCornerShape(12.dp)
             )
@@ -700,7 +698,7 @@ private fun SettingsRatingRow(
                     contentDescription = null,
                     modifier = Modifier.size(13.dp),
                     tint = if (index < stars.coerceIn(0, 5)) {
-                        MaterialTheme.colorScheme.primary
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
                         MaterialTheme.colorScheme.outlineVariant
                     }
@@ -732,7 +730,7 @@ private fun SectionHeader(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
     )
 }

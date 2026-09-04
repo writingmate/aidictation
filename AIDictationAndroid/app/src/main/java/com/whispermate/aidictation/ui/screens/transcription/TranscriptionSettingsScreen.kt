@@ -519,7 +519,7 @@ private fun ToneStyleItem(
                     Text(
                         text = style.appPackageNames.joinToString(", "),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -654,12 +654,12 @@ private fun SwipeActionRow(
         backgroundContent = {
             val direction = dismissState.dismissDirection
             val color = when (direction) {
-                SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.primary
+                SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.inverseSurface
                 SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
                 SwipeToDismissBoxValue.Settled -> MaterialTheme.colorScheme.surface
             }
             val tint = when (direction) {
-                SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.onPrimary
+                SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.inverseOnSurface
                 SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.onError
                 SwipeToDismissBoxValue.Settled -> MaterialTheme.colorScheme.onSurface
             }

@@ -216,9 +216,9 @@ fun MainScreen(
 
 @Composable
 private fun aidictationNavigationItemColors() = NavigationBarItemDefaults.colors(
-    selectedIconColor = MaterialTheme.colorScheme.primary,
+    selectedIconColor = MaterialTheme.colorScheme.onSurface,
     selectedTextColor = MaterialTheme.colorScheme.onSurface,
-    indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
+    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
     unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
     unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
 )
@@ -287,7 +287,7 @@ private fun HistoryTab(
                         val direction = dismissState.dismissDirection
                         val color = when (direction) {
                             SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
-                            SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.primary
+                            SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.inverseSurface
                             else -> MaterialTheme.colorScheme.surface
                         }
                         val icon = when (direction) {

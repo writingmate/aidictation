@@ -147,14 +147,14 @@ private fun OnboardingHeroIcon(
         modifier = modifier
             .size(72.dp)
             .clip(CircleShape)
-            .background(colors.primary.copy(alpha = 0.10f)),
+            .background(colors.onSurface.copy(alpha = 0.06f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(36.dp),
-            tint = colors.primary
+            tint = colors.onSurface
         )
     }
 }
@@ -170,14 +170,14 @@ private fun OnboardingSmallIcon(
         modifier = modifier
             .size(32.dp)
             .clip(CircleShape)
-            .background(colors.primary.copy(alpha = 0.10f)),
+            .background(colors.onSurface.copy(alpha = 0.06f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             modifier = Modifier.size(16.dp),
-            tint = colors.primary
+            tint = colors.onSurface
         )
     }
 }
@@ -296,7 +296,7 @@ fun OnboardingScreen(
                         .size(8.dp)
                         .clip(CircleShape)
                         .background(
-                            if (index <= currentStep) colors.primary
+                            if (index <= currentStep) colors.onSurface
                             else MaterialTheme.colorScheme.outlineVariant
                         )
                 )
@@ -735,7 +735,7 @@ private fun OnboardingLanguageRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (isSelected) colors.primary.copy(alpha = 0.12f) else colors.surfaceVariant.copy(alpha = 0.45f))
+            .background(if (isSelected) colors.onSurface.copy(alpha = 0.06f) else colors.surfaceVariant.copy(alpha = 0.45f))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -744,13 +744,13 @@ private fun OnboardingLanguageRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (isSelected) colors.primary.copy(alpha = 0.18f) else colors.surfaceVariant),
+                .background(if (isSelected) colors.onSurface.copy(alpha = 0.10f) else colors.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = language.code.uppercase(),
                 style = MaterialTheme.typography.labelSmall,
-                color = colors.primary,
+                color = colors.onSurface,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -780,14 +780,14 @@ private fun OnboardingLanguageRow(
                 modifier = Modifier
                     .size(24.dp)
                     .clip(CircleShape)
-                    .background(colors.primary),
+                    .background(colors.onSurface),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp),
-                    tint = colors.onPrimary
+                    tint = colors.surface
                 )
             }
         }
@@ -899,7 +899,7 @@ private fun TranscriptionModeChoice(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) colors.primary.copy(alpha = 0.10f) else colors.surfaceVariant.copy(alpha = 0.55f))
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else colors.surfaceVariant.copy(alpha = 0.55f))
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -971,7 +971,7 @@ private fun RatingRow(
                     imageVector = Icons.Default.Star,
                     contentDescription = null,
                     modifier = Modifier.size(13.dp),
-                    tint = if (index < stars.coerceIn(0, 5)) colors.primary else colors.outline
+                    tint = if (index < stars.coerceIn(0, 5)) colors.onSurfaceVariant else colors.outline
                 )
             }
         }

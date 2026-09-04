@@ -2339,7 +2339,11 @@ actor MacAudioProcessingStore {
         operation: @escaping @Sendable () throws -> Void
     ) async throws {
         let gate = MacAudioDeadlineGate<Void>()
-        let timeout = max(0, deadline.timeIntervalSinceNow + 0.05)
+        // Keep the watchdog behind the lock-wait deadline. A loaded worker
+        // queue can miss a 50ms slack and report persistenceTimedOut for a
+        // held flock, which poisons a healthy store. persistenceBusy is the
+        // correct lock-wait outcome.
+        let timeout = max(0.2, deadline.timeIntervalSinceNow + 0.2)
         let maximumSeconds = Double(UInt64.max) / 1_000_000_000
         let timeoutNanoseconds = UInt64(min(timeout, maximumSeconds) * 1_000_000_000)
 

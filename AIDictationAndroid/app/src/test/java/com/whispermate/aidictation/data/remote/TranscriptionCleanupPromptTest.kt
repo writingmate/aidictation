@@ -82,30 +82,28 @@ class TranscriptionCleanupPromptTest {
     }
 
     @Test
-    fun recognitionHintsAreBareAndExcludeRulesAndExpansions() {
+    fun recognitionHintsAreVocabularyOnly() {
+        // The STT prompt is a spelling sample, not an instruction sheet: names and phrases
+        // the recogniser should spell right, nothing a model could mistake for speech.
         val hints = TranscriptionCleanupPrompt.speechRecognitionHints(fullContext()).orEmpty()
 
-        assertTrue(hints.contains("Produce polished dictation text"))
-        assertTrue(hints.contains("including language switching within a sentence"))
-        assertTrue(hints.contains("Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\""))
-        assertTrue(hints.contains("Add natural punctuation, capitalization, paragraph breaks, and spacing"))
-        assertTrue(hints.contains("British English"))
-        assertTrue(hints.contains("NovaFlow, Kestrel Works, nova flow → NovaFlow"))
-        assertTrue(hints.contains("q b r → quarterly business review"))
-        assertTrue(hints.contains("Use short paragraphs"))
-        assertTrue(hints.contains("→"))
-        assertFalse(hints.contains("Vocabulary:"))
+        assertTrue(hints.startsWith("Vocabulary: "))
+        assertTrue(hints.contains("NovaFlow"))
+        assertTrue(hints.contains("Phrases: "))
+        assertTrue(hints.contains("Kestrel Works"))
+        assertTrue(hints.contains("q b r"))
+        assertFalse(hints.contains("Produce polished dictation text"))
+        assertFalse(hints.contains("→"))
+        assertFalse(hints.contains("Use short paragraphs"))
+        assertFalse(hints.contains("British English"))
     }
 
     @Test
-    fun recognitionContractIsPresentWithoutPersonalHints() {
-        val prompt = TranscriptionCleanupPrompt.speechRecognitionHints(
-            CapturedTranscriptionCleanupContext.EMPTY
-        ).orEmpty()
-
-        assertTrue(prompt.contains("Produce polished dictation text"))
-        assertTrue(prompt.contains("including language switching within a sentence"))
-        assertTrue(prompt.contains("Output only the transcript"))
+    fun recognitionHintsAreAbsentWithoutPersonalVocabulary() {
+        assertEquals(
+            null,
+            TranscriptionCleanupPrompt.speechRecognitionHints(CapturedTranscriptionCleanupContext.EMPTY)
+        )
     }
 
     @Test

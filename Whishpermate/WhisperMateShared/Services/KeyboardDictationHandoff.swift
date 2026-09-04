@@ -53,6 +53,37 @@ public enum KeyboardDictationHandoff {
         case cancel
     }
 
+    /// Idle mic-button path. Cold/expired/unavailable opens the app; a live
+    /// Quick Dictation window stays inside the keyboard.
+    public enum IdleStartPath: String, Equatable, Sendable {
+        case startRequiresApp
+        case startViaReadyApp
+    }
+
+    /// Host decision after a keyboard session returns to idle.
+    public enum QuickDictationRearmDecision: Equatable, Sendable {
+        case rearm(QuickDictationAvailability)
+        case clear
+    }
+
+    /// Keyboard chrome for a finished or failed attempt. Transcription failures
+    /// must return to idle silently — never a red "couldn't transcribe" banner.
+    public enum KeyboardChromeFailure: String, Equatable, Sendable {
+        case transcriptionFailed
+        case transcriptionTimeout
+        case insertFailed
+        case cancelled
+        case openAppFailed
+        case startFailed
+        case persistenceFailed
+        case restoreFailed
+    }
+
+    public enum KeyboardChromePresentation: Equatable, Sendable {
+        case silentIdle
+        case operational(String)
+    }
+
     public struct AttemptIdentity: Codable, Hashable, Sendable {
         public let sessionID: String
         public let attemptID: String
@@ -1094,6 +1125,64 @@ public enum KeyboardDictationHandoff {
             )
         }
         return ready
+    }
+
+    /// First tap (cold) opens the app. Every later tap while Quick Dictation is
+    /// still armed stays inside the keyboard.
+    public static func idleStartPath(now: Date = Date()) -> IdleStartPath {
+        isQuickDictationReady(now: now) ? .startViaReadyApp : .startRequiresApp
+    }
+
+    /// The 10-minute window is still open, even if the heartbeat is momentarily stale
+    /// or standby was torn down for a real recording.
+    public static func hasValidQuickDictationWindow(now: Date = Date()) -> Bool {
+        guard let availability = loadQuickDictationAvailability() else { return false }
+        return availability.expiresAt > now
+    }
+
+    /// Keep host polling/heartbeat alive while a keyboard attempt is running or
+    /// the Quick Dictation window is still valid. Do not treat "no active attempt"
+    /// as permission to drop standby.
+    public static func shouldKeepHostAlive(
+        hasActiveKeyboardWork: Bool,
+        availability: QuickDictationAvailability?,
+        now: Date = Date()
+    ) -> Bool {
+        if hasActiveKeyboardWork { return true }
+        return availability.map { $0.expiresAt > now } ?? false
+    }
+
+    /// After a completed keyboard session, preserve the existing window and
+    /// refresh the heartbeat so the next mic tap is `.startViaReadyApp`.
+    public static func rearmDecisionAfterIdleSession(
+        current: QuickDictationAvailability?,
+        now: Date = Date()
+    ) -> QuickDictationRearmDecision {
+        guard let current, current.expiresAt > now else {
+            return .clear
+        }
+        return .rearm(current.refreshingHeartbeat(at: now))
+    }
+
+    /// Open-app fallback is only for a truly cold/expired/unavailable host.
+    /// A live heartbeat means the app is still listening — keep waiting.
+    public static func shouldOpenAppAfterQuickDictationFallback(now: Date = Date()) -> Bool {
+        !isQuickDictationReady(now: now)
+    }
+
+    /// Transcription / insert / cancel outcomes stay silent on keyboard chrome.
+    /// Only operational "open the app" / persistence problems may show a
+    /// non-alarming status. Callers must never paint these as red errors.
+    public static func chromePresentation(
+        for failure: KeyboardChromeFailure,
+        userMessage: String
+    ) -> KeyboardChromePresentation {
+        switch failure {
+        case .transcriptionFailed, .transcriptionTimeout, .insertFailed, .cancelled:
+            return .silentIdle
+        case .openAppFailed, .startFailed, .persistenceFailed, .restoreFailed:
+            return .operational(userMessage)
+        }
     }
 
     // MARK: - Compatibility text bridge

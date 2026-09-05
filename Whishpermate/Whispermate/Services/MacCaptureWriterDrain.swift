@@ -1,6 +1,7 @@
 import Foundation
 
 nonisolated enum MacCaptureWriterDrain {
+    // The caller closes write admission and serializes native writer operations.
     static func finish<T>(
         condition: NSCondition,
         writesPending: () -> Bool,
@@ -14,8 +15,7 @@ nonisolated enum MacCaptureWriterDrain {
         // A producer's last callback may need this condition to report failure.
         let tail = drain()
 
-        condition.lock()
+        // Native file I/O must not hold the lock used by Stop and timeout.
         closeWriter(tail)
-        condition.unlock()
     }
 }

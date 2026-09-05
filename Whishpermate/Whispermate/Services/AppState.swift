@@ -118,6 +118,15 @@ class AppState: ObservableObject {
 
     // MARK: - Public API
 
+    func setMeetingPaused(_ paused: Bool, recordingID: UUID) async throws {
+        guard let attemptID = recordingAttemptID, !shouldAutoPaste,
+              recordingState == .recording,
+              ownsProcessingAttempt(recordingID: recordingID, attemptID: attemptID) else { throw CancellationError() }
+        try await audioRecorder.setMeetingPaused(paused, attemptID: attemptID)
+        guard recordingState == .recording,
+              ownsProcessingAttempt(recordingID: recordingID, attemptID: attemptID) else { throw CancellationError() }
+    }
+
     /// Start recording audio
     /// - Parameters:
     ///   - continuous: Whether this is continuous recording mode

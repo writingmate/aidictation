@@ -252,6 +252,22 @@ private func testProductionIntegrationContracts() throws {
     let recorder = try String(contentsOf: root.appendingPathComponent(
         "Whishpermate/Whispermate/Services/AudioRecorder.swift"
     ), encoding: .utf8)
+    let notes = try String(contentsOf: root.appendingPathComponent(
+        "Whishpermate/Whispermate/Services/MeetingNotesCoordinator.swift"
+    ), encoding: .utf8)
+    try require(
+        notes.contains("try await app.setMeetingPaused(paused, recordingID: recordingID)")
+            && appState.contains("try await audioRecorder.setMeetingPaused(paused, attemptID: attemptID)")
+            && recorder.contains("session.recordingID == attemptID"),
+        "meeting pause must map the stable recording identity to the current native attempt through AppState"
+    )
+    let pauseStart = recorder.range(of: "private func changeEnginePause(")!.lowerBound
+    let pauseEnd = recorder.range(of: "var engine: AVAudioEngine", range: pauseStart..<recorder.endIndex)!.lowerBound
+    let pauseBody = recorder[pauseStart..<pauseEnd]
+    let nativeFailure = pauseBody.range(of: "if let drainFailure {")!.lowerBound
+    let rememberFailure = pauseBody.range(of: "preserveFailure(", range: nativeFailure..<pauseBody.endIndex)!.lowerBound
+    let throwFailure = pauseBody.range(of: "throw drainFailure", range: nativeFailure..<pauseBody.endIndex)!.lowerBound
+    try require(rememberFailure < throwFailure, "a cancelled pause waiter can hide a late native write failure")
     let app = try String(contentsOf: root.appendingPathComponent(
         "Whishpermate/Whispermate/WhispermateApp.swift"
     ), encoding: .utf8)

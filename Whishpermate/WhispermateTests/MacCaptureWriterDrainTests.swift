@@ -48,6 +48,48 @@ final class MacCaptureWriterDrainTests: XCTestCase {
         var pending = true
         var failure: String?
         var closed = false
+
+        var recordedFailure: String? {
+            condition.lock()
+            defer { condition.unlock() }
+            return failure
+        }
+    }
+
+    func testStalledTailWriteDoesNotBlockTheNativeDeadline() async {
+        let state = State()
+        state.pending = false
+        let releaseWrite = DispatchSemaphore(value: 0)
+        let writeBegan = DispatchSemaphore(value: 0)
+        let closed = expectation(description: "Native write eventually finishes")
+        let operation = MacBoundedNativeOperation<Bool>(cancelNative: {
+            state.condition.lock()
+            state.failure = "Cancelled"
+            state.condition.unlock()
+        })
+        let start = Date()
+        do {
+            _ = try await operation.run(timeoutNanoseconds: 250_000_000) { completion in
+                DispatchQueue.global().async {
+                    MacCaptureWriterDrain.finish(condition: state.condition, writesPending: { state.pending }) {
+                        "tail"
+                    } closeWriter: { _ in
+                        writeBegan.signal()
+                        _ = releaseWrite.wait(timeout: .now() + 2)
+                    }
+                    completion(.success(true))
+                    closed.fulfill()
+                }
+            }
+            XCTFail("A stalled tail write should reach its deadline")
+        } catch {
+            XCTAssertEqual(error as? MacNativeOperationDeadlineError, .timedOut)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertEqual(writeBegan.wait(timeout: .now()), .success)
+        XCTAssertEqual(state.recordedFailure, "Cancelled")
+        releaseWrite.signal()
+        await fulfillment(of: [closed], timeout: 2)
     }
 
     func testLastProducerCallbackCanReportFailureBeforeWriterCloses() {

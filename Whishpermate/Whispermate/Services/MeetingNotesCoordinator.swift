@@ -103,7 +103,7 @@ final class MeetingNotesCoordinator: ObservableObject {
         captureTransition = Task {
             defer { if self.recordingID == recordingID { isChangingCapture = false; captureTransition = nil } }
             do {
-                try await AudioRecorder.shared.setMeetingPaused(paused, recordingID: recordingID)
+                try await app.setMeetingPaused(paused, recordingID: recordingID)
                 try Task.checkCancellation()
                 guard self.recordingID == recordingID, activeNoteID == noteID else { return }
                 if paused {

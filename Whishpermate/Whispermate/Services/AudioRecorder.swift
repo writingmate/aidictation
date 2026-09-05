@@ -846,9 +846,9 @@ class AudioRecorder: NSObject, ObservableObject {
         }
     }
 
-    func setMeetingPaused(_ paused: Bool, recordingID: UUID) async throws {
+    func setMeetingPaused(_ paused: Bool, attemptID: UUID) async throws {
         let changeID = UUID()
-        guard let session = activeCapture, session.recordingID == recordingID,
+        guard let session = activeCapture, session.recordingID == attemptID,
               session.beginPauseChange(paused: paused, id: changeID) else { throw CancellationError() }
         stopRecordingWatchdog()
         audioLevel = 0
@@ -868,6 +868,8 @@ class AudioRecorder: NSObject, ObservableObject {
                 startRecordingWatchdog()
                 lastAudioBufferAt = Date()
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             if activeCapture === session {
                 reportCaptureFailure("Recording couldn’t \(paused ? "pause" : "resume"). The available audio was kept.", session: session)
@@ -1568,10 +1570,13 @@ private nonisolated final class MacCaptureSession: @unchecked Sendable {
             MacCaptureWriterDrain.finish(condition: condition, writesPending: { activeWrites > 0 }) {
                 Result { try systemAudio?.stopAndDrain() }
             } closeWriter: { drained in
-                do { if let tail = try drained.get() { try audioFile?.write(from: tail) } }
+                do { if let tail = try drained.get() { try writerSnapshot()?.write(from: tail) } }
                 catch { drainFailure = error }
             }
-            if let drainFailure { throw drainFailure }
+            if let drainFailure {
+                preserveFailure("The end of the meeting audio couldn’t be saved. The available recording was kept.")
+                throw drainFailure
+            }
         } else {
             try engine.start()
         }
@@ -1753,6 +1758,12 @@ private nonisolated final class MacCaptureSession: @unchecked Sendable {
         return true
     }
 
+    private func preserveFailure(_ message: String) {
+        condition.lock()
+        if failureMessage == nil { failureMessage = message }
+        condition.unlock()
+    }
+
     var recordedFailure: String? {
         condition.lock()
         defer { condition.unlock() }
@@ -1772,25 +1783,36 @@ private nonisolated final class MacCaptureSession: @unchecked Sendable {
             engine.stop()
         }
 
-        MacCaptureWriterDrain.finish(condition: condition, writesPending: { activeWrites > 0 }) {
-            Result { try systemAudio?.stopAndDrain() }
-        } closeWriter: { drained in
-            do {
-                if let tail = try drained.get(), !deleteFile {
-                    try audioFile?.write(from: tail)
-                }
-            } catch {
-                if failureMessage == nil {
-                    failureMessage = "The end of the meeting audio couldn’t be saved. The available recording was kept."
+        autoreleasepool {
+            MacCaptureWriterDrain.finish(condition: condition, writesPending: { activeWrites > 0 }) {
+                Result { try systemAudio?.stopAndDrain() }
+            } closeWriter: { drained in
+                condition.lock()
+                let writer = audioFile
+                audioFile = nil
+                condition.unlock()
+                withExtendedLifetime(writer) {
+                    do {
+                        if let tail = try drained.get(), !deleteFile {
+                            try writer?.write(from: tail)
+                        }
+                    } catch {
+                        preserveFailure("The end of the meeting audio couldn’t be saved. The available recording was kept.")
+                    }
                 }
             }
-            audioFile = nil
         }
         closeProof.confirmClosed()
 
         if deleteFile {
             try? FileManager.default.removeItem(at: recordingURL)
         }
+    }
+
+    private func writerSnapshot() -> AVAudioFile? {
+        condition.lock()
+        defer { condition.unlock() }
+        return audioFile
     }
 
     private func promoteToReadyIfPossible() -> Bool {

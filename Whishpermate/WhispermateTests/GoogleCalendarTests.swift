@@ -1,6 +1,29 @@
 import XCTest
 
 final class GoogleCalendarTests: XCTestCase {
+    func testCachedMeetingsRespectSavedSelectionBeforeNewDataArrives() throws {
+        let now = Date()
+        let cached = [
+            GoogleCalendarCachedMeeting(id: "one", calendarID: "work", title: "Work", start: now, end: now.addingTimeInterval(600)),
+            GoogleCalendarCachedMeeting(id: "two", calendarID: "work:personal", title: "Personal", start: now, end: now.addingTimeInterval(600)),
+        ]
+        let restored = try JSONDecoder().decode([GoogleCalendarCachedMeeting].self, from: JSONEncoder().encode(cached))
+        XCTAssertEqual(GoogleCalendarSync.visibleMeetings(restored, selected: ["work"], now: now).map(\.id), ["one"])
+        XCTAssertEqual(GoogleCalendarSync.visibleMeetings(restored, selected: ["work", "new-calendar"], now: now).map(\.id), ["one"])
+        XCTAssertTrue(GoogleCalendarSync.visibleMeetings(restored, selected: [], now: now).isEmpty)
+        XCTAssertEqual(restored.count, 2)
+    }
+
+    func testCachedMeetingsExpireAndStayInStartOrder() {
+        let now = Date()
+        let cached = [
+            GoogleCalendarCachedMeeting(id: "later", calendarID: "work", title: "Later", start: now.addingTimeInterval(300), end: now.addingTimeInterval(600)),
+            GoogleCalendarCachedMeeting(id: "ended", calendarID: "work", title: "Ended", start: now.addingTimeInterval(-300), end: now),
+            GoogleCalendarCachedMeeting(id: "now", calendarID: "work", title: "Now", start: now, end: now.addingTimeInterval(300)),
+        ]
+        XCTAssertEqual(GoogleCalendarSync.visibleMeetings(cached, selected: ["work"], now: now).map(\.id), ["now", "later"])
+    }
+
     func testAutomaticRefreshUsesCachedMeetingsForFifteenMinutes() {
         let now = Date()
         XCTAssertTrue(GoogleCalendarSync.shouldRefresh(lastSynced: nil, now: now))

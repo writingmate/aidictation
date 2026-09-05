@@ -25,23 +25,16 @@ final class GoogleCalendarClient: ObservableObject {
     private struct Link: Decodable { let connectionID: String; let authorizationURL: URL }
     private struct Disconnection: Decodable { let disconnected: Bool }
     private struct Failure: Decodable { let error: String }
-    private struct CachedMeeting: Codable {
-        let id: String
-        let title: String
-        let start: Date
-        let end: Date
-        var meeting: MeetingCalendar.Meeting {
-            .init(id: id, title: title, start: start, end: end, color: NSColor.systemBlue.cgColor)
-        }
-    }
     private struct Cache: Codable {
         let userID: UUID
         let connectionID: String
         let calendars: [GoogleCalendarSummary]
-        let meetings: [CachedMeeting]
+        let meetings: [GoogleCalendarCachedMeeting]
+        let selectedCalendarIDs: Set<String>
         let syncedAt: Date
     }
 
+    private var cachedMeetings: [GoogleCalendarCachedMeeting] = []
     private let authorization = GoogleCalendarAuthorization()
     private var connectionTask: Task<Void, Never>?
     private var generation = UUID()
@@ -114,6 +107,7 @@ final class GoogleCalendarClient: ObservableObject {
             connectionID = link.connectionID
             UserDefaults.standard.set(link.connectionID, forKey: connectionKey)
             pendingID = nil
+            cachedMeetings = []
             meetings = []
             calendars = []
             lastSynced = nil
@@ -162,12 +156,12 @@ final class GoogleCalendarClient: ObservableObject {
         if selected { selectedCalendarIDs.insert(id) } else { selectedCalendarIDs.remove(id) }
         UserDefaults.standard.set(Array(selectedCalendarIDs).sorted(), forKey: selectionKey)
         cancelRefresh()
-        meetings = []
+        updateDisplayedMeetings()
         Task { await refresh() }
     }
 
     private func refreshIfNeeded() async {
-        meetings = meetings.filter { $0.end > Date() }
+        updateDisplayedMeetings()
         guard GoogleCalendarSync.shouldRefresh(lastSynced: lastSynced, now: Date()) else { return }
         await refresh()
     }
@@ -203,6 +197,7 @@ final class GoogleCalendarClient: ObservableObject {
     func handle(_ url: URL) -> Bool { url.host == "google-calendar" }
 
     private func clearCalendar() {
+        cachedMeetings = []
         connectionID = nil
         account = nil
         meetings = []
@@ -225,13 +220,22 @@ final class GoogleCalendarClient: ObservableObject {
         if let data = try? Data(contentsOf: cacheURL), let cache = try? JSONDecoder().decode(Cache.self, from: data),
            cache.userID == id, cache.connectionID == savedID {
             calendars = cache.calendars
-            meetings = cache.meetings.filter { $0.end > Date() }.map(\.meeting)
-            lastSynced = cache.syncedAt
+            cachedMeetings = cache.meetings
+            let selected = GoogleCalendarSync.selectedIDs(calendars: calendars,
+                saved: UserDefaults.standard.stringArray(forKey: selectionKey))
+            lastSynced = cache.selectedCalendarIDs == selected ? cache.syncedAt : nil
             account = calendars.first(where: { $0.primary == true })?.id ?? "Google Calendar"
         }
         selectedCalendarIDs = GoogleCalendarSync.selectedIDs(calendars: calendars,
             saved: UserDefaults.standard.stringArray(forKey: selectionKey))
+        updateDisplayedMeetings()
         Task { await refreshIfNeeded() }
+    }
+
+    private func updateDisplayedMeetings() {
+        meetings = GoogleCalendarSync.visibleMeetings(cachedMeetings, selected: selectedCalendarIDs, now: Date()).map {
+            .init(id: $0.id, title: $0.title, start: $0.start, end: $0.end, color: NSColor.systemBlue.cgColor)
+        }
     }
 
     private func sync(id: UUID) async {
@@ -257,7 +261,8 @@ final class GoogleCalendarClient: ObservableObject {
             let selected = GoogleCalendarSync.selectedIDs(calendars: available,
                 saved: UserDefaults.standard.stringArray(forKey: selectionKey))
             selectedCalendarIDs = selected
-            var result: [CachedMeeting] = []
+            updateDisplayedMeetings()
+            var result: [GoogleCalendarCachedMeeting] = []
             for calendar in available where selected.contains(calendar.id) {
                 nextPage = nil
                 seenPages = []
@@ -268,7 +273,7 @@ final class GoogleCalendarClient: ObservableObject {
                     let page: EventPage = try await request(body)
                     for event in page.items {
                         guard let interval = event.interval, interval.end > Date() else { continue }
-                        result.append(.init(id: "google:\(calendar.id):\(event.id)", title: event.summary ?? "Meeting",
+                        result.append(.init(id: "google:\(calendar.id):\(event.id)", calendarID: calendar.id, title: event.summary ?? "Meeting",
                                             start: interval.start, end: interval.end))
                     }
                     nextPage = page.nextPageToken
@@ -279,10 +284,11 @@ final class GoogleCalendarClient: ObservableObject {
             guard generation == operation, refreshID == id else { return }
             let sorted = result.sorted { $0.start < $1.start }
             let syncedAt = Date()
-            let cache = Cache(userID: userID, connectionID: connectionID, calendars: available, meetings: sorted, syncedAt: syncedAt)
+            let cache = Cache(userID: userID, connectionID: connectionID, calendars: available, meetings: sorted, selectedCalendarIDs: selected, syncedAt: syncedAt)
             try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(cache).write(to: cacheURL, options: .atomic)
-            meetings = sorted.map(\.meeting)
+            cachedMeetings = sorted
+            updateDisplayedMeetings()
             lastSynced = syncedAt
             error = nil
         } catch is CancellationError {

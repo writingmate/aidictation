@@ -75,6 +75,7 @@ private struct MeetingCallPromptView: View {
                 if canStart { MeetingDetectionMonitor.shared.takeNotes(for: call) }
             }
             .menuStyle(.button)
+            .disabled(!canStart)
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .fixedSize()

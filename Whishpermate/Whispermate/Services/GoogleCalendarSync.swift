@@ -9,7 +9,19 @@ nonisolated struct GoogleCalendarSummary: Codable, Identifiable, Equatable {
     var title: String { summary ?? id }
 }
 
+nonisolated struct GoogleCalendarCachedMeeting: Codable, Equatable {
+    let id: String
+    let calendarID: String
+    let title: String
+    let start: Date
+    let end: Date
+}
+
 nonisolated enum GoogleCalendarSync {
+    static func visibleMeetings(_ cached: [GoogleCalendarCachedMeeting], selected: Set<String>, now: Date) -> [GoogleCalendarCachedMeeting] {
+        cached.filter { selected.contains($0.calendarID) && $0.end > now }.sorted { $0.start < $1.start }
+    }
+
     static func shouldRefresh(lastSynced: Date?, now: Date) -> Bool {
         guard let lastSynced else { return true }
         return now.timeIntervalSince(lastSynced) >= 15 * 60
@@ -31,8 +43,6 @@ nonisolated enum GoogleCalendarSync {
         if let saved { return Set(saved).intersection(available) }
         return Set(calendars.filter { $0.selected == true || $0.primary == true }.map(\.id))
     }
-
-
 }
 
 nonisolated enum GoogleCalendarError: LocalizedError {

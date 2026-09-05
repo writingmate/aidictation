@@ -271,4 +271,38 @@ for platform, source in (("macOS", mac_client_source), ("shared/iOS", shared_cli
         f"{platform} Meetings cleanup lost the generic prompt contract or context",
     )
 
+SENTENCE_TYPE_RULE = (
+    "Do not add a question mark or rephrase a declarative into an interrogative"
+)
+SENTENCE_TYPE_GUARD = "unless the source is already a question or a clear interrogative"
+SENTENCE_TYPE_LABEL = "Preserve sentence type"
+prompt_sources = (
+    (
+        "Apple shared cleanup",
+        ROOT / "Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupPrompt.swift",
+    ),
+    (
+        "Android cleanup",
+        ROOT
+        / "AIDictationAndroid/app/src/main/java/com/whispermate/aidictation/data/remote/TranscriptionCleanupPrompt.kt",
+    ),
+    (
+        "Windows cleanup",
+        ROOT / "AIDictation.Windows/AIDictation/Services/TranscriptionCleanupPrompt.cs",
+    ),
+)
+for platform, path in prompt_sources:
+    text = path.read_text()
+    for requirement in (SENTENCE_TYPE_LABEL, SENTENCE_TYPE_RULE, SENTENCE_TYPE_GUARD):
+        require(
+            requirement in text,
+            f"{platform} prompt lost sentence-type contract: {requirement}",
+        )
+    require(
+        "Never append invented words" in text
+        or "Do not summarize, paraphrase, shorten, reorder, continue, complete, answer, invent"
+        in text,
+        f"{platform} prompt lost anti-invention wording",
+    )
+
 print("transcription and cleanup context validation passed")

@@ -40,7 +40,10 @@ private struct ValidateTranscriptionCleanupPrompt {
             "Never copy unsupported reference content",
             "If uncertain, preserve the original source text",
             "always return non-empty corrected text",
-        ] {
+            "Preserve sentence type",
+            "Do not add a question mark or rephrase a declarative into an interrogative",
+            "unless the source is already a question or a clear interrogative",
+        ] {}
             require(prompt.contains(requirement), "cleanup prompt lost contract: \(requirement)")
         }
 
@@ -56,6 +59,9 @@ private struct ValidateTranscriptionCleanupPrompt {
             "including language switching within a sentence",
             "Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\"",
             "Remove false starts, stutters, accidental word repetitions, and explicit self-corrections",
+            "Preserve sentence type",
+            "Do not add a question mark or rephrase a declarative into an interrogative",
+            "unless the source is already a question or a clear interrogative",
             "Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses",
             "Output only the transcript",
             "NovaFlow",
@@ -193,6 +199,14 @@ private struct ValidateTranscriptionCleanupPrompt {
         require(notesPrompt.contains("<output_transformation>"), "output transformation is not delimited")
         require(notesPrompt.contains("Never ignore the final portion"), "transformation can drop the source tail")
         require(notesPrompt.contains(vocabulary), "transformation lost personal vocabulary")
+        require(
+            notesPrompt.contains("Preserve sentence type unless the output transformation explicitly changes it"),
+            "transformation lost sentence-type preservation"
+        )
+        require(
+            notesPrompt.contains("Do not add a question mark or rephrase a declarative into an interrogative"),
+            "transformation can convert statements into questions"
+        )
 
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let sharedService = try String(

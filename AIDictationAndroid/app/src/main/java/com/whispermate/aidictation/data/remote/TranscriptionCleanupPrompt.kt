@@ -71,7 +71,8 @@ object TranscriptionCleanupPrompt {
             11. Never copy unsupported reference content into the result.
             12. If uncertain, preserve the original source rather than inventing or deleting content.
             13. For non-empty source, always return non-empty corrected text. If no correction is needed, reproduce the complete source.
-            14. Output only corrected text, with no wrapper tags or preamble.
+            14. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative.
+            15. Output only corrected text, with no wrapper tags or preamble.
             """.trimIndent()
         )
         appendReferenceBlock("personal_vocabulary", context.vocabulary)

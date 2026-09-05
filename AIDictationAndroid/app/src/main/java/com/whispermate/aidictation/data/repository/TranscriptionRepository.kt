@@ -60,10 +60,7 @@ class TranscriptionRepository @Inject constructor(
 
     suspend fun prewarmOnDeviceIfEnabled(): Result<Unit> {
         val onDeviceTranscription = appPreferences.onDeviceTranscriptionEnabled.first()
-        val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
-        val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
-
-        if (!onDeviceTranscription && provider != ApiProvider.PARAKEET) {
+        if (!onDeviceTranscription) {
             return Result.success(Unit)
         }
 
@@ -94,7 +91,7 @@ class TranscriptionRepository @Inject constructor(
         }
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
         val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
-        val useLocalRecognition = !requiresCloud && (onDeviceRequested || provider == ApiProvider.PARAKEET)
+        val useLocalRecognition = !requiresCloud && onDeviceRequested
         // Cleanup remains core infrastructure after both local and cloud recognition. If its
         // separately bounded request is unavailable, preserveRawOnCleanupFailure returns raw text.
         val cleanupEnabled = true

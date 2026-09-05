@@ -56,7 +56,7 @@ class ApiConfigManager @Inject constructor() {
         fun defaultPostProcessingModel(): String = "openai/gpt-oss-20b"
     }
 
-    private var transcriptionConfig = buildDefaultTranscriptionConfig()
+    private var transcriptionConfig = buildCloudTranscriptionConfig()
     private val postProcessingConfig = buildDefaultPostProcessingConfig()
 
     init {
@@ -72,10 +72,6 @@ class ApiConfigManager @Inject constructor() {
     fun getPostProcessingConfig(): ApiConfig = postProcessingConfig
 
     private fun defaultTranscriptionProvider(): ApiProvider {
-        if (ParakeetRuntime.isLocalRuntime(BuildConfig.PARAKEET_RUNTIME)) {
-            return ApiProvider.PARAKEET
-        }
-
         val endpoint = BuildConfig.TRANSCRIPTION_ENDPOINT
         return when {
             endpoint.contains("writingmate", ignoreCase = true) -> ApiProvider.WRITINGMATE
@@ -95,31 +91,8 @@ class ApiConfigManager @Inject constructor() {
         }
     }
 
-    private fun buildDefaultTranscriptionConfig(): ApiConfig {
-        val provider = defaultTranscriptionProvider()
-        val isLocalParakeet = provider == ApiProvider.PARAKEET
-        return ApiConfig(
-            provider = provider,
-            apiKey = BuildConfig.TRANSCRIPTION_API_KEY,
-            model = if (isLocalParakeet) {
-                defaultTranscriptionModel(provider)
-            } else {
-                BuildConfig.TRANSCRIPTION_MODEL.ifEmpty { defaultTranscriptionModel(provider) }
-            },
-            endpoint = if (isLocalParakeet) {
-                provider.transcriptionEndpoint()
-            } else {
-                BuildConfig.TRANSCRIPTION_ENDPOINT.ifEmpty { provider.transcriptionEndpoint() }
-            }
-        )
-    }
-
     private fun buildCloudTranscriptionConfig(): ApiConfig {
-        val provider = when {
-            BuildConfig.TRANSCRIPTION_ENDPOINT.contains("groq", ignoreCase = true) -> ApiProvider.GROQ
-            BuildConfig.TRANSCRIPTION_ENDPOINT.contains("openai", ignoreCase = true) -> ApiProvider.OPENAI
-            else -> ApiProvider.WRITINGMATE
-        }
+        val provider = defaultTranscriptionProvider()
         return ApiConfig(
             provider = provider,
             apiKey = BuildConfig.TRANSCRIPTION_API_KEY,

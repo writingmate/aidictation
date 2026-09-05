@@ -83,7 +83,7 @@ class ParakeetTranscriber @Inject constructor(
     private val retirementScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var generation = newGeneration()
     private val audioDecoder = AndroidAudioDecoder()
-    private val ortEnvironment: OrtEnvironment = OrtEnvironment.getEnvironment()
+    private val ortEnvironment: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
 
     /**
      * Detaches native work that ignored cancellation. At most one stuck generation is retained;

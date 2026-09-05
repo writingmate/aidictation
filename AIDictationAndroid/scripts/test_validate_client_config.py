@@ -38,11 +38,32 @@ class AuthBackendAgreementTests(unittest.TestCase):
                 "SUPABASE_URL": "https://aidictation.com",
                 "SUPABASE_ANON_KEY": "public-anon-key",
                 "AUTH_WEB_URL": "https://aidictation.com/auth",
+                "GOOGLE_WEB_CLIENT_ID": "123-native-test.apps.googleusercontent.com",
             }
         )
 
+    def test_release_rejects_missing_native_google_configuration(self) -> None:
+        with self.assertRaisesRegex(ClientConfigurationError, "GOOGLE_WEB_CLIENT_ID"):
+            validate_client_configuration(
+                {
+                    "TRANSCRIPTION_API_KEY": "test-transcription-key",
+                    "AIDICTATION_POST_PROCESSING_KEY": "test-cleanup-key",
+                    "SUPABASE_URL": "https://aidictation.com",
+                    "SUPABASE_ANON_KEY": "public-anon-key",
+                    "AUTH_WEB_URL": "https://aidictation.com/auth",
+                }
+            )
+
 
 class ReleaseWorkflowPinTests(unittest.TestCase):
+    def test_play_build_receives_native_google_client_like_the_apk_build(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        for name in ("android-build.yml", "android-play-release.yml"):
+            workflow = (repository_root / ".github/workflows" / name).read_text()
+            with self.subTest(workflow=name):
+                self.assertIn("GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}", workflow)
+                self.assertIn("GOOGLE_WEB_CLIENT_ID=${GOOGLE_WEB_CLIENT_ID}", workflow)
+
     @staticmethod
     def workflow_level_env(workflow: str) -> dict[str, str]:
         lines = workflow.splitlines()

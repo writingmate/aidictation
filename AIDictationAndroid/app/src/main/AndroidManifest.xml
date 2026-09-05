@@ -20,6 +20,8 @@
         android:theme="@style/Theme.AIDictation"
         tools:targetApi="36">
 
+        <meta-data android:name="io.sentry.auto-init" android:value="false" />
+
         <!-- Main Activity -->
         <activity
             android:name=".MainActivity"

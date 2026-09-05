@@ -37,6 +37,7 @@ PLIST_CONFIG_MAP = {
     "SUPABASE_URL": "SUPABASE_URL",
     "SUPABASE_ANON_KEY": "SUPABASE_ANON_KEY",
     "AUTH_WEB_URL": "AUTH_WEB_URL",
+    "GOOGLE_WEB_CLIENT_ID": "GOOGLE_WEB_CLIENT_ID",
 }
 
 PAYMENT_CONFIG_NAMES = (
@@ -166,6 +167,7 @@ def resolved_configuration(plist: dict[str, str]) -> tuple[dict[str, str], int, 
         "AIDICTATION_POST_PROCESSING_ENDPOINT",
         "AIDICTATION_POST_PROCESSING_MODEL",
         *AUTH_CONFIG_NAMES,
+        "GOOGLE_WEB_CLIENT_ID",
     )
     validate_client_configuration(config, required_names=required)
 

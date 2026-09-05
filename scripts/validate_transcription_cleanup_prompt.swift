@@ -43,7 +43,7 @@ private struct ValidateTranscriptionCleanupPrompt {
             "Preserve sentence type",
             "Do not add a question mark or rephrase a declarative into an interrogative",
             "unless the source is already a question or a clear interrogative",
-        ] {}
+        ] {
             require(prompt.contains(requirement), "cleanup prompt lost contract: \(requirement)")
         }
 

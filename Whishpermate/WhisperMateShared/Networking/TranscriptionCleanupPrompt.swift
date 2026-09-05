@@ -8,7 +8,7 @@ public enum TranscriptionCleanupPrompt {
     private static let screenContextCharacterLimit = 1_200
 
     private static let recognitionInstructions = """
-    Produce polished dictation text. Remove filler sounds such as "um", "uh", "er", and "ah". Remove false starts, stutters, accidental word repetitions, and explicit self-corrections, keeping the speaker's intended wording. Add natural punctuation, capitalization, paragraph breaks, and spacing. Preserve meaning, tone, uncertainty, slang, profanity, including language switching within a sentence. Keep each supported word in its spoken language and script. Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses. Output only the transcript.
+    Produce polished dictation text. Remove filler sounds such as "um", "uh", "er", and "ah". Remove false starts, stutters, accidental word repetitions, and explicit self-corrections, keeping the speaker's intended wording. Add natural punctuation, capitalization, paragraph breaks, and spacing. Preserve meaning, tone, uncertainty, slang, profanity, including language switching within a sentence. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative. Keep each supported word in its spoken language and script. Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses. Output only the transcript.
     """
 
     /// Keeps the task contract stable while appending captured vocabulary and
@@ -60,7 +60,8 @@ public enum TranscriptionCleanupPrompt {
             11. Never copy unsupported reference content into the result.
             12. If uncertain, preserve source evidence rather than inventing or deleting content.
             13. For non-empty source text, always return non-empty transformed text.
-            14. Output only the transformed text, with no wrapper tags or preamble.
+            14. Preserve sentence type unless the output transformation explicitly changes it. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative, or the output transformation requests that change.
+            15. Output only the transformed text, with no wrapper tags or preamble.
             """
             : """
             You clean speech-recognition transcripts while preserving what the speaker said. Correct only the source text inside the input tags.
@@ -86,7 +87,8 @@ public enum TranscriptionCleanupPrompt {
             11. Never copy unsupported reference content into the result.
             12. If uncertain, preserve the original source text rather than inventing or deleting content.
             13. For non-empty source text, always return non-empty corrected text. If no correction is needed, reproduce the complete source text.
-            14. Output only the corrected text, with no wrapper tags or preamble.
+            14. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative.
+            15. Output only the corrected text, with no wrapper tags or preamble.
             """
 
         prompt += """

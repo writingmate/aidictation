@@ -14,7 +14,7 @@ namespace AIDictation.Services;
 public static class TranscriptionCleanupPrompt
 {
     private const string RecognitionInstructions =
-        "Transcribe the audio faithfully. Preserve every spoken word in the language and script in which it was spoken, including language switching within a sentence. Do not translate, paraphrase, normalize everything into one language, answer the speaker, or add or omit content. Output only the transcript.";
+        "Transcribe the audio faithfully. Preserve every spoken word in the language and script in which it was spoken, including language switching within a sentence. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative. Do not translate, paraphrase, normalize everything into one language, answer the speaker, or add or omit content. Output only the transcript.";
 
     public static string? BuildRecognitionHints(
         IReadOnlyList<string> vocabulary,
@@ -69,6 +69,7 @@ public static class TranscriptionCleanupPrompt
         "Fix only likely recognition errors, spelling, capitalization, punctuation, spacing, unambiguous light grammar, and requested formatting. " +
         "Preserve language switching: keep each supported word in the language and script in which it appears, and never translate, transliterate, or normalize the transcript into one language. " +
         "Preserve every supported clause and the speaker's meaning, word choice, tone, uncertainty, slang, emphasis, and profanity. " +
+        "Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative. " +
         "Remove only unambiguous filler sounds, accidental word repetitions, and explicit spoken self-corrections; preserve hesitation when it affects meaning. " +
         "Do not summarize, paraphrase, shorten, reorder, continue, complete, answer, invent, repeat, or omit source content. Never create repeated-token or repeated-phrase loops. " +
         "Reference context supplies canonical spellings, explicit replacements, phrase expansions, and formatting rules; use an item only when the source supports its term or trigger. " +

@@ -293,7 +293,7 @@ struct MeetingNoteEditor: View {
             VStack(alignment: .leading, spacing: 22) {
                 if note.transcript.isEmpty {
                     NoteEmptyState(icon: "waveform", title: active ? "Listening to your meeting" : "No transcript yet",
-                                   message: "Your transcript appears after you pause or stop recording.")
+                                   message: "Your transcript appears after you stop recording.")
                 }
                 ForEach(note.segments) { segment in
                     if !segment.transcript.isEmpty {
@@ -388,24 +388,26 @@ struct MeetingNoteEditor: View {
                     Image(systemName: coordinator.isPaused ? "pause.circle.fill" : "record.circle.fill")
                         .foregroundStyle(coordinator.isPaused ? Color.orange : Color.red)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(coordinator.isPaused ? "Paused" : (app.recordingState == .recording ? "Recording" : "Saving your recording…"))
+                        Text(coordinator.isChangingCapture ? (coordinator.isPaused ? "Resuming…" : "Pausing…") :
+                            (coordinator.isPaused ? "Paused" : (app.recordingState == .recording ? "Recording" : "Saving your recording…")))
                             .dsFont(.callout).fontWeight(.medium)
                         Text(coordinator.includeSystemAudio ? "Microphone + Mac audio" : "Microphone only").dsFont(.caption).foregroundStyle(.secondary)
                     }
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let elapsed = note.segments.reduce(0) { $0 + $1.duration }
-                            + (app.recordingState == .recording ? coordinator.recordingStartedAt.map { context.date.timeIntervalSince($0) } ?? 0 : 0)
+                            + coordinator.elapsedCurrentSegment(at: context.date)
                         Text(Duration.seconds(max(0, elapsed)).formatted(.time(pattern: .minuteSecond)))
                             .dsFont(.monoSmall).foregroundStyle(.secondary)
                     }
-                    if app.recordingState == .recording {
+                    if app.recordingState == .recording && !coordinator.isPaused {
                         ProgressView(value: Double(recorder.audioLevel)).frame(width: 55).accessibilityLabel("Microphone level")
                     }
                     Spacer()
                     if coordinator.isPaused {
-                        Button("Resume") { coordinator.start(noteID) }.disabled(app.recordingState != .idle)
+                        Button("Resume") { coordinator.resume() }.disabled(app.recordingState != .recording || coordinator.isChangingCapture)
                     } else {
-                        Button { coordinator.pause() } label: { Label("Pause", systemImage: "pause.fill") }.disabled(app.recordingState != .recording)
+                        Button { coordinator.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                            .disabled(app.recordingState != .recording || coordinator.isChangingCapture)
                     }
                     Button("Stop") { coordinator.stop(); tab = .summary }.disabled(app.recordingState != .recording && app.recordingState != .idle)
                 } else {

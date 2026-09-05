@@ -344,7 +344,13 @@ struct RecordingOverlayView: View {
             if manager.isRecording && manager.showsRecordingControls && shouldShowContent {
                 ZStack {
                     centeredWaveContent(
-                        OverlayLiveWaveView(audioLevel: manager.audioLevel, frequencyBands: manager.frequencyBands, color: .white.opacity(0.95)),
+                        Group {
+                            if notes.isPaused {
+                                Text("Paused").font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+                            } else {
+                                OverlayLiveWaveView(audioLevel: manager.audioLevel, frequencyBands: manager.frequencyBands, color: .white.opacity(0.95))
+                            }
+                        },
                         targetWidth: targetPillWidth,
                         targetHeight: targetPillHeight
                     )
@@ -494,10 +500,12 @@ struct RecordingOverlayView: View {
     private var cancelButton: some View {
         Button(action: {
             updateHoverCursor(isActive: false)
-            if notes.activeNoteID != nil { notes.pause() }
+            if notes.activeNoteID != nil {
+                if notes.isPaused { notes.resume() } else { notes.pause() }
+            }
             else { AppState.shared.cancelRecording() }
         }) {
-            Image(systemName: notes.activeNoteID != nil ? "pause.fill" : "xmark")
+            Image(systemName: notes.activeNoteID != nil ? (notes.isPaused ? "play.fill" : "pause.fill") : "xmark")
                 .font(.system(size: cancelIconSize, weight: .bold))
                 .foregroundStyle(.white.opacity(0.92))
                 .frame(width: buttonSize, height: buttonSize)
@@ -511,7 +519,8 @@ struct RecordingOverlayView: View {
             updateHoverCursor(isActive: hovering)
         }
         .animation(.easeInOut(duration: 0.12), value: isCancelButtonHovering)
-        .accessibilityLabel(notes.activeNoteID != nil ? "Pause meeting recording" : "Cancel recording")
+        .disabled(notes.isChangingCapture)
+        .accessibilityLabel(notes.activeNoteID != nil ? (notes.isPaused ? "Resume meeting recording" : "Pause meeting recording") : "Cancel recording")
     }
 
     private var stopButton: some View {

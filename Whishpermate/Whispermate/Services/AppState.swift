@@ -162,7 +162,7 @@ class AppState: ObservableObject {
             appContext: nil,
             screenContext: nil,
             usesContextRules: recordingMode != .command,
-            isRetranscription: includeSystemAudio
+            isRetranscription: includeSystemAudio || !autoPaste
         )
 
         guard historyManager.registerActiveRecording(id: recordingID) else {

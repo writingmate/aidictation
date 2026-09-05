@@ -2,6 +2,47 @@ import Foundation
 import XCTest
 
 final class MacCaptureWriterDrainTests: XCTestCase {
+    func testPauseKeepsWritesClosedUntilResumeCompletes() {
+        var phase = MacCapturePhase.active
+        let pause = UUID(), resume = UUID()
+        XCTAssertTrue(phase.acceptsWrites)
+        XCTAssertTrue(phase.beginPauseChange(paused: true, id: pause))
+        XCTAssertFalse(phase.acceptsWrites)
+        XCTAssertFalse(phase.beginPauseChange(paused: false, id: resume))
+        XCTAssertTrue(phase.completePauseChange(paused: true, id: pause))
+        XCTAssertFalse(phase.acceptsWrites)
+        XCTAssertTrue(phase.beginPauseChange(paused: false, id: resume))
+        XCTAssertFalse(phase.acceptsWrites)
+        XCTAssertTrue(phase.completePauseChange(paused: false, id: resume))
+        XCTAssertTrue(phase.acceptsWrites)
+    }
+
+    func testStopWinsOverBothNativePauseAndResumeCompletions() {
+        for paused in [true, false] {
+            var phase = paused ? MacCapturePhase.active : .paused
+            let id = UUID()
+            XCTAssertTrue(phase.beginPauseChange(paused: paused, id: id))
+            phase = .retired
+            XCTAssertFalse(phase.completePauseChange(paused: paused, id: id))
+            XCTAssertFalse(phase.acceptsWrites)
+        }
+    }
+
+    func testLateTimeoutCannotRetireACompletedOrNewerChange() {
+        var phase = MacCapturePhase.active
+        let first = UUID(), second = UUID()
+        XCTAssertTrue(phase.beginPauseChange(paused: true, id: first))
+        XCTAssertTrue(phase.completePauseChange(paused: true, id: first))
+        phase.cancelPauseChange(id: first)
+        XCTAssertEqual(phase, .paused)
+        XCTAssertTrue(phase.beginPauseChange(paused: false, id: second))
+        phase.cancelPauseChange(id: first)
+        XCTAssertEqual(phase, .resuming(second))
+        XCTAssertFalse(phase.completePauseChange(paused: false, id: first))
+        phase.cancelPauseChange(id: second)
+        XCTAssertEqual(phase, .retired)
+    }
+
     private final class State: @unchecked Sendable {
         let condition = NSCondition()
         var pending = true

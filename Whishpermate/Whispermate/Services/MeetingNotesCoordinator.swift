@@ -8,7 +8,9 @@ final class MeetingNotesCoordinator: ObservableObject {
     @Published var selectedNoteID: UUID?
     @Published private(set) var activeNoteID: UUID?
     @Published private(set) var isPaused = false
+    @Published private(set) var isChangingCapture = false
     @Published private(set) var recordingStartedAt: Date?
+    @Published private var accumulatedSegmentDuration: TimeInterval = 0
     @Published var includeSystemAudio = AppDefaults.shared.object(forKey: "meetingIncludeMacAudio") as? Bool ?? true {
         didSet { AppDefaults.shared.set(includeSystemAudio, forKey: "meetingIncludeMacAudio") }
     }
@@ -16,6 +18,7 @@ final class MeetingNotesCoordinator: ObservableObject {
     @Published private(set) var errors: [UUID: String] = [:]
     private var recordingID: UUID?
     private var shouldSummarize = false
+    private var captureTransition: Task<Void, Never>?
     private var subscriptions: Set<AnyCancellable> = []
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private var requestIDs: [UUID: UUID] = [:]
@@ -28,7 +31,9 @@ final class MeetingNotesCoordinator: ObservableObject {
         }.store(in: &subscriptions)
         app.$recordingState.receive(on: RunLoop.main).sink { [weak self] state in
             guard let self, let id = self.recordingID else { return }
-            if state == .recording, self.recordingStartedAt == nil { self.recordingStartedAt = Date() }
+            if state == .recording, self.recordingStartedAt == nil, !self.isPaused, !self.isChangingCapture {
+                self.recordingStartedAt = Date()
+            }
             guard state == .idle else { return }
             if let recording = HistoryManager.shared.recording(id: id), recording.isInProgress { return }
             self.finishSegment()
@@ -54,6 +59,7 @@ final class MeetingNotesCoordinator: ObservableObject {
         recordingID = id
         isPaused = false
         recordingStartedAt = nil
+        accumulatedSegmentDuration = 0
         shouldSummarize = false
         app.startRecording(continuous: true, showOverlayControls: true, recordingID: id,
                            autoPaste: false, includeSystemAudio: includeSystemAudio)
@@ -68,7 +74,7 @@ final class MeetingNotesCoordinator: ObservableObject {
     func startFromOverlay() {
         if let activeNoteID {
             MeetingNoteWindowController.open(activeNoteID)
-            if isPaused, app.recordingState == .idle { start(activeNoteID) }
+            if isPaused { resume() }
             return
         }
         guard app.recordingState == .idle, !app.isProcessing, let id = create() else { return }
@@ -77,13 +83,49 @@ final class MeetingNotesCoordinator: ObservableObject {
     }
 
     func pause() {
-        guard recordingID == app.activeRecordingID, app.recordingState == .recording else { return }
-        isPaused = true
-        app.stopRecording()
+        changePause(paused: true)
+    }
+
+    func resume() {
+        changePause(paused: false)
+    }
+
+    func elapsedCurrentSegment(at date: Date) -> TimeInterval {
+        guard app.recordingState == .recording else { return 0 }
+        return accumulatedSegmentDuration + (recordingStartedAt.map { date.timeIntervalSince($0) } ?? 0)
+    }
+
+    private func changePause(paused: Bool) {
+        guard let recordingID, let noteID = activeNoteID,
+              recordingID == app.activeRecordingID, app.recordingState == .recording,
+              !isChangingCapture, isPaused != paused else { return }
+        isChangingCapture = true
+        captureTransition = Task {
+            defer { if self.recordingID == recordingID { isChangingCapture = false; captureTransition = nil } }
+            do {
+                try await AudioRecorder.shared.setMeetingPaused(paused, recordingID: recordingID)
+                try Task.checkCancellation()
+                guard self.recordingID == recordingID, activeNoteID == noteID else { return }
+                if paused {
+                    accumulatedSegmentDuration = elapsedCurrentSegment(at: Date())
+                    recordingStartedAt = nil
+                } else {
+                    recordingStartedAt = Date()
+                }
+                isPaused = paused
+            } catch is CancellationError {
+            } catch {
+                guard self.recordingID == recordingID else { return }
+                errors[noteID] = "Recording couldn’t \(paused ? "pause" : "resume"). The available audio was kept."
+            }
+        }
     }
 
     func stop() {
         guard let noteID = activeNoteID else { return }
+        captureTransition?.cancel()
+        captureTransition = nil
+        isChangingCapture = false
         isPaused = false
         shouldSummarize = true
         if recordingID == nil {
@@ -141,7 +183,11 @@ final class MeetingNotesCoordinator: ObservableObject {
         if !app.errorMessage.isEmpty { errors[noteID] = app.errorMessage }
         recordingID = nil
         recordingStartedAt = nil
-        if isPaused { return }
+        accumulatedSegmentDuration = 0
+        isPaused = false
+        isChangingCapture = false
+        captureTransition?.cancel()
+        captureTransition = nil
         activeNoteID = nil
         if shouldSummarize || store.note(noteID)?.hasContent == true { summarize(noteID) }
         shouldSummarize = false

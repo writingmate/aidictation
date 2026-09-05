@@ -58,6 +58,7 @@ nonisolated final class MeetingSystemAudioCapture: NSObject, SCStreamOutput, SCS
     func stopAndDrain() throws -> AVAudioPCMBuffer? {
         let remaining: [Float] = try queue.sync {
             lock.lock()
+            guard !stopped else { lock.unlock(); return [] }
             stopped = true
             let stream = self.stream
             self.stream = nil

@@ -4,6 +4,7 @@ import WhisperMateShared
 struct RecordingOverlayView: View {
     @ObservedObject var manager: OverlayWindowManager
     @ObservedObject private var history = HistoryManager.shared
+    @ObservedObject private var notes = MeetingNotesCoordinator.shared
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering = false
     @State private var shouldShowExpandedPill = false
@@ -196,17 +197,10 @@ struct RecordingOverlayView: View {
     private func overlayContent(geometry _: GeometryProxy) -> some View {
         Group {
             if let permissionIssue = manager.permissionIssue {
-                HStack(spacing: OverlayPermissionCalloutMetrics.spacing) {
-                    Color.clear
-                        .frame(
-                            width: OverlayPermissionCalloutMetrics.width,
-                            height: OverlayPermissionCalloutMetrics.height
-                        )
-                        .allowsHitTesting(false)
-
+                VStack(spacing: OverlayPermissionCalloutMetrics.spacing) {
+                    if manager.position == .bottom { permissionCallout(permissionIssue) }
                     contentView
-
-                    permissionCallout(permissionIssue)
+                    if manager.position == .top { permissionCallout(permissionIssue) }
                 }
             } else {
                 contentView
@@ -227,6 +221,11 @@ struct RecordingOverlayView: View {
             }
         }
         .contextMenu {
+            Button(notes.activeNoteID == nil ? "New meeting note" : "Open meeting note") {
+                notes.startFromOverlay()
+            }
+            .disabled(manager.isProcessing)
+            Divider()
             Button("Hide for 1 Hour") {
                 updateHoverCursor(isActive: false)
                 manager.hideTemporarily(for: 3600)
@@ -282,8 +281,8 @@ struct RecordingOverlayView: View {
 
             Text(issue.message)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.white)
-                .lineLimit(1)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
 
             Spacer(minLength: 4)
 
@@ -291,7 +290,7 @@ struct RecordingOverlayView: View {
                 updateHoverCursor(isActive: false)
                 manager.setUpPermission()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(Color.orange)
             .accessibilityLabel("Set up \(issue.message.lowercased())")
@@ -303,14 +302,14 @@ struct RecordingOverlayView: View {
         )
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.86))
+                .fill(.regularMaterial)
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.14), lineWidth: 0.75)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 0.75)
                 }
         }
         .shadow(color: .black.opacity(0.16), radius: 5, y: 2)
-        .transition(.opacity.combined(with: .move(edge: .trailing)))
+        .transition(.opacity)
     }
 
     // MARK: - Subviews
@@ -345,10 +344,19 @@ struct RecordingOverlayView: View {
             if manager.isRecording && manager.showsRecordingControls && shouldShowContent {
                 ZStack {
                     centeredWaveContent(
-                        OverlayLiveWaveView(audioLevel: manager.audioLevel, frequencyBands: manager.frequencyBands, color: .white.opacity(0.95)),
+                        Group {
+                            if notes.isPaused {
+                                Text("Paused").font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+                            } else {
+                                OverlayLiveWaveView(audioLevel: manager.audioLevel, frequencyBands: manager.frequencyBands, color: .white.opacity(0.95))
+                            }
+                        },
                         targetWidth: targetPillWidth,
                         targetHeight: targetPillHeight
                     )
+                    .onTapGesture {
+                        if let id = notes.activeNoteID { MeetingNoteWindowController.open(id) }
+                    }
 
                     HStack(spacing: 0) {
                         cancelButton
@@ -436,8 +444,8 @@ struct RecordingOverlayView: View {
             Spacer(minLength: 0)
 
             OverlayIdleControlButton(
-                systemName: "mic.fill",
-                accessibilityLabel: "Start recording",
+                systemName: notes.isPaused ? "play.fill" : "mic.fill",
+                accessibilityLabel: notes.isPaused ? "Resume meeting recording" : "Start recording",
                 iconSize: idleControlIconSize,
                 buttonSize: buttonSize
             ) {
@@ -446,6 +454,21 @@ struct RecordingOverlayView: View {
             } onHover: { hovering in
                 updateHoverCursor(isActive: hovering)
             }
+
+            Spacer(minLength: 0)
+
+            OverlayIdleControlButton(
+                systemName: "note.text",
+                accessibilityLabel: notes.activeNoteID == nil ? "Start meeting note" : "Open meeting note",
+                iconSize: idleControlIconSize,
+                buttonSize: buttonSize
+            ) {
+                updateHoverCursor(isActive: false)
+                notes.startFromOverlay()
+            } onHover: { hovering in
+                updateHoverCursor(isActive: hovering)
+            }
+            .help(notes.activeNoteID == nil ? "Start meeting note" : "Open meeting note")
 
             Spacer(minLength: 0)
 
@@ -477,9 +500,12 @@ struct RecordingOverlayView: View {
     private var cancelButton: some View {
         Button(action: {
             updateHoverCursor(isActive: false)
-            AppState.shared.cancelRecording()
+            if notes.activeNoteID != nil {
+                if notes.isPaused { notes.resume() } else { notes.pause() }
+            }
+            else { AppState.shared.cancelRecording() }
         }) {
-            Image(systemName: "xmark")
+            Image(systemName: notes.activeNoteID != nil ? (notes.isPaused ? "play.fill" : "pause.fill") : "xmark")
                 .font(.system(size: cancelIconSize, weight: .bold))
                 .foregroundStyle(.white.opacity(0.92))
                 .frame(width: buttonSize, height: buttonSize)
@@ -493,13 +519,15 @@ struct RecordingOverlayView: View {
             updateHoverCursor(isActive: hovering)
         }
         .animation(.easeInOut(duration: 0.12), value: isCancelButtonHovering)
-        .accessibilityLabel("Cancel recording")
+        .disabled(notes.isChangingCapture)
+        .accessibilityLabel(notes.activeNoteID != nil ? (notes.isPaused ? "Resume meeting recording" : "Pause meeting recording") : "Cancel recording")
     }
 
     private var stopButton: some View {
         Button(action: {
             updateHoverCursor(isActive: false)
-            AppState.shared.stopRecording()
+            if notes.activeNoteID != nil { notes.stop() }
+            else { AppState.shared.stopRecording() }
         }) {
             Image(systemName: "stop.fill")
                 .font(.system(size: stopIconSize, weight: .bold))

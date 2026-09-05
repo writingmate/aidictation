@@ -29,8 +29,8 @@ enum OverlayPermissionIssue: Equatable {
 }
 
 enum OverlayPermissionCalloutMetrics {
-    static let width: CGFloat = 250
-    static let height: CGFloat = 36
+    static let width: CGFloat = 300
+    static let height: CGFloat = 52
     static let spacing: CGFloat = 8
 }
 
@@ -226,6 +226,7 @@ class OverlayWindowManager: ObservableObject {
     // MARK: - Private Properties
 
     private var overlayWindow: NSWindow?
+    var notificationScreen: NSScreen? { targetScreen() }
     private var screenChangeObserver: Any?
     private var spaceChangeObserver: Any?
     private var appActivationObserver: Any?
@@ -574,6 +575,10 @@ class OverlayWindowManager: ObservableObject {
     }
 
     func startRecordingFromOverlay() {
+        if MeetingNotesCoordinator.shared.isPaused {
+            MeetingNotesCoordinator.shared.startFromOverlay()
+            return
+        }
         guard overlayState == .idle else { return }
         AppState.shared.startRecording(showOverlayControls: true)
     }
@@ -639,10 +644,11 @@ class OverlayWindowManager: ObservableObject {
         }
         let stageWidth = permissionIssue == nil
             ? Constants.stageWidth
-            : Constants.stageWidth + 2 * (OverlayPermissionCalloutMetrics.width + OverlayPermissionCalloutMetrics.spacing)
+            : max(Constants.stageWidth, OverlayPermissionCalloutMetrics.width) + Constants.windowSafetyPadding * 2
         let stageHeight = permissionIssue == nil
             ? Constants.stageHeight
-            : max(Constants.stageHeight, OverlayPermissionCalloutMetrics.height + (Constants.edgeMargin * 2))
+            : Constants.stageHeight + OverlayPermissionCalloutMetrics.height
+                + OverlayPermissionCalloutMetrics.spacing + Constants.windowSafetyPadding
         let (xPos, yPos) = calculatePosition(
             for: position,
             screenFrame: screen.visibleFrame,

@@ -2,7 +2,7 @@ import Foundation
 
 /// Deterministic attempt policy for rebuilding a failed capture graph without
 /// ending the user's recording. Its owner supplies serialization.
-struct MacCaptureRecoveryPolicy {
+nonisolated struct MacCaptureRecoveryPolicy {
     private(set) var attemptCount = 0
     private(set) var isRecovering = false
 

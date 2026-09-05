@@ -25,6 +25,12 @@ struct SettingsWindowView: View {
             selectedSection: $selectedSection
         )
         .navigationTitle(selectedSection.rawValue)
+        .onReceive(NotificationCenter.default.publisher(for: .showMeetingNotes)) { _ in
+            selectedSection = .notes
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showMeetingSettings)) { _ in
+            selectedSection = .meetingSettings
+        }
         .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
             // Close existing onboarding window if open
             if let window = NSApplication.shared.windows.first(where: { $0.identifier == WindowIdentifiers.onboarding }) {

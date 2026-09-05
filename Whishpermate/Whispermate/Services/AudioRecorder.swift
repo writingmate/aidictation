@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import WhisperMateShared
 internal import Combine
@@ -70,6 +70,7 @@ class AudioRecorder: NSObject, ObservableObject {
     /// does not reconfigure the input unit, so capture ran and delivered nothing.
     /// Correct audio outranks the remaining ~200ms.
     private var didWarmCoreAudio = false
+    private var lowerSystemVolume = true
 
 
     private let realtimeOutputFormat = AVAudioFormat(
@@ -204,6 +205,8 @@ class AudioRecorder: NSObject, ObservableObject {
     func startRecording(
         recordingID: UUID,
         recordingURL: URL,
+        lowerSystemVolume: Bool = true,
+        includeSystemAudio: Bool = false,
         completion: @escaping (RecordingPreparationAttempt.Terminal) -> Void
     ) {
         guard Thread.isMainThread else {
@@ -211,6 +214,8 @@ class AudioRecorder: NSObject, ObservableObject {
                 self?.startRecording(
                     recordingID: recordingID,
                     recordingURL: recordingURL,
+                    lowerSystemVolume: lowerSystemVolume,
+                    includeSystemAudio: includeSystemAudio,
                     completion: completion
                 )
             }
@@ -236,6 +241,7 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
+        self.lowerSystemVolume = lowerSystemVolume
         let deviceSnapshot = AudioDeviceManager.shared.makeCaptureSelectionSnapshot()
         let closeProof = MacNativeRecorderCloseProof()
         nativeCloseProofs[recordingID] = closeProof
@@ -247,6 +253,10 @@ class AudioRecorder: NSObject, ObservableObject {
             completion: completion
         )
         pendingPreparation = preparation
+
+        if includeSystemAudio {
+            preparation.systemAudio = MeetingSystemAudioCapture()
+        }
 
         preparation.queue.async { [weak self, weak preparation] in
             guard let self, let preparation else { return }
@@ -492,8 +502,16 @@ class AudioRecorder: NSObject, ObservableObject {
                 recordingURL: recordingURL,
                 outputFormat: outputFormat,
                 deviceResolution: deviceResolution,
-                closeProof: preparation.closeProof
+                closeProof: preparation.closeProof,
+                systemAudio: preparation.systemAudio
             )
+            session.systemAudio?.onFailure = { [weak self, weak session] message in
+                guard let session, session.recordFailure(message) else { return }
+                DispatchQueue.main.async {
+                    guard self?.activeCapture === session else { return }
+                    self?.captureFailureHandler?(message)
+                }
+            }
             preparation.setSession(session)
 
             let generation = session.currentEngineGeneration
@@ -516,23 +534,46 @@ class AudioRecorder: NSObject, ObservableObject {
                 return
             }
 
-            do {
-                try engine.start()
-            } catch {
-                failPreparation(preparation, message: "Recording could not start. Please try again.")
-                preparation.scheduleCleanup(deleteFile: true)
-                return
-            }
-
-            if session.markEngineStarted() {
-                signalPreparationReady(preparation, session: session)
-            }
-
-            if !preparation.attempt.isPending, preparation.attempt.terminal != .ready {
-                preparation.scheduleCleanup(deleteFile: true)
+            if let systemAudio = session.systemAudio {
+                Task { [weak self] in
+                    do {
+                        try await systemAudio.start()
+                        preparation.queue.async { [weak self] in
+                            self?.startPreparedEngine(engine, session: session, preparation: preparation)
+                        }
+                    } catch {
+                        self?.failPreparation(preparation, message: "Mac audio access is needed. Allow screen and system audio recording in System Settings, then try again.")
+                        preparation.scheduleCleanup(deleteFile: true)
+                    }
+                }
+            } else {
+                startPreparedEngine(engine, session: session, preparation: preparation)
             }
         } catch {
             failPreparation(preparation, message: "Recording could not start. Please try again.")
+            preparation.scheduleCleanup(deleteFile: true)
+        }
+    }
+
+    private func startPreparedEngine(_ engine: AVAudioEngine, session: MacCaptureSession, preparation: MacCapturePreparation) {
+        guard preparation.attempt.isPending else {
+            preparation.scheduleCleanup(deleteFile: true)
+            return
+        }
+        if let failure = session.recordedFailure {
+            failPreparation(preparation, message: failure)
+            preparation.scheduleCleanup(deleteFile: true)
+            return
+        }
+        do {
+            try engine.start()
+        } catch {
+            failPreparation(preparation, message: "Recording could not start. Please try again.")
+            preparation.scheduleCleanup(deleteFile: true)
+            return
+        }
+        if session.markEngineStarted() { signalPreparationReady(preparation, session: session) }
+        if !preparation.attempt.isPending, preparation.attempt.terminal != .ready {
             preparation.scheduleCleanup(deleteFile: true)
         }
     }
@@ -588,8 +629,10 @@ class AudioRecorder: NSObject, ObservableObject {
                         return buffer
                     }
                     if let conversionError { throw conversionError }
+                    session.systemAudio?.mix(into: convertedBuffer)
                     try write.audioFile.write(from: convertedBuffer)
                 } else {
+                    session.systemAudio?.mix(into: buffer)
                     try write.audioFile.write(from: buffer)
                 }
                 return (write.lease, nil)
@@ -656,7 +699,7 @@ class AudioRecorder: NSObject, ObservableObject {
             let bands = frequencyAnalyzer.analyze(buffer: buffer)
             let level = calculateAudioLevel(from: buffer)
             DispatchQueue.main.async { [weak self, weak session] in
-                guard let self, let session, self.activeCapture === session else { return }
+                guard let self, let session, self.activeCapture === session, session.isActive else { return }
                 self.lastAudioBufferAt = Date()
                 self.frequencyBands = bands
                 self.audioLevel = level
@@ -753,7 +796,7 @@ class AudioRecorder: NSObject, ObservableObject {
     private func finishEngineStart() {
         let shouldMuteAudio = AppDefaults.shared.object(forKey: "muteAudioWhenRecording") as? Bool ?? true
         DebugLog.info("Mute audio setting: \(shouldMuteAudio)", context: "AudioRecorder")
-        if shouldMuteAudio {
+        if shouldMuteAudio && lowerSystemVolume {
             volumeManager.lowerVolume()
         }
 
@@ -791,7 +834,7 @@ class AudioRecorder: NSObject, ObservableObject {
             return
         }
 
-        guard let session = activeCapture else { return }
+        guard let session = activeCapture, session.isActive else { return }
         guard session.engine.isRunning else {
             attemptCaptureRecovery(session, reason: "audio engine stopped")
             return
@@ -800,6 +843,38 @@ class AudioRecorder: NSObject, ObservableObject {
         guard let lastAudioBufferAt else { return }
         if Date().timeIntervalSince(lastAudioBufferAt) > Constants.recordingBufferStallThreshold {
             attemptCaptureRecovery(session, reason: "audio buffers stalled")
+        }
+    }
+
+    func setMeetingPaused(_ paused: Bool, attemptID: UUID) async throws {
+        let changeID = UUID()
+        guard let session = activeCapture, session.recordingID == attemptID,
+              session.beginPauseChange(paused: paused, id: changeID) else { throw CancellationError() }
+        stopRecordingWatchdog()
+        audioLevel = 0
+        frequencyBands = Array(repeating: 0, count: Self.frequencyBandCount)
+        let operation = MacBoundedNativeOperation<Bool>(cancelNative: { session.cancelPauseChange(id: changeID) })
+        do {
+            _ = try await operation.run(timeoutNanoseconds: 5_000_000_000) { completion in
+                Task {
+                    do {
+                        try await session.changePause(paused: paused, id: changeID)
+                        completion(.success(true))
+                    } catch { completion(.failure(error)) }
+                }
+            }
+            guard activeCapture === session else { throw CancellationError() }
+            if !paused {
+                startRecordingWatchdog()
+                lastAudioBufferAt = Date()
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if activeCapture === session {
+                reportCaptureFailure("Recording couldn’t \(paused ? "pause" : "resume"). The available audio was kept.", session: session)
+            }
+            throw error
         }
     }
 
@@ -1153,6 +1228,7 @@ class AudioRecorder: NSObject, ObservableObject {
 }
 
 private final class MacCapturePreparation: @unchecked Sendable {
+    var systemAudio: MeetingSystemAudioCapture?
     let recordingID: UUID
     let attempt: RecordingPreparationAttempt
     let recordingURL: URL
@@ -1269,7 +1345,13 @@ private final class MacCaptureFinalization: @unchecked Sendable {
     }
 }
 
-private final class MacCaptureSession: @unchecked Sendable {
+private nonisolated final class MacCaptureSession: @unchecked Sendable {
+    private var systemAudioStorage: MeetingSystemAudioCapture?
+    var systemAudio: MeetingSystemAudioCapture? {
+        condition.lock()
+        defer { condition.unlock() }
+        return systemAudioStorage
+    }
     struct EngineReplacement {
         let oldEngine: AVAudioEngine
         let generation: UInt64
@@ -1287,13 +1369,6 @@ private final class MacCaptureSession: @unchecked Sendable {
         case ignored
     }
 
-    private enum Phase {
-        case preparing
-        case ready
-        case active
-        case retired
-    }
-
     let recordingID: UUID
     let recordingURL: URL
     let outputFormat: AVAudioFormat
@@ -1302,7 +1377,7 @@ private final class MacCaptureSession: @unchecked Sendable {
 
     private let condition = NSCondition()
     private let cleanupClaim = RecordingPreparationCleanupClaim()
-    private var phase: Phase = .preparing
+    private var phase: MacCapturePhase = .preparing
     private var engineStorage: AVAudioEngine
     private var engineGeneration: UInt64 = 1
     private var recoveryPolicy = MacCaptureRecoveryPolicy()
@@ -1403,10 +1478,8 @@ private final class MacCaptureSession: @unchecked Sendable {
         }
 
         if let conversionError {
-            DebugLog.info(
-                "Realtime audio conversion failed: \(conversionError)",
-                context: "AudioRecorder"
-            )
+            let message = "Realtime audio conversion failed: \(conversionError)"
+            Task { @MainActor in DebugLog.info(message, context: "AudioRecorder") }
             return nil
         }
         guard status != .error else { return nil }
@@ -1429,7 +1502,8 @@ private final class MacCaptureSession: @unchecked Sendable {
         recordingURL: URL,
         outputFormat: AVAudioFormat,
         deviceResolution: AudioDeviceManager.CaptureDeviceResolution,
-        closeProof: MacNativeRecorderCloseProof
+        closeProof: MacNativeRecorderCloseProof,
+        systemAudio: MeetingSystemAudioCapture?
     ) {
         self.recordingID = recordingID
         engineStorage = engine
@@ -1438,12 +1512,78 @@ private final class MacCaptureSession: @unchecked Sendable {
         self.outputFormat = outputFormat
         self.deviceResolution = deviceResolution
         self.closeProof = closeProof
+        systemAudioStorage = systemAudio
     }
 
     var isActive: Bool {
         condition.lock()
         defer { condition.unlock() }
         return phase == .active
+    }
+
+    func beginPauseChange(paused: Bool, id: UUID) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return phase.beginPauseChange(paused: paused, id: id)
+    }
+
+    func cancelPauseChange(id: UUID) {
+        condition.lock()
+        phase.cancelPauseChange(id: id)
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func changePause(paused: Bool, id: UUID) async throws {
+        if !paused, let previous = systemAudio {
+            let replacement = MeetingSystemAudioCapture()
+            replacement.onFailure = previous.onFailure
+            guard installResumedSystemAudio(replacement, id: id) else { throw CancellationError() }
+            try await replacement.start()
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            recoveryQueue.async {
+                do {
+                    try self.changeEnginePause(paused: paused, id: id)
+                    continuation.resume()
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    private func installResumedSystemAudio(_ capture: MeetingSystemAudioCapture, id: UUID) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard phase == .resuming(id) else { return false }
+        systemAudioStorage = capture
+        return true
+    }
+
+    private func changeEnginePause(paused: Bool, id: UUID) throws {
+        condition.lock()
+        let allowed = phase == (paused ? .pausing(id) : .resuming(id))
+        condition.unlock()
+        guard allowed else { throw CancellationError() }
+        if paused {
+            engine.pause()
+            var drainFailure: Error?
+            MacCaptureWriterDrain.finish(condition: condition, writesPending: { activeWrites > 0 }) {
+                Result { try systemAudio?.stopAndDrain() }
+            } closeWriter: { drained in
+                do { if let tail = try drained.get() { try writerSnapshot()?.write(from: tail) } }
+                catch { drainFailure = error }
+            }
+            if let drainFailure {
+                preserveFailure("The end of the meeting audio couldn’t be saved. The available recording was kept.")
+                throw drainFailure
+            }
+        } else {
+            try engine.start()
+        }
+        condition.lock()
+        let completed = phase.completePauseChange(paused: paused, id: id)
+        condition.unlock()
+        guard completed else { throw CancellationError() }
     }
 
     var engine: AVAudioEngine {
@@ -1541,7 +1681,7 @@ private final class MacCaptureSession: @unchecked Sendable {
     func beginWrite() -> (audioFile: AVAudioFile, lease: WriteLease)? {
         condition.lock()
         defer { condition.unlock() }
-        guard phase == .preparing || phase == .ready || phase == .active,
+        guard phase.acceptsWrites,
               let audioFile
         else { return nil }
 
@@ -1618,6 +1758,12 @@ private final class MacCaptureSession: @unchecked Sendable {
         return true
     }
 
+    private func preserveFailure(_ message: String) {
+        condition.lock()
+        if failureMessage == nil { failureMessage = message }
+        condition.unlock()
+    }
+
     var recordedFailure: String? {
         condition.lock()
         defer { condition.unlock() }
@@ -1626,25 +1772,47 @@ private final class MacCaptureSession: @unchecked Sendable {
 
     func cleanup(deleteFile: Bool) {
         guard cleanupClaim.claim() else { return }
-
         retire()
+        recoveryQueue.sync { cleanupCapture(deleteFile: deleteFile) }
+    }
+
+    private func cleanupCapture(deleteFile: Bool) {
         let engine = self.engine
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning {
             engine.stop()
         }
 
-        condition.lock()
-        while activeWrites > 0 {
-            condition.wait()
+        autoreleasepool {
+            MacCaptureWriterDrain.finish(condition: condition, writesPending: { activeWrites > 0 }) {
+                Result { try systemAudio?.stopAndDrain() }
+            } closeWriter: { drained in
+                condition.lock()
+                let writer = audioFile
+                audioFile = nil
+                condition.unlock()
+                withExtendedLifetime(writer) {
+                    do {
+                        if let tail = try drained.get(), !deleteFile {
+                            try writer?.write(from: tail)
+                        }
+                    } catch {
+                        preserveFailure("The end of the meeting audio couldn’t be saved. The available recording was kept.")
+                    }
+                }
+            }
         }
-        audioFile = nil
-        condition.unlock()
         closeProof.confirmClosed()
 
         if deleteFile {
             try? FileManager.default.removeItem(at: recordingURL)
         }
+    }
+
+    private func writerSnapshot() -> AVAudioFile? {
+        condition.lock()
+        defer { condition.unlock() }
+        return audioFile
     }
 
     private func promoteToReadyIfPossible() -> Bool {

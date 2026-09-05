@@ -47,10 +47,12 @@ class AppState: ObservableObject {
     @Published var currentRecording: Recording?
     @Published var isProcessing: Bool = false
     @Published private(set) var isHistoryMutationInProgress = false
+    @Published private(set) var activeRecordingID: UUID?
 
     // MARK: - Private State
 
     private var shouldAutoPaste = false
+    private var includeSystemAudio = false
     private var isContinuousRecording = false
     private var recordingStartTime: Date?
     private var finalizedRecordingDuration: TimeInterval?
@@ -60,7 +62,6 @@ class AppState: ObservableObject {
     private var capturedScreenContext: String?
     private var recordingMode: RecordingMode = .dictation
     private var shouldKeepOverlayIdleVisibleAfterCurrentRecording = false
-    private var activeRecordingID: UUID?
     private var recordingAttemptID: UUID?
     private var activeCaptureLease: MacAudioProcessingStore.Lease?
     private var activeTranscriptionSnapshot: MacTranscriptionAttemptSnapshot?
@@ -117,11 +118,22 @@ class AppState: ObservableObject {
 
     // MARK: - Public API
 
+    func setMeetingPaused(_ paused: Bool, recordingID: UUID) async throws {
+        guard let attemptID = recordingAttemptID, !shouldAutoPaste,
+              recordingState == .recording,
+              ownsProcessingAttempt(recordingID: recordingID, attemptID: attemptID) else { throw CancellationError() }
+        try await audioRecorder.setMeetingPaused(paused, attemptID: attemptID)
+        guard recordingState == .recording,
+              ownsProcessingAttempt(recordingID: recordingID, attemptID: attemptID) else { throw CancellationError() }
+    }
+
     /// Start recording audio
     /// - Parameters:
     ///   - continuous: Whether this is continuous recording mode
     ///   - isCommandMode: Whether this is command mode (set by startCommandRecording)
-    func startRecording(continuous: Bool = false, isCommandMode: Bool = false, showOverlayControls: Bool = false) {
+    func startRecording(continuous: Bool = false, isCommandMode: Bool = false, showOverlayControls: Bool = false,
+                        recordingID requestedRecordingID: UUID? = nil, autoPaste: Bool = true,
+                        includeSystemAudio: Bool = false) {
         DebugLog.info("🎬 AppState.startRecording(continuous: \(continuous), isCommandMode: \(isCommandMode), showOverlayControls: \(showOverlayControls))", context: "AppState")
 
         // One app-wide owner keeps capture, local recognition, and retries from
@@ -150,7 +162,7 @@ class AppState: ObservableObject {
         capturedAppBundleId = nil
         capturedWindowTitle = nil
         capturedScreenContext = nil
-        let recordingID = UUID()
+        let recordingID = requestedRecordingID ?? UUID()
         let attemptID = UUID()
         let attemptContextTask = beginAttemptContextCapture()
         let attemptSnapshot = makeTranscriptionAttemptSnapshot(
@@ -158,7 +170,8 @@ class AppState: ObservableObject {
             transcriptionOptions: .default,
             appContext: nil,
             screenContext: nil,
-            usesContextRules: recordingMode != .command
+            usesContextRules: recordingMode != .command,
+            isRetranscription: includeSystemAudio || !autoPaste
         )
 
         guard historyManager.registerActiveRecording(id: recordingID) else {
@@ -173,7 +186,8 @@ class AppState: ObservableObject {
         activeTranscriptionSnapshot = attemptSnapshot
         recordingState = .starting
         isContinuousRecording = continuous
-        shouldAutoPaste = true // Always auto-paste when hotkey is triggered
+        shouldAutoPaste = autoPaste
+        self.includeSystemAudio = includeSystemAudio
         recordingStartTime = nil
         finalizedRecordingDuration = nil
 
@@ -352,7 +366,9 @@ class AppState: ObservableObject {
             )
             audioRecorder.startRecording(
                 recordingID: attemptID,
-                recordingURL: store.partialURL(for: recordingID)
+                recordingURL: store.partialURL(for: recordingID),
+                lowerSystemVolume: shouldAutoPaste,
+                includeSystemAudio: includeSystemAudio
             ) { [weak self] terminal in
                 Task { @MainActor [weak self] in
                     await self?.handleRecorderStartTerminal(
@@ -1737,6 +1753,11 @@ class AppState: ObservableObject {
                 continue
             }
 
+            if resultIsComplete, let transcript = projected.transcription {
+                MeetingNotesStore.shared.receive(recordingID: record.recordingID, transcript: transcript,
+                                                  duration: projected.duration ?? 0)
+            }
+
             if record.stage == .resultReady {
                 let lease = MacAudioProcessingStore.Lease(
                     recordingID: record.recordingID,
@@ -2335,6 +2356,8 @@ class AppState: ObservableObject {
         let usageWordCount = success.wordCount ?? 0
         DictationStopwatch.mark("commit entered")
         let historyWasPersisted = historyManager.upsertRecording(success)
+        MeetingNotesStore.shared.receive(recordingID: recording.id, transcript: trimmed,
+                                          duration: success.duration ?? 0)
         DictationStopwatch.mark("history upsert")
         if !historyWasPersisted {
             historyManager.showUnsavedTerminalState(success)

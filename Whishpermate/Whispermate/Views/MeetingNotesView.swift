@@ -26,16 +26,7 @@ struct MeetingNotesView: View {
                         MeetingNoteEditor(noteID: id, onBack: { notePath = [] })
                     }
             }
-            if let error = store.saveError {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle")
-                    Text(error).dsFont(.callout)
-                    Spacer()
-                    Button("Try saving again") { store.save() }.disabled(!store.isReadable)
-                }
-                .padding(12)
-                .background(Color.orange.opacity(0.12))
-            }
+            if notePath.isEmpty { MeetingNoteSaveWarning() }
         }
         .frame(minWidth: 560, minHeight: 480)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -196,6 +187,7 @@ struct MeetingNoteEditor: View {
     @ObservedObject private var recorder = AudioRecorder.shared
     @State private var tab: NoteTab = .thoughts
     @State private var question = ""
+    @State private var submittedQuestion: String?
     @State private var showsChat = false
     @State private var copied = false
     @State private var exportError: String?
@@ -208,6 +200,14 @@ struct MeetingNoteEditor: View {
     private var busy: Bool { coordinator.requests.contains(noteID) }
 
     var body: some View {
+        VStack(spacing: 0) {
+            editorContent
+            MeetingNoteSaveWarning()
+        }
+    }
+
+    @ViewBuilder
+    private var editorContent: some View {
         if let note, note.deletedAt == nil {
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 13) {
@@ -353,7 +353,8 @@ struct MeetingNoteEditor: View {
                     if busy { HStack { ProgressView().controlSize(.small); Text("Thinking…"); Spacer(); Button("Cancel") { coordinator.cancelRequest(noteID) } } }
                 }.padding(20)
             }.onChange(of: note.messages.count) { _ in
-                question = ""
+                if question == submittedQuestion { question = "" }
+                submittedQuestion = nil
                 if let last = note.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
@@ -374,6 +375,7 @@ struct MeetingNoteEditor: View {
 
     private func ask() {
         guard !busy, note?.hasContent == true, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        submittedQuestion = question
         coordinator.ask(noteID, question: question)
         showsChat = true
     }
@@ -426,6 +428,24 @@ struct MeetingNoteEditor: View {
             guard response == .OK, let url = panel.url else { return }
             do { try note.exportedText(includeThoughts: includeThoughts).write(to: url, atomically: true, encoding: .utf8) }
             catch { exportError = "The note couldn’t be exported. Choose another location and try again." }
+        }
+    }
+}
+
+private struct MeetingNoteSaveWarning: View {
+    @ObservedObject private var store = MeetingNotesStore.shared
+
+    var body: some View {
+        if let error = store.saveError {
+            HStack {
+                Image(systemName: "exclamationmark.triangle")
+                Text(error).dsFont(.callout)
+                Spacer()
+                Button("Try saving again") { store.save() }.disabled(!store.isReadable)
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.12))
+            .accessibilityIdentifier("note.saveWarning")
         }
     }
 }

@@ -59,6 +59,8 @@
 		E70400000000000000000002 /* GoogleCalendarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70400000000000000000001; };
 		E70400000000000000000004 /* GoogleCalendarSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70400000000000000000003; };
 		E70400000000000000000006 /* GoogleCalendarEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70400000000000000000005; };
+		E70600000000000000000002 /* MacCaptureWriterDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70600000000000000000001; };
+		E70600000000000000000004 /* MacCaptureWriterDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70600000000000000000003; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -220,6 +222,8 @@
 		E70400000000000000000001 /* GoogleCalendarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleCalendarTests.swift; sourceTree = "<group>"; };
 		E70400000000000000000003 /* GoogleCalendarSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Services/GoogleCalendarSync.swift; sourceTree = SOURCE_ROOT; };
 		E70400000000000000000005 /* GoogleCalendarEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Models/GoogleCalendarEvent.swift; sourceTree = SOURCE_ROOT; };
+		E70600000000000000000001 /* MacCaptureWriterDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureWriterDrainTests.swift; sourceTree = "<group>"; };
+		E70600000000000000000003 /* MacCaptureWriterDrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Services/MacCaptureWriterDrain.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -366,6 +370,7 @@
 		7645026F648E8336F7A7853E /* WhispermateTests */ = {
 			isa = PBXGroup;
 			children = (
+				E70600000000000000000001 /* MacCaptureWriterDrainTests.swift */,
 				E70400000000000000000001 /* GoogleCalendarTests.swift */,
 				E70300000000000000000001 /* MeetingAudioMixBufferTests.swift */,
 				E70200000000000000000001 /* MeetingDetectionPolicyTests.swift */,
@@ -399,6 +404,7 @@
 			isa = PBXGroup;
 			children = (
 				E70400000000000000000005 /* GoogleCalendarEvent.swift */,
+				E70600000000000000000003 /* MacCaptureWriterDrain.swift */,
 				E70400000000000000000003 /* GoogleCalendarSync.swift */,
 				E70300000000000000000003 /* MeetingAudioMixBuffer.swift */,
 				E70200000000000000000003 /* MeetingDetectionPolicy.swift */,
@@ -847,6 +853,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				E70400000000000000000006 /* GoogleCalendarEvent.swift in Sources */,
+				E70600000000000000000002 /* MacCaptureWriterDrainTests.swift in Sources */,
+				E70600000000000000000004 /* MacCaptureWriterDrain.swift in Sources */,
 				E70400000000000000000004 /* GoogleCalendarSync.swift in Sources */,
 				E70400000000000000000002 /* GoogleCalendarTests.swift in Sources */,
 				E70300000000000000000004 /* MeetingAudioMixBuffer.swift in Sources */,

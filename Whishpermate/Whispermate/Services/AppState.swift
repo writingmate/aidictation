@@ -1744,7 +1744,7 @@ class AppState: ObservableObject {
                 continue
             }
 
-            if resultIsComplete, let transcript = record.rawText ?? record.resultText {
+            if resultIsComplete, let transcript = projected.transcription {
                 MeetingNotesStore.shared.receive(recordingID: record.recordingID, transcript: transcript,
                                                   duration: projected.duration ?? 0)
             }
@@ -2347,7 +2347,7 @@ class AppState: ObservableObject {
         let usageWordCount = success.wordCount ?? 0
         DictationStopwatch.mark("commit entered")
         let historyWasPersisted = historyManager.upsertRecording(success)
-        MeetingNotesStore.shared.receive(recordingID: recording.id, transcript: storeRecord.rawText ?? trimmed,
+        MeetingNotesStore.shared.receive(recordingID: recording.id, transcript: trimmed,
                                           duration: success.duration ?? 0)
         DictationStopwatch.mark("history upsert")
         if !historyWasPersisted {

@@ -1681,19 +1681,20 @@ private final class MacCaptureSession: @unchecked Sendable {
             engine.stop()
         }
 
-        condition.lock()
-        while activeWrites > 0 {
-            condition.wait()
-        }
-        do {
-            if let tail = try systemAudio?.stopAndDrain(), !deleteFile {
-                try audioFile?.write(from: tail)
+        MacCaptureWriterDrain.finish(condition: condition, writesPending: { activeWrites > 0 }) {
+            Result { try systemAudio?.stopAndDrain() }
+        } closeWriter: { drained in
+            do {
+                if let tail = try drained.get(), !deleteFile {
+                    try audioFile?.write(from: tail)
+                }
+            } catch {
+                if failureMessage == nil {
+                    failureMessage = "The end of the meeting audio couldn’t be saved. The available recording was kept."
+                }
             }
-        } catch {
-            failureMessage = "The end of the meeting audio couldn’t be saved. The available recording was kept."
+            audioFile = nil
         }
-        audioFile = nil
-        condition.unlock()
         closeProof.confirmClosed()
 
         if deleteFile {

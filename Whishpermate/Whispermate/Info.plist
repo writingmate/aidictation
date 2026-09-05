@@ -14,6 +14,10 @@
 	<string>https://raw.githubusercontent.com/writingmate/aidictation/main/appcast.xml</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AIDictation needs access to your microphone to record your voice for transcription.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Show upcoming meetings from calendars configured on this Mac.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Show upcoming meetings so you can start a note with the meeting title.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

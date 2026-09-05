@@ -33,6 +33,8 @@ struct SettingsCard<Content: View>: View {
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general = "General"
+    case notes = "Notes"
+    case meetingSettings = "Notetaker Settings"
     case overlay = "Overlay"
     case account = "Account"
     case permissions = "Permissions"
@@ -56,6 +58,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     /// `title` is optional rather than every group carrying a label.
     enum SidebarGroup: Int, CaseIterable, Identifiable {
         case primary
+        case notetaker
         case dictation
         case text
         case system
@@ -65,6 +68,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         var title: String? {
             switch self {
             case .primary: return nil
+            case .notetaker: return "Notetaker"
             case .dictation: return "Dictation"
             case .text: return "Text"
             case .system: return "System"
@@ -74,6 +78,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         var sections: [SettingsSection] {
             switch self {
             case .primary: return [.general, .history]
+            case .notetaker: return [.notes, .meetingSettings]
             case .dictation: return [.transcription, .overlay, .audio, .language]
             case .text: return [.dictionary, .shortcuts, .contextRules]
             case .system: return [.permissions]
@@ -84,6 +89,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gear"
+        case .notes: return "note.text"
+        case .meetingSettings: return "gearshape"
         case .overlay: return "rectangle.bottomthird.inset.filled"
         case .account: return "person.circle"
         case .history: return "clock.arrow.circlepath"
@@ -101,6 +108,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .general: return "Hotkey, transcription, and app settings"
+        case .notes: return "Meeting notes, transcripts, and summaries"
+        case .meetingSettings: return "Calendar connections and call detection"
         case .overlay: return "Recording indicator appearance"
         case .account: return "Subscription and account management"
         case .history: return "View and manage transcription history"
@@ -312,16 +321,23 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var settingsDetail: some View {
-        ScrollView {
-            settingsDetailContent
+        if selectedSection == .notes {
+            MeetingNotesView()
+        } else if selectedSection == .meetingSettings {
+            NotetakerSettingsView()
+        } else {
+            ScrollView {
+                settingsDetailContent
+            }
         }
     }
 
     private func sidebarLabel(for section: SettingsSection) -> some View {
         // Plain SF Symbol, rendered by .listStyle(.sidebar) itself: secondary
         // when idle, accent-tinted when selected — the Finder/Mail treatment.
-        Label(section.rawValue, systemImage: section.icon)
+        Label(section == .meetingSettings ? "Settings" : section.rawValue, systemImage: section.icon)
     }
 
     private var settingsDetailContent: some View {
@@ -329,6 +345,10 @@ struct SettingsView: View {
             switch selectedSection {
             case .general:
                 generalSection
+            case .notes:
+                EmptyView()
+            case .meetingSettings:
+                EmptyView()
             case .overlay:
                 overlaySection
             case .account:

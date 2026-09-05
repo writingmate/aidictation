@@ -151,6 +151,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DockIconManager.shared.applySavedPreference()
         statusBarManager.setupMenuBar()
         _ = UpdateManager.shared
+        _ = MeetingNotesCoordinator.shared
+        _ = MeetingDetectionMonitor.shared
 
         // Disable automatic window restoration for all windows except main
         AppDefaults.shared.set(false, forKey: "NSQuitAlwaysKeepsWindows")
@@ -216,7 +218,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidBecomeActive(_: Notification) {
         // Ensure window is always properly configured when app becomes active
         if mainWindow == nil {
-            configureMainWindow()
+            configureMainWindow(preservingVisibility: true)
         }
         // Don't let macOS auto-restore the settings window during onboarding or recording/transcription
         if onboardingManager.showOnboarding {
@@ -252,6 +254,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func handleURL(_ url: URL) {
+        if GoogleCalendarClient.shared.handle(url) { return }
         // Handle authentication callback (aidictation://auth-callback)
         if isAuthCallbackURL(url) {
             DebugLog.info("AppDelegate received authentication callback", context: "AppDelegate")
@@ -293,7 +296,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showMainSettingsWindow()
     }
 
-    func configureMainWindow() {
+    func configureMainWindow(preservingVisibility: Bool = false) {
         guard let window = findMainWindow()
             ?? mainSettingsWindowCandidates().first else {
             return
@@ -304,6 +307,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             deduplicateMainSettingsWindows(keeping: mainWindow)
             return
         }
+        let keepVisible = preservingVisibility && window.isVisible
 
         // Minimal configuration; keep the native title bar controls visible.
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
@@ -344,7 +348,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.center()
 
         // Hide window on launch - app starts in menu bar only mode
-        window.setIsVisible(false)
+        if !keepVisible { window.setIsVisible(false) }
         deduplicateMainSettingsWindows(keeping: window)
 
         DebugLog.info("Main window configured, centered, with native traffic lights and hidden on launch", context: "AppDelegate")
@@ -667,6 +671,7 @@ func showHistoryWindow() {
 /// Bridges SwiftUI's openWindow action to AppKit code
 enum WindowBridge {
     static var openWindow: ((String) -> Void)?
+    static var openNoteWindow: ((UUID) -> Void)?
     private static var retainedWindows: [String: NSWindow] = [:]
 
     static func openLegacyWindow(id: String) {
@@ -771,7 +776,10 @@ private struct ModernAppScenes: Scene {
 
     var body: some Scene {
         // Store openWindow action globally so AppKit code can open SwiftUI windows
-        let _ = { WindowBridge.openWindow = { [openWindow] id in openWindow(id: id) } }()
+        let _ = {
+            WindowBridge.openWindow = { [openWindow] id in openWindow(id: id) }
+            WindowBridge.openNoteWindow = { [openWindow] id in openWindow(value: id) }
+        }()
 
         // Main window is now Settings
         Window(AppNaming.displayName, id: "main") {
@@ -784,7 +792,15 @@ private struct ModernAppScenes: Scene {
         .defaultSize(width: AppWindowDefaults.mainFrameSize.width, height: AppWindowDefaults.mainFrameSize.height)
         .commands {
             // Remove File > New Window command since we only want one main window
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("New meeting note") {
+                    if let id = MeetingNotesCoordinator.shared.create() { MeetingNoteWindowController.open(id) }
+                }.keyboardShortcut("n", modifiers: .command)
+                Button("Notetaker") {
+                    showMainSettingsWindow()
+                    NotificationCenter.default.post(name: .showMeetingNotes, object: nil)
+                }
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("AIDictation Settings") {
                     showMainSettingsWindow()
@@ -797,6 +813,14 @@ private struct ModernAppScenes: Scene {
                 }
             }
         }
+
+        WindowGroup("Meeting note", for: UUID.self) { $noteID in
+            if let noteID {
+                NavigationStack { MeetingNoteEditor(noteID: noteID) }
+            }
+        }
+        .defaultSize(width: 700, height: 700)
+        .commandsRemoved()
 
         // History window - opens from Settings
         Window("History", id: "history") {

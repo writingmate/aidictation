@@ -49,6 +49,16 @@
 		EA6E899FBFC37D9BF8D7DE06 /* MacAsyncDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */; };
 		F1684793ABEFD641D4018AA3 /* ParakeetRuntime.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD612DBBF5AF71F9E4D1B8A8 /* ParakeetRuntime.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F9D2353CF2D81C9462A3DC3A /* TranscriptionOutputFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */; };
+		E70100000000000000000002 /* MeetingNotesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70100000000000000000001 /* MeetingNotesTests.swift */; };
+		E70100000000000000000004 /* MeetingNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70100000000000000000003 /* MeetingNote.swift */; };
+		E70100000000000000000006 /* MeetingNotesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70100000000000000000005 /* MeetingNotesStore.swift */; };
+		E70200000000000000000002 /* MeetingDetectionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70200000000000000000001; };
+		E70200000000000000000004 /* MeetingDetectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70200000000000000000003; };
+		E70300000000000000000002 /* MeetingAudioMixBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70300000000000000000001; };
+		E70300000000000000000004 /* MeetingAudioMixBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70300000000000000000003; };
+		E70400000000000000000002 /* GoogleCalendarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70400000000000000000001; };
+		E70400000000000000000004 /* GoogleCalendarSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70400000000000000000003; };
+		E70400000000000000000006 /* GoogleCalendarEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70400000000000000000005; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -200,6 +210,16 @@
 		DD26FE6C4F67FD01DC7E517E /* WhisperMateLiveActivity.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = WhisperMateLiveActivity.entitlements; sourceTree = "<group>"; };
 		EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolverTests.swift; sourceTree = "<group>"; };
 		F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacAsyncDeadlineTests.swift; sourceTree = "<group>"; };
+		E70100000000000000000001 /* MeetingNotesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNotesTests.swift; sourceTree = "<group>"; };
+		E70100000000000000000003 /* MeetingNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Models/MeetingNote.swift; sourceTree = SOURCE_ROOT; };
+		E70100000000000000000005 /* MeetingNotesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Services/MeetingNotesStore.swift; sourceTree = SOURCE_ROOT; };
+		E70200000000000000000001 /* MeetingDetectionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingDetectionPolicyTests.swift; sourceTree = "<group>"; };
+		E70200000000000000000003 /* MeetingDetectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Models/MeetingDetectionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E70300000000000000000001 /* MeetingAudioMixBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioMixBufferTests.swift; sourceTree = "<group>"; };
+		E70300000000000000000003 /* MeetingAudioMixBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Services/MeetingAudioMixBuffer.swift; sourceTree = SOURCE_ROOT; };
+		E70400000000000000000001 /* GoogleCalendarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleCalendarTests.swift; sourceTree = "<group>"; };
+		E70400000000000000000003 /* GoogleCalendarSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Services/GoogleCalendarSync.swift; sourceTree = SOURCE_ROOT; };
+		E70400000000000000000005 /* GoogleCalendarEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Whispermate/Models/GoogleCalendarEvent.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -346,6 +366,10 @@
 		7645026F648E8336F7A7853E /* WhispermateTests */ = {
 			isa = PBXGroup;
 			children = (
+				E70400000000000000000001 /* GoogleCalendarTests.swift */,
+				E70300000000000000000001 /* MeetingAudioMixBufferTests.swift */,
+				E70200000000000000000001 /* MeetingDetectionPolicyTests.swift */,
+				E70100000000000000000001 /* MeetingNotesTests.swift */,
 				5A10A0012F90000100000003 /* SonioxRealtimeProtocolTests.swift */,
 				BB2000012FA0000100000003 /* TranscriptionCleanupPromptTests.swift */,
 				53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */,
@@ -374,6 +398,12 @@
 		98100320DE37E1160ADE235E /* WhispermateTestsSources */ = {
 			isa = PBXGroup;
 			children = (
+				E70400000000000000000005 /* GoogleCalendarEvent.swift */,
+				E70400000000000000000003 /* GoogleCalendarSync.swift */,
+				E70300000000000000000003 /* MeetingAudioMixBuffer.swift */,
+				E70200000000000000000003 /* MeetingDetectionPolicy.swift */,
+				E70100000000000000000005 /* MeetingNotesStore.swift */,
+				E70100000000000000000003 /* MeetingNote.swift */,
 				5A10A0012F90000100000004 /* SonioxRealtimeProtocol.swift */,
 				BB2000012FA0000100000004 /* TranscriptionCleanupPrompt.swift */,
 				7E07BB2796CA6C062CCD71E4 /* FnKeyGestureResolver.swift */,
@@ -816,6 +846,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E70400000000000000000006 /* GoogleCalendarEvent.swift in Sources */,
+				E70400000000000000000004 /* GoogleCalendarSync.swift in Sources */,
+				E70400000000000000000002 /* GoogleCalendarTests.swift in Sources */,
+				E70300000000000000000004 /* MeetingAudioMixBuffer.swift in Sources */,
+				E70300000000000000000002 /* MeetingAudioMixBufferTests.swift in Sources */,
+				E70200000000000000000004 /* MeetingDetectionPolicy.swift in Sources */,
+				E70200000000000000000002 /* MeetingDetectionPolicyTests.swift in Sources */,
+				E70100000000000000000006 /* MeetingNotesStore.swift in Sources */,
+				E70100000000000000000004 /* MeetingNote.swift in Sources */,
+				E70100000000000000000002 /* MeetingNotesTests.swift in Sources */,
 				5A10A0012F90000100000001 /* SonioxRealtimeProtocolTests.swift in Sources */,
 				5A10A0012F90000100000002 /* SonioxRealtimeProtocol.swift in Sources */,
 				BB2000012FA0000100000001 /* TranscriptionCleanupPromptTests.swift in Sources */,

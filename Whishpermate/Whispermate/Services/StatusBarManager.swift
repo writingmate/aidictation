@@ -60,6 +60,8 @@ func findMainWindow() -> NSWindow? {
 
 extension NSNotification.Name {
     static let showHistory = NSNotification.Name("ShowHistory")
+    static let showMeetingNotes = NSNotification.Name("ShowMeetingNotes")
+    static let showMeetingSettings = NSNotification.Name("ShowMeetingSettings")
     static let showSettings = NSNotification.Name("ShowSettings")
     static let showOnboarding = NSNotification.Name("ShowOnboarding")
     static let bringOnboardingToFront = NSNotification.Name("BringOnboardingToFront")
@@ -162,6 +164,9 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         )
         historyItem.target = self
         menu?.addItem(historyItem)
+        let notesItem = NSMenuItem(title: "Notetaker", action: #selector(showNotes), keyEquivalent: "")
+        notesItem.target = self
+        menu?.addItem(notesItem)
 
         // Settings
         let settingsItem = NSMenuItem(
@@ -259,6 +264,10 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let historyItem = NSMenuItem(title: "History", action: #selector(showHistory), keyEquivalent: "h")
         historyItem.target = self
         menu?.addItem(historyItem)
+
+        let notesItem = NSMenuItem(title: "Notetaker", action: #selector(showNotes), keyEquivalent: "")
+        notesItem.target = self
+        menu?.addItem(notesItem)
 
         let settingsItem = NSMenuItem(title: "AIDictation Settings", action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -390,6 +399,11 @@ class StatusBarManager: NSObject, NSMenuDelegate {
 
     @objc private func showHistory() {
         showHistoryWindow()
+    }
+
+    @objc private func showNotes() {
+        showMainSettingsWindow()
+        NotificationCenter.default.post(name: .showMeetingNotes, object: nil)
     }
 
     @objc private func showSettings() {

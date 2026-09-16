@@ -21,13 +21,13 @@ export const FPS = 30;
 
 // Initial target: 58 seconds. Re-timed after the generated narration is measured.
 export const SCENES = {
-  title: 210,
-  builtInSetup: 240,
-  builtInUse: 255,
-  aiShortcut: 270,
-  aiControl: 300,
-  aiResult: 225,
-  cta: 240,
+  title: 240,
+  builtInSetup: 366,
+  builtInUse: 381,
+  aiShortcut: 357,
+  aiControl: 420,
+  aiResult: 309,
+  cta: 350,
 };
 
 export const TOTAL_DURATION = Object.values(SCENES).reduce((a, b) => a + b, 0);

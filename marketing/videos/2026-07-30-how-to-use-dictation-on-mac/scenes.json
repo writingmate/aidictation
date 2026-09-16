@@ -2,49 +2,49 @@
   {
     "name": "title",
     "start_frame": 0,
-    "next_start_frame": 210,
+    "next_start_frame": 240,
     "on_screen": "How to Use Dictation on Mac — Built-In + AI",
     "text": "Here’s how to use dictation on a Mac — with Apple’s built-in option, and with AI Dictation."
   },
   {
     "name": "built_in_setup",
-    "start_frame": 210,
-    "next_start_frame": 450,
+    "start_frame": 240,
+    "next_start_frame": 606,
     "on_screen": "System Settings → Keyboard → Dictation: On",
     "text": "For built-in Dictation, open System Settings, choose Keyboard, and turn Dictation on. Pick your language, microphone, and shortcut."
   },
   {
     "name": "built_in_use",
-    "start_frame": 450,
-    "next_start_frame": 705,
+    "start_frame": 606,
+    "next_start_frame": 987,
     "on_screen": "Click a text field → Start Dictation → Speak → Escape",
     "text": "Place your cursor in a text field. Press the Microphone key, your shortcut, or choose Edit, Start Dictation. Speak, then press Escape."
   },
   {
     "name": "ai_shortcut",
-    "start_frame": 705,
-    "next_start_frame": 975,
+    "start_frame": 987,
+    "next_start_frame": 1344,
     "on_screen": "Hold for push-to-talk · Double-tap for a longer recording",
     "text": "AI Dictation starts from a configurable global shortcut. Hold it for push-to-talk, or double-tap to start and stop a longer recording."
   },
   {
     "name": "ai_control",
-    "start_frame": 975,
-    "next_start_frame": 1275,
+    "start_frame": 1344,
+    "next_start_frame": 1764,
     "on_screen": "Local or cloud · Cleanup · Vocabulary · Rules · Shortcuts",
     "text": "You can choose local recognition when supported or cloud transcription, then add optional cleanup, personal vocabulary, replacements, writing rules, and spoken shortcuts."
   },
   {
     "name": "ai_result",
-    "start_frame": 1275,
-    "next_start_frame": 1500,
+    "start_frame": 1764,
+    "next_start_frame": 2073,
     "on_screen": "Text returns to the active app",
     "text": "When processing finishes, AI Dictation returns the final text to the active app, ready where you were already writing."
   },
   {
     "name": "cta",
-    "start_frame": 1500,
-    "next_start_frame": 1740,
+    "start_frame": 2073,
+    "next_start_frame": 2423,
     "on_screen": "aidictation.com/download · Open source",
     "text": "Start with built-in Dictation. When you need more control, try the open-source AI Dictation at aidictation dot com slash download."
   }

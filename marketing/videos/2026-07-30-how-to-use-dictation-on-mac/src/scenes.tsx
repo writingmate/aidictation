@@ -46,27 +46,79 @@ export const TitleScene: React.FC = () => (
   </SceneFade>
 );
 
+const SettingsCapture: React.FC<{ delay: number }> = ({ delay }) => {
+  const frame = useCurrentFrame();
+  // Slow pan from the top of the Keyboard pane down to the Dictation card.
+  const shift = interpolate(frame, [delay + 20, SCENES.builtInSetup - 40], [0, -300], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const zoom = interpolate(frame, [delay + 20, SCENES.builtInSetup - 40], [1, 1.08], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  return (
+    <Rise delay={delay}>
+      <div
+        style={{
+          width: 900,
+          height: 620,
+          borderRadius: 30,
+          overflow: "hidden",
+          border: `1px solid ${COLORS.border}`,
+          boxShadow: "0 40px 110px rgba(0,0,0,0.5)",
+          background: "#f2f2f7",
+          position: "relative",
+        }}
+      >
+        <Img
+          src={staticFile("mac-settings-keyboard-dictation.png")}
+          style={{
+            width: 900,
+            height: "auto",
+            transform: `translateY(${shift}px) scale(${zoom})`,
+            transformOrigin: "50% 100%",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: 22,
+            bottom: 18,
+            padding: "8px 14px",
+            borderRadius: 12,
+            background: "rgba(11,18,32,0.78)",
+            color: COLORS.muted,
+            fontSize: 18,
+            fontFamily: FONT_MONO,
+          }}
+        >
+          Real macOS System Settings capture
+        </div>
+      </div>
+    </Rise>
+  );
+};
+
 export const BuiltInSetupScene: React.FC = () => (
   <SceneFade duration={SCENES.builtInSetup}>
     <BackgroundGrid />
     <Glow x="12%" y="40%" color={COLORS.blue} />
-    <AbsoluteFill style={{ padding: "84px 110px" }}>
+    <AbsoluteFill style={{ padding: "76px 96px" }}>
       <StepHeader eyebrow="Built-in Dictation · Setup" title="Turn it on in Keyboard settings" delay={4} tone="blue" />
-      <div style={{ display: "flex", alignItems: "center", gap: 20, marginTop: 92 }}>
-        <PathCard label="System Settings" detail="Open from the Apple menu" delay={22} accent={COLORS.blue} />
-        <Rise delay={30}><div style={{ color: COLORS.blue, fontSize: 42 }}>›</div></Rise>
-        <PathCard label="Keyboard" detail="Scroll to Dictation" delay={36} accent={COLORS.blue} />
-        <Rise delay={44}><div style={{ color: COLORS.blue, fontSize: 42 }}>›</div></Rise>
-        <PathCard label="Dictation: On" detail="Confirm Enable" delay={50} accent={COLORS.blue} />
+      <div style={{ display: "flex", alignItems: "center", gap: 54, marginTop: 44 }}>
+        <SettingsCapture delay={18} />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 18 }}>
+          <PathCard label="System Settings" detail="Open from the Apple menu" delay={30} accent={COLORS.blue} />
+          <PathCard label="Keyboard" detail="Scroll to Dictation" delay={42} accent={COLORS.blue} />
+          <PathCard label="Dictation: On" detail="Confirm Enable" delay={54} accent={COLORS.blue} />
+          <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+            <FeatureChip delay={70} tone="blue">Language</FeatureChip>
+            <FeatureChip delay={76} tone="blue">Microphone</FeatureChip>
+            <FeatureChip delay={82} tone="blue">Shortcut</FeatureChip>
+          </div>
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "center", gap: 22, marginTop: 46 }}>
-        <FeatureChip delay={66} tone="blue">Language</FeatureChip>
-        <FeatureChip delay={72} tone="blue">Microphone</FeatureChip>
-        <FeatureChip delay={78} tone="blue">Shortcut</FeatureChip>
-      </div>
-      <Rise delay={90} style={{ position: "absolute", right: 110, bottom: 62 }}>
-        <div style={{ color: COLORS.muted, fontSize: 21 }}>Source: Apple Support · current macOS guide</div>
-      </Rise>
     </AbsoluteFill>
   </SceneFade>
 );

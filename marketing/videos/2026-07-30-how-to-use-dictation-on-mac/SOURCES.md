@@ -9,7 +9,7 @@ Checked 2026-07-30. This file separates product evidence, Apple documentation, c
   - Supports choosing Dictation languages, microphone source, and keyboard shortcut.
   - Supports starting from the Microphone key, a configured shortcut, or `Edit → Start Dictation`.
   - Supports stopping with Escape, the Microphone key, or the configured shortcut.
-- No Apple or competitor result is shown or simulated. The built-in section uses instructional motion graphics, not a fabricated System Settings screenshot.
+- `public/mac-settings-keyboard-dictation.png` is a real, unedited capture of the macOS System Settings Keyboard pane (Dictation section) taken on 2026-09-03 on macOS 26 with Dictation off. It is panned in-frame and labeled “Real macOS System Settings capture”. No competitor result is shown or simulated.
 
 ## AI Dictation product behavior
 
@@ -34,9 +34,7 @@ Checked 2026-07-30. This file separates product evidence, Apple documentation, c
 - `public/aidictation-dictation.png` is copied unchanged from the current macOS onboarding asset catalog. It is used as branded onboarding art, not described as a live screenshot.
 - The repository’s older `screenshot.png` was audited and intentionally excluded from the video because it no longer represents the current Mac interface.
 - The document-style panel in the result scene is labeled “Conceptual text field” in-frame. It illustrates the insertion flow and is not presented as an app or competitor screenshot.
-- No current real Mac product screenshot was available in the repository at
-  production time. Add and document a current, privacy-safe capture before
-  rendering a publishable launch-video cut.
+- The built-in Dictation setup scene uses the real System Settings capture above. The AI Dictation scenes still use branded onboarding art and a labeled conceptual text field; no AI Dictation app window capture was available on 2026-09-03.
 
 ## Claims intentionally not made
 

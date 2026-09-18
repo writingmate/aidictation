@@ -161,6 +161,52 @@ enum SupportContent {
     ## When you are done
     Summarize: what was wrong, what you changed (if anything), and what I should try next. If you cannot fix it, package a short tech dump (OS version, app version, relevant logs, permission state) I can email to support.
     """
+
+    /// Unreserved characters only (RFC 3986). `.urlQueryAllowed` leaves `&`,
+    /// `=`, and `+` unescaped, which would cut the prompt off at its first
+    /// ampersand when it travels as a query value.
+    private static let queryValueAllowed: CharacterSet = {
+        var set = CharacterSet.alphanumerics
+        set.insert(charactersIn: "-._~")
+        return set
+    }()
+
+    static var percentEncodedAgentPrompt: String? {
+        agentPrompt.addingPercentEncoding(withAllowedCharacters: queryValueAllowed)
+    }
+
+    /// Chat services the troubleshooting prompt can be opened in.
+    enum AgentDestination: String, CaseIterable, Identifiable {
+        case chatGPT = "ChatGPT"
+        case claude = "Claude"
+        case writingmate = "Writingmate"
+        case gemini = "Gemini"
+
+        var id: String { rawValue }
+
+        private var newChatURLString: String {
+            switch self {
+            case .chatGPT: return "https://chatgpt.com/"
+            case .claude: return "https://claude.ai/new"
+            case .writingmate: return "https://writingmate.ai/new"
+            case .gemini: return "https://gemini.google.com/app"
+            }
+        }
+
+        /// Gemini has no documented prefill parameter, so it opens a blank
+        /// chat and the user pastes the prompt copied alongside the open.
+        private var acceptsPromptQuery: Bool {
+            self != .gemini
+        }
+
+        /// New-chat URL with the prompt prefilled where the service supports it.
+        var url: URL? {
+            guard acceptsPromptQuery, let encoded = SupportContent.percentEncodedAgentPrompt else {
+                return URL(string: newChatURLString)
+            }
+            return URL(string: "\(newChatURLString)?q=\(encoded)")
+        }
+    }
 }
 
 struct SettingsView: View {
@@ -202,6 +248,7 @@ struct SettingsView: View {
     @State private var referralStatusText: String?
     @State private var showingSupportPromptCopied = false
     @State private var showingSupportEmailCopied = false
+    @State private var supportOpenStatusText: String?
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -1642,13 +1689,13 @@ struct SettingsView: View {
             groupHeader("Troubleshoot with an AI Agent")
 
             SettingsCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Troubleshooting Prompt")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text("Paste this into Cursor, Claude, or another AI agent. It checks what it can access, asks what's wrong, and waits for your OK before changing anything.")
+                            Text("Open a chat with a ready-made troubleshooting prompt.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1666,21 +1713,35 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 2)
 
-                    Text(SupportContent.agentPrompt)
-                        .dsFont(.label)
-                        .foregroundStyle(Color.dsForeground)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: DSCornerRadius.small)
-                                .fill(Color.dsCard)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: DSCornerRadius.small)
-                                .stroke(Color.dsBorder, lineWidth: 1)
-                        )
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    // Adaptive grid so the buttons sit in one row when the
+                    // window is wide and wrap to two columns when it is narrow.
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 150), spacing: 8)],
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+                        ForEach(SupportContent.AgentDestination.allCases) { destination in
+                            Button {
+                                openSupportPrompt(in: destination)
+                            } label: {
+                                Label("Open in \(destination.rawValue)", systemImage: "arrow.up.forward.square")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 2)
+
+                    if let supportOpenStatusText {
+                        Text(supportOpenStatusText)
+                            .dsFont(.label)
+                            .foregroundStyle(Color.dsMutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 6)
+                    }
                 }
             }
 
@@ -1723,6 +1784,23 @@ struct SettingsView: View {
         showingSupportPromptCopied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             showingSupportPromptCopied = false
+        }
+    }
+
+    /// Opens a new chat with the prompt prefilled. The prompt is copied first
+    /// so the user can paste it if the service drops or truncates the query.
+    private func openSupportPrompt(in destination: SupportContent.AgentDestination) {
+        guard let url = destination.url else {
+            DebugLog.error("Could not build \(destination.rawValue) URL for support prompt", context: "SettingsView")
+            return
+        }
+
+        copyToPasteboard(SupportContent.agentPrompt)
+        NSWorkspace.shared.open(url)
+
+        supportOpenStatusText = "Prompt copied to the clipboard in case \(destination.rawValue) opens empty."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            supportOpenStatusText = nil
         }
     }
 

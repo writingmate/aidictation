@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 
 // MARK: - Support Content
@@ -52,9 +53,10 @@ enum SupportContent {
 // MARK: - Support Prompt Manager
 
 /// Opens the support troubleshooting prompt in an installed chat app (native
-/// app or browser-installed web app), falling back to the default browser only
-/// when nothing is installed. The prompt is always copied to the clipboard
-/// first so the user can paste it if a destination ignores the prefill.
+/// app or browser-installed web app), then pastes the prompt into its composer
+/// once the app is frontmost. Falls back to the default browser only when
+/// nothing is installed. The prompt is always copied to the clipboard first so
+/// the user can paste it themselves if the automatic paste cannot run.
 final class SupportPromptManager {
     // MARK: - Types
 
@@ -70,7 +72,8 @@ final class SupportPromptManager {
 
     /// How the prompt was delivered, so the UI can word its confirmation.
     enum Outcome {
-        case openedApp
+        /// The app is open; `pasted` says whether the prompt landed in its composer.
+        case openedApp(pasted: Bool)
         case openedBrowser
         case failed
     }
@@ -89,6 +92,13 @@ final class SupportPromptManager {
 
     private enum Constants {
         static let context = "SupportPromptManager"
+
+        /// How long to wait for the opened app to become frontmost. Cold
+        /// launches of Electron apps can take a couple of seconds.
+        static let activationTimeout: TimeInterval = 4.0
+        static let activationPollInterval: TimeInterval = 0.1
+        /// Extra time after activation for the window and composer to take focus.
+        static let composerSettleDelay: TimeInterval = 0.7
 
         /// Folders browsers use for installed web app shortcuts under ~/Applications.
         static let webAppFolders = [
@@ -123,7 +133,8 @@ final class SupportPromptManager {
     }
 
     /// Copies the prompt, then opens `destination`, preferring an installed app
-    /// over the browser. `completion` runs on the main actor.
+    /// over the browser, and pastes the prompt into the app once it is
+    /// frontmost. `completion` runs on the main actor, after the paste attempt.
     func open(_ destination: Destination, completion: @escaping @MainActor (Outcome) -> Void) {
         copyPrompt()
 
@@ -148,7 +159,7 @@ final class SupportPromptManager {
 
     /// Hands `url` to the app so a browser cannot claim it. If the app rejects
     /// the URL (for example an unregistered scheme), the app is launched on its
-    /// own and the clipboard copy carries the prompt.
+    /// own; the paste after activation still delivers the prompt.
     private func openInApplication(at appURL: URL, url: URL?, completion: @escaping @MainActor (Outcome) -> Void) {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -158,29 +169,82 @@ final class SupportPromptManager {
             return
         }
 
-        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { _, error in
+        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { runningApp, error in
             Task { @MainActor in
                 if let error {
                     DebugLog.warning("App declined URL (\(error.localizedDescription)); launching app without it", context: Constants.context)
                     self.launchApplication(at: appURL, configuration: configuration, completion: completion)
                 } else {
-                    completion(.openedApp)
+                    self.pasteWhenFrontmost(runningApp, appURL: appURL, completion: completion)
                 }
             }
         }
     }
 
     private func launchApplication(at appURL: URL, configuration: NSWorkspace.OpenConfiguration, completion: @escaping @MainActor (Outcome) -> Void) {
-        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { runningApp, error in
             Task { @MainActor in
                 if let error {
                     DebugLog.error("Could not launch \(appURL.lastPathComponent): \(error.localizedDescription)", context: Constants.context)
                     completion(.failed)
                 } else {
-                    completion(.openedApp)
+                    self.pasteWhenFrontmost(runningApp, appURL: appURL, completion: completion)
                 }
             }
         }
+    }
+
+    /// Waits for the opened app to become frontmost, lets its composer take
+    /// focus, then pastes the prompt through `ClipboardManager`. The target is
+    /// pinned only once the chat app is in front, so the paste can never land
+    /// back in AI Dictation or in an app left over from an earlier dictation.
+    private func pasteWhenFrontmost(_ runningApp: NSRunningApplication?, appURL: URL, completion: @escaping @MainActor (Outcome) -> Void) {
+        let deadline = Date().addingTimeInterval(Constants.activationTimeout)
+
+        Task { @MainActor in
+            while !self.isFrontmost(runningApp, appURL: appURL) {
+                guard Date() < deadline else {
+                    DebugLog.warning("\(appURL.lastPathComponent) did not come to the front in time; leaving prompt on clipboard", context: Constants.context)
+                    completion(.openedApp(pasted: false))
+                    return
+                }
+                try? await Task.sleep(nanoseconds: UInt64(Constants.activationPollInterval * 1_000_000_000))
+            }
+
+            try? await Task.sleep(nanoseconds: UInt64(Constants.composerSettleDelay * 1_000_000_000))
+
+            guard self.isFrontmost(runningApp, appURL: appURL) else {
+                DebugLog.warning("\(appURL.lastPathComponent) lost focus before paste; leaving prompt on clipboard", context: Constants.context)
+                completion(.openedApp(pasted: false))
+                return
+            }
+
+            guard AXIsProcessTrusted() else {
+                DebugLog.warning("Accessibility permission missing; cannot paste prompt into \(appURL.lastPathComponent)", context: Constants.context)
+                completion(.openedApp(pasted: false))
+                return
+            }
+
+            ClipboardManager.storePreviousApp()
+            ClipboardManager.replaceSelectionAndPaste(SupportContent.agentPrompt)
+            DebugLog.info("Pasted support prompt into \(appURL.lastPathComponent)", context: Constants.context)
+            completion(.openedApp(pasted: true))
+        }
+    }
+
+    /// True when the opened app owns the front window. Matches by process
+    /// first, then by bundle location for cases where the launch handed back a
+    /// different process (browser web apps run through a shim).
+    private func isFrontmost(_ runningApp: NSRunningApplication?, appURL: URL) -> Bool {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication,
+              frontmost.processIdentifier != NSRunningApplication.current.processIdentifier
+        else {
+            return false
+        }
+        if let runningApp, frontmost.processIdentifier == runningApp.processIdentifier {
+            return true
+        }
+        return frontmost.bundleURL?.standardizedFileURL == appURL.standardizedFileURL
     }
 
     private func installedApplicationURL(for destination: Destination) -> URL? {
@@ -242,18 +306,21 @@ final class SupportPromptManager {
         SupportContent.agentPrompt.addingPercentEncoding(withAllowedCharacters: Constants.queryValueAllowed)
     }
 
-    /// URL handed to the installed app: the app's own scheme for native apps,
-    /// the web app's origin for browser-installed apps. Nil opens the app bare.
+    /// URL handed to the installed app so a new chat is ready. Prefill through
+    /// the URL is best effort; the paste after activation is what reliably
+    /// puts the prompt in the composer. Nil opens the app bare.
     private func inAppURL(for destination: Destination) -> URL? {
         switch destination {
         case .chatGPT:
-            return percentEncodedPrompt.flatMap { URL(string: "chatgpt://?q=\($0)") }
+            // ChatGPT.app registers https (not a chatgpt:// scheme), so it is
+            // handed its own site URL.
+            return percentEncodedPrompt.flatMap { URL(string: "https://chatgpt.com/?q=\($0)") }
         case .claude:
             return percentEncodedPrompt.flatMap { URL(string: "claude://new?q=\($0)") }
         case .writingmate:
-            return percentEncodedPrompt.flatMap { URL(string: "https://new.writingmate.ai/new?q=\($0)") }
+            return percentEncodedPrompt.flatMap { URL(string: "https://writingmate.ai/new?q=\($0)") }
         case .gemini:
-            // No documented prefill parameter; the clipboard carries the prompt.
+            // No documented prefill parameter; the paste carries the prompt.
             return URL(string: "https://gemini.google.com/app")
         }
     }
@@ -266,7 +333,7 @@ final class SupportPromptManager {
         case .claude:
             return percentEncodedPrompt.flatMap { URL(string: "https://claude.ai/new?q=\($0)") }
         case .writingmate:
-            return percentEncodedPrompt.flatMap { URL(string: "https://new.writingmate.ai/new?q=\($0)") }
+            return percentEncodedPrompt.flatMap { URL(string: "https://writingmate.ai/new?q=\($0)") }
         case .gemini:
             return URL(string: "https://gemini.google.com/app")
         }

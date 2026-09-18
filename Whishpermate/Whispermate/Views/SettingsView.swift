@@ -1693,20 +1693,25 @@ struct SettingsView: View {
         }
     }
 
-    /// Opens the prompt in the installed app when there is one, otherwise in
-    /// the browser. The manager copies the prompt first as a paste fallback.
+    /// Opens the prompt in the installed app when there is one and pastes it
+    /// into the chat, otherwise opens the browser. The manager copies the
+    /// prompt first so it is on the clipboard either way.
     private func openSupportPrompt(in destination: SupportPromptManager.Destination) {
         let name = destination.rawValue
+        supportOpenStatusText = "Opening \(name)…"
+
         SupportPromptManager.shared.open(destination) { outcome in
             switch outcome {
-            case .openedApp:
-                supportOpenStatusText = "Prompt copied to the clipboard in case \(name) opens empty."
+            case .openedApp(pasted: true):
+                supportOpenStatusText = "Prompt pasted into \(name). It's also on your clipboard."
+            case .openedApp(pasted: false):
+                supportOpenStatusText = "\(name) is open, but the prompt couldn't be pasted automatically. It's on your clipboard."
             case .openedBrowser:
                 supportOpenStatusText = "\(name) isn't installed, so it opened in your browser. Prompt copied to the clipboard."
             case .failed:
                 supportOpenStatusText = "Couldn't open \(name). Prompt copied to the clipboard."
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
                 supportOpenStatusText = nil
             }
         }

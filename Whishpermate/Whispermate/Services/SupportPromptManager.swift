@@ -52,20 +52,19 @@ enum SupportContent {
 
 // MARK: - Support Prompt Manager
 
-/// Opens the support troubleshooting prompt in an installed chat app (native
-/// app or browser-installed web app), then pastes the prompt into its composer
-/// once the app is frontmost. Falls back to the default browser only when
-/// nothing is installed. The prompt is always copied to the clipboard first so
-/// the user can paste it themselves if the automatic paste cannot run.
+/// Opens the support troubleshooting prompt in an installed desktop AI app
+/// that has local access to this Mac, then pastes the prompt into its composer
+/// once the app is frontmost. Web chat sites are never opened: the prompt only
+/// works for an agent that can read logs, permissions, and the app install on
+/// this computer. The prompt is always copied to the clipboard first so the
+/// user can paste it themselves if the automatic paste cannot run.
 final class SupportPromptManager {
     // MARK: - Types
 
-    /// Chat services the troubleshooting prompt can be opened in.
+    /// Desktop AI apps the troubleshooting prompt can be opened in.
     enum Destination: String, CaseIterable, Identifiable {
         case chatGPT = "ChatGPT"
         case claude = "Claude"
-        case writingmate = "Writingmate"
-        case gemini = "Gemini"
 
         var id: String { rawValue }
     }
@@ -74,7 +73,8 @@ final class SupportPromptManager {
     enum Outcome {
         /// The app is open; `pasted` says whether the prompt landed in its composer.
         case openedApp(pasted: Bool)
-        case openedBrowser
+        /// No desktop app found. The website is deliberately not opened.
+        case appNotInstalled
         case failed
     }
 
@@ -84,8 +84,6 @@ final class SupportPromptManager {
         /// to carry that name, for identifiers shared with other products.
         case bundleIdentifier(String, appName: String? = nil)
         case path(String)
-        /// A web app shortcut (Chrome, Edge, Brave) in the user's Applications folder.
-        case webApp(named: String)
     }
 
     // MARK: - Constants
@@ -99,14 +97,6 @@ final class SupportPromptManager {
         static let activationPollInterval: TimeInterval = 0.1
         /// Extra time after activation for the window and composer to take focus.
         static let composerSettleDelay: TimeInterval = 0.7
-
-        /// Folders browsers use for installed web app shortcuts under ~/Applications.
-        static let webAppFolders = [
-            "Chrome Apps.localized",
-            "Chrome Apps",
-            "Edge Apps.localized",
-            "Brave Browser Apps.localized",
-        ]
 
         /// Unreserved characters only (RFC 3986). `.urlQueryAllowed` leaves `&`,
         /// `=`, and `+` unescaped, which would cut the prompt off at its first
@@ -132,27 +122,21 @@ final class SupportPromptManager {
         NSPasteboard.general.setString(SupportContent.agentPrompt, forType: .string)
     }
 
-    /// Copies the prompt, then opens `destination`, preferring an installed app
-    /// over the browser, and pastes the prompt into the app once it is
-    /// frontmost. `completion` runs on the main actor, after the paste attempt.
+    /// Copies the prompt, then opens the installed desktop app for
+    /// `destination` and pastes the prompt into it once it is frontmost. If the
+    /// app is not installed nothing is opened; the prompt stays on the
+    /// clipboard. `completion` runs on the main actor, after the paste attempt.
     func open(_ destination: Destination, completion: @escaping @MainActor (Outcome) -> Void) {
         copyPrompt()
 
-        if let appURL = installedApplicationURL(for: destination) {
-            DebugLog.info("Opening \(destination.rawValue) app at \(appURL.path)", context: Constants.context)
-            openInApplication(at: appURL, url: inAppURL(for: destination), completion: completion)
+        guard let appURL = installedApplicationURL(for: destination) else {
+            DebugLog.info("\(destination.rawValue) desktop app not installed; leaving prompt on clipboard", context: Constants.context)
+            completion(.appNotInstalled)
             return
         }
 
-        guard let webURL = webURL(for: destination) else {
-            DebugLog.error("No app or web URL for \(destination.rawValue)", context: Constants.context)
-            completion(.failed)
-            return
-        }
-
-        DebugLog.info("\(destination.rawValue) app not installed; opening in browser", context: Constants.context)
-        NSWorkspace.shared.open(webURL)
-        completion(.openedBrowser)
+        DebugLog.info("Opening \(destination.rawValue) app at \(appURL.path)", context: Constants.context)
+        openInApplication(at: appURL, url: inAppURL(for: destination), completion: completion)
     }
 
     // MARK: - Private Methods
@@ -233,8 +217,8 @@ final class SupportPromptManager {
     }
 
     /// True when the opened app owns the front window. Matches by process
-    /// first, then by bundle location for cases where the launch handed back a
-    /// different process (browser web apps run through a shim).
+    /// first, then by bundle location in case the launch handed back a
+    /// different process than the one now in front.
     private func isFrontmost(_ runningApp: NSRunningApplication?, appURL: URL) -> Bool {
         guard let frontmost = NSWorkspace.shared.frontmostApplication,
               frontmost.processIdentifier != NSRunningApplication.current.processIdentifier
@@ -258,21 +242,6 @@ final class SupportPromptManager {
                 if FileManager.default.fileExists(atPath: path) {
                     return URL(fileURLWithPath: path)
                 }
-            case let .webApp(name):
-                if let url = webAppURL(named: name) {
-                    return url
-                }
-            }
-        }
-        return nil
-    }
-
-    private func webAppURL(named name: String) -> URL? {
-        let applications = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
-        for folder in Constants.webAppFolders {
-            let candidate = applications.appendingPathComponent(folder).appendingPathComponent("\(name).app")
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                return candidate
             }
         }
         return nil
@@ -287,18 +256,12 @@ final class SupportPromptManager {
                 .path("/Applications/ChatGPT.app"),
                 .bundleIdentifier("com.openai.chat"),
                 .bundleIdentifier("com.openai.codex", appName: "ChatGPT"),
-                .webApp(named: "ChatGPT"),
             ]
         case .claude:
             return [
                 .bundleIdentifier("com.anthropic.claudefordesktop"),
                 .path("/Applications/Claude.app"),
-                .webApp(named: "Claude"),
             ]
-        case .writingmate:
-            return [.webApp(named: "Writingmate")]
-        case .gemini:
-            return [.webApp(named: "Gemini"), .webApp(named: "Google Gemini")]
         }
     }
 
@@ -317,25 +280,6 @@ final class SupportPromptManager {
             return percentEncodedPrompt.flatMap { URL(string: "https://chatgpt.com/?q=\($0)") }
         case .claude:
             return percentEncodedPrompt.flatMap { URL(string: "claude://new?q=\($0)") }
-        case .writingmate:
-            return percentEncodedPrompt.flatMap { URL(string: "https://writingmate.ai/new?q=\($0)") }
-        case .gemini:
-            // No documented prefill parameter; the paste carries the prompt.
-            return URL(string: "https://gemini.google.com/app")
-        }
-    }
-
-    /// Browser URL, used only when no app is installed.
-    private func webURL(for destination: Destination) -> URL? {
-        switch destination {
-        case .chatGPT:
-            return percentEncodedPrompt.flatMap { URL(string: "https://chatgpt.com/?q=\($0)") }
-        case .claude:
-            return percentEncodedPrompt.flatMap { URL(string: "https://claude.ai/new?q=\($0)") }
-        case .writingmate:
-            return percentEncodedPrompt.flatMap { URL(string: "https://writingmate.ai/new?q=\($0)") }
-        case .gemini:
-            return URL(string: "https://gemini.google.com/app")
         }
     }
 }

@@ -1601,7 +1601,7 @@ struct SettingsView: View {
                             Text("Troubleshooting Prompt")
                                 .dsFont(.body)
                                 .foregroundStyle(Color.dsForeground)
-                            Text("Open a chat with a ready-made troubleshooting prompt.")
+                            Text("Opens an AI app installed on this Mac with a ready-made prompt, so it can look at this computer and help fix the problem.")
                                 .dsFont(.label)
                                 .foregroundStyle(Color.dsMutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1693,8 +1693,8 @@ struct SettingsView: View {
         }
     }
 
-    /// Opens the prompt in the installed app when there is one and pastes it
-    /// into the chat, otherwise opens the browser. The manager copies the
+    /// Opens the installed desktop app and pastes the prompt into its chat.
+    /// Nothing opens when the app isn't installed; the manager copies the
     /// prompt first so it is on the clipboard either way.
     private func openSupportPrompt(in destination: SupportPromptManager.Destination) {
         let name = destination.rawValue
@@ -1706,8 +1706,8 @@ struct SettingsView: View {
                 supportOpenStatusText = "Prompt pasted into \(name). It's also on your clipboard."
             case .openedApp(pasted: false):
                 supportOpenStatusText = "\(name) is open, but the prompt couldn't be pasted automatically. It's on your clipboard."
-            case .openedBrowser:
-                supportOpenStatusText = "\(name) isn't installed, so it opened in your browser. Prompt copied to the clipboard."
+            case .appNotInstalled:
+                supportOpenStatusText = "The \(name) app isn't installed on this Mac. Prompt copied to the clipboard."
             case .failed:
                 supportOpenStatusText = "Couldn't open \(name). Prompt copied to the clipboard."
             }

@@ -41,6 +41,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case contextRules = "Context Rules"
     case shortcuts = "Shortcuts"
     case history = "History"
+    case support = "Support"
 
     var id: String { rawValue }
 
@@ -75,7 +76,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
             case .primary: return [.general, .history]
             case .dictation: return [.transcription, .overlay, .audio, .language]
             case .text: return [.dictionary, .shortcuts, .contextRules]
-            case .system: return [.permissions]
+            case .system: return [.permissions, .support]
             }
         }
     }
@@ -92,6 +93,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .dictionary: return "book.closed"
         case .contextRules: return "text.badge.checkmark"
         case .shortcuts: return "text.word.spacing"
+        case .support: return "questionmark.circle"
         }
     }
 
@@ -108,8 +110,32 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .dictionary: return "Custom word replacements and corrections"
         case .contextRules: return "App-specific formatting rules"
         case .shortcuts: return "Voice-triggered text expansions"
+        case .support: return "Troubleshooting help and contact"
         }
     }
+}
+
+// MARK: - Support Content
+
+/// User-facing support material shown in the Support settings section.
+enum SupportContent {
+    static let email = "hello@ai-dictation.com"
+
+    static var mailURL: URL? {
+        URL(string: "mailto:\(email)")
+    }
+
+    /// Prompt users paste into an AI coding agent (Cursor, Claude, etc.) so it
+    /// investigates a problem on this Mac in a safe, step-by-step way.
+    static let agentPrompt = """
+    You are helping me debug AI Dictation on this Mac.
+
+    1. First, check whether you have local access to this machine: a terminal, the file system, and the ability to see or control the screen. If you don't, tell me exactly what access you need before going any further.
+    2. Ask me what symptom I'm seeing. Ask one clear question and wait for my answer.
+    3. Propose a short investigation plan and wait for my explicit "yes" before changing any settings, files, or the app itself.
+    4. Diagnose the problem and back every conclusion with evidence (logs, permissions, settings, app state).
+    5. If the fix is an app update, install or point me to the latest AI Dictation release only. Never recommend or pin an older build.
+    """
 }
 
 struct SettingsView: View {
@@ -149,6 +175,8 @@ struct SettingsView: View {
     @State private var isRedeemingReferral = false
     @State private var referralCodeToRedeem = ""
     @State private var referralStatusText: String?
+    @State private var showingSupportPromptCopied = false
+    @State private var showingSupportEmailCopied = false
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -354,6 +382,8 @@ struct SettingsView: View {
                 contextRulesSection
             case .shortcuts:
                 shortcutsSection
+            case .support:
+                supportSection
             }
         }
         .padding(.horizontal, 20)
@@ -1578,6 +1608,110 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             ShortcutsTabView(manager: shortcutManager)
         }
+    }
+
+    // MARK: - Support Section
+
+    private var supportSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            groupHeader("Troubleshoot with an AI Agent")
+
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Troubleshooting Prompt")
+                                .dsFont(.body)
+                                .foregroundStyle(Color.dsForeground)
+                            Text("Paste this into Cursor, Claude, or another AI agent. It checks what it can access, asks what's wrong, and waits for your OK before changing anything.")
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Button {
+                            copySupportPrompt()
+                        } label: {
+                            Label(
+                                showingSupportPromptCopied ? "Copied" : "Copy Prompt",
+                                systemImage: showingSupportPromptCopied ? "checkmark" : "doc.on.doc"
+                            )
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, 2)
+
+                    Text(SupportContent.agentPrompt)
+                        .dsFont(.label)
+                        .foregroundStyle(Color.dsForeground)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: DSCornerRadius.small)
+                                .fill(Color.dsCard)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DSCornerRadius.small)
+                                .stroke(Color.dsBorder, lineWidth: 1)
+                        )
+                }
+            }
+
+            groupHeader("Contact")
+
+            SettingsCard {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Email Support")
+                            .dsFont(.body)
+                            .foregroundStyle(Color.dsForeground)
+                        if let mailURL = SupportContent.mailURL {
+                            Link(SupportContent.email, destination: mailURL)
+                                .dsFont(.label)
+                        } else {
+                            Text(SupportContent.email)
+                                .dsFont(.label)
+                                .foregroundStyle(Color.dsMutedForeground)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Spacer()
+                    Button {
+                        copySupportEmail()
+                    } label: {
+                        Label(
+                            showingSupportEmailCopied ? "Copied" : "Copy Email",
+                            systemImage: showingSupportEmailCopied ? "checkmark" : "doc.on.doc"
+                        )
+                    }
+                    .controlSize(.small)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func copySupportPrompt() {
+        copyToPasteboard(SupportContent.agentPrompt)
+        showingSupportPromptCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showingSupportPromptCopied = false
+        }
+    }
+
+    private func copySupportEmail() {
+        copyToPasteboard(SupportContent.email)
+        showingSupportEmailCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showingSupportEmailCopied = false
+        }
+    }
+
+    private func copyToPasteboard(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
     }
 
     // MARK: - Helper Functions

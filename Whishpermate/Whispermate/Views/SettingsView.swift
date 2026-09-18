@@ -126,15 +126,40 @@ enum SupportContent {
     }
 
     /// Prompt users paste into an AI coding agent (Cursor, Claude, etc.) so it
-    /// investigates a problem on this Mac in a safe, step-by-step way.
+    /// investigates a problem on this machine in a safe, step-by-step way.
+    /// This wording is locked by Support; do not edit without their sign-off.
     static let agentPrompt = """
-    You are helping me debug AI Dictation on this Mac.
+    You are helping me fix AI Dictation on this computer.
 
-    1. First, check whether you have local access to this machine: a terminal, the file system, and the ability to see or control the screen. If you don't, tell me exactly what access you need before going any further.
-    2. Ask me what symptom I'm seeing. Ask one clear question and wait for my answer.
-    3. Propose a short investigation plan and wait for my explicit "yes" before changing any settings, files, or the app itself.
-    4. Diagnose the problem and back every conclusion with evidence (logs, permissions, settings, app state).
-    5. If the fix is an app update, install or point me to the latest AI Dictation release only. Never recommend or pin an older build.
+    ## Hard rules (do these in order)
+
+    1. **Prove you have local access to THIS computer** before anything else.
+       - Run a real local command (for example: `hostname`, `sw_vers` on Mac, or `systeminfo` on Windows) and show the output.
+       - If you are a cloud-only agent with no local shell/desktop on my machine, STOP. Tell me to paste this same prompt into Cursor, Claude Code, or Grok Bot running on my laptop. Do not guess.
+
+    2. **Ask me what problem we are trying to solve**, then wait for my answer.
+       - One short question. Do not start diagnosing yet.
+
+    3. **After I answer, explain your plan in plain English** (what you will check or change, and why).
+       - Get my **explicit yes** before you change anything (settings, permissions, files, reinstalls, kills).
+       - Read-only checks are fine after I describe the problem; writes need yes.
+
+    4. **Then diagnose with tools.** Prefer facts over questions.
+       - Ask at most one short clarifying question only when you are blocked.
+       - Prefer updating AI Dictation to the **latest available version** when an update might help. Do **not** hardcode or recommend a specific build number; just make sure I am on the newest release the app offers (or the official download site).
+
+    ## Useful places (Mac)
+    - App: `/Applications/AIDictation.app` (or wherever it is installed)
+    - Logs: `~/Library/Logs/AIDictation`
+    - Permissions: System Settings → Privacy & Security (Microphone, Accessibility, Input Monitoring, Screen Recording if relevant)
+
+    ## Useful places (Windows)
+    - Installed app folder / Start Menu entry for AI Dictation
+    - App logs under the user’s AppData if present
+    - Privacy settings for microphone / accessibility equivalents
+
+    ## When you are done
+    Summarize: what was wrong, what you changed (if anything), and what I should try next. If you cannot fix it, package a short tech dump (OS version, app version, relevant logs, permission state) I can email to support.
     """
 }
 

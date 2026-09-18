@@ -119,7 +119,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
 /// User-facing support material shown in the Support settings section.
 enum SupportContent {
-    static let email = "hello@ai-dictation.com"
+    static let email = "hello@aidictation.com"
 
     static var mailURL: URL? {
         URL(string: "mailto:\(email)")

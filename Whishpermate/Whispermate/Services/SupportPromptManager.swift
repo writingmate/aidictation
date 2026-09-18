@@ -97,15 +97,6 @@ final class SupportPromptManager {
         static let activationPollInterval: TimeInterval = 0.1
         /// Extra time after activation for the window and composer to take focus.
         static let composerSettleDelay: TimeInterval = 0.7
-
-        /// Unreserved characters only (RFC 3986). `.urlQueryAllowed` leaves `&`,
-        /// `=`, and `+` unescaped, which would cut the prompt off at its first
-        /// ampersand when it travels as a query value.
-        static let queryValueAllowed: CharacterSet = {
-            var set = CharacterSet.alphanumerics
-            set.insert(charactersIn: "-._~")
-            return set
-        }()
     }
 
     // MARK: - Initialization
@@ -135,37 +126,21 @@ final class SupportPromptManager {
             return
         }
 
-        DebugLog.info("Opening \(destination.rawValue) app at \(appURL.path)", context: Constants.context)
-        openInApplication(at: appURL, url: inAppURL(for: destination), completion: completion)
+        DebugLog.info("Launching \(destination.rawValue) app at \(appURL.path)", context: Constants.context)
+        launchApplication(at: appURL, completion: completion)
     }
 
     // MARK: - Private Methods
 
-    /// Hands `url` to the app so a browser cannot claim it. If the app rejects
-    /// the URL (for example an unregistered scheme), the app is launched on its
-    /// own; the paste after activation still delivers the prompt.
-    private func openInApplication(at appURL: URL, url: URL?, completion: @escaping @MainActor (Outcome) -> Void) {
+    /// Launches the app with no URL at all. Handing the app a web URL is what
+    /// let the prompt leak into the default browser: apps that register https
+    /// forward URLs they do not show in-window to the system browser. The paste
+    /// after activation is the only way the prompt reaches the composer, which
+    /// also means it can never be inserted twice.
+    private func launchApplication(at appURL: URL, completion: @escaping @MainActor (Outcome) -> Void) {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
 
-        guard let url else {
-            launchApplication(at: appURL, configuration: configuration, completion: completion)
-            return
-        }
-
-        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { runningApp, error in
-            Task { @MainActor in
-                if let error {
-                    DebugLog.warning("App declined URL (\(error.localizedDescription)); launching app without it", context: Constants.context)
-                    self.launchApplication(at: appURL, configuration: configuration, completion: completion)
-                } else {
-                    self.pasteWhenFrontmost(runningApp, appURL: appURL, completion: completion)
-                }
-            }
-        }
-    }
-
-    private func launchApplication(at appURL: URL, configuration: NSWorkspace.OpenConfiguration, completion: @escaping @MainActor (Outcome) -> Void) {
         NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { runningApp, error in
             Task { @MainActor in
                 if let error {
@@ -262,24 +237,6 @@ final class SupportPromptManager {
                 .bundleIdentifier("com.anthropic.claudefordesktop"),
                 .path("/Applications/Claude.app"),
             ]
-        }
-    }
-
-    private var percentEncodedPrompt: String? {
-        SupportContent.agentPrompt.addingPercentEncoding(withAllowedCharacters: Constants.queryValueAllowed)
-    }
-
-    /// URL handed to the installed app so a new chat is ready. Prefill through
-    /// the URL is best effort; the paste after activation is what reliably
-    /// puts the prompt in the composer. Nil opens the app bare.
-    private func inAppURL(for destination: Destination) -> URL? {
-        switch destination {
-        case .chatGPT:
-            // ChatGPT.app registers https (not a chatgpt:// scheme), so it is
-            // handed its own site URL.
-            return percentEncodedPrompt.flatMap { URL(string: "https://chatgpt.com/?q=\($0)") }
-        case .claude:
-            return percentEncodedPrompt.flatMap { URL(string: "claude://new?q=\($0)") }
         }
     }
 }

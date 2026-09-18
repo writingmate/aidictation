@@ -115,100 +115,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Support Content
-
-/// User-facing support material shown in the Support settings section.
-enum SupportContent {
-    static let email = "hello@aidictation.com"
-
-    static var mailURL: URL? {
-        URL(string: "mailto:\(email)")
-    }
-
-    /// Prompt users paste into an AI coding agent (Cursor, Claude, etc.) so it
-    /// investigates a problem on this machine in a safe, step-by-step way.
-    /// This wording is locked by Support; do not edit without their sign-off.
-    static let agentPrompt = """
-    You are helping me fix AI Dictation on this computer.
-
-    ## Hard rules (do these in order)
-
-    1. **Prove you have local access to THIS computer** before anything else.
-       - Run a real local command (for example: `hostname`, `sw_vers` on Mac, or `systeminfo` on Windows) and show the output.
-       - If you are a cloud-only agent with no local shell/desktop on my machine, STOP. Tell me to paste this same prompt into Cursor, Claude Code, or Grok Bot running on my laptop. Do not guess.
-
-    2. **Ask me what problem we are trying to solve**, then wait for my answer.
-       - One short question. Do not start diagnosing yet.
-
-    3. **After I answer, explain your plan in plain English** (what you will check or change, and why).
-       - Get my **explicit yes** before you change anything (settings, permissions, files, reinstalls, kills).
-       - Read-only checks are fine after I describe the problem; writes need yes.
-
-    4. **Then diagnose with tools.** Prefer facts over questions.
-       - Ask at most one short clarifying question only when you are blocked.
-       - Prefer updating AI Dictation to the **latest available version** when an update might help. Do **not** hardcode or recommend a specific build number; just make sure I am on the newest release the app offers (or the official download site).
-
-    ## Useful places (Mac)
-    - App: `/Applications/AIDictation.app` (or wherever it is installed)
-    - Logs: `~/Library/Logs/AIDictation`
-    - Permissions: System Settings → Privacy & Security (Microphone, Accessibility, Input Monitoring, Screen Recording if relevant)
-
-    ## Useful places (Windows)
-    - Installed app folder / Start Menu entry for AI Dictation
-    - App logs under the user’s AppData if present
-    - Privacy settings for microphone / accessibility equivalents
-
-    ## When you are done
-    Summarize: what was wrong, what you changed (if anything), and what I should try next. If you cannot fix it, package a short tech dump (OS version, app version, relevant logs, permission state) I can email to support.
-    """
-
-    /// Unreserved characters only (RFC 3986). `.urlQueryAllowed` leaves `&`,
-    /// `=`, and `+` unescaped, which would cut the prompt off at its first
-    /// ampersand when it travels as a query value.
-    private static let queryValueAllowed: CharacterSet = {
-        var set = CharacterSet.alphanumerics
-        set.insert(charactersIn: "-._~")
-        return set
-    }()
-
-    static var percentEncodedAgentPrompt: String? {
-        agentPrompt.addingPercentEncoding(withAllowedCharacters: queryValueAllowed)
-    }
-
-    /// Chat services the troubleshooting prompt can be opened in.
-    enum AgentDestination: String, CaseIterable, Identifiable {
-        case chatGPT = "ChatGPT"
-        case claude = "Claude"
-        case writingmate = "Writingmate"
-        case gemini = "Gemini"
-
-        var id: String { rawValue }
-
-        private var newChatURLString: String {
-            switch self {
-            case .chatGPT: return "https://chatgpt.com/"
-            case .claude: return "https://claude.ai/new"
-            case .writingmate: return "https://writingmate.ai/new"
-            case .gemini: return "https://gemini.google.com/app"
-            }
-        }
-
-        /// Gemini has no documented prefill parameter, so it opens a blank
-        /// chat and the user pastes the prompt copied alongside the open.
-        private var acceptsPromptQuery: Bool {
-            self != .gemini
-        }
-
-        /// New-chat URL with the prompt prefilled where the service supports it.
-        var url: URL? {
-            guard acceptsPromptQuery, let encoded = SupportContent.percentEncodedAgentPrompt else {
-                return URL(string: newChatURLString)
-            }
-            return URL(string: "\(newChatURLString)?q=\(encoded)")
-        }
-    }
-}
-
 struct SettingsView: View {
     @ObservedObject var hotkeyManager: HotkeyManager
     @ObservedObject var languageManager: LanguageManager
@@ -1723,7 +1629,7 @@ struct SettingsView: View {
                         alignment: .leading,
                         spacing: 8
                     ) {
-                        ForEach(SupportContent.AgentDestination.allCases) { destination in
+                        ForEach(SupportPromptManager.Destination.allCases) { destination in
                             Button {
                                 openSupportPrompt(in: destination)
                             } label: {
@@ -1780,27 +1686,29 @@ struct SettingsView: View {
     }
 
     private func copySupportPrompt() {
-        copyToPasteboard(SupportContent.agentPrompt)
+        SupportPromptManager.shared.copyPrompt()
         showingSupportPromptCopied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             showingSupportPromptCopied = false
         }
     }
 
-    /// Opens a new chat with the prompt prefilled. The prompt is copied first
-    /// so the user can paste it if the service drops or truncates the query.
-    private func openSupportPrompt(in destination: SupportContent.AgentDestination) {
-        guard let url = destination.url else {
-            DebugLog.error("Could not build \(destination.rawValue) URL for support prompt", context: "SettingsView")
-            return
-        }
-
-        copyToPasteboard(SupportContent.agentPrompt)
-        NSWorkspace.shared.open(url)
-
-        supportOpenStatusText = "Prompt copied to the clipboard in case \(destination.rawValue) opens empty."
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            supportOpenStatusText = nil
+    /// Opens the prompt in the installed app when there is one, otherwise in
+    /// the browser. The manager copies the prompt first as a paste fallback.
+    private func openSupportPrompt(in destination: SupportPromptManager.Destination) {
+        let name = destination.rawValue
+        SupportPromptManager.shared.open(destination) { outcome in
+            switch outcome {
+            case .openedApp:
+                supportOpenStatusText = "Prompt copied to the clipboard in case \(name) opens empty."
+            case .openedBrowser:
+                supportOpenStatusText = "\(name) isn't installed, so it opened in your browser. Prompt copied to the clipboard."
+            case .failed:
+                supportOpenStatusText = "Couldn't open \(name). Prompt copied to the clipboard."
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                supportOpenStatusText = nil
+            }
         }
     }
 

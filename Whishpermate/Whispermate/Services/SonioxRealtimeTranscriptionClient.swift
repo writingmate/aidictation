@@ -97,6 +97,16 @@ nonisolated final class SonioxRealtimeTranscriptionClient: @unchecked Sendable, 
                     "Soniox finalization timed out; discarding unproven stream",
                     context: "SonioxRealtime"
                 )
+                // A socket exists once the session key has arrived. Separate
+                // reports tell a slow stream start from a stream that opened
+                // and still returned no final text.
+                CrashReporter.captureError(
+                    self.socket == nil
+                        ? "Soniox finalization timed out before the stream opened"
+                        : "Soniox finalization timed out after the stream opened",
+                    context: "SonioxRealtime",
+                    feature: "transcription"
+                )
                 self.abandonTransportOnQueue()
             }
             let finalizationSilence = SonioxRealtimeProtocol.finalizationSilence
@@ -274,6 +284,7 @@ nonisolated final class SonioxRealtimeTranscriptionClient: @unchecked Sendable, 
     private func failOnQueue(_ message: String) {
         dispatchPrecondition(condition: .onQueue(queue))
         guard !isClosed else { return }
+        CrashReporter.captureError(message, context: "SonioxRealtime", feature: "transcription")
         abandonTransportOnQueue()
         finishGate.resolve(with: nil)
         Task { @MainActor [onError] in onError(message) }

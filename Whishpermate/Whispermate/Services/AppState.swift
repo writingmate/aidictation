@@ -2193,6 +2193,15 @@ class AppState: ObservableObject {
                (snapshot.mode != .auto || snapshot.networkWasConnected),
                realtimeResult == nil
             {
+                DebugLog.error(
+                    "Realtime transcription ended without a transcript provider=\(snapshot.provider.rawValue) durationSeconds=\(recording.duration ?? 0)",
+                    context: "RealtimeTranscription"
+                )
+                CrashReporter.captureError(
+                    "Realtime transcription did not complete",
+                    context: "RealtimeTranscription",
+                    feature: "transcription"
+                )
                 throw NSError(
                     domain: "AppState",
                     code: -9,

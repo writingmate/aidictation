@@ -6,11 +6,14 @@ import WhisperMateShared
 
 @main
 struct WhisperMateApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var onboardingManager = OnboardingManager()
+    @StateObject private var authManager = AuthManager.shared
     @State private var showKeyboardAudioSetup = false
 
     init() {
         SentryTelemetry.start()
+        Task { @MainActor in MobileInstallationAnalytics.start() }
     }
 
     var body: some Scene {
@@ -20,6 +23,20 @@ struct WhisperMateApp: App {
                     ContentView()
                 } else {
                     OnboardingView(onboardingManager: onboardingManager)
+                }
+            }
+            .onReceive(authManager.$currentUser) { user in
+                Task { @MainActor in
+                    if let user {
+                        MobileInstallationAnalytics.signedIn(user.userId)
+                    } else {
+                        MobileInstallationAnalytics.signedOut()
+                    }
+                }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    Task { @MainActor in MobileInstallationAnalytics.appOpened() }
                 }
             }
             .onOpenURL { url in

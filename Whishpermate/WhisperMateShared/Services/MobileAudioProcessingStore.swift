@@ -1602,6 +1602,23 @@ public actor MobileAudioProcessingStore {
         }
     }
 
+    public func pendingUsageWordCount(recordingID: UUID) throws -> Int? {
+        try withExclusiveLock { () -> Int? in
+            _ = try requireReadableMetadataLocked()
+            let snapshot = try loadSnapshotLocked(recordingID: recordingID)
+            guard [.succeeded, .deleted].contains(snapshot.stage),
+                  (snapshot.usageAccountingState ?? .pending) == .pending
+            else { return nil }
+            if let storedWordCount = snapshot.usageAccountingWordCount {
+                return storedWordCount
+            }
+            if snapshot.stage == .succeeded, let resultURL = snapshot.resultURL {
+                return Self.wordCount(in: try readNonEmptyTextLocked(resultURL))
+            }
+            return nil
+        }
+    }
+
     /// Durably claims one pending non-idempotent usage operation before returning it to the caller.
     /// Once this succeeds the operation is never returned again, including after restart. A crash
     /// before delivery can undercount, but can never charge the same transcript twice.

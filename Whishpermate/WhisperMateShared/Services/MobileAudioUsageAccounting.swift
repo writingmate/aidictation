@@ -18,10 +18,20 @@ public enum MobileAudioUsageAccounting {
             )
             return
         }
+        #if os(iOS)
+        let words: Int?
+        do {
+            words = try await store.pendingUsageWordCount(recordingID: recordingID)
+        } catch {
+            return
+        }
+        if let words, !MobileInstallationAnalytics.transcriptionCompleted(recordingID: recordingID, words: words) {
+            return
+        }
+        #endif
         guard let lease = try? await store.beginUsageAccounting(recordingID: recordingID) else {
             return
         }
-
         let acknowledged = await subscriptionManager.recordWords(lease.wordCount)
         if !acknowledged {
             DebugLog.warning(

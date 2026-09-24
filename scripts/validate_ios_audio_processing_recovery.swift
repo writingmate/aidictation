@@ -1628,10 +1628,14 @@ private func testTerminalSuccessCannotBeDowngradedByDeliveryFailure() async thro
     try require(snapshot?.stage == .succeeded, "Delivery failure downgraded terminal success")
     let text = try await store.recognizedText(for: lease.recordingID)
     try require(text == "durable final text", "Delivery failure lost durable text")
+    let previewWordCount = try await store.pendingUsageWordCount(recordingID: lease.recordingID)
+    try require(previewWordCount == 3, "Analytics preview did not match durable usage")
     let firstAccountingLease = try await store.beginUsageAccounting(recordingID: lease.recordingID)
     let duplicateAccountingLease = try await store.beginUsageAccounting(recordingID: lease.recordingID)
     try require(firstAccountingLease?.wordCount == 3, "Successful result was not leased for usage")
     try require(duplicateAccountingLease == nil, "Usage accounting was leased concurrently")
+    let previewAfterClaim = try await store.pendingUsageWordCount(recordingID: lease.recordingID)
+    try require(previewAfterClaim == nil, "Analytics preview replayed claimed usage")
     let accountingAfterClaim = try await store.beginUsageAccounting(
         recordingID: lease.recordingID
     )
@@ -1785,6 +1789,8 @@ private func testUsageClaimIsAtMostOnceAcrossRestartDeleteAndClear() async throw
     try await deleteStore.checkpointRawTranscript("count survives delete", lease: deleteLease)
     _ = try await deleteStore.checkpointFinalText("count survives delete", lease: deleteLease)
     try await deleteStore.markSucceeded(deleteLease)
+    let deletePreview = try await deleteStore.pendingUsageWordCount(recordingID: deleteLease.recordingID)
+    try require(deletePreview == 3, "Delete fixture lost analytics usage preview")
     let deleteClaim = try await deleteStore.beginUsageAccounting(
         recordingID: deleteLease.recordingID
     )

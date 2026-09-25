@@ -75,13 +75,15 @@ extension NSNotification.Name {
 // MARK: - StatusBarManager
 
 /// Manages the macOS menu bar icon and dropdown menu
-class StatusBarManager: NSObject, NSMenuDelegate {
+class StatusBarManager: NSObject, NSMenuDelegate, NSMenuItemValidation {
     // MARK: - Properties
 
     weak var appWindow: NSWindow?
 
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
+    /// Read when the menu was last built; decides whether Retry and Copy are enabled.
+    private var lastTranscriptionState: LastTranscriptionMenuState?
 
     private enum Keys {
         static let showMenuBarIcon = "showMenuBarIcon"
@@ -153,6 +155,8 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         addTranscriptionModeMenu()
 
         menu?.addItem(NSMenuItem.separator())
+
+        addLastTranscriptionItems()
 
         // History
         let historyItem = NSMenuItem(
@@ -256,6 +260,8 @@ class StatusBarManager: NSObject, NSMenuDelegate {
 
         menu?.addItem(NSMenuItem.separator())
 
+        addLastTranscriptionItems()
+
         let historyItem = NSMenuItem(title: "History", action: #selector(showHistory), keyEquivalent: "h")
         historyItem.target = self
         menu?.addItem(historyItem)
@@ -286,6 +292,50 @@ class StatusBarManager: NSObject, NSMenuDelegate {
         let quitItem = NSMenuItem(title: "Quit AIDictation", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu?.addItem(quitItem)
+    }
+
+    private func addLastTranscriptionItems() {
+        let state = AppState.shared.lastTranscriptionMenuState()
+        lastTranscriptionState = state
+
+        let retryItem = NSMenuItem(
+            title: state.retryTitle,
+            action: #selector(retryLastTranscription),
+            keyEquivalent: ""
+        )
+        retryItem.target = self
+        menu?.addItem(retryItem)
+
+        let copyItem = NSMenuItem(
+            title: LastTranscriptionMenuState.copyTitle,
+            action: #selector(copyLastTranscription),
+            keyEquivalent: "c"
+        )
+        copyItem.keyEquivalentModifierMask = [.command, .shift]
+        copyItem.target = self
+        menu?.addItem(copyItem)
+
+        menu?.addItem(NSMenuItem.separator())
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(retryLastTranscription):
+            return lastTranscriptionState?.canRetry ?? false
+        case #selector(copyLastTranscription):
+            return lastTranscriptionState?.copyText != nil
+        default:
+            // Every other item keeps AppKit's automatic enabling.
+            return true
+        }
+    }
+
+    @objc private func retryLastTranscription() {
+        AppState.shared.retryLastTranscription()
+    }
+
+    @objc private func copyLastTranscription() {
+        AppState.shared.copyLastTranscription()
     }
 
     @objc private func handleMenuBarIconVisibilityRequest(_ notification: Notification) {

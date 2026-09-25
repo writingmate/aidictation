@@ -119,4 +119,11 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -o "$work_dir/validate-parakeet-runtime"
 "$work_dir/validate-parakeet-runtime"
 
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
+  Whishpermate/Whispermate/Models/LastTranscriptionMenuState.swift \
+  scripts/validate_macos_last_transcription_menu.swift \
+  -o "$work_dir/validate-macos-last-transcription-menu"
+"$work_dir/validate-macos-last-transcription-menu"
+
 echo "Apple audio recovery contract matrix passed"

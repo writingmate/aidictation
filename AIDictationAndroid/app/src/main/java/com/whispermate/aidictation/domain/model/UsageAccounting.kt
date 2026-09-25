@@ -1,5 +1,7 @@
 package com.whispermate.aidictation.domain.model
 
+import java.util.UUID
+
 object UsageClaimDestination {
     const val LOCAL = "local"
     const val UNATTRIBUTED = "unattributed"
@@ -20,3 +22,7 @@ fun countUsageWords(text: String): Int = text.trim()
 
 fun audioUsageClaimId(recordingId: String, generation: Long): String =
     "audio:$recordingId:$generation"
+
+fun audioAnalyticsEventId(recordingId: String, generation: Long): String =
+    UUID.nameUUIDFromBytes("android-transcription:$recordingId:$generation".toByteArray(Charsets.UTF_8))
+        .toString()

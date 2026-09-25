@@ -7,6 +7,8 @@ import androidx.room.Query
 import androidx.room.Transaction
 import com.whispermate.aidictation.data.local.entity.RecordingEntity
 import com.whispermate.aidictation.data.local.entity.UsageClaimEntity
+import com.whispermate.aidictation.data.local.entity.InstallationAnalyticsEventEntity
+import com.whispermate.aidictation.domain.model.audioAnalyticsEventId
 import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.audioUsageClaimId
 import com.whispermate.aidictation.domain.model.countUsageWords
@@ -51,6 +53,9 @@ interface RecordingDao {
             recognitionComplete = 0,
             usageEligible = :usageEligible,
             usageDestination = :usageDestination,
+            analyticsInstallationId = :analyticsInstallationId,
+            analyticsAnonymousId = :analyticsAnonymousId,
+            analyticsUserId = :analyticsUserId,
             errorMessage = NULL,
             updatedAt = :updatedAt
         WHERE id = :id
@@ -66,6 +71,9 @@ interface RecordingDao {
         nextStatus: String,
         usageEligible: Boolean,
         usageDestination: String,
+        analyticsInstallationId: String?,
+        analyticsAnonymousId: String?,
+        analyticsUserId: String?,
         updatedAt: Long
     ): Int
 
@@ -377,6 +385,9 @@ interface RecordingDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertUsageClaim(claim: UsageClaimEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertInstallationAnalyticsEvent(event: InstallationAnalyticsEventEntity): Long
+
     @Query("SELECT * FROM usage_claims WHERE id = :id")
     suspend fun getUsageClaimById(id: String): UsageClaimEntity?
 
@@ -441,9 +452,25 @@ interface RecordingDao {
         createdAt: Long
     ) {
         val current = getRecordingById(id) ?: return
-        if (!current.usageEligible || current.generation != generation || current.status != "success") return
+        if (current.generation != generation || current.status != "success") return
         val wordCount = countUsageWords(text)
         if (wordCount <= 0) return
+        val installationId = current.analyticsInstallationId
+        val anonymousId = current.analyticsAnonymousId
+        if (installationId != null && anonymousId != null) {
+            insertInstallationAnalyticsEvent(
+                InstallationAnalyticsEventEntity(
+                    eventId = audioAnalyticsEventId(id, generation),
+                    installationId = installationId,
+                    anonymousId = anonymousId,
+                    eventName = "transcription_completed",
+                    wordCount = wordCount.coerceAtMost(1_000_000),
+                    userId = current.analyticsUserId,
+                    createdAt = createdAt
+                )
+            )
+        }
+        if (!current.usageEligible) return
         insertUsageClaim(
             UsageClaimEntity(
                 id = audioUsageClaimId(id, generation),

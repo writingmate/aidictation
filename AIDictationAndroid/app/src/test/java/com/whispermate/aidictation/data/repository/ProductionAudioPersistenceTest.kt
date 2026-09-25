@@ -17,6 +17,7 @@ import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.AudioSourceIntegrity
 import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.audioUsageClaimId
+import com.whispermate.aidictation.domain.model.audioAnalyticsEventId
 import java.io.IOException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
@@ -191,6 +192,74 @@ class ProductionAudioPersistenceTest {
         assertEquals(AudioProcessingStatus.SUCCESS.persistedValue, dao.getRecordingById(row.id)?.status)
         assertNull(dao.getUsageClaimById(audioUsageClaimId(row.id, row.generation)))
         assertEquals(0, repository.pendingUsageClaimCount.first())
+    }
+
+    @Test
+    fun completedTranscriptionQueuesAnalyticsInTheSameTransactionEvenWhenNotBillable() = runBlocking {
+        val installationId = UUID.randomUUID().toString()
+        val anonymousId = UUID.randomUUID().toString()
+        val row = activeRow(id = "analytics-completion", generation = 2, usageEligible = false)
+            .copy(
+                analyticsInstallationId = installationId,
+                analyticsAnonymousId = anonymousId
+            )
+        dao.insertRecording(row)
+
+        assertTrue(
+            repository.finishAttempt(
+                lease = row.lease(),
+                status = AudioProcessingStatus.SUCCESS,
+                transcription = "saved without billing",
+                rawTranscription = "saved without billing"
+            )
+        )
+
+        val eventId = audioAnalyticsEventId(row.id, row.generation)
+        val event = database.installationAnalyticsDao().getById(eventId)
+        assertNotNull(event)
+        assertEquals(installationId, event?.installationId)
+        assertEquals(anonymousId, event?.anonymousId)
+        assertEquals("transcription_completed", event?.eventName)
+        assertEquals(3, event?.wordCount)
+        assertNull(event?.userId)
+        assertNull(dao.getUsageClaimById(audioUsageClaimId(row.id, row.generation)))
+
+        assertFalse(
+            repository.finishAttempt(
+                lease = row.lease(),
+                status = AudioProcessingStatus.SUCCESS,
+                transcription = "duplicate",
+                rawTranscription = "duplicate"
+            )
+        )
+        assertEquals(event, database.installationAnalyticsDao().getById(eventId))
+    }
+
+    @Test
+    fun recoveryQueuesAccountBoundAnalyticsWithoutBackfillingAnotherAccount() = runBlocking {
+        val accountId = UUID.randomUUID().toString()
+        val row = activeRow(
+            id = "analytics-recovery",
+            generation = 3,
+            usageEligible = true,
+            usageDestination = checkNotNull(UsageClaimDestination.account(accountId)),
+            rawText = "durable raw words",
+            recognitionComplete = true
+        ).copy(
+            analyticsInstallationId = UUID.randomUUID().toString(),
+            analyticsAnonymousId = UUID.randomUUID().toString(),
+            analyticsUserId = accountId
+        )
+        dao.insertRecording(row)
+
+        repository.normalizeAbandonedAttempts(now = 4_000L)
+
+        val event = database.installationAnalyticsDao()
+            .getById(audioAnalyticsEventId(row.id, row.generation))
+        assertEquals(3, event?.wordCount)
+        assertEquals(accountId, event?.userId)
+        assertNull(database.installationAnalyticsDao().nextDeliverable(UUID.randomUUID().toString()))
+        assertEquals(event, database.installationAnalyticsDao().nextDeliverable(accountId))
     }
 
     @Test

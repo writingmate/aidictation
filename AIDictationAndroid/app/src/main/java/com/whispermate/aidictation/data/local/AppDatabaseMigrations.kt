@@ -87,5 +87,32 @@ object AppDatabaseMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE recordings ADD COLUMN analyticsInstallationId TEXT")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN analyticsAnonymousId TEXT")
+            database.execSQL("ALTER TABLE recordings ADD COLUMN analyticsUserId TEXT")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS installation_analytics_events (
+                    eventId TEXT NOT NULL PRIMARY KEY,
+                    installationId TEXT NOT NULL,
+                    anonymousId TEXT NOT NULL,
+                    eventName TEXT NOT NULL,
+                    wordCount INTEGER NOT NULL,
+                    userId TEXT,
+                    createdAt INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_installation_analytics_events_createdAt ON installation_analytics_events(createdAt)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_installation_analytics_events_userId_createdAt ON installation_analytics_events(userId, createdAt)"
+            )
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 }

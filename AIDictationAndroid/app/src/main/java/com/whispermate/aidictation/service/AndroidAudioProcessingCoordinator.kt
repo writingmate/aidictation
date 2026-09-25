@@ -6,6 +6,7 @@ import android.media.MediaFormat
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.whispermate.aidictation.data.repository.AuthRepository
+import com.whispermate.aidictation.telemetry.InstallationAnalytics
 import com.whispermate.aidictation.data.repository.RecordingRepository
 import com.whispermate.aidictation.data.repository.TranscriptionAttemptConfiguration
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
@@ -198,14 +199,16 @@ class AndroidAudioProcessingCoordinator internal constructor(
     private val transcriptionOperations: AndroidTranscriptionOperations,
     private val audioDurationReader: (File) -> Long,
     private val recognitionTimeoutMillis: (Long) -> Long,
-    private val usageDestinationProvider: () -> String? = { null }
+    private val usageDestinationProvider: () -> String? = { null },
+    private val installationAnalytics: InstallationAnalytics? = null
 ) {
     @Inject
     constructor(
         @ApplicationContext context: Context,
         recordingRepository: RecordingRepository,
         transcriptionRepository: TranscriptionRepository,
-        authRepository: AuthRepository
+        authRepository: AuthRepository,
+        installationAnalytics: InstallationAnalytics
     ) : this(
         context = context,
         recordingRepository = recordingRepository,
@@ -217,7 +220,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 MAX_RECOGNITION_TIMEOUT_MS
             )
         },
-        usageDestinationProvider = authRepository::currentUsageDestination
+        usageDestinationProvider = authRepository::currentUsageDestination,
+        installationAnalytics = installationAnalytics
     )
 
     companion object {
@@ -402,7 +406,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                     start.provisionalLease.attemptId,
                     partial.absolutePath,
                     usageEligible = owner.recordsUsage,
-                    usageDestination = start.usageDestination
+                    usageDestination = start.usageDestination,
+                    analyticsIdentity = installationAnalytics?.identitySnapshot()
                 )
             }
             start.lease.set(lease)
@@ -1124,7 +1129,8 @@ class AndroidAudioProcessingCoordinator internal constructor(
                 recordingRepository.claimRetry(
                     recordingId,
                     usageEligible = owner.recordsUsage,
-                    usageDestination = retryStart.usageDestination
+                    usageDestination = retryStart.usageDestination,
+                    analyticsIdentity = installationAnalytics?.identitySnapshot()
                 )
             }
                 ?: throw AudioAttemptUnavailableException(

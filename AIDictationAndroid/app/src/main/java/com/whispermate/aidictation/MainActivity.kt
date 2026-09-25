@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.whispermate.aidictation.data.repository.AuthRepository
+import com.whispermate.aidictation.telemetry.InstallationAnalytics
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.AIDictationNavHost
 import com.whispermate.aidictation.ui.theme.AIDictationTheme
@@ -24,6 +25,7 @@ import kotlinx.coroutines.launch
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var authRepository: AuthRepository
+    @Inject lateinit var installationAnalytics: InstallationAnalytics
 
     private var shouldStartRecording by mutableStateOf(false)
 
@@ -50,6 +52,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        installationAnalytics.appOpened()
     }
 
 

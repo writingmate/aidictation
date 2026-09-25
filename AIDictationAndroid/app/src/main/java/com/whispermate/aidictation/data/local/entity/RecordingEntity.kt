@@ -26,7 +26,10 @@ data class RecordingEntity(
     @ColumnInfo(defaultValue = "0") val updatedAt: Long = timestamp,
     @ColumnInfo(defaultValue = "0") val usageEligible: Boolean = false,
     @ColumnInfo(defaultValue = "'unattributed'")
-    val usageDestination: String = UsageClaimDestination.UNATTRIBUTED
+    val usageDestination: String = UsageClaimDestination.UNATTRIBUTED,
+    val analyticsInstallationId: String? = null,
+    val analyticsAnonymousId: String? = null,
+    val analyticsUserId: String? = null
 ) {
     fun toDomain(): Recording = Recording(
         id = id,

@@ -6,6 +6,7 @@ import com.squareup.moshi.Moshi
 import com.whispermate.aidictation.data.local.AppDatabase
 import com.whispermate.aidictation.data.local.AppDatabaseMigrations
 import com.whispermate.aidictation.data.local.dao.RecordingDao
+import com.whispermate.aidictation.data.local.dao.InstallationAnalyticsDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -32,4 +33,9 @@ object AppModule {
     @Provides
     @Singleton
     fun provideRecordingDao(database: AppDatabase): RecordingDao = database.recordingDao()
+
+    @Provides
+    @Singleton
+    fun provideInstallationAnalyticsDao(database: AppDatabase): InstallationAnalyticsDao =
+        database.installationAnalyticsDao()
 }

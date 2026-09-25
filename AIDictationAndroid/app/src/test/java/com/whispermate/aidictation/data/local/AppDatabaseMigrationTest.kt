@@ -63,6 +63,7 @@ class AppDatabaseMigrationTest {
                 assertEquals(localClaim, database.recordingDao().getUsageClaimById(localClaim.id))
 
                 assertDestinationSchema(database)
+                assertInstallationAnalyticsSchema(database)
             } finally {
                 database.close()
             }
@@ -119,6 +120,7 @@ class AppDatabaseMigrationTest {
             )
 
             assertDestinationSchema(database)
+            assertInstallationAnalyticsSchema(database)
         } finally {
             database.close()
         }
@@ -328,6 +330,23 @@ class AppDatabaseMigrationTest {
             }
         }
         assertEquals(listOf("state", "usageDestination"), compositeIndexColumns)
+    }
+
+    private fun assertInstallationAnalyticsSchema(database: AppDatabase) {
+        val sqlite = database.openHelper.readableDatabase
+        val recordingColumns = sqlite.query("PRAGMA table_info(recordings)").use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) {
+                    add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+                }
+            }
+        }
+        assertTrue(recordingColumns.containsAll(listOf(
+            "analyticsInstallationId", "analyticsAnonymousId", "analyticsUserId"
+        )))
+        sqlite.query("SELECT * FROM installation_analytics_events LIMIT 0").use { cursor ->
+            assertEquals(0, cursor.count)
+        }
     }
 
     private data class ColumnDefinition(

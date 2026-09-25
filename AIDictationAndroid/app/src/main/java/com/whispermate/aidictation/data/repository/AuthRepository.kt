@@ -388,6 +388,11 @@ class AuthRepository @Inject constructor(
         return UsageClaimDestination.account(user.userId)
     }
 
+    internal fun analyticsAccessToken(expectedUserId: String): String? =
+        _authState.value.user
+            ?.takeIf { !_authState.value.isLoading && it.userId.equals(expectedUserId, ignoreCase = true) }
+            ?.let { securePrefs.getString(SecureKeys.ACCESS_TOKEN, null) }
+
     suspend fun updateWordCount(
         wordsToAdd: Int,
         expectedUserId: String

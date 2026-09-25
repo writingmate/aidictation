@@ -10,6 +10,7 @@ import com.whispermate.aidictation.domain.model.AudioProcessingStatus
 import com.whispermate.aidictation.domain.model.AudioSourceIntegrity
 import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.Recording
+import com.whispermate.aidictation.telemetry.InstallationAnalyticsIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
@@ -151,6 +152,7 @@ class RecordingRepository @Inject constructor(
         partialSourcePath: String,
         usageEligible: Boolean,
         usageDestination: String = UsageClaimDestination.UNATTRIBUTED,
+        analyticsIdentity: InstallationAnalyticsIdentity? = null,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease {
         val managedSource = managedAudioSources.prepareCaptureSource(recordingId, partialSourcePath)
@@ -166,7 +168,13 @@ class RecordingRepository @Inject constructor(
             usageEligible = usageEligible,
             usageDestination = usageDestination
         )
-        recordingDao.insertRecording(RecordingEntity.fromDomain(row))
+        recordingDao.insertRecording(
+            RecordingEntity.fromDomain(row).copy(
+                analyticsInstallationId = analyticsIdentity?.installationId,
+                analyticsAnonymousId = analyticsIdentity?.anonymousId,
+                analyticsUserId = analyticsIdentity?.userId
+            )
+        )
         return AudioAttemptLease(
             recordingId,
             attemptId,
@@ -239,6 +247,7 @@ class RecordingRepository @Inject constructor(
         recordingId: String,
         usageEligible: Boolean,
         usageDestination: String = UsageClaimDestination.UNATTRIBUTED,
+        analyticsIdentity: InstallationAnalyticsIdentity? = null,
         now: Long = System.currentTimeMillis()
     ): AudioAttemptLease? {
         val current = recordingDao.getRecordingById(recordingId) ?: return null
@@ -255,6 +264,9 @@ class RecordingRepository @Inject constructor(
             nextStatus = AudioProcessingStatus.RETRYING.persistedValue,
             usageEligible = usageEligible,
             usageDestination = usageDestination,
+            analyticsInstallationId = analyticsIdentity?.installationId,
+            analyticsAnonymousId = analyticsIdentity?.anonymousId,
+            analyticsUserId = analyticsIdentity?.userId,
             updatedAt = now
         )
         return if (updated == 1) {

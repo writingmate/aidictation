@@ -28,6 +28,9 @@ interface InstallationAnalyticsDao {
     @Query("DELETE FROM installation_analytics_events WHERE eventId = :eventId")
     suspend fun delete(eventId: String): Int
 
+    @Query("DELETE FROM installation_analytics_events WHERE createdAt < :cutoff")
+    suspend fun deleteOlderThan(cutoff: Long): Int
+
     @Query("SELECT * FROM installation_analytics_events WHERE eventId = :eventId")
     suspend fun getById(eventId: String): InstallationAnalyticsEventEntity?
 }

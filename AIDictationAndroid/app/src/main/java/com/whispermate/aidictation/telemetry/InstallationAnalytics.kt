@@ -88,7 +88,6 @@ class InstallationAnalytics internal constructor(
             if (started) return
             started = true
         }
-        appOpened()
         scope.launch {
             session.state.collect { state ->
                 if (state.isLoading) return@collect
@@ -199,6 +198,7 @@ class InstallationAnalytics internal constructor(
     }
 
     private suspend fun flush() = flushMutex.withLock {
+        events.deleteOlderThan(System.currentTimeMillis() - EVENT_RETENTION_MILLIS)
         val endpoint = endpoint ?: return@withLock
         while (true) {
             val state = session.state.value
@@ -255,5 +255,9 @@ class InstallationAnalytics internal constructor(
             synchronized(identityLock) { retryScheduled = false }
             flush()
         }
+    }
+
+    private companion object {
+        const val EVENT_RETENTION_MILLIS = 30L * 24 * 60 * 60 * 1_000
     }
 }

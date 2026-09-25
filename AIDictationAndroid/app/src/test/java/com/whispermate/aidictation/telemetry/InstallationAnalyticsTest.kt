@@ -62,6 +62,9 @@ class InstallationAnalyticsTest {
                 server.url("/api/installation-event").toString(), OkHttpClient(), scope
             )
             analytics.start()
+            assertEquals(0, database.installationAnalyticsDao().observePendingCount().first())
+            assertNull(server.takeRequest(300, TimeUnit.MILLISECONDS))
+            analytics.appOpened()
             val request = server.takeRequest(5, TimeUnit.SECONDS)
             assertNotNull(request)
             val event = JSONObject(request!!.body.readUtf8())
@@ -144,7 +147,7 @@ class InstallationAnalyticsTest {
             database.installationAnalyticsDao().insert(
                 InstallationAnalyticsEventEntity(
                     eventId, UUID.randomUUID().toString(), UUID.randomUUID().toString(),
-                    "app_opened", 0, null, 0
+                    "app_opened", 0, null, System.currentTimeMillis()
                 )
             )
             val analytics = InstallationAnalytics(
@@ -162,6 +165,43 @@ class InstallationAnalyticsTest {
             scope.cancel()
             database.close()
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun formerAccountEventsExpireAfterThirtyDays() = runBlocking {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        context.getSharedPreferences("installation_analytics", Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val oldEventId = UUID.randomUUID().toString()
+        val recentEventId = UUID.randomUUID().toString()
+        try {
+            val dao = database.installationAnalyticsDao()
+            val installationId = UUID.randomUUID().toString()
+            val anonymousId = UUID.randomUUID().toString()
+            val formerUserId = UUID.randomUUID().toString()
+            dao.insert(InstallationAnalyticsEventEntity(
+                oldEventId, installationId, anonymousId, "transcription_completed", 3,
+                formerUserId, System.currentTimeMillis() - TimeUnit.DAYS.toMillis(31)
+            ))
+            dao.insert(InstallationAnalyticsEventEntity(
+                recentEventId, installationId, anonymousId, "transcription_completed", 3,
+                formerUserId, System.currentTimeMillis()
+            ))
+            val analytics = InstallationAnalytics(
+                context, dao, FakeSession(), null, OkHttpClient(), scope
+            )
+            analytics.start()
+            withTimeout(5_000) {
+                while (dao.getById(oldEventId) != null) delay(20)
+            }
+            assertNotNull(dao.getById(recentEventId))
+        } finally {
+            scope.cancel()
+            database.close()
         }
     }
 
@@ -188,6 +228,7 @@ class InstallationAnalyticsTest {
                 scope
             )
             analytics.start()
+            analytics.appOpened()
 
             val anonymousRequest = server.takeRequest(5, TimeUnit.SECONDS)
             assertNotNull(anonymousRequest)

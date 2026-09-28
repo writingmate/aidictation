@@ -6,6 +6,7 @@ struct RecordingOverlayView: View {
     @ObservedObject private var history = HistoryManager.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isPermissionCalloutShown = false
     @State private var isHovering = false
     @State private var shouldShowExpandedPill = false
     @State private var shouldShowContent = false
@@ -327,16 +328,24 @@ struct RecordingOverlayView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("\(issue.message). Open System Settings")
-        .transition(permissionCalloutTransition)
-    }
-
-    /// The callout rises out of the pill like a tooltip from its anchor.
-    private var permissionCalloutTransition: AnyTransition {
-        guard !reduceMotion else { return .opacity }
-        let isAbovePill = manager.position == .bottom
-        return .opacity
-            .combined(with: .scale(scale: 0.9, anchor: isAbovePill ? .bottom : .top))
-            .combined(with: .offset(y: isAbovePill ? 8 : -8))
+        // The callout rises out of the pill like a tooltip from its anchor.
+        // Only drawing is animated, never layout: an animated size change makes
+        // the hosting view animate the overlay window's frame mid-layout, which
+        // AppKit aborts on.
+        .scaleEffect(
+            isPermissionCalloutShown || reduceMotion ? 1 : 0.9,
+            anchor: manager.position == .bottom ? .bottom : .top
+        )
+        .offset(y: isPermissionCalloutShown || reduceMotion ? 0 : (manager.position == .bottom ? 8 : -8))
+        .opacity(isPermissionCalloutShown ? 1 : 0)
+        .onAppear {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                isPermissionCalloutShown = true
+            }
+        }
+        .onDisappear {
+            isPermissionCalloutShown = false
+        }
     }
 
     // MARK: - Subviews

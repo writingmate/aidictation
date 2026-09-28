@@ -135,7 +135,6 @@ class OverlayWindowManager: ObservableObject {
         /// The permission callout is a nudge, not a banner to dismiss. It
         /// hides itself and comes back on the next blocked recording.
         static let permissionCalloutVisibleDuration: TimeInterval = 8
-        static let permissionCalloutAppearAnimation = Animation.spring(response: 0.32, dampingFraction: 0.78)
     }
 
     // MARK: - Published Properties (derived from overlayState for view compatibility)
@@ -490,9 +489,7 @@ class OverlayWindowManager: ObservableObject {
             return
         }
 
-        withAnimation(Constants.permissionCalloutAppearAnimation) {
-            permissionIssue = issue
-        }
+        permissionIssue = issue
         schedulePermissionCalloutHide()
         hoverCollapseResizeWorkItem?.cancel()
         keepIdleVisibleAfterCollapse = true
@@ -876,11 +873,6 @@ class OverlayWindowManager: ObservableObject {
         // Create SwiftUI view that observes this manager
         let contentView = RecordingOverlayView(manager: self)
         let hosting = NSHostingView(rootView: contentView)
-        // The manager owns the window frame (see positionStage). Left on, the
-        // hosting view also resizes the window to fit its content, and an
-        // animated content change makes it do so mid-layout, which AppKit
-        // aborts on ("window needs update constraints" loop).
-        hosting.sizingOptions = []
         hosting.frame = window.contentView?.bounds ?? .zero
         hosting.autoresizingMask = [.width, .height]
 

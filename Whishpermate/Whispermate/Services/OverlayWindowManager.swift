@@ -876,6 +876,11 @@ class OverlayWindowManager: ObservableObject {
         // Create SwiftUI view that observes this manager
         let contentView = RecordingOverlayView(manager: self)
         let hosting = NSHostingView(rootView: contentView)
+        // The manager owns the window frame (see positionStage). Left on, the
+        // hosting view also resizes the window to fit its content, and an
+        // animated content change makes it do so mid-layout, which AppKit
+        // aborts on ("window needs update constraints" loop).
+        hosting.sizingOptions = []
         hosting.frame = window.contentView?.bounds ?? .zero
         hosting.autoresizingMask = [.width, .height]
 

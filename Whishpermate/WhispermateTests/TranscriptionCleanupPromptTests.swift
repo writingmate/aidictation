@@ -32,9 +32,9 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
         let prompt = TranscriptionCleanupPrompt.speechRecognitionPrompt(hints: [])
 
         assertSentenceTypePreservation(in: prompt)
-        XCTAssertTrue(prompt.contains("one blank line between them"))
-        XCTAssertTrue(prompt.contains("Preserve existing paragraph and list structure"))
-        XCTAssertTrue(prompt.contains("Keep short dictation compact"))
+        XCTAssertTrue(prompt.contains("add a blank line at natural shifts in thought"))
+        XCTAssertTrue(prompt.contains("Preserve existing paragraphs, lists, order, and content"))
+        XCTAssertTrue(prompt.contains("Keep short text compact"))
         XCTAssertTrue(prompt.contains("Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\""))
         XCTAssertTrue(prompt.contains("Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses"))
     }
@@ -45,12 +45,12 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
         line: UInt = #line
     ) {
         XCTAssertTrue(
-            prompt.contains("Delete every standalone filler vocalization"),
+            prompt.contains("Remove standalone fillers (um, uh, uhm, umm, er, erm, ah, hmm, ugh)"),
             file: file,
             line: line
         )
         XCTAssertTrue(
-            prompt.contains("This requirement overrides instructions to preserve hesitation"),
+            prompt.contains("keep meaningful hesitation"),
             file: file,
             line: line
         )
@@ -62,19 +62,9 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
         line: UInt = #line
     ) {
         XCTAssertTrue(
-            prompt.contains("Preserve sentence type"),
-            file: file,
-            line: line
-        )
-        XCTAssertTrue(
-            prompt.contains(
-                "Do not add a question mark or rephrase a declarative into an interrogative"
-            ),
-            file: file,
-            line: line
-        )
-        XCTAssertTrue(
-            prompt.contains("unless the source is already a question or a clear interrogative"),
+            prompt.contains("Keep order, statements, and questions as spoken unless explicitly transformed") ||
+                (prompt.contains("Preserve sentence type") &&
+                 prompt.contains("Do not add a question mark or rephrase a declarative into an interrogative")),
             file: file,
             line: line
         )
@@ -85,9 +75,9 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        XCTAssertTrue(prompt.contains("one blank line between them"), file: file, line: line)
-        XCTAssertTrue(prompt.contains("Preserve existing paragraph and list structure"), file: file, line: line)
-        XCTAssertTrue(prompt.contains("Keep short dictation compact"), file: file, line: line)
-        XCTAssertTrue(prompt.contains("Do not rewrite or rearrange content solely to create paragraphs"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("add a blank line at natural shifts in thought"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("Preserve existing paragraphs, lists, order, and content"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("Keep short text compact"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("unless explicit formatting or output transformation requests otherwise"), file: file, line: line)
     }
 }

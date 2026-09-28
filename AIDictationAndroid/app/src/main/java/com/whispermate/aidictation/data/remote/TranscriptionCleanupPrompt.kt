@@ -46,6 +46,10 @@ private fun List<String>.cleanedSnapshot(): List<String> =
 
 /** One generic correction contract for server-side one-stage and client-side two-stage cleanup. */
 object TranscriptionCleanupPrompt {
+    // BEGIN GENERATED PARAGRAPH POLICY
+    private const val paragraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs."
+    // END GENERATED PARAGRAPH POLICY
+
     fun systemPrompt(context: CapturedTranscriptionCleanupContext): String = buildString {
         append(
             """
@@ -75,6 +79,8 @@ object TranscriptionCleanupPrompt {
             15. Output only corrected text, with no wrapper tags or preamble.
             """.trimIndent()
         )
+        append("\n\nPARAGRAPH FORMATTING:\n")
+        append(paragraphPolicy)
         appendReferenceBlock("personal_vocabulary", context.vocabulary)
         appendReferenceBlock("personal_phrases", context.phrases)
         appendReplacementBlock("explicit_replacements", context.explicitReplacements)

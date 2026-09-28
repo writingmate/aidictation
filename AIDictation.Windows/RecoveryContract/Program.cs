@@ -1754,6 +1754,8 @@ static class Contract
              snapshot.RecognitionPrompt.Contains("ship it", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("Transcribe the audio faithfully", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("including language switching within a sentence", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("one blank line between them", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("Preserve existing paragraph and list structure", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("Preserve sentence type", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains(
                  "Do not add a question mark or rephrase a declarative into an interrogative",
@@ -1765,6 +1767,9 @@ static class Contract
              snapshot.PostProcessingPrompt.Contains("ship the verified build", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Use sentence case.", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Preserve language switching", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("one blank line between them", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Preserve existing paragraph and list structure", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Do not rewrite or rearrange content solely to create paragraphs", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("never translate, transliterate", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Preserve sentence type", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains(

@@ -6,9 +6,12 @@ import Foundation
 public enum TranscriptionCleanupPrompt {
     /// Upper bound on how much on-screen text is quoted into the prompt.
     private static let screenContextCharacterLimit = 1_200
+    // BEGIN GENERATED PARAGRAPH POLICY
+    private static let paragraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs."
+    // END GENERATED PARAGRAPH POLICY
 
     private static let recognitionInstructions = """
-    Produce polished dictation text. Remove filler sounds such as "um", "uh", "er", and "ah". Remove false starts, stutters, accidental word repetitions, and explicit self-corrections, keeping the speaker's intended wording. Add natural punctuation, capitalization, paragraph breaks, and spacing. Preserve meaning, tone, uncertainty, slang, profanity, including language switching within a sentence. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative. Keep each supported word in its spoken language and script. Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses. Output only the transcript.
+    Produce polished dictation text. Remove filler sounds such as "um", "uh", "er", and "ah". Remove false starts, stutters, accidental word repetitions, and explicit self-corrections, keeping the speaker's intended wording. Add natural punctuation, capitalization, and spacing. Preserve meaning, tone, uncertainty, slang, profanity, including language switching within a sentence. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative. Keep each supported word in its spoken language and script. Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses. Output only the transcript.
     """
 
     /// Keeps the task contract stable while appending captured vocabulary and
@@ -18,8 +21,9 @@ public enum TranscriptionCleanupPrompt {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         }
-        guard !nonemptyHints.isEmpty else { return recognitionInstructions }
-        return recognitionInstructions + "\n\n" + nonemptyHints.joined(separator: "\n")
+        let instructions = recognitionInstructions + " " + paragraphPolicy
+        guard !nonemptyHints.isEmpty else { return instructions }
+        return instructions + "\n\n" + nonemptyHints.joined(separator: "\n")
     }
 
     public static func systemPrompt(
@@ -99,6 +103,8 @@ public enum TranscriptionCleanupPrompt {
         - This requirement overrides instructions to preserve hesitation, uncertainty, word choice, or source evidence. Never retain a listed filler as meaningful transcript content.
         - Do not delete a meaningful word merely because it contains the same letters as a filler.
         """
+
+        prompt += "\n\nPARAGRAPH FORMATTING:\n" + paragraphPolicy
 
         if hasSelectedContent {
             let action = transformsOutput ? "Transform" : "Correct"

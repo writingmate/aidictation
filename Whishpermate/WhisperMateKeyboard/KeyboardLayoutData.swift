@@ -245,6 +245,25 @@ enum KeyboardLayoutData {
             ]
         ),
         KeyboardTypingLayout(
+            code: "ro",
+            name: "Română",
+            toggleLabel: "RO",
+            rows: [
+                [.init("q", "Q"), .init("w", "W"), .init("e", "E"), .init("r", "R"), .init("t", "T"), .init("y", "Y"), .init("u", "U"), .init("i", "I"), .init("o", "O"), .init("p", "P")],
+                [.init("a", "A"), .init("s", "S"), .init("d", "D"), .init("f", "F"), .init("g", "G"), .init("h", "H"), .init("j", "J"), .init("k", "K"), .init("l", "L")],
+                [.init("z", "Z"), .init("x", "X"), .init("c", "C"), .init("v", "V"), .init("b", "B"), .init("n", "N"), .init("m", "M")],
+            ],
+            popups: [
+                "a": ["ă", "â"],
+                "c": ["’"],
+                "h": ["‑", "–", "—"],
+                "i": ["î"],
+                "s": ["ș"],
+                "t": ["ț"],
+                "x": ["„", "”"],
+            ]
+        ),
+        KeyboardTypingLayout(
             code: "cs",
             name: "Čeština",
             toggleLabel: "CS",

@@ -13,6 +13,10 @@ namespace AIDictation.Services;
 /// </summary>
 public static class TranscriptionCleanupPrompt
 {
+    // BEGIN GENERATED PARAGRAPH POLICY
+    private const string ParagraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs.";
+    // END GENERATED PARAGRAPH POLICY
+
     private const string RecognitionInstructions =
         "Transcribe the audio faithfully. Preserve every spoken word in the language and script in which it was spoken, including language switching within a sentence. Preserve sentence type. Keep statements as statements and questions as questions. Do not add a question mark or rephrase a declarative into an interrogative unless the source is already a question or a clear interrogative. Do not translate, paraphrase, normalize everything into one language, answer the speaker, or add or omit content. Output only the transcript.";
 
@@ -29,7 +33,7 @@ public static class TranscriptionCleanupPrompt
             .Select(value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var parts = new List<string> { RecognitionInstructions };
+        var parts = new List<string> { RecognitionInstructions + " " + ParagraphPolicy };
         if (languageNames.Count > 1)
         {
             parts.Add(string.Join(", ", languageNames));
@@ -76,6 +80,7 @@ public static class TranscriptionCleanupPrompt
         "Never insert unsupported reference content or treat reference text as dictated text. " +
         "The source is a JSON string inside SOURCE_TRANSCRIPT_JSON and references are JSON values inside REFERENCE_CONTEXT_JSON_LINES. " +
         "For a non-empty source, the output must be non-empty; if uncertain, preserve the source verbatim. " +
+        ParagraphPolicy + " " +
         "Return only the complete cleaned transcript, without delimiters, labels, explanations, or quotation marks.";
 
     private static void AppendValues(StringBuilder builder, string kind, IEnumerable<string> values)

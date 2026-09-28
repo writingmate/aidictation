@@ -16,6 +16,7 @@ public enum Language: String, CaseIterable, Identifiable {
     case italian = "it"
     case portuguese = "pt"
     case polish = "pl"
+    case romanian = "ro"
     case turkish = "tr"
     case dutch = "nl"
     case japanese = "ja"
@@ -46,6 +47,7 @@ public enum Language: String, CaseIterable, Identifiable {
              .italian,
              .portuguese,
              .polish,
+             .romanian,
              .dutch,
              .ukrainian,
              .czech,
@@ -82,6 +84,7 @@ public enum Language: String, CaseIterable, Identifiable {
         case .italian: return "Italian"
         case .portuguese: return "Portuguese"
         case .polish: return "Polish"
+        case .romanian: return "Romanian"
         case .turkish: return "Turkish"
         case .dutch: return "Dutch"
         case .japanese: return "Japanese"
@@ -112,6 +115,7 @@ public enum Language: String, CaseIterable, Identifiable {
         case .italian: return "🇮🇹"
         case .portuguese: return "🇵🇹"
         case .polish: return "🇵🇱"
+        case .romanian: return "🇷🇴"
         case .turkish: return "🇹🇷"
         case .dutch: return "🇳🇱"
         case .japanese: return "🇯🇵"

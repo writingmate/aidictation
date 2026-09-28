@@ -5,6 +5,7 @@ struct RecordingOverlayView: View {
     @ObservedObject var manager: OverlayWindowManager
     @ObservedObject private var history = HistoryManager.shared
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
     @State private var shouldShowExpandedPill = false
     @State private var shouldShowContent = false
@@ -326,7 +327,16 @@ struct RecordingOverlayView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("\(issue.message). Open System Settings")
-        .transition(.opacity.combined(with: .move(edge: .trailing)))
+        .transition(permissionCalloutTransition)
+    }
+
+    /// The callout rises out of the pill like a tooltip from its anchor.
+    private var permissionCalloutTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        let isAbovePill = manager.position == .bottom
+        return .opacity
+            .combined(with: .scale(scale: 0.9, anchor: isAbovePill ? .bottom : .top))
+            .combined(with: .offset(y: isAbovePill ? 8 : -8))
     }
 
     // MARK: - Subviews

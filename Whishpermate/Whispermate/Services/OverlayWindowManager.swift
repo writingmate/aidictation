@@ -135,6 +135,7 @@ class OverlayWindowManager: ObservableObject {
         /// The permission callout is a nudge, not a banner to dismiss. It
         /// hides itself and comes back on the next blocked recording.
         static let permissionCalloutVisibleDuration: TimeInterval = 8
+        static let permissionCalloutAppearAnimation = Animation.spring(response: 0.32, dampingFraction: 0.78)
     }
 
     // MARK: - Published Properties (derived from overlayState for view compatibility)
@@ -489,7 +490,9 @@ class OverlayWindowManager: ObservableObject {
             return
         }
 
-        permissionIssue = issue
+        withAnimation(Constants.permissionCalloutAppearAnimation) {
+            permissionIssue = issue
+        }
         schedulePermissionCalloutHide()
         hoverCollapseResizeWorkItem?.cancel()
         keepIdleVisibleAfterCollapse = true

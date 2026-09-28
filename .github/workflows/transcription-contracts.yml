@@ -11,7 +11,9 @@ on:
       - 'scripts/validate_transcription_cleanup_prompt.swift'
       - 'scripts/validate_cross_platform_soniox_defaults.py'
       - 'scripts/transcription_paragraph_policy.txt'
-      - 'scripts/sync_transcription_paragraph_policy.py'
+      - 'scripts/transcription_cleanup_policy.txt'
+      - 'scripts/transcription_recognition_policy.txt'
+      - 'scripts/sync_transcription_prompts.py'
       - 'AGENTS.md'
       - '.github/workflows/transcription-contracts.yml'
 
@@ -35,8 +37,8 @@ jobs:
       - name: Validate transcription prompt routing
         run: python3 scripts/validate_transcription_prompt_routing.py
 
-      - name: Validate shared paragraph policy
-        run: python3 scripts/sync_transcription_paragraph_policy.py --check
+      - name: Validate shared transcription prompts
+        run: python3 scripts/sync_transcription_prompts.py --check
 
       - name: Validate Soniox cloud defaults
         run: python3 scripts/validate_cross_platform_soniox_defaults.py

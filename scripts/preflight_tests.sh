@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$(cd "$SCRIPT_DIR/../Whishpermate" && pwd)/Whispermate.xcodeproj"
 
 python3 "$SCRIPT_DIR/validate_cross_platform_soniox_defaults.py"
-python3 "$SCRIPT_DIR/sync_transcription_paragraph_policy.py" --check
+python3 "$SCRIPT_DIR/sync_transcription_prompts.py" --check
 
 echo "==> Running WhispermateTests"
 xcodebuild test \

@@ -1760,7 +1760,7 @@ static class Contract
              snapshot.RecognitionPrompt.Contains(
                  "Do not add a question mark or rephrase a declarative into an interrogative",
                  StringComparison.Ordinal) &&
-             snapshot.RecognitionPrompt.Contains("Do not translate, paraphrase", StringComparison.Ordinal),
+             snapshot.RecognitionPrompt.Contains("Do not translate, summarize, paraphrase", StringComparison.Ordinal),
             "one-stage recognition receives the shared fidelity contract and bare speech hints");
         True(snapshot.PostProcessingPrompt?.Contains("REFERENCE_CONTEXT_JSON_LINES", StringComparison.Ordinal) == true &&
              snapshot.PostProcessingPrompt.Contains("WhisperMate", StringComparison.Ordinal) &&
@@ -1770,7 +1770,7 @@ static class Contract
              snapshot.PostProcessingPrompt.Contains("one blank line between them", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Preserve existing paragraph and list structure", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Do not rewrite or rearrange content solely to create paragraphs", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("never translate, transliterate", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Never translate, transliterate", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Preserve sentence type", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains(
                  "Do not add a question mark or rephrase a declarative into an interrogative",

@@ -14,7 +14,7 @@ namespace AIDictation.Services;
 public static class TranscriptionCleanupPrompt
 {
     // BEGIN GENERATED PARAGRAPH POLICY
-    private const string ParagraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs.";
+    private const string ParagraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs unless an explicit formatting instruction or output transformation requests a different structure.";
     // END GENERATED PARAGRAPH POLICY
 
     private const string RecognitionInstructions =

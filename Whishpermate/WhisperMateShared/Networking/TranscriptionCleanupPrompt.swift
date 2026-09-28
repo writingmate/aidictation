@@ -7,7 +7,7 @@ public enum TranscriptionCleanupPrompt {
     /// Upper bound on how much on-screen text is quoted into the prompt.
     private static let screenContextCharacterLimit = 1_200
     // BEGIN GENERATED PARAGRAPH POLICY
-    private static let paragraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs."
+    private static let paragraphPolicy = "For longer dictation, separate natural shifts in thought into paragraphs with one blank line between them. Preserve existing paragraph and list structure, source order, and all supported content. Keep short dictation compact. Do not rewrite or rearrange content solely to create paragraphs unless an explicit formatting instruction or output transformation requests a different structure."
     // END GENERATED PARAGRAPH POLICY
 
     private static let recognitionInstructions = """

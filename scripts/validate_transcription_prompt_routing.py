@@ -273,11 +273,7 @@ for platform, source in (("macOS", mac_client_source), ("shared/iOS", shared_cli
         f"{platform} Meetings cleanup lost the generic prompt contract or context",
     )
 
-SENTENCE_TYPE_RULE = (
-    "Do not add a question mark or rephrase a declarative into an interrogative"
-)
-SENTENCE_TYPE_GUARD = "unless the source is already a question or a clear interrogative"
-SENTENCE_TYPE_LABEL = "Preserve sentence type"
+SENTENCE_TYPE_RULE = "Keep order, statements, and questions as spoken unless explicitly transformed"
 prompt_sources = (
     (
         "Apple shared cleanup",
@@ -295,15 +291,13 @@ prompt_sources = (
 )
 for platform, path in prompt_sources:
     text = path.read_text()
-    for requirement in (SENTENCE_TYPE_LABEL, SENTENCE_TYPE_RULE, SENTENCE_TYPE_GUARD):
+    for requirement in (SENTENCE_TYPE_RULE, "through its final word"):
         require(
             requirement in text,
             f"{platform} prompt lost sentence-type contract: {requirement}",
         )
     require(
-        "Never append invented words" in text
-        or "Do not summarize, paraphrase, shorten, reorder, continue, complete, answer, invent"
-        in text,
+        "Never answer, invent, or repeat content" in text,
         f"{platform} prompt lost anti-invention wording",
     )
 

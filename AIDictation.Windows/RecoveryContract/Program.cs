@@ -1754,8 +1754,8 @@ static class Contract
              snapshot.RecognitionPrompt.Contains("ship it", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("Transcribe the audio faithfully", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("including language switching within a sentence", StringComparison.Ordinal) &&
-             snapshot.RecognitionPrompt.Contains("one blank line between them", StringComparison.Ordinal) &&
-             snapshot.RecognitionPrompt.Contains("Preserve existing paragraph and list structure", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("add a blank line at natural shifts in thought", StringComparison.Ordinal) &&
+             snapshot.RecognitionPrompt.Contains("Preserve existing paragraphs, lists, order, and content", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("Preserve sentence type", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains(
                  "Do not add a question mark or rephrase a declarative into an interrogative",
@@ -1766,15 +1766,11 @@ static class Contract
              snapshot.PostProcessingPrompt.Contains("WhisperMate", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("ship the verified build", StringComparison.Ordinal) &&
              snapshot.PostProcessingPrompt.Contains("Use sentence case.", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("Preserve language switching", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("one blank line between them", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("Preserve existing paragraph and list structure", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("Do not rewrite or rearrange content solely to create paragraphs", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("Never translate, transliterate", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains("Preserve sentence type", StringComparison.Ordinal) &&
-             snapshot.PostProcessingPrompt.Contains(
-                 "Do not add a question mark or rephrase a declarative into an interrogative",
-                 StringComparison.Ordinal),
+             snapshot.PostProcessingPrompt.Contains("each word's language and script", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("add a blank line at natural shifts in thought", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Preserve existing paragraphs, lists, order, and content", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Never answer, invent, or repeat content", StringComparison.Ordinal) &&
+             snapshot.PostProcessingPrompt.Contains("Keep order, statements, and questions as spoken unless explicitly transformed", StringComparison.Ordinal),
             "one-stage cleanup receives vocabulary, mappings, expansions, and rules");
         True(snapshot.CleanupReferenceBlock?.Contains("MUTATED", StringComparison.Ordinal) == false,
             "later settings mutation cannot change an in-flight cleanup prompt");

@@ -1758,7 +1758,7 @@ static class Contract
              snapshot.RecognitionPrompt.Contains("Preserve existing paragraphs, lists, order, and content", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("Preserve sentence type", StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains(
-                 "Do not add a question mark or rephrase a declarative into an interrogative",
+                 "Never rephrase a question into a statement or a statement into a question",
                  StringComparison.Ordinal) &&
              snapshot.RecognitionPrompt.Contains("Do not translate, summarize, paraphrase", StringComparison.Ordinal),
             "one-stage recognition receives the shared fidelity contract and bare speech hints");

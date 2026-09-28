@@ -11,6 +11,7 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
 
         assertMandatoryFillerPolicy(in: prompt)
         assertSentenceTypePreservation(in: prompt)
+        assertParagraphFormatting(in: prompt)
     }
 
     func testTransformedOutputRequiresStandaloneFillerDeletion() {
@@ -24,12 +25,16 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
 
         assertMandatoryFillerPolicy(in: prompt)
         assertSentenceTypePreservation(in: prompt)
+        assertParagraphFormatting(in: prompt)
     }
 
     func testRecognitionInstructionsPreserveSentenceType() {
         let prompt = TranscriptionCleanupPrompt.speechRecognitionPrompt(hints: [])
 
         assertSentenceTypePreservation(in: prompt)
+        XCTAssertTrue(prompt.contains("one blank line between them"))
+        XCTAssertTrue(prompt.contains("Preserve existing paragraph and list structure"))
+        XCTAssertTrue(prompt.contains("Keep short dictation compact"))
         XCTAssertTrue(prompt.contains("Remove filler sounds such as \"um\", \"uh\", \"er\", and \"ah\""))
         XCTAssertTrue(prompt.contains("Do not translate, summarize, paraphrase, answer the speaker, invent content, or omit meaningful clauses"))
     }
@@ -73,5 +78,16 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    private func assertParagraphFormatting(
+        in prompt: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(prompt.contains("one blank line between them"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("Preserve existing paragraph and list structure"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("Keep short dictation compact"), file: file, line: line)
+        XCTAssertTrue(prompt.contains("Do not rewrite or rearrange content solely to create paragraphs"), file: file, line: line)
     }
 }

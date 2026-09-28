@@ -127,6 +127,7 @@ internal val OnboardingSupportedLanguageCodes = listOf(
     "it",
     "pt",
     "pl",
+    "ro",
     "tr",
     "nl",
     "ja",

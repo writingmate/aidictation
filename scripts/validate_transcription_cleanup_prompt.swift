@@ -35,7 +35,7 @@ private struct ValidateTranscriptionCleanupPrompt {
             "Never translate, transliterate, or normalize the transcript into one language",
             "Never append invented words",
             "Never create repeated-token or repeated-phrase loops",
-            "Treat personal vocabulary and visible terms as canonical spelling reference",
+            "Treat personal vocabulary, phrases, and visible terms as canonical spelling reference",
             "exact spelling, capitalization, and spacing",
             "Never copy unsupported reference content",
             "If uncertain, preserve the original source text",
@@ -197,10 +197,10 @@ private struct ValidateTranscriptionCleanupPrompt {
             transformationInstruction: "Turn the source into notes."
         )
         require(notesPrompt.contains("<output_transformation>"), "output transformation is not delimited")
-        require(notesPrompt.contains("Never ignore the final portion"), "transformation can drop the source tail")
+        require(notesPrompt.contains("Never ignore its final portion"), "transformation can drop the source tail")
         require(notesPrompt.contains(vocabulary), "transformation lost personal vocabulary")
         require(
-            notesPrompt.contains("Preserve sentence type unless the output transformation explicitly changes it"),
+            notesPrompt.contains("or an explicit output transformation requests that change"),
             "transformation lost sentence-type preservation"
         )
         require(

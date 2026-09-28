@@ -31,6 +31,7 @@ LANGUAGES = [
     ("pt", "Português", "PT", "qwerty", "pt"),
     ("nl", "Nederlands", "NL", "qwerty", None),  # hand-authored popups below
     ("pl", "Polski", "PL", "qwerty", "pl"),
+    ("ro", "Română", "RO", "qwerty", "ro"),
     ("cs", "Čeština", "CS", "qwertz", "cs"),
     ("sv", "Svenska", "SV", "swedish_finnish", "sv"),
     ("fi", "Suomi", "FI", "swedish_finnish", "fi"),

@@ -57,13 +57,42 @@ if [[ "$AIDICTATION_BUILD_ONLY" == "1" ]]; then
   exit 0
 fi
 
+# Every worktree builds its own copy, but they all share one bundle ID. When
+# System Settings or a permission flow relaunches the app by bundle ID, macOS
+# can pick any registered copy. Install to one fixed path and unregister the
+# rest so there is only ever one dev app.
+AIDICTATION_INSTALLED_APP="${AIDICTATION_DEV_INSTALL_PATH:-$HOME/Applications/$AIDICTATION_DEV_PRODUCT_NAME.app}"
+AIDICTATION_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
 while IFS= read -r AIDICTATION_DEV_PID; do
   [[ -n "$AIDICTATION_DEV_PID" ]] && kill "$AIDICTATION_DEV_PID" 2>/dev/null || true
-done < <(pgrep -f "$AIDICTATION_APP/Contents/MacOS/$AIDICTATION_DEV_PRODUCT_NAME" || true)
-
-open -n "$AIDICTATION_APP"
+done < <(pgrep -f "$AIDICTATION_DEV_PRODUCT_NAME.app/Contents/MacOS/$AIDICTATION_DEV_PRODUCT_NAME" || true)
 sleep 1
 
+mkdir -p "$(dirname "$AIDICTATION_INSTALLED_APP")"
+rm -rf "$AIDICTATION_INSTALLED_APP"
+ditto "$AIDICTATION_APP" "$AIDICTATION_INSTALLED_APP"
+
+while IFS= read -r AIDICTATION_STALE_APP; do
+  [[ -n "$AIDICTATION_STALE_APP" && "$AIDICTATION_STALE_APP" != "$AIDICTATION_INSTALLED_APP" ]] || continue
+  "$AIDICTATION_LSREGISTER" -u "$AIDICTATION_STALE_APP" 2>/dev/null || true
+done < <("$AIDICTATION_LSREGISTER" -dump 2>/dev/null \
+  | sed -n "s|^path: *\(.*/$AIDICTATION_DEV_PRODUCT_NAME\.app\) (0x[0-9a-f]*)$|\1|p" \
+  | sort -u)
+# Xcode registers each build product with LaunchServices, so a copy left in
+# any worktree's DerivedData can come back as a relaunch target. Remove them;
+# every worktree rebuilds its product on the next run of this script.
+for AIDICTATION_BUILT_APP in "$HOME"/Library/Developer/Xcode/DerivedData/AIDictationDev-*/Build/Products/Debug/"$AIDICTATION_DEV_PRODUCT_NAME".app; do
+  [[ -d "$AIDICTATION_BUILT_APP" ]] || continue
+  "$AIDICTATION_LSREGISTER" -u "$AIDICTATION_BUILT_APP" 2>/dev/null || true
+  rm -rf "$AIDICTATION_BUILT_APP"
+done
+"$AIDICTATION_LSREGISTER" -f "$AIDICTATION_INSTALLED_APP"
+
+open "$AIDICTATION_INSTALLED_APP"
+sleep 1
+
+AIDICTATION_APP="$AIDICTATION_INSTALLED_APP"
 AIDICTATION_RUNNING_PID="$(pgrep -f "$AIDICTATION_APP/Contents/MacOS/$AIDICTATION_DEV_PRODUCT_NAME" | head -n 1 || true)"
 if [[ -z "$AIDICTATION_RUNNING_PID" ]]; then
   echo "Developer app exited during launch." >&2

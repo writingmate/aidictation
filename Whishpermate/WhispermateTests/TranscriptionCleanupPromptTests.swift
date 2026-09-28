@@ -62,9 +62,10 @@ final class TranscriptionCleanupPromptTests: XCTestCase {
         line: UInt = #line
     ) {
         XCTAssertTrue(
-            prompt.contains("Keep order, statements, and questions as spoken unless explicitly transformed") ||
+            (prompt.contains("Keep order, statements, and questions as spoken unless explicitly transformed") &&
+                 prompt.contains("after a false start, keep the speaker's final wording")) ||
                 (prompt.contains("Preserve sentence type") &&
-                 prompt.contains("Do not add a question mark or rephrase a declarative into an interrogative")),
+                 prompt.contains("Never rephrase a question into a statement or a statement into a question")),
             file: file,
             line: line
         )

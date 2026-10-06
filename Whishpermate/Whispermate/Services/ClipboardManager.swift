@@ -36,6 +36,16 @@ class ClipboardManager {
         insertText(text, addBoundarySpaces: true)
     }
 
+    /// Put text on the clipboard and leave it there. A pending restore from an
+    /// earlier paste is cancelled so it cannot bring back older contents.
+    @discardableResult
+    static func copy(_ text: String) -> Bool {
+        cancelClipboardRestore()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        return pasteboard.setString(text, forType: .string)
+    }
+
     /// Replace the current selection exactly, without adding boundary spaces.
     static func replaceSelectionAndPaste(_ text: String) {
         DebugLog.info("========================================", context: "ClipboardManager")

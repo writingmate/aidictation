@@ -36,9 +36,16 @@ require(
     and 'model = "soniox/stt-async-v5"' in APP_STATE,
     "AI Dictation retranscription is not pinned to Soniox v5 batch",
 )
+RETRANSCRIBE_IN_CLOUD = APP_STATE.split("func retranscribeInCloud(", 1)[-1].split("\n    }\n", 1)[0]
 require(
-    "onlineProvider: .soniox" in HISTORY,
+    "AppState.shared.retranscribeInCloud(" in HISTORY
+    and "mode: .cloud" in RETRANSCRIBE_IN_CLOUD
+    and "onlineProvider: .soniox" in RETRANSCRIBE_IN_CLOUD,
     "History re-transcription does not route directly to AI Dictation",
+)
+require(
+    "retranscribeInCloud(recording: recording, copyResultToClipboard: true)" in APP_STATE,
+    "menu bar Retry Last Transcription does not use History's re-transcription route",
 )
 require("RetranscriptionRouteMenu" not in HISTORY, "History still exposes a provider switch")
 require('Button("ChatGPT")' not in HISTORY, "History still exposes ChatGPT transcription")

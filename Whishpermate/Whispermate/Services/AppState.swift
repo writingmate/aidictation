@@ -68,6 +68,8 @@ class AppState: ObservableObject {
     private var capturePreparationTask: (attemptID: UUID, task: Task<Void, Never>)?
     private var captureDeadlineTask: Task<Void, Never>?
     private var retranscriptionAttemptIDs: [UUID: UUID] = [:]
+    /// The re-transcription whose text goes on the clipboard when it succeeds.
+    private var copyResultRecordingID: UUID?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingPreparationStoreIDs: [UUID: UUID] = [:]
     private var terminationBarrierActive = false
@@ -1294,11 +1296,72 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Re-transcribe a saved recording the way History's Re-transcribe does.
+    func retranscribeInCloud(recording: Recording, copyResultToClipboard: Bool = false) {
+        retranscribe(
+            recording: recording,
+            mode: .cloud,
+            onlineProvider: .soniox,
+            copyResultToClipboard: copyResultToClipboard
+        )
+    }
+
+    /// No recording, transcription, or History change is running, so a
+    /// re-transcription can start now.
+    var canStartRetranscription: Bool {
+        recordingState == .idle
+            && retranscriptionAttemptIDs.isEmpty
+            && !terminationBarrierActive
+            && !isHistoryMutationInProgress
+    }
+
+    /// State of the menu bar's Retry and Copy Last Transcription items.
+    func lastTranscriptionMenuState() -> LastTranscriptionMenuState {
+        let newest = LastTranscriptionMenuState.newest(
+            of: historyManager.recordings.map {
+                LastTranscriptionMenuState.Candidate(
+                    recordingID: $0.id,
+                    timestamp: $0.timestamp,
+                    transcription: $0.transcription,
+                    isInProgress: $0.isInProgress,
+                    canRetranscribe: $0.canRetranscribe
+                )
+            }
+        )
+        let audioIsAvailable = newest
+            .flatMap { historyManager.recording(id: $0.recordingID) }
+            .map { FileManager.default.fileExists(atPath: $0.audioFileURL.path) }
+            ?? false
+        return LastTranscriptionMenuState(
+            newest: newest,
+            audioIsAvailable: audioIsAvailable,
+            appCanStartRetry: canStartRetranscription
+        )
+    }
+
+    /// Re-transcribe the newest recording and copy its text when it finishes.
+    func retryLastTranscription() {
+        let state = lastTranscriptionMenuState()
+        guard state.canRetry,
+              let recordingID = state.recordingID,
+              let recording = historyManager.recording(id: recordingID)
+        else { return }
+        retranscribeInCloud(recording: recording, copyResultToClipboard: true)
+    }
+
+    /// Copy the newest recording's text. Returns false when there is none.
+    @discardableResult
+    func copyLastTranscription() -> Bool {
+        guard let text = lastTranscriptionMenuState().copyText else { return false }
+        return ClipboardManager.copy(text)
+    }
+
     /// Re-transcribe a recording from its saved audio file
     func retranscribe(
         recording: Recording,
         mode: TranscriptionMode? = nil,
-        onlineProvider: TranscriptionProvider? = nil
+        onlineProvider: TranscriptionProvider? = nil,
+        copyResultToClipboard: Bool = false
     ) {
         DebugLog.info("🔄 AppState.retranscribe(id: \(recording.id))", context: "AppState")
 
@@ -1311,6 +1374,7 @@ class AppState: ObservableObject {
         let attemptID = UUID()
         guard historyManager.registerActiveRecording(id: recording.id) else { return }
         retranscriptionAttemptIDs[recording.id] = attemptID
+        copyResultRecordingID = copyResultToClipboard ? recording.id : nil
 
         var retrying = recording
         retrying.retryCount += 1
@@ -1542,6 +1606,9 @@ class AppState: ObservableObject {
         transcriptionTasks.removeValue(forKey: recording.id)
         retranscriptionAttemptIDs.removeValue(forKey: recording.id)
         historyManager.unregisterActiveRecording(id: recording.id)
+        if copyResultRecordingID == recording.id {
+            copyResultRecordingID = nil
+        }
 
         if activeRecordingID == recording.id {
             let nativeCaptureAttemptID = recordingAttemptID
@@ -1609,6 +1676,7 @@ class AppState: ObservableObject {
         for task in transcriptionTasks.values { task.cancel() }
         transcriptionTasks.removeAll()
         retranscriptionAttemptIDs.removeAll()
+        copyResultRecordingID = nil
         for recording in cachedRecordings {
             historyManager.unregisterActiveRecording(id: recording.id)
         }
@@ -1987,6 +2055,7 @@ class AppState: ObservableObject {
         activeCaptureLease = nil
         activeTranscriptionSnapshot = nil
         retranscriptionAttemptIDs.removeAll()
+        copyResultRecordingID = nil
         transcriptionTasks.removeAll()
         recordingState = .idle
         isProcessing = false
@@ -2432,6 +2501,10 @@ class AppState: ObservableObject {
         } else {
             retranscriptionAttemptIDs.removeValue(forKey: recording.id)
             historyManager.unregisterActiveRecording(id: recording.id)
+            if copyResultRecordingID == recording.id {
+                copyResultRecordingID = nil
+                ClipboardManager.copy(trimmed)
+            }
         }
         NotificationCenter.default.post(name: .recordingCompleted, object: success)
 
@@ -2471,6 +2544,9 @@ class AppState: ObservableObject {
         } else {
             retranscriptionAttemptIDs.removeValue(forKey: recordingID)
             historyManager.unregisterActiveRecording(id: recordingID)
+            if copyResultRecordingID == recordingID {
+                copyResultRecordingID = nil
+            }
         }
         DictationActivityAssertion.release()
         AudioRecorder.shared.prewarmEngine()
@@ -2548,6 +2624,9 @@ class AppState: ObservableObject {
         transcriptionTasks.removeValue(forKey: recording.id)
         retranscriptionAttemptIDs.removeValue(forKey: recording.id)
         historyManager.unregisterActiveRecording(id: recording.id)
+        if copyResultRecordingID == recording.id {
+            copyResultRecordingID = nil
+        }
     }
 
     private func isCurrentAttempt(

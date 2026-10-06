@@ -41,11 +41,7 @@ enum AIApp: String, CaseIterable, Identifiable {
 }
 
 private func retranscribeWithAIDictation(_ recording: Recording) {
-    AppState.shared.retranscribe(
-        recording: recording,
-        mode: .cloud,
-        onlineProvider: .soniox
-    )
+    AppState.shared.retranscribeInCloud(recording: recording)
 }
 
 /// Master-detail view that combines history list with recording interface

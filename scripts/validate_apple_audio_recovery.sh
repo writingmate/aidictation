@@ -78,6 +78,13 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  Whishpermate/Whispermate/Models/OfflineRetranscribeOption.swift \
+  scripts/validate_macos_offline_retranscribe.swift \
+  -o "$work_dir/validate-macos-offline-retranscribe"
+"$work_dir/validate-macos-offline-retranscribe"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Services/RealtimeTranscriptionSupport.swift \
   Whishpermate/Whispermate/Services/RealtimeTranscriptionFinishGate.swift \
   scripts/validate_macos_realtime_finalization.swift \

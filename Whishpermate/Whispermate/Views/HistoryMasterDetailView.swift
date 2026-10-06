@@ -172,6 +172,7 @@ private struct HistoryDetailPane: View {
 struct HistorySidebarView: View {
     @ObservedObject var historyManager: HistoryManager
     @ObservedObject private var appState = AppState.shared
+    @ObservedObject private var offlineModel = ParakeetTranscriptionService.shared
     @Binding var selectedRecordingID: Recording.ID?
     @State private var searchText = ""
     @State private var operationError: String?
@@ -244,8 +245,15 @@ struct HistorySidebarView: View {
                     }
                     .disabled(recording.transcription == nil)
 
-                    Button {
-                        retranscribeWithAIDictation(recording)
+                    Menu {
+                        Button(OfflineRetranscribeOption.onlineTitle) {
+                            retranscribeWithAIDictation(recording)
+                        }
+                        let offline = appState.offlineRetranscribeOption
+                        Button(offline.title) {
+                            appState.retranscribeOffline(recording: recording)
+                        }
+                        .disabled(!offline.isEnabled)
                     } label: {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     }
@@ -403,6 +411,7 @@ struct RecordingDetailView: View {
     @State private var showCopiedNotification = false
     @StateObject private var audioPlayer = AudioPlayerModel()
     @ObservedObject private var appState = AppState.shared
+    @ObservedObject private var offlineModel = ParakeetTranscriptionService.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -496,11 +505,21 @@ struct RecordingDetailView: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Button {
-                        retranscribeWithAIDictation(recording)
+                    Menu {
+                        Button(OfflineRetranscribeOption.onlineTitle) {
+                            retranscribeWithAIDictation(recording)
+                        }
+                        let offline = appState.offlineRetranscribeOption
+                        Button(offline.title) {
+                            appState.retranscribeOffline(recording: recording)
+                        }
+                        .disabled(!offline.isEnabled)
                     } label: {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
+                    } primaryAction: {
+                        retranscribeWithAIDictation(recording)
                     }
+                    .help("Re-transcribe online. Use the arrow to re-transcribe offline on this Mac.")
                     .disabled(
                         !recording.canRetranscribe ||
                         appState.isHistoryMutationInProgress ||

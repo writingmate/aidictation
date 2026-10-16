@@ -5,30 +5,60 @@ import WhisperMateShared
 internal import Combine
 import AVFoundation
 
-enum OverlayPermissionIssue: Equatable {
-    case microphone
-    case accessibility
+/// Something that kept a recording from starting, shown as a callout beside
+/// the overlay pill. Permissions are fixed in System Settings; a capture
+/// failure is fixed in the app's own Sound settings (pick another microphone).
+enum OverlayIssue: Equatable {
+    case microphonePermission
+    case accessibilityPermission
+    /// Native capture refused to start. `detail` is the full user-facing
+    /// reason; the callout shows a short title and reads the detail aloud.
+    case captureFailed(detail: String)
 
     var message: String {
         switch self {
-        case .microphone:
+        case .microphonePermission:
             return "Microphone access is off"
-        case .accessibility:
+        case .accessibilityPermission:
             return "Accessibility access is off"
+        case .captureFailed:
+            return "Microphone didn’t start"
         }
     }
 
     var iconName: String {
         switch self {
-        case .microphone:
+        case .microphonePermission:
             return "mic.slash.fill"
-        case .accessibility:
+        case .accessibilityPermission:
             return "hand.raised.fill"
+        case .captureFailed:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .microphonePermission, .accessibilityPermission:
+            return "\(message). Open System Settings"
+        case let .captureFailed(detail):
+            return "\(detail) Open microphone settings"
+        }
+    }
+
+    /// Longer text shown beside the callout while hovered, when the title
+    /// alone does not say what to do.
+    var hoverDetail: String? {
+        switch self {
+        case .microphonePermission, .accessibilityPermission:
+            return nil
+        case let .captureFailed(detail):
+            return detail
         }
     }
 }
 
-enum OverlayPermissionCalloutMetrics {
+enum OverlayCalloutMetrics {
     /// Wide enough for the longest message plus both icons. The measured line
     /// is ~149pt ("Accessibility access is off"), and the leading icon, the
     /// trailing cog, the gaps, and the padding take ~70pt more.
@@ -132,16 +162,16 @@ class OverlayWindowManager: ObservableObject {
         static let stageHeight: CGFloat =
             activeStateHeight + (verticalPaddingActive * 2) + (edgeMargin * 2)
         static let hoverCollapseResizeDelay: TimeInterval = 0.18
-        /// The permission callout is a nudge, not a banner to dismiss. It
-        /// hides itself and comes back on the next blocked recording.
-        static let permissionCalloutVisibleDuration: TimeInterval = 8
+        /// The issue callout is a nudge, not a banner to dismiss. It hides
+        /// itself and comes back on the next blocked recording.
+        static let issueCalloutVisibleDuration: TimeInterval = 8
     }
 
     // MARK: - Published Properties (derived from overlayState for view compatibility)
 
     @Published var isRecording = false
     @Published var isProcessing = false
-    @Published private(set) var permissionIssue: OverlayPermissionIssue?
+    @Published private(set) var issue: OverlayIssue?
 
     @Published var audioLevel: Float = 0.0 {
         didSet {
@@ -249,7 +279,7 @@ class OverlayWindowManager: ObservableObject {
     private var frequencyBandsCancellable: AnyCancellable?
     private var suppressHoverExpansionUntilMouseExit = false
     private var keepIdleVisibleAfterCollapse = false
-    private var permissionCalloutHideWorkItem: DispatchWorkItem?
+    private var issueCalloutHideWorkItem: DispatchWorkItem?
 
     // MARK: - Initialization
 
@@ -414,24 +444,45 @@ class OverlayWindowManager: ObservableObject {
     @discardableResult
     func showMissingPermissionIfNeeded() -> Bool {
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-            showPermissionIssue(.microphone)
+            showIssue(.microphonePermission)
             return true
         }
 
         if !AXIsProcessTrusted() {
-            showPermissionIssue(.accessibility)
+            showIssue(.accessibilityPermission)
             return true
         }
 
-        clearPermissionIssue()
+        clearIssue()
         return false
     }
 
-    func setUpPermission() {
-        guard let permissionIssue else { return }
+    /// Tells the user why the recording they just asked for did not start.
+    /// Without this the pill flashed for a second and went back to idle with
+    /// no explanation, which read as "the app is broken".
+    func showCaptureFailure(_ detail: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.showCaptureFailure(detail)
+            }
+            return
+        }
+        showIssue(.captureFailed(detail: detail))
+    }
 
-        switch permissionIssue {
-        case .microphone:
+    /// The click on the callout. Permissions go to System Settings; a capture
+    /// failure opens the app's Sound settings where another microphone can be
+    /// picked.
+    func resolveIssue() {
+        guard let issue else { return }
+
+        switch issue {
+        case .captureFailed:
+            clearIssue()
+            NotificationCenter.default.post(name: .openAudioSettings, object: nil)
+            showMainSettingsWindow()
+
+        case .microphonePermission:
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .notDetermined:
                 AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
@@ -445,19 +496,19 @@ class OverlayWindowManager: ObservableObject {
                             return
                         }
                         self.initializeAudioObservers()
-                        self.refreshPermissionIssue()
+                        self.refreshIssue()
                     }
                 }
             case .denied, .restricted:
                 PrivacyPermissionFlowManager.shared.open(.microphone)
             case .authorized:
                 initializeAudioObservers()
-                refreshPermissionIssue()
+                refreshIssue()
             @unknown default:
                 PrivacyPermissionFlowManager.shared.open(.microphone)
             }
 
-        case .accessibility:
+        case .accessibilityPermission:
             PrivacyPermissionFlowManager.shared.open(
                 .accessibility,
                 promptForAccessibilityTrust: true,
@@ -466,31 +517,31 @@ class OverlayWindowManager: ObservableObject {
         }
     }
 
-    /// Retires the callout on its own after a few seconds. The permission is
-    /// still missing, so the next blocked recording shows it again.
-    private func schedulePermissionCalloutHide() {
-        permissionCalloutHideWorkItem?.cancel()
+    /// Retires the callout on its own after a few seconds. If the cause is
+    /// still there, the next blocked recording shows it again.
+    private func scheduleIssueCalloutHide() {
+        issueCalloutHideWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.permissionIssue != nil else { return }
-            self.clearPermissionIssue()
+            guard let self, self.issue != nil else { return }
+            self.clearIssue()
         }
-        permissionCalloutHideWorkItem = workItem
+        issueCalloutHideWorkItem = workItem
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + Constants.permissionCalloutVisibleDuration,
+            deadline: .now() + Constants.issueCalloutVisibleDuration,
             execute: workItem
         )
     }
 
-    private func showPermissionIssue(_ issue: OverlayPermissionIssue) {
-        guard permissionIssue != issue else {
+    private func showIssue(_ newIssue: OverlayIssue) {
+        guard issue != newIssue else {
             ensureWindowExists()
             overlayWindow?.orderFrontRegardless()
-            schedulePermissionCalloutHide()
+            scheduleIssueCalloutHide()
             return
         }
 
-        permissionIssue = issue
-        schedulePermissionCalloutHide()
+        issue = newIssue
+        scheduleIssueCalloutHide()
         hoverCollapseResizeWorkItem?.cancel()
         keepIdleVisibleAfterCollapse = true
         ensureWindowExists()
@@ -498,23 +549,23 @@ class OverlayWindowManager: ObservableObject {
         overlayWindow?.orderFrontRegardless()
     }
 
-    private func clearPermissionIssue() {
-        guard permissionIssue != nil else { return }
-        permissionCalloutHideWorkItem?.cancel()
-        permissionCalloutHideWorkItem = nil
-        permissionIssue = nil
+    private func clearIssue() {
+        guard issue != nil else { return }
+        issueCalloutHideWorkItem?.cancel()
+        issueCalloutHideWorkItem = nil
+        issue = nil
         keepIdleVisibleAfterCollapse = false
         positionStage()
         settleRestingOverlay()
     }
 
     /// Moves a resting overlay into the state the "Show When Idle" choice calls
-    /// for, and makes the window agree. A missing-permission callout brings the
-    /// window forward without changing the state, so an overlay that is already
+    /// for, and makes the window agree. An issue callout brings the window
+    /// forward without changing the state, so an overlay that is already
     /// `.hidden` still needs its window ordered out here. While a callout is up
     /// the window stays; clearing the callout settles the overlay.
     private func settleRestingOverlay() {
-        guard permissionIssue == nil else { return }
+        guard issue == nil else { return }
         let settledState = overlayState.settled(hideIdleState: hideIdleState)
         if settledState == .hidden, overlayState == .hidden {
             overlayWindow?.orderOut(nil)
@@ -524,19 +575,22 @@ class OverlayWindowManager: ObservableObject {
         }
     }
 
-    private func refreshPermissionIssue() {
-        guard let permissionIssue else { return }
+    private func refreshIssue() {
+        guard let issue else { return }
 
-        let isGranted: Bool
-        switch permissionIssue {
-        case .microphone:
-            isGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        case .accessibility:
-            isGranted = AXIsProcessTrusted()
+        let isResolved: Bool
+        switch issue {
+        case .microphonePermission:
+            isResolved = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        case .accessibilityPermission:
+            isResolved = AXIsProcessTrusted()
+        case .captureFailed:
+            // Only a recording attempt can prove capture works again.
+            isResolved = false
         }
 
-        if isGranted {
-            clearPermissionIssue()
+        if isResolved {
+            clearIssue()
         }
     }
 
@@ -683,7 +737,7 @@ class OverlayWindowManager: ObservableObject {
         guard overlayState == .idle else { return }
         DebugLog.info("onCollapseAnimationComplete", context: "OverlayWindowManager")
         updateWindowSizeForState(.idle, animated: false, preserveAnchor: true)
-        let shouldHideIdle = hideIdleState && permissionIssue == nil && !keepIdleVisibleAfterCollapse
+        let shouldHideIdle = hideIdleState && issue == nil && !keepIdleVisibleAfterCollapse
         keepIdleVisibleAfterCollapse = false
         if shouldHideIdle {
             overlayWindow?.orderOut(nil)
@@ -749,12 +803,12 @@ class OverlayWindowManager: ObservableObject {
         }
         // The callout stacks above/below the pill, so it costs a row of height
         // rather than two columns of width.
-        let stageWidth = permissionIssue == nil
+        let stageWidth = issue == nil
             ? Constants.stageWidth
-            : max(Constants.stageWidth, OverlayPermissionCalloutMetrics.width + (Constants.edgeMargin * 2))
-        let stageHeight = permissionIssue == nil
+            : max(Constants.stageWidth, OverlayCalloutMetrics.width + (Constants.edgeMargin * 2))
+        let stageHeight = issue == nil
             ? Constants.stageHeight
-            : Constants.stageHeight + OverlayPermissionCalloutMetrics.height + OverlayPermissionCalloutMetrics.spacing
+            : Constants.stageHeight + OverlayCalloutMetrics.height + OverlayCalloutMetrics.spacing
         let (xPos, yPos) = calculatePosition(
             for: position,
             screenFrame: screen.visibleFrame,
@@ -922,7 +976,7 @@ class OverlayWindowManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             DebugLog.info("Frontmost app changed, repositioning overlay", context: "OverlayWindowManager")
-            self?.refreshPermissionIssue()
+            self?.refreshIssue()
             self?.logWindowState("observer-activate-before")
             self?.repositionWindow()
             guard let self else { return }

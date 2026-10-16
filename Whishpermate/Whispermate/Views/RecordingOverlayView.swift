@@ -6,7 +6,7 @@ struct RecordingOverlayView: View {
     @ObservedObject private var history = HistoryManager.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isPermissionCalloutShown = false
+    @State private var isIssueCalloutShown = false
     @State private var isHovering = false
     @State private var shouldShowExpandedPill = false
     @State private var shouldShowContent = false
@@ -17,6 +17,7 @@ struct RecordingOverlayView: View {
     @State private var isPointingHandCursorActive = false
     @State private var isCancelButtonHovering = false
     @State private var isStopButtonHovering = false
+    @State private var isIssueCalloutHovering = false
 
     // MARK: - Size Constants (single source of truth)
 
@@ -197,18 +198,18 @@ struct RecordingOverlayView: View {
     @ViewBuilder
     private func overlayContent(geometry _: GeometryProxy) -> some View {
         Group {
-            if let permissionIssue = manager.permissionIssue {
+            if let issue = manager.issue {
                 // Stack the callout away from the screen edge the pill hugs:
                 // above a bottom overlay, below a top one. Beside the pill it
                 // competed with the pill for one row's width, which is what
                 // clipped the message.
-                VStack(spacing: OverlayPermissionCalloutMetrics.spacing) {
+                VStack(spacing: OverlayCalloutMetrics.spacing) {
                     if manager.position == .bottom {
-                        permissionCallout(permissionIssue)
+                        issueCallout(issue)
                         contentView
                     } else {
                         contentView
-                        permissionCallout(permissionIssue)
+                        issueCallout(issue)
                     }
                 }
             } else {
@@ -277,7 +278,7 @@ struct RecordingOverlayView: View {
         }
     }
 
-    private func permissionCallout(_ issue: OverlayPermissionIssue) -> some View {
+    private func issueCallout(_ issue: OverlayIssue) -> some View {
         HStack(spacing: 8) {
             Image(systemName: issue.iconName)
                 .font(.system(size: 12, weight: .semibold))
@@ -293,9 +294,10 @@ struct RecordingOverlayView: View {
 
             Spacer(minLength: 4)
 
-            // The cog says where the click lands: System Settings. The whole
-            // callout carries the gesture, so this stays a marker, not a
-            // second target that can be missed.
+            // The cog says where the click lands: a settings pane (System
+            // Settings for permissions, the app's Sound settings for a capture
+            // failure). The whole callout carries the gesture, so this stays a
+            // marker, not a second target that can be missed.
             Image(systemName: "gearshape.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.7))
@@ -303,8 +305,8 @@ struct RecordingOverlayView: View {
         }
         .padding(.horizontal, 10)
         .frame(
-            width: OverlayPermissionCalloutMetrics.width,
-            height: OverlayPermissionCalloutMetrics.height
+            width: OverlayCalloutMetrics.width,
+            height: OverlayCalloutMetrics.height
         )
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -320,31 +322,35 @@ struct RecordingOverlayView: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture {
             updateHoverCursor(isActive: false)
-            manager.setUpPermission()
+            manager.resolveIssue()
         }
         .onHover { hovering in
+            isIssueCalloutHovering = hovering
             updateHoverCursor(isActive: hovering)
         }
+        // The short title fits the callout; the full reason shows on hover,
+        // the same way the recording buttons show their titles.
+        .overlayHoverTitle(issue.hoverDetail ?? "", isHovering: isIssueCalloutHovering && issue.hoverDetail != nil)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("\(issue.message). Open System Settings")
+        .accessibilityLabel(issue.accessibilityLabel)
         // The callout rises out of the pill like a tooltip from its anchor.
         // Only drawing is animated, never layout: an animated size change makes
         // the hosting view animate the overlay window's frame mid-layout, which
         // AppKit aborts on.
         .scaleEffect(
-            isPermissionCalloutShown || reduceMotion ? 1 : 0.9,
+            isIssueCalloutShown || reduceMotion ? 1 : 0.9,
             anchor: manager.position == .bottom ? .bottom : .top
         )
-        .offset(y: isPermissionCalloutShown || reduceMotion ? 0 : (manager.position == .bottom ? 8 : -8))
-        .opacity(isPermissionCalloutShown ? 1 : 0)
+        .offset(y: isIssueCalloutShown || reduceMotion ? 0 : (manager.position == .bottom ? 8 : -8))
+        .opacity(isIssueCalloutShown ? 1 : 0)
         .onAppear {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                isPermissionCalloutShown = true
+                isIssueCalloutShown = true
             }
         }
         .onDisappear {
-            isPermissionCalloutShown = false
+            isIssueCalloutShown = false
         }
     }
 

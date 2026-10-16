@@ -23,6 +23,10 @@
 		AA10000000000000000004 /* HostLaunchRecoveryGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000003 /* HostLaunchRecoveryGate.swift */; };
 		AA10000000000000000006 /* MobileAudioLaunchRecoveryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000005 /* MobileAudioLaunchRecoveryPolicyTests.swift */; };
 		AA10000000000000000008 /* MobileAudioLaunchRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */; };
+		AA1000000000000000000A /* MacCaptureDevicePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000009 /* MacCaptureDevicePolicyTests.swift */; };
+		AA1000000000000000000C /* MacCaptureDevicePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000B /* MacCaptureDevicePolicy.swift */; };
+		AA1000000000000000000E /* AuthSessionRestorePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000D /* AuthSessionRestorePolicyTests.swift */; };
+		AA10000000000000000010 /* AuthSessionRestorePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000F /* AuthSessionRestorePolicy.swift */; };
 		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -180,6 +184,10 @@
 		AA10000000000000000003 /* HostLaunchRecoveryGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HostLaunchRecoveryGate.swift; path = WhisperMateShared/Services/HostLaunchRecoveryGate.swift; sourceTree = SOURCE_ROOT; };
 		AA10000000000000000005 /* MobileAudioLaunchRecoveryPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MobileAudioLaunchRecoveryPolicyTests.swift; sourceTree = "<group>"; };
 		AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAudioLaunchRecoveryPolicy.swift; path = WhisperMateShared/Services/MobileAudioLaunchRecoveryPolicy.swift; sourceTree = SOURCE_ROOT; };
+		AA10000000000000000009 /* MacCaptureDevicePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacCaptureDevicePolicyTests.swift; sourceTree = "<group>"; };
+		AA1000000000000000000B /* MacCaptureDevicePolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MacCaptureDevicePolicy.swift; path = Whispermate/Services/MacCaptureDevicePolicy.swift; sourceTree = SOURCE_ROOT; };
+		AA1000000000000000000D /* AuthSessionRestorePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthSessionRestorePolicyTests.swift; sourceTree = "<group>"; };
+		AA1000000000000000000F /* AuthSessionRestorePolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AuthSessionRestorePolicy.swift; path = WhisperMateShared/Services/AuthSessionRestorePolicy.swift; sourceTree = SOURCE_ROOT; };
 		56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatterTests.swift; sourceTree = "<group>"; };
 		5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolver.swift; sourceTree = "<group>"; };
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -357,6 +365,10 @@
 				AA10000000000000000003 /* HostLaunchRecoveryGate.swift */,
 				AA10000000000000000005 /* MobileAudioLaunchRecoveryPolicyTests.swift */,
 				AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */,
+				AA10000000000000000009 /* MacCaptureDevicePolicyTests.swift */,
+				AA1000000000000000000B /* MacCaptureDevicePolicy.swift */,
+				AA1000000000000000000D /* AuthSessionRestorePolicyTests.swift */,
+				AA1000000000000000000F /* AuthSessionRestorePolicy.swift */,
 				56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */,
 				EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */,
 				18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */,
@@ -845,6 +857,10 @@
 				AA10000000000000000004 /* HostLaunchRecoveryGate.swift in Sources */,
 				AA10000000000000000006 /* MobileAudioLaunchRecoveryPolicyTests.swift in Sources */,
 				AA10000000000000000008 /* MobileAudioLaunchRecoveryPolicy.swift in Sources */,
+				AA1000000000000000000A /* MacCaptureDevicePolicyTests.swift in Sources */,
+				AA1000000000000000000C /* MacCaptureDevicePolicy.swift in Sources */,
+				AA1000000000000000000E /* AuthSessionRestorePolicyTests.swift in Sources */,
+				AA10000000000000000010 /* AuthSessionRestorePolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

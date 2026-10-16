@@ -440,10 +440,14 @@ class AudioRecorder: NSObject, ObservableObject {
     ) {
         guard preparation.attempt.isPending else { return }
 
+        // Resolution never changes the route and never waits: it describes the
+        // system default input the engine is about to use, falling back to it
+        // when the preferred microphone is missing or not yet the default.
         guard let deviceResolution = AudioDeviceManager.shared.resolveCaptureDevice(using: deviceSnapshot) else {
+            SentryTelemetry.recordAudioEngineEvent("no_input_device")
             failPreparation(
                 preparation,
-                message: "The selected microphone is unavailable. Choose another microphone and try again."
+                message: "No microphone is available. Connect or turn on a microphone and try again."
             )
             return
         }
@@ -458,13 +462,13 @@ class AudioRecorder: NSObject, ObservableObject {
         guard preparation.attempt.isPending else { return }
 
         let bus = 0
-        // The selected device is already the system default, as verified by
-        // resolveCaptureDevice. Leave AVAudioEngine's HAL unit untouched so it
-        // can retain the private aggregate it builds around that device. A
-        // direct CurrentDevice bind replaces the aggregate with raw hardware
-        // and can leave the tap and hardware at incompatible sample rates.
-        // Rebuild once without binding if Core Audio initially reports a dead
-        // format after a route change.
+        // The resolved device is the system default, so AVAudioEngine's HAL
+        // unit picks it up on its own. Leave the unit untouched so it can
+        // retain the private aggregate it builds around that device. A direct
+        // CurrentDevice bind replaces the aggregate with raw hardware and can
+        // leave the tap and hardware at incompatible sample rates. Rebuild
+        // once without binding if Core Audio initially reports a dead format
+        // after a route change.
         var engine = AVAudioEngine()
         var inputNode = engine.inputNode
         var inputFormat = inputNode.outputFormat(forBus: bus)
@@ -486,7 +490,15 @@ class AudioRecorder: NSObject, ObservableObject {
                   interleaved: false
               )
         else {
-            failPreparation(preparation, message: "The microphone audio format is unavailable. Please try again.")
+            DebugLog.error(
+                "Input format unavailable on \(deviceResolution.device.name) after rebuild",
+                context: "AudioRecorder"
+            )
+            SentryTelemetry.recordAudioEngineEvent("input_format_unavailable")
+            failPreparation(
+                preparation,
+                message: "\(deviceResolution.device.name) isn’t sending audio. Choose another microphone in Settings and try again."
+            )
             return
         }
 
@@ -536,7 +548,15 @@ class AudioRecorder: NSObject, ObservableObject {
             do {
                 try engine.start()
             } catch {
-                failPreparation(preparation, message: "Recording could not start. Please try again.")
+                DebugLog.error(
+                    "Audio engine failed to start on \(deviceResolution.device.name): \(error)",
+                    context: "AudioRecorder"
+                )
+                SentryTelemetry.recordAudioEngineEvent("engine_start_failed")
+                failPreparation(
+                    preparation,
+                    message: "\(deviceResolution.device.name) couldn’t start. Choose another microphone in Settings and try again."
+                )
                 preparation.scheduleCleanup(deleteFile: true)
                 return
             }
@@ -784,6 +804,7 @@ class AudioRecorder: NSObject, ObservableObject {
         audioLevel = 0.0
         frequencyBands = Array(repeating: 0.0, count: Self.frequencyBandCount)
         volumeManager.restoreVolume()
+        AudioDeviceManager.shared.captureDidEnd()
     }
 
     private func startRecordingWatchdog() {
@@ -1126,6 +1147,9 @@ class AudioRecorder: NSObject, ObservableObject {
 
         pendingFinalization = nil
         finalization.completion(terminal)
+        // The engine has stopped (or was abandoned); a route change deferred
+        // during capture can run safely now.
+        AudioDeviceManager.shared.captureDidEnd()
     }
 
     private func finalizedRecordingFailure(_ url: URL) -> String? {

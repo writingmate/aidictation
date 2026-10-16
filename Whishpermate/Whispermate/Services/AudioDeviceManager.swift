@@ -18,14 +18,7 @@ class AudioDeviceManager: ObservableObject {
     private enum Constants {
         static let wakeRecoveryDelays: [TimeInterval] = [0.5, 1.5, 3.0, 5.0, 8.0, 13.0]
         static let deviceOperationTimeout: TimeInterval = 2.0
-        static let virtualDeviceNameFragments = [
-            "cadeviceaggregate",
-            "aggregate",
-            "multi-output",
-            "blackhole",
-            "loopback",
-            "soundflower"
-        ]
+        static let virtualDeviceNameFragments = MacCaptureDevicePolicy.virtualDeviceNameFragments
     }
 
     @Published private(set) var inputDevices: [AudioDevice] = []
@@ -46,6 +39,10 @@ class AudioDeviceManager: ObservableObject {
     private var maintenanceOperationID: UUID?
     private var refreshOperationID: UUID?
     private var routeReconciliationNeeded = false
+    /// Set while a recording captures from the system default input. Changing
+    /// the default underneath a live AVAudioEngine stops it, so reconciliation
+    /// of the preferred route waits until capture ends.
+    private var isCaptureActive = false
 
     // MARK: - Types
 
@@ -71,9 +68,19 @@ class AudioDeviceManager: ObservableObject {
     }
 
     struct CaptureDeviceResolution: Sendable {
+        /// The device capture runs through. Always the current system default,
+        /// because `AVAudioEngine.inputNode` follows it and recording never
+        /// changes the route itself.
         let device: AudioDevice
         let availableDevices: [AudioDevice]
-        let usedFallback: Bool
+        /// Why `device` is not the one the user's preference asked for, or nil
+        /// when it is.
+        let fallbackReason: MacCaptureDevicePolicy.FallbackReason?
+        /// The device the preference resolves to when it differs from `device`.
+        /// Maintenance makes it the default once this capture has ended.
+        let preferredDevice: AudioDevice?
+
+        var usedFallback: Bool { fallbackReason != nil }
     }
 
     private struct DeviceApplyOutcome: Sendable {
@@ -121,35 +128,48 @@ class AudioDeviceManager: ObservableObject {
         )
     }
 
-    /// Resolves the already-applied recording input without mutating global route
-    /// or published UI state. Recording preparation never changes the system
-    /// default, so an abandoned attempt cannot overwrite a newer route.
+    /// Resolves the recording input without mutating global route or published
+    /// UI state. Recording preparation never changes the system default, so an
+    /// abandoned attempt cannot overwrite a newer route.
+    ///
+    /// Capture always runs through the current system default input. When that
+    /// is not the device the user asked for — the saved microphone is unplugged,
+    /// macOS moved the default, or the lid is closed with only the built-in mic
+    /// left — the default is used anyway and the mismatch is reported through
+    /// `fallbackReason`, so one stale preference can no longer block recording.
+    /// Returns nil only when Core Audio has no default input at all.
     func resolveCaptureDevice(using snapshot: CaptureSelectionSnapshot) -> CaptureDeviceResolution? {
         let devices = getInputDevices()
-        guard !devices.isEmpty else { return nil }
+        let systemDefault = getDefaultInputDevice()
+        let context = makePolicyContext(
+            snapshot: snapshot,
+            devices: devices,
+            systemDefault: systemDefault
+        )
 
-        let preferredDevice: AudioDevice?
-        if snapshot.automaticallySelectDevice {
-            preferredDevice = bestAutomaticInputDevice(in: devices)
-        } else if let savedUID = snapshot.savedSelectedDeviceUID {
-            preferredDevice = preferredInputDevice(for: savedUID, in: devices)
-        } else {
-            preferredDevice = nil
-        }
-
-        let usedFallback = !snapshot.automaticallySelectDevice && preferredDevice == nil
-        guard let target = preferredDevice ?? bestAutomaticInputDevice(in: devices) else {
+        guard let decision = MacCaptureDevicePolicy.captureDecision(context.policyContext) else {
+            DebugLog.error(
+                "No default input device available for capture (listed: \(devices.count))",
+                context: "AudioDeviceManager"
+            )
             return nil
         }
 
-        guard getDefaultInputDevice()?.uniqueID == target.uniqueID else {
-            return nil
+        guard let device = context.device(for: decision.device) else { return nil }
+        let preferredDevice = decision.preferredDevice.flatMap { context.device(for: $0) }
+
+        if let reason = decision.fallbackReason {
+            DebugLog.warning(
+                "Capturing from system default \(device.name) instead of preferred \(preferredDevice?.name ?? "none") (\(reason.rawValue))",
+                context: "AudioDeviceManager"
+            )
         }
 
         return CaptureDeviceResolution(
-            device: target,
+            device: device,
             availableDevices: devices,
-            usedFallback: usedFallback
+            fallbackReason: decision.fallbackReason,
+            preferredDevice: preferredDevice
         )
     }
 
@@ -165,12 +185,32 @@ class AudioDeviceManager: ObservableObject {
 
         inputDevices = resolution.availableDevices
         selectedDevice = resolution.device
+        isCaptureActive = true
+        if resolution.preferredDevice != nil {
+            // The user's device is connected but is not the default. Fix the
+            // route once this recording is over, never underneath it.
+            routeReconciliationNeeded = true
+        }
         SentryTelemetry.recordAudioDeviceEvent(
             "recording_input_device",
             device: resolution.device,
-            mode: resolution.usedFallback ? "fallback" : nil,
+            mode: resolution.fallbackReason?.rawValue,
             fallback: resolution.usedFallback
         )
+    }
+
+    /// Called by the recorder when native capture has ended for any reason.
+    /// Runs any route reconciliation that was deferred while recording.
+    func captureDidEnd() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.captureDidEnd()
+            }
+            return
+        }
+
+        isCaptureActive = false
+        runPendingRouteReconciliationIfPossible()
     }
 
     func refreshDevices(completion: (() -> Void)? = nil) {
@@ -443,21 +483,83 @@ class AudioDeviceManager: ObservableObject {
     // MARK: - Private Methods
 
     private func runPendingRouteReconciliationIfPossible() {
-        guard maintenanceOperationID == nil, routeReconciliationNeeded else { return }
+        guard maintenanceOperationID == nil, routeReconciliationNeeded, !isCaptureActive else { return }
         routeReconciliationNeeded = false
         applyPreferredOrAutomaticDevice()
+    }
+
+    /// Everything the pure policy needs, gathered with Core Audio and display
+    /// queries on the calling (background) queue, plus the mapping back from
+    /// policy candidates to live `AudioDevice` values.
+    private struct PolicyContext {
+        let policyContext: MacCaptureDevicePolicy.Context
+        private let devicesByUID: [String: AudioDevice]
+
+        init(policyContext: MacCaptureDevicePolicy.Context, devices: [AudioDevice]) {
+            self.policyContext = policyContext
+            devicesByUID = Dictionary(devices.map { ($0.uniqueID, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+
+        func device(for candidate: MacCaptureDevicePolicy.Candidate) -> AudioDevice? {
+            devicesByUID[candidate.uniqueID]
+        }
+    }
+
+    private func makePolicyContext(
+        snapshot: CaptureSelectionSnapshot,
+        devices: [AudioDevice],
+        systemDefault: AudioDevice?
+    ) -> PolicyContext {
+        var knownDevices = devices
+        var listedDevices = devices
+
+        // A saved device that is alive but hidden from the list (an aggregate
+        // the user picked in an older build, for example) still counts as
+        // connected for preference purposes.
+        if !snapshot.automaticallySelectDevice,
+           let savedUID = snapshot.savedSelectedDeviceUID,
+           !devices.contains(where: { $0.uniqueID == savedUID }),
+           let saved = preferredInputDevice(for: savedUID, in: devices)
+        {
+            knownDevices.append(saved)
+            listedDevices.append(saved)
+        }
+
+        if let systemDefault, !knownDevices.contains(systemDefault) {
+            knownDevices.append(systemDefault)
+        }
+
+        func candidate(_ device: AudioDevice) -> MacCaptureDevicePolicy.Candidate {
+            MacCaptureDevicePolicy.Candidate(
+                uniqueID: device.uniqueID,
+                name: device.name,
+                isBuiltIn: isBuiltInInputDevice(device.id)
+            )
+        }
+
+        let policyContext = MacCaptureDevicePolicy.Context(
+            automaticallySelectDevice: snapshot.automaticallySelectDevice,
+            savedSelectedDeviceUID: snapshot.savedSelectedDeviceUID,
+            availableDevices: listedDevices.map(candidate),
+            systemDefault: systemDefault.map(candidate),
+            clamshellClosed: isClamshellClosed(),
+            hasActiveBuiltInDisplay: hasActiveBuiltInDisplay(),
+            hasActiveExternalDisplay: hasActiveExternalDisplay()
+        )
+        return PolicyContext(policyContext: policyContext, devices: knownDevices)
     }
 
     private func selectedDevice(
         for snapshot: CaptureSelectionSnapshot,
         in devices: [AudioDevice]
     ) -> AudioDevice? {
-        if !snapshot.automaticallySelectDevice {
-            guard let savedUID = snapshot.savedSelectedDeviceUID else { return nil }
-            return preferredInputDevice(for: savedUID, in: devices)
-                ?? bestAutomaticInputDevice(in: devices)
-        }
-        return bestAutomaticInputDevice(in: devices)
+        let context = makePolicyContext(
+            snapshot: snapshot,
+            devices: devices,
+            systemDefault: getDefaultInputDevice()
+        )
+        return MacCaptureDevicePolicy.preferredDevice(in: context.policyContext)
+            .flatMap { context.device(for: $0) }
     }
 
     private func preferredInputDevice(for uniqueID: String, in devices: [AudioDevice]) -> AudioDevice? {
@@ -480,13 +582,18 @@ class AudioDeviceManager: ObservableObject {
 
     private func applyDevicePreference(_ snapshot: CaptureSelectionSnapshot) -> DeviceApplyOutcome {
         let devices = getInputDevices()
-        let preferred = snapshot.savedSelectedDeviceUID.flatMap {
-            preferredInputDevice(for: $0, in: devices)
-        }
-        let usedFallback = !snapshot.automaticallySelectDevice && preferred == nil
-        let target = snapshot.automaticallySelectDevice
-            ? bestAutomaticInputDevice(in: devices)
-            : preferred ?? bestAutomaticInputDevice(in: devices)
+        let current = getDefaultInputDevice()
+        let context = makePolicyContext(
+            snapshot: snapshot,
+            devices: devices,
+            systemDefault: current
+        )
+        let savedDeviceConnected = snapshot.savedSelectedDeviceUID.map { savedUID in
+            context.policyContext.availableDevices.contains { $0.uniqueID == savedUID }
+        } ?? false
+        let usedFallback = !snapshot.automaticallySelectDevice && !savedDeviceConnected
+        let target = MacCaptureDevicePolicy.preferredDevice(in: context.policyContext)
+            .flatMap { context.device(for: $0) }
 
         guard let target else {
             return DeviceApplyOutcome(
@@ -498,7 +605,6 @@ class AudioDeviceManager: ObservableObject {
             )
         }
 
-        let current = getDefaultInputDevice()
         let routeChanged = current?.uniqueID != target.uniqueID
 
         if routeChanged {
@@ -529,50 +635,6 @@ class AudioDeviceManager: ObservableObject {
             label: "ai.writingmate.audio-device.\(purpose).\(UUID().uuidString)",
             qos: .utility
         )
-    }
-
-    private func bestAutomaticInputDevice(in devices: [AudioDevice]) -> AudioDevice? {
-        let clamshellClosed = isClamshellClosed()
-
-        if let defaultDevice = getDefaultInputDevice(),
-           devices.contains(defaultDevice),
-           !shouldAvoidAutomaticallySelecting(
-               defaultDevice,
-               clamshellClosed: clamshellClosed,
-               availableDevices: devices
-           )
-        {
-            return defaultDevice
-        }
-
-        let allowedCandidates = devices.filter { device in
-            !shouldAvoidAutomaticallySelecting(
-                device,
-                clamshellClosed: clamshellClosed,
-                availableDevices: devices
-            )
-        }
-
-        let physicalCandidates = allowedCandidates.filter { device in
-            let lowercasedName = device.name.lowercased()
-            return !Constants.virtualDeviceNameFragments.contains { lowercasedName.contains($0) }
-        }
-
-        return physicalCandidates.first { device in
-            let lowercasedName = device.name.lowercased()
-            return lowercasedName.contains("microphone") || lowercasedName.contains("mic")
-        } ?? physicalCandidates.first ?? allowedCandidates.first
-    }
-
-    private func shouldAvoidAutomaticallySelecting(
-        _ device: AudioDevice,
-        clamshellClosed: Bool,
-        availableDevices: [AudioDevice]
-    ) -> Bool {
-        guard isBuiltInInputDevice(device.id) else { return false }
-        return clamshellClosed
-            || !hasActiveBuiltInDisplay()
-            || shouldPreferExternalInputOverBuiltIn(availableDevices: availableDevices)
     }
 
     /// Returns whether the device is a built-in microphone.
@@ -663,10 +725,6 @@ class AudioDeviceManager: ObservableObject {
         guard listStatus == .success else { return false }
 
         return displays.contains { CGDisplayIsBuiltin($0) == 0 }
-    }
-
-    private func shouldPreferExternalInputOverBuiltIn(availableDevices: [AudioDevice]) -> Bool {
-        hasActiveExternalDisplay() && availableDevices.contains { !isBuiltInInputDevice($0.id) }
     }
 
     private func hasInputStreams(deviceID: AudioDeviceID) -> Bool {

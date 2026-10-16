@@ -32,6 +32,12 @@ final class UserDefaultsAuthLocalStorage: AuthLocalStorage, @unchecked Sendable 
     var hasStoredSession: Bool {
         defaults.dictionaryRepresentation().keys.contains { $0.hasPrefix(keyPrefix) }
     }
+
+    func removeAll() {
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(keyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }
 
 /// Keychain access for the Supabase session.
@@ -170,6 +176,14 @@ enum AuthKeychain {
         }
     }
 
+    /// Removes every session item this app stored, in both keychains.
+    static func removeAll() {
+        SecItemDelete(baseQuery(dataProtection: false) as CFDictionary)
+        _ = perform { dataProtection in
+            SecItemDelete(baseQuery(dataProtection: dataProtection) as CFDictionary)
+        }
+    }
+
     /// True when any session item is present, regardless of whether it can be decoded.
     static func hasStoredSession() -> Bool {
         for dataProtection in [dataProtectionEnabled, false] {
@@ -210,13 +224,17 @@ final class PersistentAuthLocalStorage: AuthLocalStorage, @unchecked Sendable {
             return data
         }
         if status != errSecItemNotFound {
+            // Never delete the item here. A read can fail while the keychain is locked or
+            // when the user dismisses a one-off prompt; deleting on that status turned a
+            // transient miss into a permanent sign-out and stopped the restore retries, since
+            // the app could no longer tell that a session had ever existed. `store` already
+            // replaces an item it cannot update, so nothing is gained by removing it early.
             DebugLog.error("Keychain retrieve failed (\(status))", context: "AuthStorage")
-        }
-        if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
-            // The item cannot be read by this binary at all, and leaving it in place would keep
-            // every later write on the failing update path. Drop it so the next sign-in stores
-            // a session this build owns.
-            AuthKeychain.remove(key: key)
+            CrashReporter.captureError(
+                "Keychain retrieve failed (\(status))",
+                context: "AuthStorage",
+                feature: "auth"
+            )
         }
 
         // Reading a login keychain item can put up a SecurityAgent prompt, so try the one-time
@@ -277,6 +295,13 @@ public class SupabaseManager {
     /// from "signed in, but the session could not be restored yet".
     public var hasPersistedSession: Bool {
         AuthKeychain.hasStoredSession() || UserDefaultsAuthLocalStorage().hasStoredSession
+    }
+
+    /// Drops the persisted session from every storage location. Used on sign-out so a session
+    /// the SDK could not load (and therefore does not clear itself) is not restored next launch.
+    public func clearPersistedSession() {
+        AuthKeychain.removeAll()
+        UserDefaultsAuthLocalStorage().removeAll()
     }
 
     // MARK: - Private Helpers

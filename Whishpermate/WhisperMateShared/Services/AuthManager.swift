@@ -165,9 +165,20 @@ public class AuthManager: ObservableObject {
         case profileRequestRejected
     }
 
+    private enum SessionValidation {
+        case valid
+        case failed(AuthSessionRestorePolicy.Failure)
+    }
+
+    /// True while a persisted session exists but the last restore attempt did not reach the
+    /// backend. The signed-in state is kept from the profile cache meanwhile, so this is what
+    /// drives retries instead of `isAuthenticated`.
+    private var isSessionRestorePending = false
+
     // MARK: - Initialization
 
     private init() {
+        restoreCachedSignedInStateIfPossible()
         observeSessionRestoreTriggers()
         Task {
             await checkSession()
@@ -178,6 +189,21 @@ public class AuthManager: ObservableObject {
 
     private func checkSession() async {
         await refreshUser()
+    }
+
+    /// A user who signed in before relaunch should never see "Not signed in / Free" while the
+    /// stored session is being validated. Show the last profile the backend gave us right away;
+    /// `refreshUser` then confirms it, replaces it, or — only when the server rejects the
+    /// session for good — clears it.
+    private func restoreCachedSignedInStateIfPossible() {
+        guard supabase.client != nil, supabase.hasPersistedSession,
+              let cachedUser = loadCachedUserProfile()
+        else { return }
+
+        DebugLog.info("Restoring cached profile for \(cachedUser.email) while the session is validated", context: "AuthManager")
+        currentUser = cachedUser
+        isAuthenticated = true
+        isSessionRestorePending = true
     }
 
     /// The stored session is only restored once, at launch. If that attempt happens before the
@@ -215,7 +241,8 @@ public class AuthManager: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard !self.isAuthenticated, !self.isLoading, !self.isAuthenticationSessionActive else { return }
+            guard !self.isAuthenticated || self.isSessionRestorePending else { return }
+            guard !self.isLoading, !self.isAuthenticationSessionActive else { return }
 
             DebugLog.info("Retrying session restore (\(reason))", context: "AuthManager")
             await self.refreshUser()
@@ -229,21 +256,41 @@ public class AuthManager: ObservableObject {
     }
 
     private func ensureValidSession() async -> Bool {
-        guard let client = supabase.client else { return false }
+        if case .valid = await validateSession() {
+            return true
+        }
+        return false
+    }
+
+    private func validateSession() async -> SessionValidation {
+        guard let client = supabase.client else { return .failed(.sessionMissing) }
         do {
             _ = try await client.auth.session
             await startAutoRefreshIfNeeded()
-            return true
+            return .valid
         } catch {
             DebugLog.info("No active session; attempting refresh", context: "AuthManager")
             do {
                 _ = try await client.auth.refreshSession()
                 await startAutoRefreshIfNeeded()
-                return true
+                return .valid
             } catch {
-                DebugLog.info("Session refresh failed", context: "AuthManager")
-                return false
+                let failure = sessionRestoreFailure(for: error)
+                DebugLog.info("Session refresh failed (\(failure))", context: "AuthManager")
+                return .failed(failure)
             }
+        }
+    }
+
+    private func sessionRestoreFailure(for error: Error) -> AuthSessionRestorePolicy.Failure {
+        guard let authError = error as? AuthError else { return .transient }
+        switch authError {
+        case .sessionMissing:
+            return .sessionMissing
+        case let .api(_, _, _, response):
+            return AuthSessionRestorePolicy.failure(forHTTPStatus: response.statusCode)
+        default:
+            return .transient
         }
     }
 
@@ -540,18 +587,13 @@ public class AuthManager: ObservableObject {
             self.error = nil
         }
 
-        let hasSession = await ensureValidSession()
-        guard hasSession else {
-            await MainActor.run {
-                self.currentUser = nil
-                self.isAuthenticated = false
-                self.isLoading = false
-            }
-            return .sessionUnavailable
+        if case let .failed(failure) = await validateSession() {
+            return await handleSessionRestoreFailure(failure)
         }
 
         await MainActor.run {
             self.isAuthenticated = true
+            self.isSessionRestorePending = false
         }
 
         do {
@@ -585,6 +627,62 @@ public class AuthManager: ObservableObject {
                 self.isLoading = false
             }
             return .profileRequestRejected
+        }
+    }
+
+    /// Applies ``AuthSessionRestorePolicy`` to a failed session restore. Only a server
+    /// rejection — or having nothing persisted at all — signs the user out; anything else keeps
+    /// the current state (restoring the cached profile on a cold launch) and retries later.
+    private func handleSessionRestoreFailure(
+        _ failure: AuthSessionRestorePolicy.Failure
+    ) async -> UserRefreshOutcome {
+        let hasPersistedSession = supabase.hasPersistedSession
+        let cachedUser = loadCachedUserProfile()
+        let hasCurrentUser = await MainActor.run { self.currentUser != nil }
+        let resolution = AuthSessionRestorePolicy.resolve(
+            failure: failure,
+            hasPersistedSession: hasPersistedSession,
+            hasCurrentUser: hasCurrentUser,
+            hasCachedProfile: cachedUser != nil
+        )
+
+        switch resolution {
+        case .signOut:
+            if hasPersistedSession {
+                DebugLog.warning("Stored session was rejected by the server; signing out", context: "AuthManager")
+                CrashReporter.captureError(
+                    "Stored session rejected during restore (\(failure))",
+                    context: "AuthManager",
+                    feature: "auth"
+                )
+                supabase.clearPersistedSession()
+            } else {
+                DebugLog.info("No stored session to restore", context: "AuthManager")
+            }
+            clearCachedUserProfile()
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+                self.isSessionRestorePending = false
+                self.isLoading = false
+            }
+            return .sessionUnavailable
+
+        case let .keepSignedIn(restoreCachedProfile):
+            DebugLog.warning(
+                "Session restore failed (\(failure)); keeping signed-in state and retrying later",
+                context: "AuthManager"
+            )
+            await MainActor.run {
+                if restoreCachedProfile, let cachedUser {
+                    DebugLog.warning("Using cached profile for \(cachedUser.email) until the session is restored", context: "AuthManager")
+                    self.currentUser = cachedUser
+                }
+                self.isAuthenticated = self.currentUser != nil
+                self.isSessionRestorePending = true
+                self.isLoading = false
+            }
+            return .sessionUnavailable
         }
     }
 
@@ -673,10 +771,15 @@ public class AuthManager: ObservableObject {
         DebugLog.info("Logging out...", context: "AuthManager")
         do {
             try await supabase.client?.auth.signOut()
+            // The SDK skips storage when it has no session in memory, which is exactly the
+            // state a user who could not be restored is in. Clear it ourselves so the next
+            // launch does not pick the stale session back up.
+            supabase.clearPersistedSession()
             clearCachedUserProfile()
             await MainActor.run {
                 self.currentUser = nil
                 self.isAuthenticated = false
+                self.isSessionRestorePending = false
             }
             DebugLog.info("Logged out successfully", context: "AuthManager")
         } catch {

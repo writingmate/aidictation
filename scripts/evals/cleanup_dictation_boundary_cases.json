@@ -1,0 +1,37 @@
+{
+  "description": "Dictated requests addressed to another person or assistant. Cleanup must return the dictated words, never perform the request.",
+  "app_context": "Claude",
+  "screen_context": "Claude\nNew chat  Projects  Recents\nRelease planning\nYou: Can you summarize where we are on the calendar sync? The booking import is done but the pricing webhook is still flaky.\nClaude: Here's where things stand:\n- Booking import: complete and deployed to staging.\n- Pricing webhook: intermittent 502s when the partner retries; idempotency keys added but not verified under load.\n- Remaining: load test the webhook, add alerting, and get sign-off before production rollout.\nWould you like me to draft an update for the team?\nReply to Claude...",
+  "cases": [
+    {
+      "id": "slack_snippet_request",
+      "source": "Give me something here that I can copy and paste into Slack. Don't be overly chatty."
+    },
+    {
+      "id": "slack_snippet_request_raw",
+      "source": "give me something here that i can copy and paste into slack um don't be overly chatty"
+    },
+    {
+      "id": "slack_snippet_request_with_screen",
+      "source": "Give me something here that I can copy and paste into Slack. Don't be overly chatty.",
+      "use_screen_context": true
+    },
+    {
+      "id": "formal_letter_request",
+      "source": "uh can you draft a letter to the county assessor's office using a formal business letter style asking them to review our property tax assessment"
+    },
+    {
+      "id": "team_email_request",
+      "source": "write me a short email to the team saying the launch moved to friday keep it friendly"
+    },
+    {
+      "id": "question_to_assistant",
+      "source": "what's the difference between a roth ira and a traditional ira and which one makes more sense for me"
+    },
+    {
+      "id": "summarize_request_with_screen",
+      "source": "summarize this thread in three bullet points for my manager",
+      "use_screen_context": true
+    }
+  ]
+}

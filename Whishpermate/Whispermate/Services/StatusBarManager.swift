@@ -68,6 +68,7 @@ extension NSNotification.Name {
     static let recordingCompleted = NSNotification.Name("RecordingCompleted")
     static let recordingReadyForTranscription = NSNotification.Name("RecordingReadyForTranscription")
     static let openAccountSettings = NSNotification.Name("OpenAccountSettings")
+    static let openAudioSettings = NSNotification.Name("OpenAudioSettings")
     static let menuBarIconVisibilityRequested = NSNotification.Name("MenuBarIconVisibilityRequested")
     static let menuBarIconVisibilityChanged = NSNotification.Name("MenuBarIconVisibilityChanged")
 }

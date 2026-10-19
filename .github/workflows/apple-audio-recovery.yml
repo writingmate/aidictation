@@ -7,6 +7,8 @@ on:
       - 'Whishpermate/**'
       - 'scripts/validate_apple_http_audio_recovery.swift'
       - 'scripts/validate_apple_audio_recovery.sh'
+      - 'scripts/validate_auth_session_restore.swift'
+      - 'scripts/validate_macos_capture_device_policy.swift'
       - 'scripts/validate_ios_audio_processing_recovery.swift'
       - 'scripts/validate_ios_quick_dictation.swift'
       - 'scripts/validate_ios_realtime_transcription.swift'

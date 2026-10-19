@@ -38,5 +38,10 @@ struct SettingsWindowView: View {
             selectedSection = .general
             showMainSettingsWindow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openAudioSettings)) { _ in
+            // The input device picker lives in Sound.
+            selectedSection = .audio
+            showMainSettingsWindow()
+        }
     }
 }

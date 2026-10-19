@@ -1232,6 +1232,12 @@ class AppState: ObservableObject {
         CommandModeManager.shared.reset()
         ClipboardManager.cancelLiveDictationInsertion()
         finishOverlayAfterRecording()
+        // A start failure used to end here: the pill flashed and went idle
+        // with no explanation. Say what happened, next to where it happened.
+        if let terminalMessage, overlayManager.isOverlayMode {
+            SentryTelemetry.recordAudioEngineEvent("start_failed_surfaced", reason: terminalMessage)
+            overlayManager.showCaptureFailure(terminalMessage)
+        }
     }
 
     @discardableResult

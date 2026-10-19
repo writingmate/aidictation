@@ -53,6 +53,20 @@ swiftc -parse-as-library -module-cache-path "$module_cache" \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  Whishpermate/Whispermate/Services/MacCaptureDevicePolicy.swift \
+  scripts/validate_macos_capture_device_policy.swift \
+  -o "$work_dir/validate-macos-capture-device"
+"$work_dir/validate-macos-capture-device"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/Services/AuthSessionRestorePolicy.swift \
+  scripts/validate_auth_session_restore.swift \
+  -o "$work_dir/validate-auth-session-restore"
+"$work_dir/validate-auth-session-restore"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
   Whishpermate/Whispermate/Services/MacAsyncDeadline.swift \
   Whishpermate/Whispermate/Services/MacTerminationGuards.swift \
   scripts/validate_macos_lifecycle_guards.swift \

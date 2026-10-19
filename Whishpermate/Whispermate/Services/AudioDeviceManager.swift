@@ -137,19 +137,36 @@ class AudioDeviceManager: ObservableObject {
             preferredDevice = nil
         }
 
-        let usedFallback = !snapshot.automaticallySelectDevice && preferredDevice == nil
-        guard let target = preferredDevice ?? bestAutomaticInputDevice(in: devices) else {
+        let target = preferredDevice ?? bestAutomaticInputDevice(in: devices)
+        guard let systemDefault = getDefaultInputDevice() else { return nil }
+
+        if let target, systemDefault.uniqueID == target.uniqueID {
+            return CaptureDeviceResolution(
+                device: target,
+                availableDevices: devices,
+                usedFallback: !snapshot.automaticallySelectDevice && preferredDevice == nil
+            )
+        }
+
+        // AVAudioEngine always captures from the system default input. When the
+        // preference disagrees with it (a saved mic was unplugged, or automatic
+        // selection would avoid the built-in mic while the user picked it in
+        // macOS), record from the live default instead of refusing to start.
+        // Refusing left recording permanently broken until the route changed.
+        guard hasInputStreams(deviceID: systemDefault.id),
+              isInputDeviceAlive(systemDefault.id)
+        else {
             return nil
         }
 
-        guard getDefaultInputDevice()?.uniqueID == target.uniqueID else {
-            return nil
-        }
-
+        DebugLog.info(
+            "Preferred input \(target?.name ?? "none") is not the system default; recording from \(systemDefault.name)",
+            context: "AudioDeviceManager"
+        )
         return CaptureDeviceResolution(
-            device: target,
+            device: systemDefault,
             availableDevices: devices,
-            usedFallback: usedFallback
+            usedFallback: true
         )
     }
 

@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Check that cleanup transcribes dictated requests instead of performing them.
+
+Builds the default dictation cleanup prompt the same way
+TranscriptionCleanupPrompt.systemPrompt does, from the shared policy files and
+the Swift header, then replays each case against an OpenAI-compatible chat
+endpoint. Pass --ref to build the prompt from another git ref (for example
+origin/main) and compare it against the working tree.
+
+A run passes when its words equal the source words, ignoring case,
+punctuation, and standalone fillers. An empty response is reported separately:
+the apps replace it with the raw transcript, so it is not a failure.
+
+Needs network access and an API key, so it is not part of CI.
+"""
+
+import argparse
+import concurrent.futures
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+CASES = Path(__file__).resolve().parent / "cleanup_dictation_boundary_cases.json"
+SWIFT_PROMPT = "Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupPrompt.swift"
+CLEANUP_POLICY = "scripts/transcription_cleanup_policy.txt"
+PARAGRAPH_POLICY = "scripts/transcription_paragraph_policy.txt"
+# Mirrors TranscriptionCleanupPrompt.screenContextCharacterLimit.
+SCREEN_CONTEXT_LIMIT = 1_200
+FILLERS = {"um", "uh", "uhm", "umm", "er", "erm", "ah", "hmm", "ugh"}
+
+
+def read_source(path, ref):
+    if ref is None:
+        return (ROOT / path).read_text()
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{ref}:{path}"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+
+
+def prompt_header(swift_source):
+    opening = re.search(r':\s*"(Clean <transcription>\.)"', swift_source)
+    rules = re.search(r'prompt \+= "( XML entities[^"]*)"', swift_source)
+    if not opening or not rules:
+        raise SystemExit("could not locate the cleanup prompt header in " + SWIFT_PROMPT)
+    return opening.group(1) + rules.group(1)
+
+
+def escape(value):
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def system_prompt(ref, app_context, screen_context):
+    prompt = prompt_header(read_source(SWIFT_PROMPT, ref))
+    prompt += "\n\n" + read_source(CLEANUP_POLICY, ref).strip()
+    prompt += "\n\n" + read_source(PARAGRAPH_POLICY, ref).strip()
+    prompt += f"\n\n<app_context>\n{escape(app_context)}\n</app_context>"
+    if screen_context:
+        capped = screen_context.strip()[:SCREEN_CONTEXT_LIMIT]
+        prompt += f"\n\n<screen_context>\n{escape(capped)}\n</screen_context>"
+    return prompt
+
+
+def complete(args, system, source):
+    body = {
+        "model": args.model,
+        "temperature": 0,
+        "max_tokens": 1000,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"<transcription>\n{escape(source)}\n</transcription>"},
+        ],
+    }
+    request = urllib.request.Request(
+        args.base_url.rstrip("/") + "/chat/completions",
+        json.dumps(body).encode(),
+        {
+            "Authorization": "Bearer " + os.environ[args.api_key_env],
+            "Content-Type": "application/json",
+            "User-Agent": "aidictation-cleanup-eval",
+        },
+    )
+    error = None
+    for _ in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return json.load(response)["choices"][0]["message"].get("content") or ""
+        except Exception as caught:  # noqa: BLE001 - retried, then reported
+            error = caught
+    raise RuntimeError(f"request failed: {error}")
+
+
+def words(text):
+    return [word for word in re.findall(r"[a-z0-9']+", text.lower()) if word not in FILLERS]
+
+
+def run_variant(args, label, ref, suite):
+    prompts = {
+        False: system_prompt(ref, suite["app_context"], None),
+        True: system_prompt(ref, suite["app_context"], suite["screen_context"]),
+    }
+    jobs = [(case, index) for case in suite["cases"] for index in range(args.runs)]
+    tallies = {case["id"]: {"pass": 0, "empty": 0, "fail": []} for case in suite["cases"]}
+    with concurrent.futures.ThreadPoolExecutor(args.concurrency) as pool:
+        futures = {
+            pool.submit(complete, args, prompts[case.get("use_screen_context", False)], case["source"]): case
+            for case, _ in jobs
+        }
+        for future in concurrent.futures.as_completed(futures):
+            case = futures[future]
+            output = future.result()
+            tally = tallies[case["id"]]
+            if not output.strip():
+                tally["empty"] += 1
+            elif words(output) == words(case["source"]):
+                tally["pass"] += 1
+            else:
+                tally["fail"].append(output)
+
+    print(f"\n{label}")
+    failures = 0
+    for case_id, tally in tallies.items():
+        failures += len(tally["fail"])
+        empty = f"  empty {tally['empty']}" if tally["empty"] else ""
+        print(f"  {case_id:36} pass {tally['pass']}/{args.runs}  fail {len(tally['fail'])}{empty}")
+        for output in tally["fail"][:args.show]:
+            print("      " + output.replace("\n", " | ")[:200])
+    return failures
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--runs", type=int, default=10, help="replays per case")
+    parser.add_argument("--ref", help="also evaluate the prompt at this git ref, e.g. origin/main")
+    parser.add_argument("--model", default="openai/gpt-oss-20b")
+    parser.add_argument("--base-url", default="https://api.groq.com/openai/v1")
+    parser.add_argument("--api-key-env", default="GROQ_API_KEY")
+    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--show", type=int, default=1, help="failing outputs to print per case")
+    args = parser.parse_args()
+    if not os.environ.get(args.api_key_env):
+        raise SystemExit(f"set {args.api_key_env}")
+
+    suite = json.loads(CASES.read_text())
+    if args.ref:
+        run_variant(args, f"{args.ref} (reference)", args.ref, suite)
+    failures = run_variant(args, "working tree", None, suite)
+    sys.exit(1 if failures else 0)
+
+
+if __name__ == "__main__":
+    main()

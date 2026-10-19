@@ -105,6 +105,8 @@ public class AuthManager: ObservableObject {
     private var restoreRetryRequestedWhileLoading = false
     private var restoreRetryAttempt = 0
     private var restoreRetryTask: Task<Void, Never>?
+    /// Bumped on logout so a refresh that was already running cannot sign the old account back in.
+    private var authGeneration = 0
     #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
         private let authPresentationContextProvider = AuthPresentationContextProvider()
         private var authSession: ASWebAuthenticationSession?
@@ -611,9 +613,23 @@ public class AuthManager: ObservableObject {
 
     private func refreshUserWithOutcome() async -> UserRefreshOutcome {
         DebugLog.info("Fetching user data...", context: "AuthManager")
-        await MainActor.run {
+        let generation = await MainActor.run {
             self.isLoading = true
             self.error = nil
+            return self.authGeneration
+        }
+
+        /// Applies `update` only if no logout happened since this refresh started; otherwise
+        /// a late result would sign the old account back in.
+        func apply(_ update: @escaping @MainActor () -> Void) async -> Bool {
+            await MainActor.run {
+                guard self.authGeneration == generation else {
+                    DebugLog.info("Discarding refresh result that finished after logout", context: "AuthManager")
+                    return false
+                }
+                update()
+                return true
+            }
         }
 
         switch await ensureValidSession() {
@@ -623,7 +639,7 @@ public class AuthManager: ObservableObject {
             // Still signed in: keep the last known profile (and its tier) on screen and keep
             // retrying, rather than showing a paying user as signed out until they log in again.
             let cachedUser = currentUser ?? loadCachedUserProfile()
-            await MainActor.run {
+            _ = await apply {
                 self.currentUser = cachedUser
                 self.isAuthenticated = true
                 self.isLoading = false
@@ -634,7 +650,7 @@ public class AuthManager: ObservableObject {
             clearCachedUserProfile()
             fallthrough
         case .missing:
-            await MainActor.run {
+            _ = await apply {
                 self.currentUser = nil
                 self.isAuthenticated = false
                 self.isLoading = false
@@ -643,15 +659,13 @@ public class AuthManager: ObservableObject {
             return .sessionUnavailable
         }
 
-        await MainActor.run {
-            self.isAuthenticated = true
-        }
+        guard await apply({ self.isAuthenticated = true }) else { return .sessionUnavailable }
 
         do {
             let user = try await supabase.fetchUser()
             DebugLog.info("User fetched: \(user.email), tier: \(user.subscriptionTier), words: \(user.totalWordsUsed)", context: "AuthManager")
-            cacheUserProfile(user)
-            await MainActor.run {
+            let applied = await apply {
+                self.cacheUserProfile(user)
                 self.objectWillChange.send()
                 self.currentUser = user
                 self.isAuthenticated = true
@@ -660,12 +674,13 @@ public class AuthManager: ObservableObject {
 
                 NotificationCenter.default.post(name: NSNotification.Name(Constants.userAuthChangedNotification), object: nil)
             }
+            guard applied else { return .sessionUnavailable }
             DebugLog.info("Auth state updated - isAuthenticated: true", context: "AuthManager")
             return .profileLoaded
         } catch {
             DebugLog.warning("Failed to fetch authenticated profile", context: "AuthManager")
             let cachedUser = currentUser == nil ? loadCachedUserProfile() : nil
-            await MainActor.run {
+            _ = await apply {
                 if let cachedUser {
                     // Keep the last known profile so subscription status (e.g. lifetime)
                     // survives a backend outage instead of degrading to signed-out gating.
@@ -766,6 +781,13 @@ public class AuthManager: ObservableObject {
 
     public func logout() async {
         DebugLog.info("Logging out...", context: "AuthManager")
+        await MainActor.run {
+            // Invalidate any refresh still in flight (e.g. a scheduled restore) so it cannot
+            // sign this account back in or re-cache its profile once it finishes.
+            self.authGeneration += 1
+            self.isLoading = false
+            self.updateSessionRestoreState(pending: false)
+        }
         do {
             try await supabase.client?.auth.signOut()
             clearCachedUserProfile()

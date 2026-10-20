@@ -76,6 +76,9 @@ public class AuthManager: ObservableObject {
             AuthManager.applicationURLScheme
         }
         static let userAuthChangedNotification = "UserAuthenticationChanged"
+        /// Backoff between restore attempts while a persisted session cannot be restored. The
+        /// last value repeats until the restore succeeds or the server rejects the session.
+        static let restoreRetryDelays: [TimeInterval] = [5, 15, 30, 60, 120, 300]
     }
 
     private enum Keys {
@@ -97,6 +100,13 @@ public class AuthManager: ObservableObject {
     private let networkMonitor = NWPathMonitor()
     private let networkMonitorQueue = DispatchQueue(label: "com.whispermate.auth.network")
     private var activationObserver: NSObjectProtocol?
+    /// Main-actor state for restoring a persisted session that could not be validated yet.
+    private var isSessionRestorePending = false
+    private var restoreRetryRequestedWhileLoading = false
+    private var restoreRetryAttempt = 0
+    private var restoreRetryTask: Task<Void, Never>?
+    /// Bumped on logout so a refresh that was already running cannot sign the old account back in.
+    private var authGeneration = 0
     #if canImport(AuthenticationServices) && (canImport(AppKit) || canImport(UIKit))
         private let authPresentationContextProvider = AuthPresentationContextProvider()
         private var authSession: ASWebAuthenticationSession?
@@ -165,6 +175,17 @@ public class AuthManager: ObservableObject {
         case profileRequestRejected
     }
 
+    private enum SessionValidation {
+        case valid
+        /// Nothing is stored: the user never signed in or signed out.
+        case missing
+        /// The server definitively refused the stored refresh token.
+        case rejected
+        /// A session is stored but could not be validated right now (offline, server error,
+        /// keychain not readable yet). The user is still signed in.
+        case unavailable
+    }
+
     // MARK: - Initialization
 
     private init() {
@@ -215,10 +236,51 @@ public class AuthManager: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard !self.isAuthenticated, !self.isLoading, !self.isAuthenticationSessionActive else { return }
+            guard self.isSessionRestorePending || !self.isAuthenticated,
+                  !self.isAuthenticationSessionActive
+            else { return }
+            guard !self.isLoading else {
+                // The launch restore is still running (the network monitor's first callback
+                // usually lands here). Retry once it finishes instead of dropping the trigger;
+                // a menu-bar app may never become active to trigger another one.
+                self.restoreRetryRequestedWhileLoading = true
+                return
+            }
 
             DebugLog.info("Retrying session restore (\(reason))", context: "AuthManager")
+            self.isLoading = true
             await self.refreshUser()
+        }
+    }
+
+    /// Records whether the persisted session still needs restoring and schedules the next
+    /// attempt. Call on the main actor after `isLoading` has been cleared.
+    @MainActor
+    private func updateSessionRestoreState(pending: Bool) {
+        isSessionRestorePending = pending
+        restoreRetryTask?.cancel()
+        restoreRetryTask = nil
+
+        let retryRequested = restoreRetryRequestedWhileLoading
+        restoreRetryRequestedWhileLoading = false
+
+        guard pending else {
+            restoreRetryAttempt = 0
+            return
+        }
+
+        if retryRequested {
+            retrySessionRestoreIfNeeded(reason: "trigger during refresh")
+            return
+        }
+
+        let delays = Constants.restoreRetryDelays
+        let delay = delays[min(restoreRetryAttempt, delays.count - 1)]
+        restoreRetryAttempt += 1
+        restoreRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.retrySessionRestoreIfNeeded(reason: "scheduled retry")
         }
     }
 
@@ -228,23 +290,39 @@ public class AuthManager: ObservableObject {
         await client.auth.startAutoRefresh()
     }
 
-    private func ensureValidSession() async -> Bool {
-        guard let client = supabase.client else { return false }
+    /// `auth.session` already refreshes an expired session (sharing any in-flight refresh with
+    /// the auto-refresh loop), so there is no second `refreshSession()` call here: it would
+    /// resend the same stored refresh token and fail the same way.
+    private func ensureValidSession() async -> SessionValidation {
+        guard let client = supabase.client else { return .missing }
         do {
             _ = try await client.auth.session
             await startAutoRefreshIfNeeded()
-            return true
+            return .valid
         } catch {
-            DebugLog.info("No active session; attempting refresh", context: "AuthManager")
-            do {
-                _ = try await client.auth.refreshSession()
-                await startAutoRefreshIfNeeded()
-                return true
-            } catch {
-                DebugLog.info("Session refresh failed", context: "AuthManager")
-                return false
+            if isDefinitiveSessionRejection(error) {
+                DebugLog.warning("Stored session was rejected by the server", context: "AuthManager")
+                return .rejected
             }
+            // The SDK deletes the stored session itself when the server reports it gone, so a
+            // session still on disk means this failure was transient.
+            if supabase.hasPersistedSession {
+                DebugLog.warning("Stored session could not be validated yet", context: "AuthManager")
+                return .unavailable
+            }
+            DebugLog.info("No stored session", context: "AuthManager")
+            return .missing
         }
+    }
+
+    /// A 4xx from the token endpoint means the refresh token itself is invalid, expired, or
+    /// revoked; signing in again is the only way forward. Network errors, rate limits, and
+    /// server errors are retried instead.
+    private func isDefinitiveSessionRejection(_ error: Error) -> Bool {
+        guard let authError = error as? AuthError,
+              case let .api(_, _, _, response) = authError
+        else { return false }
+        return (400 ... 499).contains(response.statusCode) && response.statusCode != 429
     }
 
     // MARK: - Public API
@@ -272,7 +350,7 @@ public class AuthManager: ObservableObject {
     /// auth storage; callers should use the returned token only for the request
     /// they are about to make.
     public func accessToken() async throws -> String {
-        guard await ensureValidSession(), let client = supabase.client else {
+        guard await ensureValidSession() == .valid, let client = supabase.client else {
             throw NSError(
                 domain: "AuthManager",
                 code: 401,
@@ -535,43 +613,74 @@ public class AuthManager: ObservableObject {
 
     private func refreshUserWithOutcome() async -> UserRefreshOutcome {
         DebugLog.info("Fetching user data...", context: "AuthManager")
-        await MainActor.run {
+        let generation = await MainActor.run {
             self.isLoading = true
             self.error = nil
+            return self.authGeneration
         }
 
-        let hasSession = await ensureValidSession()
-        guard hasSession else {
+        /// Applies `update` only if no logout happened since this refresh started; otherwise
+        /// a late result would sign the old account back in.
+        func apply(_ update: @escaping @MainActor () -> Void) async -> Bool {
             await MainActor.run {
+                guard self.authGeneration == generation else {
+                    DebugLog.info("Discarding refresh result that finished after logout", context: "AuthManager")
+                    return false
+                }
+                update()
+                return true
+            }
+        }
+
+        switch await ensureValidSession() {
+        case .valid:
+            break
+        case .unavailable:
+            // Still signed in: keep the last known profile (and its tier) on screen and keep
+            // retrying, rather than showing a paying user as signed out until they log in again.
+            let cachedUser = currentUser ?? loadCachedUserProfile()
+            _ = await apply {
+                self.currentUser = cachedUser
+                self.isAuthenticated = true
+                self.isLoading = false
+                self.updateSessionRestoreState(pending: true)
+            }
+            return .sessionUnavailable
+        case .rejected:
+            clearCachedUserProfile()
+            fallthrough
+        case .missing:
+            _ = await apply {
                 self.currentUser = nil
                 self.isAuthenticated = false
                 self.isLoading = false
+                self.updateSessionRestoreState(pending: false)
             }
             return .sessionUnavailable
         }
 
-        await MainActor.run {
-            self.isAuthenticated = true
-        }
+        guard await apply({ self.isAuthenticated = true }) else { return .sessionUnavailable }
 
         do {
             let user = try await supabase.fetchUser()
             DebugLog.info("User fetched: \(user.email), tier: \(user.subscriptionTier), words: \(user.totalWordsUsed)", context: "AuthManager")
-            cacheUserProfile(user)
-            await MainActor.run {
+            let applied = await apply {
+                self.cacheUserProfile(user)
                 self.objectWillChange.send()
                 self.currentUser = user
                 self.isAuthenticated = true
                 self.isLoading = false
+                self.updateSessionRestoreState(pending: false)
 
                 NotificationCenter.default.post(name: NSNotification.Name(Constants.userAuthChangedNotification), object: nil)
             }
+            guard applied else { return .sessionUnavailable }
             DebugLog.info("Auth state updated - isAuthenticated: true", context: "AuthManager")
             return .profileLoaded
         } catch {
             DebugLog.warning("Failed to fetch authenticated profile", context: "AuthManager")
             let cachedUser = currentUser == nil ? loadCachedUserProfile() : nil
-            await MainActor.run {
+            _ = await apply {
                 if let cachedUser {
                     // Keep the last known profile so subscription status (e.g. lifetime)
                     // survives a backend outage instead of degrading to signed-out gating.
@@ -583,6 +692,7 @@ public class AuthManager: ObservableObject {
                     self.error = "We could not load your account. Please try again."
                 }
                 self.isLoading = false
+                self.updateSessionRestoreState(pending: true)
             }
             return .profileRequestRejected
         }
@@ -671,12 +781,20 @@ public class AuthManager: ObservableObject {
 
     public func logout() async {
         DebugLog.info("Logging out...", context: "AuthManager")
+        await MainActor.run {
+            // Invalidate any refresh still in flight (e.g. a scheduled restore) so it cannot
+            // sign this account back in or re-cache its profile once it finishes.
+            self.authGeneration += 1
+            self.isLoading = false
+            self.updateSessionRestoreState(pending: false)
+        }
         do {
             try await supabase.client?.auth.signOut()
             clearCachedUserProfile()
             await MainActor.run {
                 self.currentUser = nil
                 self.isAuthenticated = false
+                self.updateSessionRestoreState(pending: false)
             }
             DebugLog.info("Logged out successfully", context: "AuthManager")
         } catch {

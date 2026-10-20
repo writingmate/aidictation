@@ -212,7 +212,13 @@ final class PersistentAuthLocalStorage: AuthLocalStorage, @unchecked Sendable {
         if status != errSecItemNotFound {
             DebugLog.error("Keychain retrieve failed (\(status))", context: "AuthStorage")
         }
-        if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
+        if status == errSecInteractionNotAllowed {
+            // The keychain is not readable yet (locked, or launched before it was unlocked).
+            // This is transient: keep the item so the session restores on the next attempt, but
+            // still use the defaults copy `store` writes when a keychain write fails.
+            return try legacy.retrieve(key: key)
+        }
+        if status == errSecAuthFailed {
             // The item cannot be read by this binary at all, and leaving it in place would keep
             // every later write on the failing update path. Drop it so the next sign-in stores
             // a session this build owns.

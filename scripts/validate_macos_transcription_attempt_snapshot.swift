@@ -399,8 +399,14 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         }
         let liveOutputSource = String(source[liveOutputStart.lowerBound..<liveOutputEnd.lowerBound])
         precondition(
-            liveOutputSource.contains("return transcriptWithoutStandaloneFillers(cleaned)"),
-            "Successful LLM cleanup no longer runs the live filler output filter"
+            liveOutputSource.contains("TranscriptionCleanupGuard.resolve(")
+                && liveOutputSource.contains("rawTranscript: rawText")
+                && liveOutputSource.contains("cleanedOutput: cleaned"),
+            "Successful LLM cleanup no longer passes its output through the cleanup guard"
+        )
+        precondition(
+            liveOutputSource.contains("return transcriptWithoutStandaloneFillers(verdict.text)"),
+            "Successful LLM cleanup no longer runs the live filler output filter on the guarded output"
         )
         precondition(
             liveOutputSource.contains("return transcriptWithoutStandaloneFillers(rawText)"),

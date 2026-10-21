@@ -21,6 +21,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -51,6 +53,25 @@ def prompt_header(swift_source):
     return opening.group(1) + rules.group(1)
 
 
+def closing_reminder(swift_source):
+    """The line TranscriptionCleanupPrompt.userMessage appends after the source.
+
+    Older refs have no reminder, so the eval sends exactly what each ref sent.
+    """
+    match = re.search(
+        r'static let transcriptionClosingReminder =\s*\n?\s*"([^"]*)"', swift_source
+    )
+    return match.group(1) if match else None
+
+
+def user_message(ref, source):
+    message = f"<transcription>\n{escape(source)}\n</transcription>"
+    reminder = closing_reminder(read_source(SWIFT_PROMPT, ref))
+    if reminder:
+        message += "\n\n" + reminder
+    return message
+
+
 def escape(value):
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -66,14 +87,14 @@ def system_prompt(ref, app_context, screen_context):
     return prompt
 
 
-def complete(args, system, source):
+def complete(args, system, user):
     body = {
         "model": args.model,
         "temperature": 0,
         "max_tokens": 1000,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": f"<transcription>\n{escape(source)}\n</transcription>"},
+            {"role": "user", "content": user},
         ],
     }
     request = urllib.request.Request(
@@ -86,17 +107,40 @@ def complete(args, system, source):
         },
     )
     error = None
-    for _ in range(3):
+    for attempt in range(6):
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 return json.load(response)["choices"][0]["message"].get("content") or ""
+        except urllib.error.HTTPError as caught:
+            error = caught
+            if caught.code != 429:
+                raise RuntimeError(f"request failed: {caught}") from caught
+            # Shared keys sit on tight token-per-minute limits; wait them out.
+            retry_after = caught.headers.get("retry-after")
+            delay = float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else 2.0 ** attempt
+            time.sleep(min(delay + 1, 90))
         except Exception as caught:  # noqa: BLE001 - retried, then reported
             error = caught
+            time.sleep(2.0 ** attempt)
     raise RuntimeError(f"request failed: {error}")
 
 
 def words(text):
     return [word for word in re.findall(r"[a-z0-9']+", text.lower()) if word not in FILLERS]
+
+
+REFUSAL_OPENERS = re.compile(
+    r"^(i'?m sorry|i am sorry|sorry|apologies|unfortunately|i apologi[sz]e|as an ai|"
+    r"i (can'?t|cannot|can not|won'?t|will not|am unable|'?m unable|am not able|'?m not able))\b"
+)
+
+
+def classify_failure(output):
+    """Label a failing output so refusals and fulfilled requests are visible."""
+    head = re.sub(r"^[\s>*`\"'_-]+", "", output.strip().lower())
+    if REFUSAL_OPENERS.match(head):
+        return "refusal"
+    return "rewrote"
 
 
 def run_variant(args, label, ref, suite):
@@ -105,10 +149,18 @@ def run_variant(args, label, ref, suite):
         True: system_prompt(ref, suite["app_context"], suite["screen_context"]),
     }
     jobs = [(case, index) for case in suite["cases"] for index in range(args.runs)]
-    tallies = {case["id"]: {"pass": 0, "empty": 0, "fail": []} for case in suite["cases"]}
+    tallies = {
+        case["id"]: {"pass": 0, "empty": 0, "refusal": 0, "fail": []}
+        for case in suite["cases"]
+    }
     with concurrent.futures.ThreadPoolExecutor(args.concurrency) as pool:
         futures = {
-            pool.submit(complete, args, prompts[case.get("use_screen_context", False)], case["source"]): case
+            pool.submit(
+                complete,
+                args,
+                prompts[case.get("use_screen_context", False)],
+                user_message(ref, case["source"]),
+            ): case
             for case, _ in jobs
         }
         for future in concurrent.futures.as_completed(futures):
@@ -120,6 +172,8 @@ def run_variant(args, label, ref, suite):
             elif words(output) == words(case["source"]):
                 tally["pass"] += 1
             else:
+                if classify_failure(output) == "refusal":
+                    tally["refusal"] += 1
                 tally["fail"].append(output)
 
     print(f"\n{label}")
@@ -127,7 +181,10 @@ def run_variant(args, label, ref, suite):
     for case_id, tally in tallies.items():
         failures += len(tally["fail"])
         empty = f"  empty {tally['empty']}" if tally["empty"] else ""
-        print(f"  {case_id:36} pass {tally['pass']}/{args.runs}  fail {len(tally['fail'])}{empty}")
+        refusal = f"  refusal {tally['refusal']}" if tally["refusal"] else ""
+        print(
+            f"  {case_id:40} pass {tally['pass']}/{args.runs}  fail {len(tally['fail'])}{refusal}{empty}"
+        )
         for output in tally["fail"][:args.show]:
             print("      " + output.replace("\n", " | ")[:200])
     return failures

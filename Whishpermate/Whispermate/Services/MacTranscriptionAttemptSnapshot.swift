@@ -240,4 +240,20 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
             .filter { $0.isSupported(in: rawTranscript) }
             .map(\.cleanupInstruction)
     }
+
+    /// True when a matching context rule appended free-form instructions to
+    /// the base vocabulary, phrase, replacement, and expansion context. Such
+    /// rules may legitimately reword the dictation, so the output guard
+    /// relaxes its divergence checks for them.
+    var hasContextRuleInstructions: Bool {
+        cleanupPromptComponents.count > baseCleanupPromptComponents.count
+    }
+
+    /// How closely the cleanup output must track the raw transcript.
+    var cleanupExpectation: TranscriptionCleanupGuard.Expectation {
+        if outputMode != .dictation {
+            return .transformation
+        }
+        return hasContextRuleInstructions ? .instructedCleanup : .faithfulCleanup
+    }
 }

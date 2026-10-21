@@ -14,6 +14,7 @@ public enum SharedTranscriptionService {
         fileprivate let sttPrompt: String
         fileprivate let postProcessingPrompt: String
         fileprivate let serverPostProcessingPrompt: String
+        fileprivate let cleanupExpectation: TranscriptionCleanupGuard.Expectation
 
         public var prefersRealtimeRecognition: Bool {
             !useOnDeviceRecognition
@@ -103,6 +104,10 @@ public enum SharedTranscriptionService {
                 serverPostProcessingPrompt: SharedTranscriptionService.serverPostProcessingPrompt(
                     outputMode: selectedOutputMode,
                     referenceContext: prompts.postProcessing
+                ),
+                cleanupExpectation: SharedTranscriptionService.cleanupExpectation(
+                    outputMode: selectedOutputMode,
+                    hasPresetInstructions: prompts.hasPresetInstructions
                 )
             )
         }
@@ -256,7 +261,8 @@ public enum SharedTranscriptionService {
                         transcript: durableRawTranscript,
                         outputMode: request.outputMode,
                         postProcessingPrompt: request.postProcessingPrompt,
-                        cleanupConfiguration: request.cleanup
+                        cleanupConfiguration: request.cleanup,
+                        cleanupExpectation: request.cleanupExpectation
                     )
                 }
             } catch is CancellationError {
@@ -301,7 +307,8 @@ public enum SharedTranscriptionService {
                     transcript: durableRawTranscript,
                     outputMode: request.outputMode,
                     postProcessingPrompt: request.postProcessingPrompt,
-                    cleanupConfiguration: request.cleanup
+                    cleanupConfiguration: request.cleanup,
+                    cleanupExpectation: request.cleanupExpectation
                 )
             }
         } catch is CancellationError {
@@ -335,9 +342,10 @@ public enum SharedTranscriptionService {
         toneStyleManager: ToneStyleManager,
         shortcutManager: ShortcutManager,
         selectedPreset: ContextRule?
-    ) -> (stt: String, postProcessing: String) {
+    ) -> (stt: String, postProcessing: String, hasPresetInstructions: Bool) {
         var sttPromptComponents: [String] = []
         var postProcessingPromptComponents: [String] = []
+        var hasPresetInstructions = false
 
         let dictionaryHints = dictionaryManager.transcriptionHints
         if !dictionaryHints.isEmpty {
@@ -361,14 +369,32 @@ public enum SharedTranscriptionService {
 
         if let selectedPreset, !selectedPreset.isNotesModeRule, !selectedPreset.isMeetingsModeRule {
             postProcessingPromptComponents.append("\(selectedPreset.name): \(selectedPreset.instructions)")
+            hasPresetInstructions = !selectedPreset.instructions
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
         return (
             stt: TranscriptionCleanupPrompt.speechRecognitionPrompt(
                 hints: sttPromptComponents
             ),
-            postProcessing: postProcessingPromptComponents.joined(separator: "\n")
+            postProcessing: postProcessingPromptComponents.joined(separator: "\n"),
+            hasPresetInstructions: hasPresetInstructions
         )
+    }
+
+    /// Plain dictation must come back as the dictated words. A user preset
+    /// with its own instructions may reword, and Notes/Meetings restructure,
+    /// so only the assistant-turn checks apply to those.
+    private static func cleanupExpectation(
+        outputMode: TranscriptionOutputMode,
+        hasPresetInstructions: Bool
+    ) -> TranscriptionCleanupGuard.Expectation {
+        switch outputMode {
+        case .dictation:
+            return hasPresetInstructions ? .instructedCleanup : .faithfulCleanup
+        case .notes, .meetings:
+            return .transformation
+        }
     }
 
     private static func serverPostProcessingPrompt(
@@ -398,7 +424,8 @@ public enum SharedTranscriptionService {
         transcript: String,
         outputMode: TranscriptionOutputMode,
         postProcessingPrompt: String,
-        cleanupConfiguration: CleanupRequestConfiguration?
+        cleanupConfiguration: CleanupRequestConfiguration?,
+        cleanupExpectation: TranscriptionCleanupGuard.Expectation
     ) async throws -> String {
         guard CloudTranscriptionConsent.isGranted else {
             DebugLog.info("Skipping cloud post-processing because cloud transcription is not allowed", context: "SharedTranscriptionService")
@@ -416,14 +443,32 @@ public enum SharedTranscriptionService {
         ))
 
         let rules = postProcessingPrompt.isEmpty ? [] : [postProcessingPrompt]
+        let cleaned: String
         switch outputMode {
         case .dictation:
-            return try await client.applyFormattingRules(transcription: transcript, rules: rules)
+            cleaned = try await client.applyFormattingRules(transcription: transcript, rules: rules)
         case .notes:
-            return try await client.applyNotesFormatting(transcription: transcript, rules: rules)
+            cleaned = try await client.applyNotesFormatting(transcription: transcript, rules: rules)
         case .meetings:
-            return try await client.applyMeetingFormatting(transcription: transcript, rules: rules)
+            cleaned = try await client.applyMeetingFormatting(transcription: transcript, rules: rules)
         }
+
+        // Dictation must insert the speaker's words. Output that reads like a
+        // refusal, an assistant reply, or content the model wrote is dropped
+        // for the raw transcript, the same fallback as a failed cleanup.
+        let verdict = TranscriptionCleanupGuard.resolve(
+            rawTranscript: transcript,
+            cleanedOutput: cleaned,
+            expectation: cleanupExpectation,
+            referenceText: rules
+        )
+        if let rejection = verdict.rejection {
+            DebugLog.warning(
+                "Cleanup output rejected (\(rejection)) - using transcript",
+                context: "SharedTranscriptionService"
+            )
+        }
+        return verdict.text
     }
 
     private static func transcribeWithoutDiarization(
@@ -491,7 +536,8 @@ public enum SharedTranscriptionService {
                         transcript: mergedRaw,
                         outputMode: request.outputMode,
                         postProcessingPrompt: request.postProcessingPrompt,
-                        cleanupConfiguration: request.cleanup
+                        cleanupConfiguration: request.cleanup,
+                        cleanupExpectation: request.cleanupExpectation
                     )
                 }
             }

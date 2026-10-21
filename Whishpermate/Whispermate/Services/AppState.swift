@@ -3384,7 +3384,9 @@ class AppState: ObservableObject {
     ) async throws -> String {
         try await cleanupWithRawFallback(
             rawText: rawText,
-            label: "\(snapshot.outputMode.displayName) post-processing"
+            label: "\(snapshot.outputMode.displayName) post-processing",
+            expectation: snapshot.cleanupExpectation,
+            referenceText: snapshot.cleanupPromptComponents(for: rawText)
         ) {
             try await self.applyLLMPass(
                 rawText: rawText,
@@ -3394,21 +3396,35 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Runs cleanup under its deadline and keeps the raw transcript whenever
+    /// the model fails, returns nothing, or returns something other than the
+    /// speaker's words (a refusal, an assistant reply, or content it wrote
+    /// itself). Dictation must insert what the user said.
     private func cleanupWithRawFallback(
         rawText: String,
         label: String,
+        expectation: TranscriptionCleanupGuard.Expectation,
+        referenceText: [String],
         operation: @escaping @Sendable () async throws -> String
     ) async throws -> String {
         do {
             let cleaned = try await withTimeout(
                 seconds: llmPostProcessingTimeoutSeconds,
                 operation: operation
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleaned.isEmpty else {
-                DebugLog.warning("\(label) returned no text - using transcript", context: "AppState")
-                return transcriptWithoutStandaloneFillers(rawText)
+            )
+            let verdict = TranscriptionCleanupGuard.resolve(
+                rawTranscript: rawText,
+                cleanedOutput: cleaned,
+                expectation: expectation,
+                referenceText: referenceText
+            )
+            if let rejection = verdict.rejection {
+                DebugLog.warning(
+                    "\(label) rejected (\(rejection)) - using transcript",
+                    context: "AppState"
+                )
             }
-            return transcriptWithoutStandaloneFillers(cleaned)
+            return transcriptWithoutStandaloneFillers(verdict.text)
         } catch is CancellationError {
             throw CancellationError()
         } catch {

@@ -24,6 +24,8 @@ on:
       - 'scripts/validate_parakeet_runtime_recovery.swift'
       - 'scripts/validate_transcription_prompt_routing.py'
       - 'scripts/validate_transcription_cleanup_prompt.swift'
+      - 'scripts/validate_transcription_cleanup_guard.swift'
+      - 'scripts/evals/cleanup_output_guard_cases.json'
       - 'docs/audio-processing-failure-contract.md'
       - 'AGENTS.md'
       - '.github/workflows/apple-audio-recovery.yml'

@@ -26,6 +26,13 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupGuard.swift \
+  scripts/validate_transcription_cleanup_guard.swift \
+  -o "$work_dir/validate-transcription-cleanup-guard"
+"$work_dir/validate-transcription-cleanup-guard"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Networking/AppleAudioHTTPRecovery.swift \
   scripts/validate_apple_http_audio_recovery.swift \
   -o "$work_dir/validate-apple-http"
@@ -71,6 +78,7 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupGuard.swift \
   Whishpermate/Whispermate/Services/MacTranscriptionAttemptSnapshot.swift \
   scripts/validate_macos_transcription_attempt_snapshot.swift \
   -o "$work_dir/validate-macos-snapshot"

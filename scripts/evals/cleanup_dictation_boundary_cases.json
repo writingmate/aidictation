@@ -32,6 +32,32 @@
       "id": "summarize_request_with_screen",
       "source": "summarize this thread in three bullet points for my manager",
       "use_screen_context": true
+    },
+    {
+      "id": "client_email_request",
+      "source": "write an email to my client about the delayed shipment and apologize for the inconvenience"
+    },
+    {
+      "id": "client_email_request_raw",
+      "source": "um write an email to my client um about the delayed shipment and uh apologize for the inconvenience"
+    },
+    {
+      "id": "client_email_request_with_screen",
+      "source": "write an email to my client about the delayed shipment and apologize for the inconvenience",
+      "use_screen_context": true
+    },
+    {
+      "id": "slack_draft_request",
+      "source": "draft a slack message to the team saying the launch moved to friday keep it friendly"
+    },
+    {
+      "id": "answer_this_question_request",
+      "source": "answer this question for me what time zone is the client in"
+    },
+    {
+      "id": "answer_this_question_request_with_screen",
+      "source": "answer this question for me what time zone is the client in",
+      "use_screen_context": true
     }
   ]
 }

@@ -22,7 +22,14 @@ jobs:
           python3 scripts/validate_transcription_prompt_routing.py
           swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
             -module-cache-path "$RUNNER_TEMP/dictation-module-cache" \
+            Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupGuard.swift \
             Whishpermate/Whispermate/Services/MacTranscriptionAttemptSnapshot.swift \
             scripts/validate_macos_transcription_attempt_snapshot.swift \
             -o "$RUNNER_TEMP/validate-macos-dictation"
           "$RUNNER_TEMP/validate-macos-dictation"
+          swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+            -module-cache-path "$RUNNER_TEMP/dictation-module-cache" \
+            Whishpermate/WhisperMateShared/Networking/TranscriptionCleanupGuard.swift \
+            scripts/validate_transcription_cleanup_guard.swift \
+            -o "$RUNNER_TEMP/validate-cleanup-guard"
+          "$RUNNER_TEMP/validate-cleanup-guard"

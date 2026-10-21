@@ -103,6 +103,14 @@ private func capture(
                 isEnabled: true,
                 diarization: false
             ),
+            .init(
+                name: "Compose formatting",
+                appBundleIDs: [],
+                titlePatterns: ["Compose*"],
+                instructions: "Write as a friendly email",
+                isEnabled: true,
+                diarization: false
+            ),
         ],
         usesContextRules: true,
         appContext: "Before app",
@@ -219,6 +227,46 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
             resolvedTwice.cleanupPromptComponents
                 == currentContextSnapshot.cleanupPromptComponents,
             "Resolving captured context twice duplicated frozen instructions"
+        )
+        // The output guard must hold dictation to its words unless the user
+        // configured rewording rules or a Notes/Meetings transformation.
+        precondition(
+            snapshot.cleanupExpectation == .faithfulCleanup,
+            "Plain dictation cleanup is not held to the dictated words"
+        )
+        precondition(
+            !snapshot.hasContextRuleInstructions,
+            "Vocabulary-only reference context was treated as rewording instructions"
+        )
+        precondition(
+            contextualSnapshot.cleanupExpectation == .faithfulCleanup,
+            "Captured app and screen context changed the cleanup expectation"
+        )
+        precondition(
+            currentContextSnapshot.hasContextRuleInstructions,
+            "A matching context rule's instructions were not recognized"
+        )
+        precondition(
+            currentContextSnapshot.cleanupExpectation == .transformation,
+            "Meetings mode did not relax the guard to a transformation"
+        )
+        let ruleOnlySnapshot = snapshot.withContext(
+            appContext: "Mail",
+            screenContext: "Current screen",
+            appBundleID: "com.other",
+            windowTitle: "Compose: Weekly update"
+        )
+        guard case .dictation = ruleOnlySnapshot.outputMode else {
+            preconditionFailure("A formatting-only rule changed the output mode")
+        }
+        precondition(
+            ruleOnlySnapshot.cleanupPromptComponents
+                == ["Before vocabulary", "Write as a friendly email"],
+            "Title-matched rule instructions were not applied"
+        )
+        precondition(
+            ruleOnlySnapshot.cleanupExpectation == .instructedCleanup,
+            "Dictation with a context rule was not treated as instructed cleanup"
         )
         let appStatePath = "Whishpermate/Whispermate/Services/AppState.swift"
         let source = try String(contentsOfFile: appStatePath, encoding: .utf8)

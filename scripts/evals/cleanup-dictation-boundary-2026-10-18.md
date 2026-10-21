@@ -97,3 +97,19 @@ kind are visible. Cases added: `client_email_request`,
 The exact Slack wording did not reproduce in these runs. The same failure,
 performing the dictated request using on-screen text, reproduces reliably
 through the letter, email, and screen-summary cases.
+
+## Results (10 runs per case, Groq `openai/gpt-oss-20b`, 2026-10-21)
+
+`main` is the 0.0.135 prompt; the fix column is the prompt plus the closing
+reminder in the user turn. 13 cases, 130 completions per column.
+
+| Case | `main` (0.0.135) | Fix (PR #159) |
+|---|---|---|
+| client_email_request | 9/10 (1 wrote the email) | 10/10 |
+| all other 12 cases | 10/10 | 10/10 |
+
+No refusal-style output appeared in these 260 completions. The reported
+"I'm sorry, but I can't help with that" is a low-frequency sample from the
+same prompt, which is why the app no longer relies on the prompt alone: the
+output guard turns that sample into the raw transcript regardless of how
+often the model produces it.

@@ -9,19 +9,22 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
-import kotlin.math.max
 
 /**
  * Reports whether the soft keyboard is on screen, and where its top edge is, by watching
- * a hidden application overlay window.
+ * the keyboard insets delivered to a hidden application overlay window.
  *
  * The accessibility window list is the only keyboard signal available to an
  * accessibility service on its own, and it lags, flaps during keyboard animations and
  * misses keyboards that expose no accessibility tree. An application overlay window
- * (which needs the "display over other apps" permission) is laid out by the window
- * manager like any other window: it is resized when the keyboard appears and, on
- * Android 11 and later, receives the keyboard insets directly. That gives an exact,
- * event-driven signal.
+ * (which needs the "display over other apps" permission) receives the keyboard insets
+ * directly on Android 11 and later, which gives an exact, event-driven signal.
+ *
+ * Only the insets are trusted. The window's own height is not a keyboard signal: an
+ * overlay sits above the keyboard, so the window manager never shrinks it for one, while
+ * it does change size on rotation, folding and full-screen apps. Reading those changes as
+ * a keyboard inverted the bubble on such devices: it stayed away while typing and showed
+ * up without a keyboard.
  *
  * The probe is one pixel wide, full height, invisible and untouchable. Until it has
  * observed the keyboard at least once its reports are unknown (`null`) so a device
@@ -34,13 +37,7 @@ class KeyboardProbeWindow(
 ) {
 
     private var probe: View? = null
-    private var tallestSeen = 0
-    private var layoutSaysVisible = false
-    private var insetsSayVisible = false
-    private var layoutKeyboardTop: Int? = null
-    private var insetsKeyboardTop: Int? = null
-    private var reportedVisible: Boolean? = null
-    private var proven = false
+    private var state = ProbeState()
 
     /** True while the overlay window is attached. */
     val isAttached: Boolean
@@ -51,15 +48,16 @@ class KeyboardProbeWindow(
      * not yet seen the keyboard on this device.
      */
     val keyboardVisible: Boolean?
-        get() = if (proven) reportedVisible else null
+        get() = state.keyboardVisible
 
     /** Screen y of the keyboard's top edge while it is showing, else `null`. */
     val keyboardTop: Int?
-        get() = if (keyboardVisible == true) insetsKeyboardTop ?: layoutKeyboardTop else null
+        get() = state.keyboardTop
 
     /** Attaches the probe if the permission is granted. Returns whether it is attached. */
     fun attach(): Boolean {
         if (probe != null) return true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         if (!canDrawOverlays(context)) return false
 
         val view = View(context)
@@ -75,21 +73,13 @@ class KeyboardProbeWindow(
             gravity = Gravity.TOP or Gravity.START
             title = "AIDictation keyboard probe"
             windowAnimations = 0
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                // Let the window manager shrink the frame above the keyboard.
-                setFitInsetsTypes(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
-            } else {
-                @Suppress("DEPRECATION")
-                softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-            }
+            // Keep the frame stable: the keyboard is read from the insets, never from the size.
+            setFitInsetsTypes(0)
         }
 
-        view.viewTreeObserver.addOnGlobalLayoutListener { onLayout(view) }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            view.setOnApplyWindowInsetsListener { v, insets ->
-                onInsets(v, insets)
-                insets
-            }
+        view.setOnApplyWindowInsetsListener { v, insets ->
+            onInsets(v, insets)
+            insets
         }
 
         return try {
@@ -111,42 +101,16 @@ class KeyboardProbeWindow(
         } catch (e: Exception) {
             Log.w(TAG, "Failed to detach keyboard probe", e)
         }
-        tallestSeen = 0
-        layoutSaysVisible = false
-        insetsSayVisible = false
-        layoutKeyboardTop = null
-        insetsKeyboardTop = null
-        reportedVisible = null
-        proven = false
-    }
-
-    private fun onLayout(view: View) {
-        val height = view.height
-        if (height <= 0) return
-        tallestSeen = max(tallestSeen, height)
-        val visible = isKeyboardHeight(tallestSeen, height, minimumKeyboardPx())
-        layoutSaysVisible = visible
-        layoutKeyboardTop = if (visible) screenY(view) + height else null
-        publish()
+        state = ProbeState()
     }
 
     private fun onInsets(view: View, insets: WindowInsets) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val bottom = insets.getInsets(WindowInsets.Type.ime()).bottom
-        val visible = insets.isVisible(WindowInsets.Type.ime()) && bottom > 0
-        insetsSayVisible = visible
-        insetsKeyboardTop = if (visible) screenY(view) + view.height - bottom else null
-        publish()
-    }
-
-    private fun publish() {
-        val visible = layoutSaysVisible || insetsSayVisible
-        val previous = reportedVisible
-        reportedVisible = visible
-        // The first keyboard sighting proves the technique works on this device; from
-        // then on a hidden report is trusted too.
-        if (visible) proven = true
-        if (proven && previous != visible) onChanged()
+        val imeVisible = insets.isVisible(WindowInsets.Type.ime())
+        val previous = state
+        state = previous.observe(imeVisible, bottom, screenY(view) + view.height)
+        if (state.keyboardVisible != previous.keyboardVisible) onChanged()
     }
 
     private fun screenY(view: View): Int {
@@ -155,22 +119,37 @@ class KeyboardProbeWindow(
         return location[1]
     }
 
-    private fun minimumKeyboardPx(): Int =
-        (MINIMUM_KEYBOARD_DP * context.resources.displayMetrics.density).toInt()
+    /**
+     * The probe's report, derived only from keyboard insets. Pure so the proving rule
+     * can be tested without a window.
+     */
+    internal data class ProbeState(
+        private val proven: Boolean = false,
+        private val visible: Boolean = false,
+        val keyboardTop: Int? = null
+    ) {
+        val keyboardVisible: Boolean?
+            get() = if (proven) visible else null
+
+        /**
+         * Folds in one insets report. [windowBottom] is the screen y of the probe's
+         * bottom edge; the keyboard's top edge is [imeBottom] above it.
+         */
+        fun observe(imeVisible: Boolean, imeBottom: Int, windowBottom: Int): ProbeState {
+            val showing = imeVisible && imeBottom > 0
+            return ProbeState(
+                // The first keyboard sighting proves the technique works on this device;
+                // from then on a hidden report is trusted too.
+                proven = proven || showing,
+                visible = showing,
+                keyboardTop = if (showing) windowBottom - imeBottom else null
+            )
+        }
+    }
 
     companion object {
         private const val TAG = "KeyboardProbeWindow"
 
-        /** Nothing shorter than this counts as a keyboard; system bars and toolbars are smaller. */
-        const val MINIMUM_KEYBOARD_DP = 120
-
         fun canDrawOverlays(context: Context): Boolean = Settings.canDrawOverlays(context)
-
-        /**
-         * A window that is at least [minimumKeyboardPx] shorter than the tallest it has
-         * been is sitting above a keyboard.
-         */
-        internal fun isKeyboardHeight(tallestSeen: Int, height: Int, minimumKeyboardPx: Int): Boolean =
-            tallestSeen > 0 && height > 0 && tallestSeen - height >= minimumKeyboardPx
     }
 }

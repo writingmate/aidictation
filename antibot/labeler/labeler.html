@@ -1,0 +1,135 @@
+<title>Bot Flagging Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one comment at a time in a reading column, verdict controls pinned directly under it. */
+:root {
+  --bg: #f3f5f7; --surface: #ffffff; --fg: #17212b; --muted: #5a6875; --line: #d5dce3;
+  --bot: #a3195b; --bot-fg: #ffffff; --human: #0b6e69; --human-fg: #ffffff; --unsure: #e4e9ee; --unsure-fg: #17212b;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11171d; --surface: #1a222a; --fg: #e8edf2; --muted: #9aa8b5; --line: #2e3a45;
+  --bot: #e0528f; --bot-fg: #1a0610; --human: #3cbdb5; --human-fg: #04211f; --unsure: #2a353f; --unsure-fg: #e8edf2; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #11171d; --surface: #1a222a; --fg: #e8edf2; --muted: #9aa8b5; --line: #2e3a45;
+  --bot: #e0528f; --bot-fg: #1a0610; --human: #3cbdb5; --human-fg: #04211f; --unsure: #2a353f; --unsure-fg: #e8edf2; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 17px/1.55 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 32px; }
+main { max-width: 680px; margin: 0 auto; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; }
+h1 { font-size: 19px; margin: 0; }
+.tally { font: 500 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.tally b { font-weight: 500; }
+.tally .b { color: var(--bot); } .tally .h { color: var(--human); }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--fg); }
+.rule { font-size: 14px; color: var(--muted); margin: 0; max-width: 65ch; }
+article { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; min-height: 180px; display: grid; gap: 12px; align-content: start; }
+.ctx { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--muted); }
+.ctx span { min-width: 0; overflow-wrap: anywhere; }
+.ctx a { color: inherit; white-space: nowrap; }
+#text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.verdicts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+button { font: 700 16px var(--body); border: 0; border-radius: 8px; padding: 13px 8px; cursor: pointer; }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+button kbd { font: 500 12px var(--mono); opacity: .75; margin-left: 6px; }
+#bot { background: var(--bot); color: var(--bot-fg); } #human { background: var(--human); color: var(--human-fg); } #unsure { background: var(--unsure); color: var(--unsure-fg); }
+footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 28px; }
+#undo { background: none; color: var(--muted); font: 400 14px var(--body); padding: 4px 0; text-decoration: underline; }
+#status { font-size: 14px; color: var(--muted); }
+#status.err { color: var(--bot); }
+@media (max-width: 460px) { button kbd { display: none; } article { padding: 14px; } }
+</style>
+<main>
+  <header>
+    <h1>Bot Flagging Desk</h1>
+    <div class="tally" id="tally">Loading labels</div>
+  </header>
+  <div class="bar"><i id="fill"></i></div>
+  <p class="rule">Flag <strong>Bot</strong> if you think automation or an LLM wrote this comment, even if a person posted it. Go with your gut, and use Unsure when you can't tell.</p>
+  <article>
+    <div class="ctx"><span id="ctx"></span><a id="link" href="#" target="_blank" rel="noopener" hidden>Open thread</a></div>
+    <p id="text">Comments will appear here once your saved labels load.</p>
+  </article>
+  <div class="verdicts">
+    <button id="bot" disabled>Bot<kbd>B</kbd></button>
+    <button id="human" disabled>Human<kbd>H</kbd></button>
+    <button id="unsure" disabled>Unsure<kbd>U</kbd></button>
+  </div>
+  <footer>
+    <button id="undo" disabled>Undo last (Z)</button>
+    <span id="status" role="status"></span>
+  </footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let pool = [], labels = new Map(), history = [], current = null, labelsRef = null, ready = false;
+
+function setStatus(msg, err) { $("status").textContent = msg || ""; $("status").className = err ? "err" : ""; }
+
+function render() {
+  const counts = { bot: 0, human: 0, unsure: 0 };
+  for (const l of labels.values()) if (l in counts) counts[l]++;
+  const done = pool.filter(c => labels.has(c.id)).length;
+  $("tally").innerHTML = `<b class="b">${counts.bot} bot</b> · <b class="h">${counts.human} human</b> · ${counts.unsure} unsure · ${done}/${pool.length}`;
+  $("fill").style.width = pool.length ? (100 * done / pool.length) + "%" : "0";
+  current = pool.find(c => !labels.has(c.id)) || null;
+  if (current) {
+    $("text").textContent = current.text;
+    $("ctx").textContent = current.context ? "On: " + current.context : "";
+    $("link").href = current.url; $("link").hidden = false;
+  } else if (pool.length) {
+    $("text").textContent = "That's the whole batch. Tell Claude you're done and it will train on these labels.";
+    $("ctx").textContent = ""; $("link").hidden = true;
+  }
+  for (const id of ["bot", "human", "unsure"]) $(id).disabled = !ready || !current;
+  $("undo").disabled = !ready || !history.length;
+}
+
+async function flag(label) {
+  if (!ready || !current) return;
+  const c = current;
+  labels.set(c.id, label); history.push(c.id); render();
+  try { await labelsRef.doc(c.id).set({ label, at: new Date().toISOString() }); setStatus(""); }
+  catch (e) {
+    labels.delete(c.id); history.pop(); render();
+    setStatus("That label didn't save. Try again in a moment.", true);
+  }
+}
+
+async function undo() {
+  if (!ready || !history.length) return;
+  const id = history.pop(), prev = labels.get(id);
+  labels.delete(id); render();
+  try { await labelsRef.doc(id).delete(); setStatus(""); }
+  catch (e) { labels.set(id, prev); history.push(id); render(); setStatus("Undo didn't save. Try again in a moment.", true); }
+}
+
+$("bot").onclick = () => flag("bot");
+$("human").onclick = () => flag("human");
+$("unsure").onclick = () => flag("unsure");
+$("undo").onclick = undo;
+addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") flag("bot"); else if (k === "h") flag("human"); else if (k === "u") flag("unsure"); else if (k === "z") undo();
+});
+
+(async () => {
+  try { pool = await (await fetch("pool.json")).json(); }
+  catch (e) { setStatus("The comment batch didn't load. Reload the page.", true); return; }
+  const db = window.claude ? await window.claude.use("db") : null;
+  if (!db) { render(); $("tally").textContent = `0/${pool.length}`; setStatus("Saving isn't available in this view, so flagging is off.", true); return; }
+  labelsRef = db.collection("labels");
+  const timer = setTimeout(() => setStatus("Your saved labels can't be reached yet.", true), 10000);
+  try {
+    const snap = await labelsRef.limit(1000).get();
+    snap.docs.forEach(d => labels.set(d.id, d.data().label));
+    ready = true; clearTimeout(timer); setStatus(""); render();
+  } catch (e) { clearTimeout(timer); setStatus("Your saved labels didn't load. Reload the page.", true); }
+})();
+</script>

@@ -4,3 +4,4 @@ models/
 __pycache__/
 labeler/pool.json
 .vercel/
+.env*

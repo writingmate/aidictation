@@ -3,3 +3,5 @@ labeler/
 scripts/
 .venv/
 __pycache__/
+.env*
+.vercel/

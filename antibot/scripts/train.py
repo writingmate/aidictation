@@ -31,6 +31,7 @@ DATA = ROOT / "data"
 TARGET_FPR = 0.01
 MIN_CHARS, MAX_CHARS = 60, 2000
 CLAUDE = ["fable", "haiku", "opus", "sonnet"]
+GPT_FAMILY = ["chatgpt", "gpt"]
 
 
 def build_model():
@@ -114,10 +115,10 @@ def main():
 
     # A family's bots are withheld. Its humans stay in training only when they come from
     # a different forum, and the test humans are always the withheld forum's own.
-    claude, chatgpt = np.isin(sources, CLAUDE), sources == "chatgpt"
+    claude, gpt_family = np.isin(sources, CLAUDE), np.isin(sources, GPT_FAMILY)
     metrics["leave_one_family_out"] = {
         "claude_unseen": evaluate(family == "hc3", claude, sources == "hn_2016_2020", threshold, X, y),
-        "chatgpt_unseen": evaluate(family == "hn", chatgpt, sources == "hc3_human", threshold, X, y),
+        "chatgpt_unseen": evaluate((family == "hn") & ~gpt_family, gpt_family, sources == "hc3_human", threshold, X, y),
     }
 
     print(json.dumps(metrics, indent=2))

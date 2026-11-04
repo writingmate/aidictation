@@ -17,6 +17,7 @@ def main():
     ap.add_argument("--n", type=int, default=2000)
     ap.add_argument("--out", default=str(Path(__file__).parent.parent / "data/human.jsonl"))
     args = ap.parse_args()
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
 
     random.seed(11)
     rows, seen = [], set()

@@ -18,7 +18,7 @@ PLAN = {"haiku": 240, "sonnet": 240, "opus": 150, "fable": 150,
 humans = [json.loads(l) for l in (DATA / "human.jsonl").read_text().splitlines()]
 random.seed(17)
 gen = DATA / "gen"
-gen.mkdir(exist_ok=True)
+gen.mkdir(parents=True, exist_ok=True)
 for name, n in PLAN.items():
     rows = []
     for i, h in enumerate(random.sample(humans, n)):

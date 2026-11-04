@@ -68,6 +68,14 @@ footer { display: flex; justify-content: space-between; align-items: center; gap
 <script>
 const $ = id => document.getElementById(id);
 let pool = [], labels = new Map(), history = [], current = null, labelsRef = null, ready = false;
+let writes = Promise.resolve();
+
+// Saves and undos run one at a time, so a rollback only ever undoes its own operation.
+function enqueue(write) {
+  const result = writes.then(write);
+  writes = result.catch(() => {});
+  return result;
+}
 
 function setStatus(msg, err) { $("status").textContent = msg || ""; $("status").className = err ? "err" : ""; }
 
@@ -94,9 +102,9 @@ async function flag(label) {
   if (!ready || !current) return;
   const c = current;
   labels.set(c.id, label); history.push(c.id); render();
-  try { await labelsRef.doc(c.id).set({ label, at: new Date().toISOString() }); setStatus(""); }
+  try { await enqueue(() => labelsRef.doc(c.id).set({ label, at: new Date().toISOString() })); setStatus(""); }
   catch (e) {
-    labels.delete(c.id); history.pop(); render();
+    labels.delete(c.id); history = history.filter(id => id !== c.id); render();
     setStatus("That label didn't save. Try again in a moment.", true);
   }
 }
@@ -105,7 +113,7 @@ async function undo() {
   if (!ready || !history.length) return;
   const id = history.pop(), prev = labels.get(id);
   labels.delete(id); render();
-  try { await labelsRef.doc(id).delete(); setStatus(""); }
+  try { await enqueue(() => labelsRef.doc(id).delete()); setStatus(""); }
   catch (e) { labels.set(id, prev); history.push(id); render(); setStatus("Undo didn't save. Try again in a moment.", true); }
 }
 

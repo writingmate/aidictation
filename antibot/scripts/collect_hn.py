@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--size", type=int, default=600)
     ap.add_argument("--out", default=str(Path(__file__).parent.parent / "data/pool.json"))
     args = ap.parse_args()
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
 
     rows, seen = [], set()
     for h in fetch_hits(args.fetch):

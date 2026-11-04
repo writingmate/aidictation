@@ -23,6 +23,7 @@ def fetch(endpoint, **params):
 splits = fetch("splits")["splits"]
 print([(s["config"], s["split"]) for s in splits])
 config = next(s for s in splits if "eli5" in s["config"])
+OUT.parent.mkdir(parents=True, exist_ok=True)
 with OUT.open("w") as f:
     for page in range(PAGES):
         rows = fetch("rows", config=config["config"], split=config["split"], offset=page * 100, length=100)["rows"]

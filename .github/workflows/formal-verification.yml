@@ -1,0 +1,38 @@
+name: Formal Verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Whishpermate/Whispermate/Services/MacAudioProcessingStore.swift'
+      - 'Whishpermate/Whispermate/Services/MacAudioProcessingStoreProvider.swift'
+      - 'Whishpermate/Whispermate/Services/AppState.swift'
+      - 'docs/audio-processing-failure-contract.md'
+      - 'formal/**'
+      - '.github/workflows/formal-verification.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-verification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model-check:
+    name: macOS audio store model check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check that every seeded bug is caught
+        run: python3 formal/mac_audio_store_model.py --self-test
+
+      - name: Model check one recording with two crashes
+        run: python3 formal/mac_audio_store_model.py --recs 1 --max-crashes 2
+
+      - name: Model check two concurrent recordings
+        run: python3 formal/mac_audio_store_model.py --recs 2 --max-attempts 2 --max-crashes 1

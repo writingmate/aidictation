@@ -25,6 +25,8 @@
 		AA10000000000000000004 /* HostLaunchRecoveryGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000003 /* HostLaunchRecoveryGate.swift */; };
 		AA10000000000000000006 /* MobileAudioLaunchRecoveryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000005 /* MobileAudioLaunchRecoveryPolicyTests.swift */; };
 		AA10000000000000000008 /* MobileAudioLaunchRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */; };
+		RVP100012F11000100000001 /* ReviewPromptPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVP100012F11000100000003 /* ReviewPromptPolicyTests.swift */; };
+		RVP100012F11000100000002 /* ReviewPromptPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVP100012F11000100000004 /* ReviewPromptPolicy.swift */; };
 		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -184,6 +186,8 @@
 		AA10000000000000000003 /* HostLaunchRecoveryGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HostLaunchRecoveryGate.swift; path = WhisperMateShared/Services/HostLaunchRecoveryGate.swift; sourceTree = SOURCE_ROOT; };
 		AA10000000000000000005 /* MobileAudioLaunchRecoveryPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MobileAudioLaunchRecoveryPolicyTests.swift; sourceTree = "<group>"; };
 		AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAudioLaunchRecoveryPolicy.swift; path = WhisperMateShared/Services/MobileAudioLaunchRecoveryPolicy.swift; sourceTree = SOURCE_ROOT; };
+		RVP100012F11000100000003 /* ReviewPromptPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewPromptPolicyTests.swift; sourceTree = "<group>"; };
+		RVP100012F11000100000004 /* ReviewPromptPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ReviewPromptPolicy.swift; path = WhisperMateShared/Services/ReviewPromptPolicy.swift; sourceTree = SOURCE_ROOT; };
 		56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatterTests.swift; sourceTree = "<group>"; };
 		5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolver.swift; sourceTree = "<group>"; };
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -361,6 +365,8 @@
 				AA10000000000000000003 /* HostLaunchRecoveryGate.swift */,
 				AA10000000000000000005 /* MobileAudioLaunchRecoveryPolicyTests.swift */,
 				AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */,
+				RVP100012F11000100000003 /* ReviewPromptPolicyTests.swift */,
+				RVP100012F11000100000004 /* ReviewPromptPolicy.swift */,
 				56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */,
 				EBE389747A89826966B083FB /* HotkeyGestureResolverTests.swift */,
 				18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */,
@@ -853,6 +859,8 @@
 				AA10000000000000000004 /* HostLaunchRecoveryGate.swift in Sources */,
 				AA10000000000000000006 /* MobileAudioLaunchRecoveryPolicyTests.swift in Sources */,
 				AA10000000000000000008 /* MobileAudioLaunchRecoveryPolicy.swift in Sources */,
+				RVP100012F11000100000001 /* ReviewPromptPolicyTests.swift in Sources */,
+				RVP100012F11000100000002 /* ReviewPromptPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -971,7 +979,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.109;
+				MARKETING_VERSION = 0.0.110;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME)";
@@ -1064,7 +1072,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.109;
+				MARKETING_VERSION = 0.0.110;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1399,7 +1407,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.109;
+				MARKETING_VERSION = 0.0.110;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1437,7 +1445,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.109;
+				MARKETING_VERSION = 0.0.110;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_APPSTORE_PROFILE_NAME)";
@@ -1471,7 +1479,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.109;
+				MARKETING_VERSION = 0.0.110;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1504,7 +1512,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.109;
+				MARKETING_VERSION = 0.0.110;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_KEYBOARD_APPSTORE_PROFILE_NAME)";

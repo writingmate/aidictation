@@ -1,0 +1,1 @@
+You can rate AI Dictation from Settings. After several successful dictations, AI Dictation may ask for a rating when you are finished and the app is idle.

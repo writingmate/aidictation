@@ -4,6 +4,7 @@ import AVFoundation
 #endif
 import Combine
 import MediaPlayer
+import StoreKit
 import SwiftUI
 import UIKit
 import WhisperMateShared
@@ -80,6 +81,7 @@ struct ContentView: View {
                         showLoginSheet = true
                     }
                 #endif
+                considerReviewPrompt()
             }
             .onDisappear {
                 stopKeyboardCommandPolling()
@@ -91,6 +93,7 @@ struct ContentView: View {
                     drainKeyboardDiagnostics()
                     startKeyboardCommandPolling()
                     consumePendingKeyboardCommandIfNeeded()
+                    considerReviewPrompt()
                 } else if shouldKeepKeyboardCommandPolling {
                     startKeyboardCommandPolling()
                 } else {
@@ -99,6 +102,18 @@ struct ContentView: View {
             }
             .onChange(of: selectedRecordingMode) { _ in
                 prepareOfflineRuntimeForSelectedModeIfNeeded()
+            }
+            .onChange(of: showRecordingSheet) { showing in
+                if !showing { considerReviewPrompt() }
+            }
+            .onChange(of: showSettings) { showing in
+                if !showing { considerReviewPrompt() }
+            }
+            .onChange(of: selectedRecording?.id) { recordingID in
+                if recordingID == nil { considerReviewPrompt() }
+            }
+            .onChange(of: inlineRecording.errorMessage) { message in
+                if message == nil { considerReviewPrompt() }
             }
             .onReceive(NotificationCenter.default.publisher(for: KeyboardDictationHandoff.openAppNotification)) { notification in
                 _ = notification
@@ -832,6 +847,9 @@ struct ContentView: View {
                 }
 
                 Section {
+                    Button(action: openWriteReview) {
+                        Label("Rate AI Dictation", systemImage: "star")
+                    }
                     HStack {
                         Text("Version")
                         Spacer()
@@ -856,6 +874,42 @@ struct ContentView: View {
     }
 
     // MARK: - Permission Helpers
+
+    private func openWriteReview() {
+        guard let url = URL(string: "https://apps.apple.com/app/id6754910103?action=write-review") else { return }
+        openURL(url)
+    }
+
+    /// Asks for a rating only after the main screen has settled. Keyboard and
+    /// shortcut dictation defer this so the dialog does not cover another app.
+    private func considerReviewPrompt() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard reviewHostIsAtRest else { return }
+            guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive })
+            else { return }
+            guard ReviewPromptStore.claimPromptAttemptIfEligible(hostIsAtRest: true) else { return }
+            if #available(iOS 18.0, *) {
+                AppStore.requestReview(in: scene)
+            } else {
+                SKStoreReviewController.requestReview(in: scene)
+            }
+        }
+    }
+
+    private var reviewHostIsAtRest: Bool {
+        guard scenePhase == .active else { return false }
+        guard inlineRecording.state == .idle, inlineRecording.errorMessage == nil else { return false }
+        guard !showKeyboardReturnScreen, activeKeyboardDictationIdentity == nil else { return false }
+        if let keyboardBridgeAliveUntil, keyboardBridgeAliveUntil > Date() { return false }
+        guard !showRecordingSheet, selectedRecording == nil, !showSettings, !showLoginSheet else { return false }
+        guard !showCloudTranscriptionConsent, !showOfflineModelAlert, historyActionMessage == nil else { return false }
+        guard referralShareItem == nil, recordingToShare == nil, referralError == nil else { return false }
+        guard !showShortcutsUnavailable, !isPreparingReferral, !isRedeemingReferral else { return false }
+        return true
+    }
 
     private func openShortcuts() {
         guard let url = URL(string: "shortcuts://") else { return }
@@ -1247,6 +1301,12 @@ struct ContentView: View {
                 ? QuickDictationIntentBridge.shared.requestID : nil,
             keepAudioBridgeAliveAfterStop: activeKeyboardDictationIdentity != nil
         ) { recording in
+                let deferReviewPrompt = self.activeKeyboardDictationIdentity != nil
+                    || QuickDictationIntentBridge.shared.isStartPending
+                ReviewPromptStore.recordSuccessfulDictation(
+                    recording.transcription,
+                    deferPrompt: deferReviewPrompt
+                )
                 if let activeKeyboardDictationIdentity {
                 DebugLog.info("completed keyboard attemptID=\(activeKeyboardDictationIdentity.attemptID) length=\(recording.transcription.count)", context: "KEYBOARD_DIAG")
                 self.activeKeyboardDictationIdentity = nil
@@ -1261,6 +1321,9 @@ struct ContentView: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
             markRecordingAsNew(recording)
+            if !deferReviewPrompt {
+                considerReviewPrompt()
+            }
         }
     }
 
@@ -4008,6 +4071,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
     }
 
     private func showError(_ message: String) {
+        ReviewPromptStore.recordFailedDictation()
         captureDeadlineTask?.cancel()
         captureDeadlineTask = nil
         recordingStatus.stop()

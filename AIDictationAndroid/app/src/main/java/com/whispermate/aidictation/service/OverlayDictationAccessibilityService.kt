@@ -40,6 +40,7 @@ import com.whispermate.aidictation.data.remote.CommandClient
 import com.whispermate.aidictation.data.remote.TranscriptionClient
 import com.whispermate.aidictation.telemetry.SentryTelemetry
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
+import com.whispermate.aidictation.review.ReviewPromptStore
 import com.whispermate.aidictation.domain.model.Command
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
 import com.whispermate.aidictation.ui.views.OverlayMicButtonView
@@ -230,6 +231,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     @Inject lateinit var transcriptionRepository: com.whispermate.aidictation.data.repository.TranscriptionRepository
     @Inject lateinit var subscriptionRepository: SubscriptionRepository
     @Inject lateinit var audioProcessingCoordinator: AndroidAudioProcessingCoordinator
+    @Inject lateinit var reviewPromptStore: ReviewPromptStore
     private lateinit var windowManager: WindowManager
 
     private var bubbleView: OverlayMicButtonView? = null
@@ -1771,6 +1773,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 finalized,
                 error.message ?: "Transcription is not available right now. Your audio was saved."
             )
+            reviewPromptStore.recordFailedDictation()
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
                 error.message ?: getString(R.string.usage_limit_reached),
@@ -1791,6 +1794,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val processed = audioProcessingCoordinator.processRecognition(finalized)
             .getOrElse { e ->
                 Log.e("OverlayDictation", "Transcription failed", e)
+                reviewPromptStore.recordFailedDictation()
                 Toast.makeText(
                     this@OverlayDictationAccessibilityService,
                     e.message ?: getString(R.string.dictation_transcription_failed),
@@ -1812,11 +1816,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         val transcription = result.getOrElse { error ->
             if (!ownsDelivery(token)) return
             Log.e(TAG, "Transcription failed", error)
+            reviewPromptStore.recordFailedDictation()
             SentryTelemetry.captureException(error, context = "OverlayDictation", feature = "transcription")
             Toast.makeText(this@OverlayDictationAccessibilityService, "Transcription failed", Toast.LENGTH_SHORT).show()
             return
         }
         if (transcription.text.isBlank()) {
+            reviewPromptStore.recordFailedDictation()
             Toast.makeText(
                 this@OverlayDictationAccessibilityService,
                 R.string.dictation_no_speech_recognized,
@@ -1837,7 +1843,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         if (applied) {
             lastDictatedText = finalText
+            reviewPromptStore.recordSuccessfulDictation(finalText, deferPrompt = true)
         } else {
+            reviewPromptStore.recordFailedDictation()
             copyTextForManualPaste(finalText)
             SentryTelemetry.captureError(
                 "Dictation text could not be inserted into the target field",

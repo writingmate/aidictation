@@ -1,1 +1,1 @@
-Makes the floating mic appear more reliably, fixes stalls in automatic stop mode, and shows a clear message when dictation or text insertion fails.
+You can rate AI Dictation from Settings. After several successful dictations, AI Dictation may ask for a rating when you are finished and the app is idle.

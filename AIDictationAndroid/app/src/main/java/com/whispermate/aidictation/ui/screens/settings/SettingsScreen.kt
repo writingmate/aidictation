@@ -82,6 +82,7 @@ import com.whispermate.aidictation.ui.permissions.AccessibilityDisclosureSheet
 import com.whispermate.aidictation.ui.permissions.OverlayPermissions
 import com.whispermate.aidictation.ui.permissions.PermissionRows
 import com.whispermate.aidictation.ui.permissions.rememberMicrophonePermissionLauncher
+import com.whispermate.aidictation.review.openPlayListing
 import com.whispermate.aidictation.ui.screens.main.OnDeviceModelUiState
 
 @Composable
@@ -259,6 +260,21 @@ fun SettingsScreen(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
+            SettingsItem(
+                icon = Icons.Default.Star,
+                title = stringResource(R.string.settings_rate),
+                onClick = { openPlayListing(context) },
+                trailingContent = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            )
+
+            SettingsRowGap()
+
             SettingsItem(
                 icon = Icons.Default.Info,
                 title = stringResource(R.string.settings_version),

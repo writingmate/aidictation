@@ -21,6 +21,7 @@ credentials = "1.5.0"
 googleId = "1.1.1"
 onnxRuntime = "1.25.1"
 playAssetDelivery = "2.3.0"
+playReview = "2.0.2"
 litert = "2.0.3"
 gradlePlayPublisher = "3.13.0"
 sentry = "8.33.0"
@@ -76,6 +77,7 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 # ONNX Runtime for Silero VAD
 onnx-runtime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxRuntime" }
 play-asset-delivery = { group = "com.google.android.play", name = "asset-delivery", version.ref = "playAssetDelivery" }
+play-review = { group = "com.google.android.play", name = "review-ktx", version.ref = "playReview" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 
 # Crash reporting

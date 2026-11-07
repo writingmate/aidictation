@@ -304,7 +304,8 @@ old code.
    refuse while `isRewritePanelAttached`. Needs three taps inside 220 ms, so
    it is unlikely by hand, but the guard is one line.
 
-With all six fixes, every property holds; see the PR for the bounds checked.
+With all six fixes, every property holds: two dictations and two panel
+sessions (233,024 states, run in CI) and three of each (746,952 states).
 
 ### Defense-in-depth observation
 

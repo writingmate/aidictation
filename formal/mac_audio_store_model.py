@@ -126,7 +126,7 @@ class State(NamedTuple):
     part: Tuple[bool, ...]
     fin: Tuple[bool, ...]
     health: str             # healthy | readOnly
-    ro_cause: str           # none | timeout | launch
+    ro_cause: str           # none | timeout | storage | launch
     up: bool
     job: Optional[Job]
     waiting: bool
@@ -144,6 +144,8 @@ class Config(NamedTuple):
     max_revision: int = 10**9
     max_crashes: int = 1
     external_loss: bool = False
+    journal_sync_faults: bool = False
+    strict_ownership: bool = False
     mutant: Optional[str] = None
 
 
@@ -180,6 +182,14 @@ MUTANTS: Dict[str, Tuple[str, str]] = {
     "timeout-stays-writable": (
         "a commit timeout leaves the store writable while the late write can still land",
         "MemoryMatchesDisk",
+    ),
+    "unsynced-journal-stays-writable": (
+        "persist() leaves the store writable after the journal rename's directory fsync fails",
+        "MemoryMatchesDisk",
+    ),
+    "no-deadline-recovery": (
+        "attempts cannot be failed or timed out, so stalled native work holds the row",
+        "EventuallyIdle",
     ),
     "begin-recognition-ignores-source": (
         "beginRecognition() accepts a failed row without a complete final source",
@@ -321,7 +331,8 @@ def lease_actions(cfg: Config, s: State, l: Lease) -> Succ:
         yield transition("markSucceeded(usage)",
                          x._replace(stage=SUCCEEDED, pending=True, claimed=False))
         yield transition("markSucceeded(noUsage)", x._replace(stage=SUCCEEDED))
-    if lease_op(cfg, s, l, set(STAGES) - {DELETED, SUCCEEDED}):
+    if lease_op(cfg, s, l, set(STAGES) - {DELETED, SUCCEEDED}) \
+            and cfg.mutant != "no-deadline-recovery":
         # fail(_:message:) / timeOut(_:)
         if x.stage in (RAW_READY, CLEANING) and cfg.mutant != "fail-discards-raw-transcript":
             yield transition("fail->useRawResult", x._replace(stage=RESULT_READY, result=True))
@@ -447,6 +458,11 @@ def worker_actions(cfg: Config, s: State) -> Succ:
                s._replace(disk=j.proposed, hard_disk=hard_disk, job=j._replace(phase="post")))
         yield ("worker: journal write fails",
                s._replace(job=j._replace(phase="done", outcome="error")))
+        # persist(): the rename is visible but the directory fsync failed, so
+        # its crash durability is unknown (power loss may still rewind it).
+        if cfg.journal_sync_faults:
+            yield ("worker: journal renamed, directory fsync fails",
+                   s._replace(disk=j.proposed, job=j._replace(phase="done", outcome="uncertain")))
     elif j.phase == "post":
         if j.post == "create":
             if not s.part[r] and not s.fin[r]:
@@ -485,6 +501,10 @@ def caller_actions(cfg: Config, s: State) -> Succ:
             nxt = nxt._replace(mem=p, leases=leases, fail_q=fail_q,
                                cleanup_q=cleanup_q, charges=charges)
             yield (f"commit returns {j.outcome}", nxt)
+        elif j.outcome == "uncertain" and cfg.mutant != "unsynced-journal-stays-writable":
+            # persist() throws .readOnly; commit() fails closed.
+            yield ("commit throws (readOnly)",
+                   nxt._replace(health="readOnly", ro_cause="storage"))
         else:
             yield (f"commit throws ({j.outcome})", nxt)
     else:
@@ -514,8 +534,9 @@ def fault_actions(cfg: Config, s: State) -> Succ:
     if s.up and s.crashes < cfg.max_crashes:
         yield ("process dies", died(s))
         if s.disk != s.hard_disk:
-            # `.ordered` journal writes may be lost; file moves were fsynced.
-            yield ("power loss rewinds ordered writes", died(s, disk=s.hard_disk))
+            # `.ordered` writes and a rename whose directory fsync failed may be
+            # lost; source file moves are always followed by directory fsyncs.
+            yield ("power loss rewinds unsynced writes", died(s, disk=s.hard_disk))
 
 
 def reconcile(s: State, j: Journal) -> Journal:
@@ -554,7 +575,9 @@ def launch(cfg: Config, s: State) -> Succ:
         # AppState's recovery pass builds a lease from every row it can see.
         leases = frozenset(lease_of(r, x) for r, x in enumerate(j.recs)
                            if x.stage not in (ABSENT, DELETED))
-        yield ("launch", base._replace(mem=j, disk=j, hard_disk=j, health="healthy",
+        # init persists (hard) only when reconciliation changed the journal.
+        hard_disk = j if j != s.disk else s.hard_disk
+        yield ("launch", base._replace(mem=j, disk=j, hard_disk=hard_disk, health="healthy",
                                        ro_cause="none", part=part, fin=fin, leases=leases))
     else:
         # Fail closed: change no files, expose an empty read-only store.
@@ -755,7 +778,7 @@ ALLOWED_STEPS = {
 }
 
 
-def allowed_step(a: str, b: str, power_loss: bool) -> bool:
+def allowed_step(a: str, b: str) -> bool:
     if a == b or (a, b) in ALLOWED_STEPS:
         return True
     if b == RECOGNIZING and a in (READY, FAILED, RESULT_READY, SUCCEEDED):
@@ -764,23 +787,27 @@ def allowed_step(a: str, b: str, power_loss: bool) -> bool:
         return True
     if b == DELETED and a != ABSENT:
         return True
-    if power_loss and (a, b) in {(RAW_READY, RECOGNIZING), (CLEANING, RECOGNIZING),
-                                 (CLEANING, RAW_READY)}:
-        return True  # `.ordered` progress rewound to the last `.hard` write
     return False
 
 
 def act_disk_transitions_allowed(cfg: Config, s: State, name: str, t: State) -> bool:
-    """Persisted stage changes follow the contract's state table."""
-    power = name.startswith("power loss")
-    return all(allowed_step(a.stage, b.stage, power)
+    """Persisted stage changes follow the contract's state table. Power loss
+    may only rewind journal.json to the last durably synced journal."""
+    if name.startswith("power loss"):
+        return t.disk == s.hard_disk
+    return all(allowed_step(a.stage, b.stage)
                for a, b in zip(s.disk.recs, t.disk.recs))
 
 
 def act_tombstone_wins(cfg: Config, s: State, name: str, t: State) -> bool:
-    """If deletion is accepted, it wins: a tombstone is never resurrected."""
+    """If deletion is accepted, it wins: a tombstone is never resurrected.
+    journal.json may lose an unsynced tombstone to power loss, but never a
+    durably synced one."""
     for r in range(cfg.recs):
-        if s.disk.recs[r].stage == DELETED and t.disk.recs[r].stage != DELETED:
+        if s.hard_disk.recs[r].stage == DELETED and t.disk.recs[r].stage != DELETED:
+            return False
+        if s.disk.recs[r].stage == DELETED and t.disk.recs[r].stage != DELETED \
+                and not name.startswith("power loss"):
             return False
         if s.up and t.up and s.mem.recs[r].stage == DELETED and t.mem.recs[r].stage != DELETED:
             return False
@@ -788,18 +815,22 @@ def act_tombstone_wins(cfg: Config, s: State, name: str, t: State) -> bool:
 
 
 def act_audio_removed_only_after_tombstone(cfg: Config, s: State, name: str, t: State) -> bool:
-    """Never delete the only recoverable audio: removal requires a durable tombstone."""
+    """Never delete the only recoverable audio: removal requires a tombstone
+    that is durably synced, so no crash or power loss can bring the row back
+    without its audio."""
     if name.startswith("externalLoss"):
         return True
     for r in range(cfg.recs):
         lost = (s.fin[r] and not t.fin[r]) or (s.part[r] and not t.part[r] and not t.fin[r])
-        if lost and s.disk.recs[r].stage != DELETED:
+        if lost and t.hard_disk.recs[r].stage != DELETED:
             return False
     return True
 
 
 def act_attempt_changes_only_by_new_attempt(cfg: Config, s: State, name: str, t: State) -> bool:
     """A retry keeps the recording ID; only a new attempt replaces the owner."""
+    if name.startswith("power loss"):
+        return True  # constrained by DiskTransitionsAllowed
     for a, b in zip(s.disk.recs, t.disk.recs):
         if a.att != b.att and a.stage != ABSENT \
                 and b.stage not in (PREPARING, FINALIZING, RECOGNIZING, DELETED):
@@ -816,6 +847,8 @@ def act_launch_terminalizes(cfg: Config, s: State, name: str, t: State) -> bool:
 
 def act_success_is_never_lost(cfg: Config, s: State, name: str, t: State) -> bool:
     """Phase 5: a durable success only leaves `succeeded` for a retry or delete."""
+    if name.startswith("power loss"):
+        return True  # constrained by DiskTransitionsAllowed
     for a, b in zip(s.disk.recs, t.disk.recs):
         if a.stage == SUCCEEDED and b.stage not in (SUCCEEDED, RECOGNIZING, DELETED):
             return False
@@ -845,6 +878,8 @@ def act_raw_transcript_never_lost(cfg: Config, s: State, name: str, t: State) ->
 def act_cleanup_failure_keeps_result(cfg: Config, s: State, name: str, t: State) -> bool:
     """Phase 3: cleanup timeout/error/interruption makes raw text the result;
     it never turns recognition success into a failed row."""
+    if name.startswith("power loss"):
+        return True  # constrained by DiskTransitionsAllowed
     for a, b in zip(s.disk.recs, t.disk.recs):
         if a.stage in (RAW_READY, CLEANING) and b.stage == FAILED:
             return False
@@ -865,12 +900,37 @@ ACTION_PROPERTIES: Dict[str, ActionProperty] = {
 
 
 # --------------------------------------------------------------------------
-# Liveness (checked on the explored graph): from every reachable state the
-# system can still bring every row to a non-active stage. This is the
-# "no endless spinner" guarantee without assuming any particular scheduler.
+# Liveness: "A timeout must return the UI to idle even when native work
+# ignores cancellation." From every reachable state, every row must be able
+# to reach a non-active stage using only deadline recovery: fail/timeOut on
+# the attempt's own lease, the persistence worker and commit outcomes, and a
+# relaunch of a store that already failed closed. Progress actions (which
+# stalled native work may never perform), Delete, Clear and crashes are not
+# allowed to rescue a stuck row.
 # --------------------------------------------------------------------------
-def quiescent(s: State) -> bool:
-    return s.up and s.job is None and all(x.stage not in ACTIVE for x in s.mem.recs)
+RECOVERY_PREFIXES = ("fail", "worker:", "commit ", "user quits read-only app", "launch")
+
+
+def is_recovery_step(name: str) -> bool:
+    return name.startswith(RECOVERY_PREFIXES)
+
+
+def has_owner(cfg: Config, s: State, r: int) -> bool:
+    """Someone in this process can still move row r: a current lease, a
+    pending failCurrentRecord, or the in-flight commit."""
+    return (r in s.fail_q
+            or (s.job is not None and s.job.r == r)
+            or any(l.r == r and is_current(cfg, s, l) for l in s.leases))
+
+
+def quiescent(cfg: Config, s: State) -> bool:
+    """No active row is waiting on this process. Without --strict-ownership,
+    an active row nobody owns any more counts as waiting for the next launch
+    (a known finding, see formal/README.md)."""
+    if not (s.up and s.job is None):
+        return False
+    return all(x.stage not in ACTIVE or (not cfg.strict_ownership and not has_owner(cfg, s, r))
+               for r, x in enumerate(s.mem.recs))
 
 
 # --------------------------------------------------------------------------
@@ -893,7 +953,7 @@ def check(cfg: Config, *, check_liveness: bool = True, verbose: bool = False) ->
     start = time.time()
     init = canonical(cfg, initial_state(cfg), perms)
     parent: Dict[State, Optional[Tuple[State, str]]] = {init: None}
-    edges: Dict[State, List[State]] = {}
+    edges: Dict[State, List[State]] = {}   # recovery steps only
     queue = deque([init])
     transitions = 0
     next_report = 250000
@@ -928,7 +988,8 @@ def check(cfg: Config, *, check_liveness: bool = True, verbose: bool = False) ->
                 if not prop(cfg, s, name, t):
                     return fail(pname, s, (name, t))
             ct = canonical(cfg, t, perms)
-            succ_list.append(ct)
+            if is_recovery_step(name):
+                succ_list.append(ct)
             if ct not in parent:
                 parent[ct] = (s, name)
                 queue.append(ct)
@@ -940,13 +1001,13 @@ def check(cfg: Config, *, check_liveness: bool = True, verbose: bool = False) ->
                   f"{time.time() - start:.0f}s", file=sys.stderr, flush=True)
 
     if check_liveness:
-        # Backward reachability from quiescent states over the explored graph.
+        # Backward reachability from quiescent states over recovery steps.
         # States cut off by the revision bound are treated as able to progress.
         reverse: Dict[State, List[State]] = {}
         for src, dsts in edges.items():
             for d in dsts:
                 reverse.setdefault(d, []).append(src)
-        good = {s for s in parent if quiescent(s) or s not in edges}
+        good = {s for s in parent if quiescent(cfg, s) or s not in edges}
         frontier = deque(good)
         while frontier:
             d = frontier.popleft()
@@ -987,7 +1048,7 @@ def print_violation(cfg: Config, v: Violation) -> None:
 def run_one(cfg: Config, label: str, *, check_liveness: bool, verbose: bool) -> Result:
     print(f"==> {label}: recs={cfg.recs} attempts={cfg.max_attempts} "
           f"crashes<={cfg.max_crashes} "
-          f"externalLoss={cfg.external_loss}" + (f" mutant={cfg.mutant}" if cfg.mutant else ""))
+          f"externalLoss={cfg.external_loss} journalSyncFaults={cfg.journal_sync_faults}" + (f" mutant={cfg.mutant}" if cfg.mutant else ""))
     res = check(cfg, check_liveness=check_liveness, verbose=verbose)
     print(f"    {res.states:,} distinct states, {res.transitions:,} transitions, "
           f"{res.seconds:.1f}s")
@@ -1003,6 +1064,10 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--max-crashes", type=int, default=1)
     ap.add_argument("--external-loss", action="store_true",
                     help="let something outside the app delete a final source")
+    ap.add_argument("--journal-sync-faults", action="store_true",
+                    help="let the journal rename land while its directory fsync fails")
+    ap.add_argument("--strict-ownership", action="store_true",
+                    help="do not let an ownerless active row wait for the next launch")
     ap.add_argument("--mutant", choices=sorted(MUTANTS))
     ap.add_argument("--no-liveness", action="store_true")
     ap.add_argument("--self-test", action="store_true",
@@ -1013,7 +1078,8 @@ def main(argv: List[str]) -> int:
     if args.self_test:
         failures = 0
         for name, (desc, expected) in sorted(MUTANTS.items()):
-            cfg = Config(recs=1, max_attempts=3, max_crashes=1, mutant=name)
+            cfg = Config(recs=1, max_attempts=3, max_crashes=1, mutant=name,
+                         journal_sync_faults=name == "unsynced-journal-stays-writable")
             res = run_one(cfg, f"mutant: {desc}", check_liveness=True, verbose=False)
             got = res.violation.prop if res.violation else None
             if got != expected:
@@ -1029,7 +1095,9 @@ def main(argv: List[str]) -> int:
 
     cfg = Config(recs=args.recs, max_attempts=args.max_attempts,
                  max_revision=args.max_revision, max_crashes=args.max_crashes,
-                 external_loss=args.external_loss, mutant=args.mutant)
+                 external_loss=args.external_loss,
+                 journal_sync_faults=args.journal_sync_faults,
+                 strict_ownership=args.strict_ownership, mutant=args.mutant)
     res = run_one(cfg, "MacAudioProcessingStore", check_liveness=not args.no_liveness,
                   verbose=args.verbose)
     if res.violation:

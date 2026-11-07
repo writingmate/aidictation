@@ -16,7 +16,10 @@ dependencies, so it runs anywhere, including CI on Linux.
 python3 formal/mac_audio_store_model.py --self-test           # every seeded bug must be caught
 python3 formal/mac_audio_store_model.py --recs 1 --max-crashes 2
 python3 formal/mac_audio_store_model.py --recs 2 --max-attempts 2
-python3 formal/mac_audio_store_model.py --recs 1 --external-loss  # shows the open finding below
+# Each of these reproduces one open finding below:
+python3 formal/mac_audio_store_model.py --recs 1 --external-loss
+python3 formal/mac_audio_store_model.py --recs 1 --journal-sync-faults
+python3 formal/mac_audio_store_model.py --recs 1 --strict-ownership
 ```
 
 CI runs the first three checks in `.github/workflows/formal-verification.yml`
@@ -26,13 +29,13 @@ whenever the store, `AppState`, the contract, or this folder changes.
 
 | Swift | Model |
 |---|---|
-| `journal` (actor memory) and `journal.json` | `mem`, `disk`, plus `hard_disk` for the last `.hard` write |
+| `journal` (actor memory) and `journal.json` | `mem`, `disk`, plus `hard_disk` for the last durably synced write |
 | `Incoming/<id>.partial.m4a`, `Recordings/<id>.m4a` | `part[r]`, `fin[r]` |
 | `requireWritable`, `currentRecord(for:)`, expected-stage checks, `expectedRevision` CAS | same guards, written out field by field |
 | `prepare`, `markRecording`, `beginFinalization`, `checkpointClosedAudio`, `finishFinalization`, `salvageFinalizedPartial`, `beginRecognition`, `checkpointRecognition`, `markRawResultReady`, `beginCleanup`, `finishCleanup`/`useRawResult`, `markSucceeded`, `claimPendingUsage`, `fail`/`timeOut`, `tombstone`, `clearAll`, `cleanupDeletedSources` | one action each |
-| `commit` | async job: CAS → before-persist hook (rename) → atomic journal write → after-persist hook (create partial); every step can fail |
+| `commit` | async job: CAS → before-persist hook (rename) → atomic journal write → after-persist hook (create partial); every step can fail. With `--journal-sync-faults`, the journal rename can also land while its directory fsync fails, which `persist()` reports as `.readOnly` |
 | `performBoundedPersistence` deadline | caller stops waiting, store goes read-only, worker may still finish the write |
-| process death, power loss | any time, including mid-commit; power loss rewinds `.ordered` writes |
+| process death, power loss | any time, including mid-commit; power loss rewinds every write that was not durably synced |
 | `init(rootDirectory:)` | validate → `validateManagedSources` → `reconcileAfterRestart` → persist → tombstone cleanup, or fail closed |
 | `AppState` recovery pass | rebuilds a lease for every visible row after launch |
 | late / stale callbacks | every lease handed out stays available and can be replayed |
@@ -72,9 +75,9 @@ both are justified by properties the checker verifies:
 | `SuccessIsNeverLost` | phase 5: delivery never takes a success back |
 | `LaunchTerminalizes` | invariant 3: a relaunch never shows an endless processing state |
 | `RevisionsMonotone` | supports the lease reduction above |
-| `EventuallyIdle` (liveness) | from every reachable state, every row can still reach a non-active stage |
+| `EventuallyIdle` (liveness) | "A timeout must return the UI to idle even when native work ignores cancellation": from every reachable state, every row can reach a non-active stage using only `fail`/`timeOut`, commit outcomes and the relaunch of a store that already failed closed. Progress actions, Delete, Clear and crashes may not rescue it |
 
-`--self-test` runs eight mutants. Each one removes or reorders a single guard
+`--self-test` runs ten mutants. Each one removes or reorders a single guard
 in the model, and the test requires the checker to catch it with the expected
 property. That shows the properties can catch the bugs they are meant to:
 
@@ -88,6 +91,8 @@ property. That shows the properties can catch the bugs they are meant to:
 | a commit timeout leaves the store writable | `MemoryMatchesDisk` |
 | `beginRecognition()` skips the final-source check | `DiskJournalValid` |
 | `fail()` during cleanup marks the row failed | `CleanupFailureKeepsResult` |
+| the store stays writable after a journal rename whose directory fsync failed | `MemoryMatchesDisk` |
+| attempts cannot be failed or timed out (no deadline recovery) | `EventuallyIdle` |
 
 ## Results
 
@@ -95,7 +100,7 @@ All properties hold for the default models. Bounds: one recording with up to
 three attempts and two process deaths or power losses; two concurrent
 recordings with two attempts each and one fault.
 
-### Open finding: one missing audio file makes every launch fail closed
+### Open finding 1: one missing audio file makes every launch fail closed
 
 Run with `--external-loss` (something outside the app deletes a final source,
 such as a cleanup utility or disk damage). Then `LaunchNeverBricked` fails:
@@ -115,6 +120,44 @@ active work to a recoverable failure"). A likely fix: in
 to `failed` with `source = .missing`. Its text would be kept and a retry would
 be refused. This is not applied yet, because changes to the store must pass
 the Apple audio recovery matrix on macOS.
+
+### Open finding 2: launch deletes audio on an unsynced tombstone
+
+Run with `--journal-sync-faults`. Then `AudioRemovedOnlyAfterTombstone` fails:
+
+1. `tombstone()` writes the deleted row and renames `journal.json`, but the
+   directory fsync fails. `persist()` throws `.readOnly`, so the delete is
+   reported as failed and the store fails closed.
+2. The app quits or dies, and the next launch reads the visible journal.
+   Reconciliation changes nothing, so `init` does not rewrite (and sync) it.
+3. `init` removes the sources of every `deleted` row, including this one.
+4. A power cut before anything else syncs the journal rewinds it to the old
+   row. The recording comes back with its audio gone, after the user was told
+   the delete failed.
+
+This needs a failed directory fsync followed by a power cut, so it is rare.
+A likely fix: sync the journal in `init` before removing tombstoned sources.
+With that change (`hard_disk = j` at launch in the model), every property
+holds under `--journal-sync-faults`.
+
+### Open finding 3: a failed preparation can leave an ownerless row
+
+Run with `--strict-ownership`. Then `EventuallyIdle` fails:
+
+1. `prepare()` commits the `preparing` row, but creating the empty partial
+   fails.
+2. Its fallback `failCurrentRecord` hits a storage error that is not a
+   timeout, so the store stays healthy and the row stays `preparing`.
+3. `prepare()` throws without returning a lease, so nothing in this process
+   can move the row. It becomes `failed` only at the next launch.
+
+The UI is not stuck: `AppState` treats the failed `prepare()` as an idle
+return. But it breaks invariant 2 ("Every active attempt has one owner … and a
+terminal persisted state"). It takes two storage failures in a row. Without
+`--strict-ownership`, the liveness check counts such ownerless rows as
+waiting for the next launch and stays strict about everything else. A likely
+fix: fail the store closed when `failCurrentRecord` cannot persist, or retry
+it.
 
 ### Defense-in-depth observations
 

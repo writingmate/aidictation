@@ -1,3 +1,2 @@
-• Start Quick Dictation from Shortcuts or Siri, then copy the finished transcript or use it in another shortcut.
-• Open Shortcuts from the new “Set up shortcuts” row in Settings.
-• Long-press a recording in History to copy, share, play, or delete it.
+• Rate AI Dictation from Settings whenever you want to leave a review.
+• After several successful dictations, AI Dictation may ask for a rating when you are finished and the app is idle.

@@ -48,6 +48,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
@@ -57,6 +60,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
+import com.whispermate.aidictation.review.findActivity
+import com.whispermate.aidictation.review.launchPlayReview
 import com.whispermate.aidictation.ui.components.groupedItemShape
 import com.whispermate.aidictation.ui.components.GroupedListGap
 import com.whispermate.aidictation.domain.model.Recording
@@ -83,6 +88,7 @@ fun MainScreen(
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     val audioLevel by viewModel.audioLevel.collectAsState()
     val frequencyBands by viewModel.frequencyBands.collectAsState()
@@ -112,6 +118,32 @@ fun MainScreen(
         if (shouldStartRecording && recordingState == RecordingState.Idle) {
             viewModel.startRecording()
             onRecordingStarted()
+        }
+    }
+
+    // Ask for a Play review only after the home screen has settled. The system
+    // may still decline to show it; Settings is the explicit way to rate.
+    LaunchedEffect(recordingState, selectedTab, error, shouldStartRecording) {
+        val atRest = selectedTab == 0 &&
+            recordingState == RecordingState.Idle &&
+            error == null &&
+            !shouldStartRecording &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        if (!atRest) return@LaunchedEffect
+        delay(900)
+        val stillAtRest = selectedTab == 0 &&
+            recordingState == RecordingState.Idle &&
+            error == null &&
+            !shouldStartRecording &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        val activity = context.findActivity()
+        if (!stillAtRest || activity == null || !viewModel.tryBeginReviewPrompt()) return@LaunchedEffect
+        var finished = false
+        try {
+            viewModel.finishReviewPrompt(launched = launchPlayReview(activity))
+            finished = true
+        } finally {
+            if (!finished) viewModel.abandonReviewPrompt()
         }
     }
 

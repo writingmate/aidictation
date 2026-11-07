@@ -1063,6 +1063,7 @@ struct RecordingSheetView: View {
             currentRecoverySnapshot = nil
 
             transcription = durableResult
+            ReviewPromptStore.recordSuccessfulDictation(durableResult)
             sheetState = .viewing
             errorMessage = ""
             recordingStartTime = nil
@@ -1174,12 +1175,15 @@ struct RecordingSheetView: View {
         captureDeadlineTask = nil
         updateRecordingSurface(animated: true)
         if succeeded {
+            ReviewPromptStore.recordSuccessfulDictation(recoveredText ?? "")
             await MobileAudioUsageAccounting.flush(
                 recordingID: lease.recordingID,
                 historyManager: historyManager,
                 store: processingStore,
                 subscriptionManager: subscriptionManager
             )
+        } else {
+            ReviewPromptStore.recordFailedDictation()
         }
     }
 
@@ -1239,6 +1243,9 @@ struct RecordingSheetView: View {
         captureDeadlineTask = nil
         sheetState = currentRecording == nil ? .idle : .viewing
         errorMessage = message ?? ""
+        if message != nil {
+            ReviewPromptStore.recordFailedDictation()
+        }
         recordingViewModel.audioLevel = 0
         recordingViewModel.frequencyBands = Array(repeating: 0, count: 10)
         updateRecordingSurface(animated: true)
@@ -1260,6 +1267,9 @@ struct RecordingSheetView: View {
         activeTranscriptionRequest = nil
         sheetState = .idle
         errorMessage = message ?? ""
+        if message != nil {
+            ReviewPromptStore.recordFailedDictation()
+        }
         recordingViewModel.audioLevel = 0.0
         recordingViewModel.frequencyBands = Array(repeating: 0.0, count: 10)
         updateRecordingSurface(animated: true)

@@ -151,6 +151,7 @@
     <string name="settings_post_processing_settings">Post-processing Settings</string>
     <string name="settings_about">About</string>
     <string name="settings_version">Version</string>
+    <string name="settings_rate">Rate AI Dictation</string>
     <string name="settings_data">Data</string>
     <string name="settings_clear_history">Clear All History</string>
 

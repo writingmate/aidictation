@@ -164,8 +164,8 @@ android {
         applicationId = "com.aidictation.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = configValue("VERSION_CODE", "1040").toInt()
-        versionName = configValue("VERSION_NAME", "0.0.42")
+        versionCode = configValue("VERSION_CODE", "1041").toInt()
+        versionName = configValue("VERSION_NAME", "0.0.43")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -319,6 +319,7 @@ dependencies {
     // ONNX Runtime for Silero VAD
     implementation(libs.onnx.runtime)
     implementation(libs.play.asset.delivery)
+    implementation(libs.play.review)
     implementation(libs.litert)
 
     // Debug

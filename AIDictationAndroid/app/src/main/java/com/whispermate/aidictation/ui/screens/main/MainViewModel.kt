@@ -13,6 +13,7 @@ import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.data.repository.TranscriptionRepository
 import com.whispermate.aidictation.domain.model.Recording
 import com.whispermate.aidictation.domain.model.AudioAttemptLease
+import com.whispermate.aidictation.review.ReviewPromptStore
 import com.whispermate.aidictation.service.AndroidAudioAttemptOwner
 import com.whispermate.aidictation.service.AndroidAudioProcessingCoordinator
 import com.whispermate.aidictation.service.AndroidAudioProcessingState
@@ -58,7 +59,8 @@ class MainViewModel @Inject constructor(
     private val parakeetModelAssets: ParakeetModelAssets,
     private val subscriptionRepository: SubscriptionRepository,
     private val appPreferences: AppPreferences,
-    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator
+    private val audioProcessingCoordinator: AndroidAudioProcessingCoordinator,
+    private val reviewPromptStore: ReviewPromptStore
 ) : ViewModel() {
     companion object {
         private const val TAG = "MainViewModel"
@@ -329,6 +331,7 @@ class MainViewModel @Inject constructor(
                 audioProcessingCoordinator.failBeforeRecognition(finalized, message)
                 activeCaptureLease = null
                 activeCaptureWorkflowToken = null
+                reviewPromptStore.recordFailedDictation()
                 _error.value = message
                 return@launch
             }
@@ -340,6 +343,7 @@ class MainViewModel @Inject constructor(
                 )
                 activeCaptureLease = null
                 activeCaptureWorkflowToken = null
+                reviewPromptStore.recordFailedDictation()
                 _error.value = error.message
                 return@launch
             }
@@ -349,6 +353,7 @@ class MainViewModel @Inject constructor(
             activeCaptureWorkflowToken = null
             outcome
                 .onSuccess { result ->
+                    reviewPromptStore.recordSuccessfulDictation(result.text)
                     subscriptionRepository.recordUsageClaim(result.usageClaimId)
                     _selectedRecording.value = try {
                         recordingRepository.getRecordingById(result.recordingId)
@@ -361,6 +366,7 @@ class MainViewModel @Inject constructor(
                 }
                 .onFailure { error ->
                     Log.e(TAG, "Transcription failed", error)
+                    reviewPromptStore.recordFailedDictation()
                     _error.value = error.message
                         ?: "Your recording could not be transcribed. Its audio is available to retry."
                 }
@@ -429,6 +435,7 @@ class MainViewModel @Inject constructor(
                 // History refresh and usage accounting are delivery work, not processing state.
                 finishPreflight(requestId)
                 outcome.onSuccess { result ->
+                        reviewPromptStore.recordSuccessfulDictation(result.text)
                         subscriptionRepository.recordUsageClaim(result.usageClaimId)
                         _selectedRecording.value = try {
                             recordingRepository.getRecordingById(result.recordingId)
@@ -440,6 +447,7 @@ class MainViewModel @Inject constructor(
                         }
                     }
                     .onFailure { error ->
+                        reviewPromptStore.recordFailedDictation()
                         _error.value = error.message
                             ?: "Retry could not finish. Your saved audio is still available."
                     }
@@ -470,6 +478,16 @@ class MainViewModel @Inject constructor(
         preflightJob?.cancel()
         preflightJob = null
         _preflightActive.value = false
+    }
+
+    fun tryBeginReviewPrompt(): Boolean = reviewPromptStore.tryBeginPrompt()
+
+    fun finishReviewPrompt(launched: Boolean) {
+        reviewPromptStore.finishPrompt(launched)
+    }
+
+    fun abandonReviewPrompt() {
+        reviewPromptStore.abandonPrompt()
     }
 
     fun openLogin() {

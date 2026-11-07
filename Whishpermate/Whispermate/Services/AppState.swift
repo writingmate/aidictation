@@ -2205,6 +2205,15 @@ class AppState: ObservableObject {
                 } else {
                     realtimeFinishRequest?.close()
                     realtimeResult = nil
+                    DebugLog.error(
+                        "Realtime transcription ended without a transcript; falling back to batch provider=\(snapshot.provider.rawValue) durationSeconds=\(recording.duration ?? 0)",
+                        context: "RealtimeTranscription"
+                    )
+                    CrashReporter.captureError(
+                        "Realtime transcription did not complete; fell back to batch",
+                        context: "RealtimeTranscription",
+                        feature: "transcription"
+                    )
                 }
             } else {
                 realtimeResult = nil

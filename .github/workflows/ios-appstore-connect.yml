@@ -5,6 +5,11 @@ on:
     tags:
       - 'ios-v[0-9]*.[0-9]*.[0-9]*'
   workflow_dispatch:
+    inputs:
+      submit_version:
+        description: 'Existing marketing version to submit, without uploading a new build'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -53,6 +58,7 @@ jobs:
   archive-and-upload:
     name: Archive and upload
     needs: provenance
+    if: github.event_name != 'workflow_dispatch' || inputs.submit_version == ''
     environment: release
     runs-on: macos-26
     timeout-minutes: 90
@@ -307,9 +313,14 @@ jobs:
 
   submit-for-review:
     name: Submit for App Review
-    needs: archive-and-upload
-    # Only a tagged release goes to review; a manual dispatch stops at TestFlight.
-    if: startsWith(github.ref, 'refs/tags/ios-v')
+    needs: [provenance, archive-and-upload]
+    # A tagged release goes to review. A manual dispatch submits an existing
+    # version only when submit_version is set; otherwise it stops at TestFlight.
+    if: >-
+      always() &&
+      needs.provenance.result == 'success' &&
+      (needs.archive-and-upload.result == 'success' || needs.archive-and-upload.result == 'skipped') &&
+      (startsWith(github.ref, 'refs/tags/ios-v') || inputs.submit_version != '')
     environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -347,12 +358,17 @@ jobs:
 
       - name: Resolve version from the tag
         shell: bash
+        env:
+          SUBMIT_VERSION: ${{ inputs.submit_version }}
         run: |
           set -euo pipefail
 
-          version="${GITHUB_REF_NAME#ios-v}"
+          version="${SUBMIT_VERSION:-}"
+          if [ -z "${version}" ]; then
+            version="${GITHUB_REF_NAME#ios-v}"
+          fi
           if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not carry an X.Y.Z version"
+            echo "::error::${version:-<empty>} is not an X.Y.Z version"
             exit 1
           fi
           echo "IOS_MARKETING_VERSION=${version}" >> "${GITHUB_ENV}"

@@ -69,6 +69,68 @@ async function api(method, path, body) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function apiOptional(method, path) {
+  try {
+    return await api(method, path);
+  } catch (error) {
+    if (String(error.message).includes("-> 404")) return null;
+    throw error;
+  }
+}
+
+const EDITABLE_APP_INFO_STATES = new Set([
+  "PREPARE_FOR_SUBMISSION",
+  "READY_FOR_REVIEW",
+  "WAITING_FOR_REVIEW",
+  "IN_REVIEW",
+  "UNRESOLVED_ISSUES",
+  "REJECTED",
+  "DEVELOPER_REJECTED",
+  "METADATA_REJECTED",
+  "INVALID_BINARY",
+]);
+
+async function declareNoSocialMedia(appId, versionId) {
+  const fromVersion = await apiOptional("GET", `appStoreVersions/${versionId}/ageRatingDeclaration`);
+  let declaration = fromVersion?.data ?? null;
+  if (!declaration) {
+    const infos = await api("GET", `apps/${appId}/appInfos?include=ageRatingDeclaration&limit=20`);
+    const editable = (infos.data ?? []).find((info) => EDITABLE_APP_INFO_STATES.has(info.attributes?.state));
+    const declarationId = editable?.relationships?.ageRatingDeclaration?.data?.id;
+    if (declarationId) {
+      declaration = (await api("GET", `ageRatingDeclarations/${declarationId}`)).data;
+    }
+  }
+  if (!declaration) {
+    declaration = (await apiOptional("GET", `ageRatingDeclarations/${versionId}`))?.data ?? null;
+  }
+  if (!declaration) throw new Error(`No age rating declaration for version ${versionId}`);
+
+  const current = declaration.attributes ?? {};
+  const patch = {};
+  if (current.socialMedia == null) patch.socialMedia = false;
+  if (current.socialMediaAgeRestricted == null) patch.socialMediaAgeRestricted = false;
+  if (Object.keys(patch).length === 0) {
+    console.log("age rating already answers social media");
+    return;
+  }
+
+  const bodyFor = (attributes) => ({
+    data: { type: "ageRatingDeclarations", id: declaration.id, attributes },
+  });
+  try {
+    await api("PATCH", `ageRatingDeclarations/${declaration.id}`, bodyFor(patch));
+    console.log(`age rating updated: ${JSON.stringify(patch)}`);
+  } catch (error) {
+    if (!("socialMedia" in patch)) throw error;
+    await api("PATCH", `ageRatingDeclarations/${declaration.id}`, bodyFor({ socialMedia: false }));
+    console.log("age rating updated: socialMedia=false");
+    if (!String(error.message).includes("socialMediaAgeRestricted")) {
+      console.log(String(error.message).split("\n")[0]);
+    }
+  }
+}
+
 const apps = await api("GET", `apps?filter[bundleId]=${BUNDLE_ID}`);
 const app = apps.data?.[0];
 if (!app) throw new Error(`No app found for bundle id ${BUNDLE_ID}`);
@@ -150,6 +212,10 @@ await api("PATCH", `appStoreVersions/${version.id}/relationships/build`, {
   data: { type: "builds", id: build.id },
 });
 console.log("attached build to version");
+
+// AI Dictation has no social feed. Apple requires this answer before a version
+// can be added to a review submission.
+await declareNoSocialMedia(app.id, version.id);
 
 const openStates = "READY_FOR_REVIEW,WAITING_FOR_REVIEW,IN_REVIEW,UNRESOLVED_ISSUES";
 const existing = await api("GET", `reviewSubmissions?filter[app]=${app.id}&filter[state]=${openStates}&limit=10`);

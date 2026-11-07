@@ -8,6 +8,10 @@ on:
       - 'Whishpermate/Whispermate/Services/MacAudioProcessingStoreProvider.swift'
       - 'Whishpermate/Whispermate/Services/AppState.swift'
       - 'docs/audio-processing-failure-contract.md'
+      - 'AIDictationAndroid/app/src/main/java/com/whispermate/aidictation/service/OverlayDictationAccessibilityService.kt'
+      - 'AIDictationAndroid/app/src/main/java/com/whispermate/aidictation/service/AudioWorkflowFences.kt'
+      - 'AIDictationAndroid/app/src/main/java/com/whispermate/aidictation/ui/views/OverlayRewritePanelView.kt'
+      - 'docs/android-overlay-button-states.md'
       - 'formal/**'
       - '.github/workflows/formal-verification.yml'
 
@@ -36,3 +40,21 @@ jobs:
 
       - name: Model check two concurrent recordings
         run: python3 formal/mac_audio_store_model.py --recs 2 --max-attempts 2 --max-crashes 1
+
+  android-overlay:
+    name: Android overlay model check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check that every seeded bug is caught
+        run: python3 formal/android_overlay_model.py --self-test
+
+      - name: Check that each open finding still reproduces
+        run: python3 formal/android_overlay_model.py --check-findings
+
+      - name: Model check the overlay with the proposed fixes
+        run: python3 formal/android_overlay_model.py --fix all --max-dictations 2 --max-panels 2

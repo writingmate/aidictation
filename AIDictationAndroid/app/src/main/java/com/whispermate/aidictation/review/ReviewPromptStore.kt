@@ -60,6 +60,23 @@ class ReviewPromptStore @Inject constructor(
         }
     }
 
+    /**
+     * The onboarding step always shows the ask. This only decides whether the
+     * Play dialog may be presented again, and records that it was.
+     */
+    fun beginOnboardingPrompt(atMillis: Long = System.currentTimeMillis()): Boolean {
+        synchronized(lock) {
+            val record = loadLocked()
+            if (record.promptAttempts >= ReviewPromptPolicy.maximumPromptAttempts) return false
+            val lastPrompt = record.lastPromptAttemptAtMillis
+            if (lastPrompt != null && atMillis - lastPrompt < ReviewPromptPolicy.cooldownMillis) {
+                return false
+            }
+            saveLocked(ReviewPromptPolicy.notingPromptAttempt(record, atMillis))
+            return true
+        }
+    }
+
     private fun update(transform: (ReviewPromptRecord) -> ReviewPromptRecord) {
         synchronized(lock) {
             saveLocked(transform(loadLocked()))

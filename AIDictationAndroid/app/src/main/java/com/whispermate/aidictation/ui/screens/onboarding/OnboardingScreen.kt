@@ -61,6 +61,10 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.AutoAwesome
 import com.whispermate.aidictation.domain.model.PaymentPlan
+import com.whispermate.aidictation.review.ReviewPromptStore
+import com.whispermate.aidictation.review.findActivity
+import com.whispermate.aidictation.review.launchPlayReview
+import com.whispermate.aidictation.review.openPlayListing
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -203,6 +207,7 @@ private enum class OnboardingStep {
     Microphone,
     ButtonDemo,
     OverlayPermissions,
+    Review,
     SignIn,
     Paywall
 }
@@ -234,6 +239,9 @@ fun OnboardingScreen(
     var permissions by remember { mutableStateOf(OverlayPermissions.read(context)) }
     var showAccessibilityDisclosure by remember { mutableStateOf(false) }
     var demoLaunchRequested by remember { mutableStateOf(false) }
+    var onboardingReviewStarted by remember { mutableStateOf(false) }
+    var didOpenPlayListing by remember { mutableStateOf(false) }
+    val reviewPromptStore = remember { ReviewPromptStore(context.applicationContext) }
     val colors = onboardingColors()
 
     OnboardingSystemBars()
@@ -249,6 +257,8 @@ fun OnboardingScreen(
             add(OnboardingStep.Microphone)
             add(OnboardingStep.ButtonDemo)
             add(OnboardingStep.OverlayPermissions)
+            // After setup, before account and plan: everyone sees the rating ask.
+            add(OnboardingStep.Review)
             // Last, once everything is authorised: sign in so the account follows the user.
             if (signInAvailable) add(OnboardingStep.SignIn)
             // The paywall closes onboarding; it drops out once the account is already Pro.
@@ -273,6 +283,14 @@ fun OnboardingScreen(
         ) {
             demoLaunchRequested = false
         }
+    }
+
+    LaunchedEffect(currentOnboardingStep) {
+        if (currentOnboardingStep != OnboardingStep.Review || onboardingReviewStarted) return@LaunchedEffect
+        val activity = context.findActivity() ?: return@LaunchedEffect
+        onboardingReviewStarted = true
+        if (!reviewPromptStore.beginOnboardingPrompt()) return@LaunchedEffect
+        launchPlayReview(activity)
     }
 
     LaunchedEffect(onboardingSteps.size) {
@@ -376,6 +394,7 @@ fun OnboardingScreen(
                         onStopRecording = onStopDemoRecording,
                         onCancelRecording = onCancelDemoRecording
                     )
+                    OnboardingStep.Review -> ReviewStep()
                     OnboardingStep.SignIn -> SignInStep(signedInEmail = signedInEmail)
                     OnboardingStep.Paywall -> PaywallStep(
                         selectedPlan = selectedPlan,
@@ -463,6 +482,41 @@ fun OnboardingScreen(
             ) {
                 Text(stringResource(R.string.onboarding_paywall_continue_free))
             }
+        } else if (currentOnboardingStep == OnboardingStep.Review) {
+            Button(
+                onClick = {
+                    if (didOpenPlayListing) {
+                        if (isLastStep) finishOnboarding() else goToNextStep()
+                    } else {
+                        didOpenPlayListing = true
+                        openPlayListing(context)
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = colors.onPrimary
+                )
+            ) {
+                Text(
+                    text = stringResource(
+                        if (didOpenPlayListing) {
+                            if (isLastStep) R.string.onboarding_get_started else R.string.onboarding_continue
+                        } else {
+                            R.string.settings_rate
+                        }
+                    ),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            TextButton(
+                onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.onboarding_rate_not_now))
+            }
         } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
             // The Google button is the one action here; finishing without an account stays possible.
             GoogleSignInButton(
@@ -518,6 +572,31 @@ private fun permissionsHintText(state: PermissionsState): Int = when (permission
     PermissionsHint.NeedAccessibility -> R.string.permissions_hint_need_accessibility
     PermissionsHint.OverlayLater -> R.string.permissions_hint_overlay_later
     PermissionsHint.AllSet -> R.string.permissions_hint_all_set
+}
+
+@Composable
+private fun ReviewStep() {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        OnboardingHeroIcon(icon = Icons.Default.Star)
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_rate_title),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_rate_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
 }
 
 @Composable

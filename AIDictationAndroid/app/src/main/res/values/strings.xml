@@ -56,6 +56,9 @@
     <string name="permissions_hint_all_set">All set.</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_rate_title">Rate AI Dictation</string>
+    <string name="onboarding_rate_subtitle">A rating helps other people find voice dictation.</string>
+    <string name="onboarding_rate_not_now">Not now</string>
     <string name="onboarding_sign_in_title">Keep your account in sync</string>
     <string name="onboarding_sign_in_subtitle">Sign in to keep your plan and history when you switch phones.</string>
     <string name="onboarding_sign_in_signed_in_as">Signed in as %1$s</string>

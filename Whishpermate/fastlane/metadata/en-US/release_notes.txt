@@ -1,2 +1,2 @@
-• Rate AI Dictation from Settings whenever you want to leave a review.
-• After several successful dictations, AI Dictation may ask for a rating when you are finished and the app is idle.
+• Setup asks you to rate AI Dictation before you finish.
+• You can also rate AI Dictation from Settings whenever you want.

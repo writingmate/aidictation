@@ -90,7 +90,18 @@ class S(NamedTuple):
     sessions: int
 
 
+def pw(pid: int) -> str:
+    """Each OverlayRewritePanelView is its own window."""
+    return f"{PANEL}{pid}"
+
+
+def panel_windows(s: S) -> List[str]:
+    return [w for w in s.stack if w.startswith(PANEL)]
+
+
 def attached(s: S, w: str) -> bool:
+    if w == PANEL:
+        return bool(panel_windows(s))   # isRewritePanelAttached
     return w in s.stack
 
 
@@ -160,8 +171,9 @@ def bubble_size(rec: str) -> str:
 
 
 def restack_above_bubble(cfg: Cfg, s: S) -> S:
-    for w in (WAND, PANEL):
-        if attached(s, w):
+    # Re-adds the wand, then the current panel (rewritePanel) only.
+    for w in (WAND, pw(s.panel) if s.panel else None):
+        if w and w in s.stack:
             s = add_window(remove_window(s, w), w)
     return s
 
@@ -225,7 +237,7 @@ def remove_panel(cfg: Cfg, s: S) -> S:
     pid = s.panel
     s = drop_pending(s, lambda p: p[0] in ("close_end", "apply_end") and p[1] == pid)
     s = s._replace(panel=0)
-    s = remove_window(s, PANEL)
+    s = remove_window(s, pw(pid))
     if cfg.mutant != "panel-close-keeps-bubble-hidden":
         s = set_bubble_hidden_by_panel(s, False)
     return s
@@ -282,12 +294,16 @@ def refresh(cfg: Cfg, s: S) -> S:
     return schedule_focus_recovery(cfg, s)
 
 
+RECOVERY_ATTEMPTS = 3
+
+
 def schedule_focus_recovery(cfg: Cfg, s: S, force: bool = False) -> S:
     if (not force and not s.sticky) or attached(s, BUBBLE) or s.suppressed:
         return s
     if any(p[0] == "recovery" for p in s.pending):
         return s
-    return add_pending(s, ("recovery",))
+    # FOCUS_RECOVERY_ATTEMPTS is 15; any bound keeps the same behaviours.
+    return add_pending(s, ("recovery", RECOVERY_ATTEMPTS))
 
 
 def reset_after_recording(cfg: Cfg, s: S, token: int) -> S:
@@ -357,6 +373,8 @@ def on_bubble_tapped(cfg: Cfg, s: S) -> Optional[S]:
 def open_panel(cfg: Cfg, s: S) -> Optional[S]:
     if s.session != 0 or not attached(s, BUBBLE):
         return s
+    if "open-guards-panel-window" in cfg.fixes and attached(s, PANEL):
+        return s  # proposed: never open over a panel that is still withering
     if not can_start_selection_command(s.rec, workflow(s)):
         return s
     if not (node_present(s) and s.sel):
@@ -366,7 +384,7 @@ def open_panel(cfg: Cfg, s: S) -> Optional[S]:
     sid = s.sessions + 1
     s = s._replace(session=sid, session_running=False, session_changed=False,
                    panel=sid, sessions=sid)
-    s = add_window(s, PANEL)
+    s = add_window(s, pw(sid))
     s = set_bubble_hidden_by_panel(s, True)
     # absorbWandButton
     if not attached(s, WAND):
@@ -466,9 +484,8 @@ def user_actions(cfg: Cfg, s: S) -> Succ:
         t = open_panel(cfg, s)
         if t is not None:
             yield "user: tap wand", t
-    # Timing assumption: the panel blooms from 12% scale over 460 ms, so its
-    # buttons cannot be hit before the 220 ms wand absorb has ended.
-    if s.session and attached(s, PANEL) and not s.absorbing and not s.dragging:
+    # The panel's buttons are touchable while it blooms, even during the absorb.
+    if s.session and attached(s, PANEL) and not s.dragging:
         if not s.session_running:
             yield "user: panel action", add_pending(
                 s._replace(session_running=True), ("rewrite", s.session))
@@ -500,23 +517,28 @@ def system_actions(cfg: Cfg, s: S) -> Succ:
             if show:
                 yield "timer: focus recovery refreshes", refresh(cfg, t)
             else:
-                yield "timer: focus recovery retries", t._replace(pending=s.pending)
-                yield "timer: focus recovery gives up", t
+                if p[1] > 1:
+                    yield "timer: focus recovery retries", add_pending(t, ("recovery", p[1] - 1))
+                else:
+                    yield "timer: focus recovery gives up", t
         elif kind == "shortcut":
             t = on_bubble_tapped(cfg, rest)
             # Past the model's dictation bound the tap drains as a no-op.
             yield "timer: shortcut taps bubble", t if t is not None else rest
         elif kind == "absorb_end":
             t = rest._replace(absorbing=False)
-            if cfg.mutant != "absorb-end-keeps-wand":
+            if cfg.mutant == "absorb-end-keeps-wand":
+                pass
+            elif "absorb-end-refresh" in cfg.fixes:
+                t = update_wand(cfg, t)  # proposed: re-evaluate instead of hiding
+            else:
                 t = remove_wand(cfg, t)
             yield "anim: wand absorb ends", t
-        elif kind == "close_end":
-            if p[1] == rest.panel:
-                yield "anim: panel close ends", refresh(cfg, remove_panel(cfg, rest))
-        elif kind == "apply_end":
-            if p[1] == rest.panel:
-                yield "anim: panel apply ends", refresh(cfg, remove_panel(cfg, rest))
+        elif kind in ("close_end", "apply_end"):
+            # The end action calls removeRewritePanel(), which removes whatever
+            # panel is current, with no check that it is this one.
+            what = "close" if kind == "close_end" else "apply"
+            yield f"anim: panel {what} ends", refresh(cfg, remove_panel(cfg, rest))
         elif kind == "apply_job":
             yield "job: apply finishes", refresh(cfg, rest)
         elif kind == "rewrite":
@@ -575,13 +597,20 @@ def initial(cfg: Cfg) -> S:
 # --------------------------------------------------------------------------
 def order_ok(s: S) -> bool:
     idx = {w: i for i, w in enumerate(s.stack)}
+    panels = [idx[w] for w in panel_windows(s)]
     if WAND in idx and idx[WAND] < idx[BUBBLE]:
         return False
-    if PANEL in idx and idx[PANEL] < idx[BUBBLE]:
+    if panels and min(panels) < idx[BUBBLE]:
         return False
-    if WAND in idx and PANEL in idx and idx[WAND] > idx[PANEL]:
+    if WAND in idx and panels and idx[WAND] > min(panels):
         return False
     return True
+
+
+def inv_single_panel(cfg: Cfg, s: S) -> bool:
+    """One rewrite panel window at a time, and it is the one the service tracks."""
+    panels = panel_windows(s)
+    return len(panels) <= 1 and (not panels or panels[0] == pw(s.panel))
 
 
 def inv_wand_needs_bubble(cfg: Cfg, s: S) -> bool:
@@ -680,6 +709,7 @@ INVARIANTS: Dict[str, Callable[[Cfg, S], bool]] = {
     "WandNeedsBubble": inv_wand_needs_bubble,
     "PanelNeedsBubble": inv_panel_needs_bubble,
     "Stacking": inv_stacking,
+    "SinglePanel": inv_single_panel,
     "DragHidesWand": inv_drag_hides_wand,
     "WandNotOverPanel": inv_wand_not_over_panel,
     "BubbleHiddenIffPanel": inv_bubble_hidden_iff_panel,
@@ -698,6 +728,8 @@ FIXES: Dict[str, str] = {
     "suppressed-start": "startRecording refuses while the bubble is snoozed or hidden",
     "drop-refresh": "dropping the bubble outside the zones re-evaluates the wand",
     "drag-hides-wand": "updateCommandActionsVisibility keeps the wand hidden while the zones show",
+    "absorb-end-refresh": "the absorb end action re-evaluates the wand instead of hiding it",
+    "open-guards-panel-window": "openRewritePanel also refuses while a panel window is attached",
 }
 
 # Open findings in the current Kotlin: removing the fix must break the property.
@@ -706,13 +738,15 @@ FINDINGS: Dict[str, str] = {
     "start-refresh": "SettledBubbleVisibility",
     "drop-refresh": "SettledWandVisibility",
     "drag-hides-wand": "DragHidesWand",
+    "absorb-end-refresh": "SettledWandVisibility",
+    "open-guards-panel-window": "SinglePanel",
 }
 
 MUTANTS: Dict[str, Tuple[str, str]] = {
     "absorb-end-keeps-wand": ("the absorb end action leaves the wand window on screen",
                               "WandNotOverPanel"),
     "wand-ignores-panel-window": ("the wand returns while the panel's close animation runs",
-                                  "Stacking"),
+                                  "WandNotOverPanel"),
     "panel-close-keeps-bubble-hidden": ("removing the panel leaves the bubble invisible",
                                         "BubbleHiddenIffPanel"),
     "dictation-keeps-panel": ("starting dictation leaves the panel open", "PanelOnlyWhenIdle"),
@@ -773,24 +807,40 @@ def check(cfg: Cfg) -> Result:
                 queue.append(t)
         sys_edges[s] = out
 
-    # Liveness: with no further input from the user or the environment, the
-    # overlay always settles (no endless animation, timer or stuck flag).
-    reverse: Dict[S, List[S]] = {}
-    for a, outs in sys_edges.items():
-        for b in outs:
-            reverse.setdefault(b, []).append(a)
-    # A held drag or an interrupted overlay waits on the user or the next event.
-    good = {s for s in parent if not s.pending and not s.absorbing}
-    frontier = deque(good)
-    while frontier:
-        b = frontier.popleft()
-        for a in reverse.get(b, ()):
-            if a not in good:
-                good.add(a)
-                frontier.append(a)
-    for s in parent:
-        if s not in good:
-            return fail("EventuallySettles", s)
+    # Liveness (AlwaysSettles): with no further input from the user or the
+    # environment, every run of timers, animation ends and job completions
+    # terminates, and it terminates settled. Checked as: (1) every state with
+    # pending work has a system step, (2) system steps between states with
+    # pending work form no cycle, so no run goes on forever, and (3) a state
+    # with nothing pending is never mid-absorb. A held drag or an interrupted
+    # overlay waits on the user or the next event, so they may end a run.
+    for st, outs in sys_edges.items():
+        if st.pending and not outs:
+            return fail("AlwaysSettles", st)
+        if not st.pending and st.absorbing:
+            return fail("AlwaysSettles", st)
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour: Dict[S, int] = {}
+    for root in sys_edges:
+        if colour.get(root, WHITE) != WHITE or not root.pending:
+            continue
+        stack = [(root, iter(sys_edges.get(root, ())))]
+        colour[root] = GREY
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                colour[node] = BLACK
+                stack.pop()
+                continue
+            if not nxt.pending:
+                continue
+            c = colour.get(nxt, WHITE)
+            if c == GREY:
+                return fail("AlwaysSettles", nxt)
+            if c == WHITE:
+                colour[nxt] = GREY
+                stack.append((nxt, iter(sys_edges.get(nxt, ()))))
     return Result(len(parent), transitions, time.time() - start, None)
 
 
@@ -842,14 +892,14 @@ def main(argv: List[str]) -> int:
         bad = 0
         for fix, expected in sorted(FINDINGS.items()):
             fixes = frozenset(FINDINGS) - {fix}
-            res = run(Cfg(max_dictations=1, max_sessions=1, fixes=fixes), f"finding without fix {fix}")
+            res = run(Cfg(max_dictations=1, max_sessions=2, fixes=fixes), f"finding without fix {fix}")
             got = res.violation[0] if res.violation else None
             if got == expected:
                 print(f"    reproduces as {got} (trace length {len(res.violation[1])})")
             else:
                 print(f"    FAIL: expected {expected}, got {got}")
                 bad += 1
-        res = run(Cfg(max_dictations=1, max_sessions=1), "current Kotlin, no fixes")
+        res = run(Cfg(max_dictations=1, max_sessions=2), "current Kotlin, no fixes")
         if res.violation is None:
             print("    FAIL: the current code is expected to show the open findings")
             bad += 1
@@ -869,7 +919,7 @@ def main(argv: List[str]) -> int:
             print(f"  {i:2d}. {step}\n      {describe(st)}")
         return 1
     print(f"    all {len(INVARIANTS)} invariants and {len(ACTION_PROPERTIES)} action "
-          f"property hold; EventuallySettles holds")
+          f"property hold; AlwaysSettles holds")
     return 0
 
 

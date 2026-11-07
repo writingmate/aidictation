@@ -215,11 +215,17 @@ auto-stop it on silence. The user taps the bubble, its cancel and accept
 targets, the wand and the panel buttons, drags the bubble into the dismiss
 area, and can use the dictation shortcut.
 
-Pending callbacks fire in any order, which over-approximates timing. Two
-timing facts are kept because ignoring them produced impossible traces:
-the panel's buttons can't be hit during the 220 ms wand absorb (the panel is
-still blooming from 12% scale for 460 ms), and a hide timer armed during
-the absorb waits at least 250 ms, so it fires after the absorb ends.
+Pending callbacks fire in any order, which over-approximates timing. One
+timing fact is kept because ignoring it produced impossible traces: a hide
+timer armed during the 220 ms wand absorb waits at least 250 ms, so it fires
+after the absorb ends. Panel buttons are touchable as soon as the panel is
+added (alpha 0 views still take touches), so taps during the bloom are
+explored; findings 5 and 6 depend on such fast taps.
+
+Each rewrite panel is its own window. The close and apply end actions call
+`removeRewritePanel()`, which removes whichever panel is current, exactly as
+the Kotlin does. Focus recovery is bounded (3 attempts in the model, 15 in
+the code).
 
 ### Properties
 
@@ -227,6 +233,7 @@ the absorb waits at least 250 ms, so it fires after the absorb ends.
 |---|---|
 | `WandNeedsBubble`, `PanelNeedsBubble` | the wand follows the bubble; the bubble hiding discards the panel |
 | `Stacking` | wand invariant 5: bubble, then wand, then panel |
+| `SinglePanel` | one panel window at a time, and it is the one the service tracks |
 | `WandNotOverPanel` | wand invariant 4: never on screen with the panel, except while being absorbed |
 | `DragHidesWand` | wand invariant 3: dragging to the dismiss zones hides it |
 | `BubbleHiddenIffPanel` | panel invariant 8: the bubble is invisible exactly while the panel shows |
@@ -237,7 +244,7 @@ the absorb waits at least 250 ms, so it fires after the absorb ends.
 | `SettledNotAbsorbing` | the absorb is transient |
 | `SettledDictationVisible` | a running dictation always has a visible bubble to stop it |
 | `DictationSurvivesKeyboardClose` | a keyboard that hides mid-task never tears the task down |
-| `EventuallySettles` (liveness) | with no further input, every timer, animation and job completes |
+| `AlwaysSettles` (liveness) | with no further input from the user or the environment, every run of timers, animation ends and job completions terminates, and ends settled. Checked as: no cycle among states with pending work, every such state can step, and no run ends mid-absorb |
 
 `--self-test` runs six mutants (absorb end leaves the wand, the wand returns
 during the close animation, the panel leaves the bubble invisible,
@@ -247,9 +254,12 @@ property.
 
 ### Open findings in the current Kotlin
 
-Each fix is a switch (`--fix NAME`). `--check-findings` confirms that leaving
-any one out breaks its property, so the findings stay tied to the code
-until it changes.
+Each fix is a switch (`--fix NAME`). `--check-findings` confirms that, in the
+model, leaving any one out breaks its property. It reads only this model,
+not the Kotlin. **Whenever the overlay's Kotlin changes, update the model to
+match.** When a finding is fixed in Kotlin, make its fix the model's default
+behaviour and remove it from `FINDINGS`; otherwise CI keeps describing the
+old code.
 
 1. **The wand can disappear for the rest of the session** (`absorb`,
    `SettledNotAbsorbing`). `absorbWandButton()` clears `wandAbsorbing` only
@@ -279,9 +289,22 @@ until it changes.
    (`drag-hides-wand`, `DragHidesWand`). `updateCommandActionsVisibility()`
    doesn't know a drag is under way. Fix: keep the wand hidden while the
    dismiss zones are attached.
+5. **Closing the panel during the absorb loses the wand**
+   (`absorb-end-refresh`, `SettledWandVisibility`). If × or ✓ is tapped
+   within the 220 ms absorb and the close finishes first, its refresh skips
+   the wand (still absorbing), and the absorb end action then just hides it,
+   though the selection remains. Fix: the absorb end action re-evaluates the
+   wand instead of hiding it.
+6. **A second panel can open over a withering one** (`open-guards-panel-window`,
+   `SinglePanel`). `openRewritePanel()` checks only `rewriteSession`, which
+   close and apply clear before their animation. Tapping the still-absorbing
+   wand in that window adds a second panel and replaces `rewritePanel`. The
+   first panel's end action then removes the second one, and the first
+   panel's window stays attached with the bubble shown beneath it. Fix: also
+   refuse while `isRewritePanelAttached`. Needs three taps inside 220 ms, so
+   it is unlikely by hand, but the guard is one line.
 
-With all four fixes, every property holds for up to three dictations and
-three panel sessions (286,480 states).
+With all six fixes, every property holds; see the PR for the bounds checked.
 
 ### Defense-in-depth observation
 

@@ -59,6 +59,21 @@ public enum ReviewPromptStore {
         return true
     }
 
+    /// The onboarding step always shows the ask. This only decides whether the
+    /// system dialog may be presented again, and records that it was.
+    public static func beginOnboardingReview(at date: Date = Date()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let record = loadUnlocked()
+        guard record.promptAttempts < ReviewPromptPolicy.maximumPromptAttempts else { return false }
+        if let lastPromptAttemptAt = record.lastPromptAttemptAt,
+           date.timeIntervalSince(lastPromptAttemptAt) < ReviewPromptPolicy.cooldown {
+            return false
+        }
+        saveUnlocked(ReviewPromptPolicy.notingPromptAttempt(record, at: date))
+        return true
+    }
+
     private static func update(_ transform: (ReviewPromptRecord) -> ReviewPromptRecord) {
         lock.lock()
         defer { lock.unlock() }

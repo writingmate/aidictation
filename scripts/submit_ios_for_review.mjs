@@ -90,45 +90,69 @@ const EDITABLE_APP_INFO_STATES = new Set([
   "INVALID_BINARY",
 ]);
 
-async function declareNoSocialMedia(appId, versionId) {
-  const fromVersion = await apiOptional("GET", `appStoreVersions/${versionId}/ageRatingDeclaration`);
-  let declaration = fromVersion?.data ?? null;
-  if (!declaration) {
-    const infos = await api("GET", `apps/${appId}/appInfos?include=ageRatingDeclaration&limit=20`);
-    const editable = (infos.data ?? []).find((info) => EDITABLE_APP_INFO_STATES.has(info.attributes?.state));
-    const declarationId = editable?.relationships?.ageRatingDeclaration?.data?.id;
-    if (declarationId) {
-      declaration = (await api("GET", `ageRatingDeclarations/${declarationId}`)).data;
-    }
-  }
-  if (!declaration) {
-    declaration = (await apiOptional("GET", `ageRatingDeclarations/${versionId}`))?.data ?? null;
-  }
-  if (!declaration) throw new Error(`No age rating declaration for version ${versionId}`);
-
-  const current = declaration.attributes ?? {};
-  const patch = {};
-  if (current.socialMedia == null) patch.socialMedia = false;
-  if (current.socialMediaAgeRestricted == null) patch.socialMediaAgeRestricted = false;
-  if (Object.keys(patch).length === 0) {
-    console.log("age rating already answers social media");
-    return;
-  }
-
-  const bodyFor = (attributes) => ({
-    data: { type: "ageRatingDeclarations", id: declaration.id, attributes },
+async function patchAgeRating(id, attributes) {
+  await api("PATCH", `ageRatingDeclarations/${id}`, {
+    data: { type: "ageRatingDeclarations", id, attributes },
   });
-  try {
-    await api("PATCH", `ageRatingDeclarations/${declaration.id}`, bodyFor(patch));
-    console.log(`age rating updated: ${JSON.stringify(patch)}`);
-  } catch (error) {
-    if (!("socialMedia" in patch)) throw error;
-    await api("PATCH", `ageRatingDeclarations/${declaration.id}`, bodyFor({ socialMedia: false }));
-    console.log("age rating updated: socialMedia=false");
-    if (!String(error.message).includes("socialMediaAgeRestricted")) {
-      console.log(String(error.message).split("\n")[0]);
+}
+
+async function declareNoSocialMedia(appId, versionId) {
+  const declarations = new Map();
+  const remember = (id, attributes = {}) => {
+    if (!id || declarations.has(id)) return;
+    declarations.set(id, attributes);
+  };
+
+  const fromVersion = await apiOptional("GET", `appStoreVersions/${versionId}/ageRatingDeclaration`);
+  if (fromVersion?.data?.id) remember(fromVersion.data.id, fromVersion.data.attributes ?? {});
+
+  // Apple allows UPDATE on this resource and rejects GET_INSTANCE, so use the
+  // id from the app info relationship and do not read the declaration itself.
+  const infos = await api("GET", `apps/${appId}/appInfos?include=ageRatingDeclaration&limit=20`);
+  for (const info of infos.data ?? []) {
+    const state = info.attributes?.state ?? "unknown";
+    const declarationId = info.relationships?.ageRatingDeclaration?.data?.id;
+    console.log(`app info ${info.id} state=${state} ageRating=${declarationId ?? "none"}`);
+    if (!EDITABLE_APP_INFO_STATES.has(state)) continue;
+    const included = (infos.included ?? []).find((item) => item.id === declarationId);
+    remember(declarationId, included?.attributes ?? {});
+  }
+  remember(versionId, {});
+
+  if (declarations.size === 0) throw new Error(`No age rating declaration for version ${versionId}`);
+
+  const errors = [];
+  let updated = false;
+  for (const [id, attributes] of declarations) {
+    const patch = {};
+    if (attributes.socialMedia == null) patch.socialMedia = false;
+    if (attributes.socialMediaAgeRestricted == null) patch.socialMediaAgeRestricted = false;
+    if (Object.keys(patch).length === 0) {
+      console.log(`age rating ${id} already answers social media`);
+      updated = true;
+      continue;
+    }
+    try {
+      await patchAgeRating(id, patch);
+      console.log(`age rating ${id} updated: ${JSON.stringify(patch)}`);
+      updated = true;
+    } catch (error) {
+      if (!("socialMedia" in patch)) {
+        errors.push(error);
+        console.log(`age rating ${id} not updated: ${String(error.message).split("\n")[0]}`);
+        continue;
+      }
+      try {
+        await patchAgeRating(id, { socialMedia: false });
+        console.log(`age rating ${id} updated: socialMedia=false`);
+        updated = true;
+      } catch (fallbackError) {
+        errors.push(fallbackError);
+        console.log(`age rating ${id} not updated: ${String(fallbackError.message).split("\n")[0]}`);
+      }
     }
   }
+  if (!updated) throw errors[0] ?? new Error(`No age rating declaration for version ${versionId}`);
 }
 
 const apps = await api("GET", `apps?filter[bundleId]=${BUNDLE_ID}`);

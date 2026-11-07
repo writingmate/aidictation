@@ -48,6 +48,19 @@ private func retranscribeWithAIDictation(_ recording: Recording) {
     )
 }
 
+/// The Re-transcribe button's default click. Someone who chose Offline mode
+/// keeps the retry on this Mac when the offline model is ready; everyone else
+/// re-transcribes online.
+private func retranscribeWithPreferredRoute(_ recording: Recording) {
+    let appState = AppState.shared
+    if TranscriptionProviderManager.shared.transcriptionMode == .local,
+       appState.offlineRetranscribeOption.isEnabled {
+        AppState.shared.retranscribeOffline(recording: recording)
+    } else {
+        retranscribeWithAIDictation(recording)
+    }
+}
+
 /// Master-detail view that combines history list with recording interface
 struct HistoryMasterDetailView: View {
     var body: some View {
@@ -517,9 +530,9 @@ struct RecordingDetailView: View {
                     } label: {
                         Label("Re-transcribe", systemImage: "arrow.clockwise")
                     } primaryAction: {
-                        retranscribeWithAIDictation(recording)
+                        retranscribeWithPreferredRoute(recording)
                     }
-                    .help("Re-transcribe online. Use the arrow to re-transcribe offline on this Mac.")
+                    .help("Re-transcribe. Use the arrow to choose online or offline on this Mac.")
                     .disabled(
                         !recording.canRetranscribe ||
                         appState.isHistoryMutationInProgress ||

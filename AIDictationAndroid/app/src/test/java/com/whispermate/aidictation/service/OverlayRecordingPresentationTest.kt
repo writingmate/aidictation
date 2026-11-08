@@ -154,4 +154,17 @@ class OverlayRecordingPresentationTest {
             )
         )
     }
+
+    @Test
+    fun `a snoozed bubble stays away while idle`() {
+        assertTrue(suppressionHidesBubble(suppressed = true, workflowActive = false))
+        assertFalse(suppressionHidesBubble(suppressed = false, workflowActive = false))
+    }
+
+    @Test
+    fun `a running dictation shows its bubble even while snoozed`() {
+        // The shortcut can start dictation behind a snoozed bubble; it must still be stoppable.
+        assertFalse(suppressionHidesBubble(suppressed = true, workflowActive = true))
+        assertFalse(suppressionHidesBubble(suppressed = false, workflowActive = true))
+    }
 }

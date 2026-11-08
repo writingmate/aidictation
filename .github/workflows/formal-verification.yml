@@ -53,8 +53,8 @@ jobs:
       - name: Check that every seeded bug is caught
         run: python3 formal/android_overlay_model.py --self-test
 
-      - name: Check that each open finding still reproduces
-        run: python3 formal/android_overlay_model.py --check-findings
+      - name: Check that reverting any fix brings its bug back
+        run: python3 formal/android_overlay_model.py --check-regressions
 
-      - name: Model check the overlay with the proposed fixes
-        run: python3 formal/android_overlay_model.py --fix all --max-dictations 2 --max-panels 2
+      - name: Model check the overlay
+        run: python3 formal/android_overlay_model.py --max-dictations 2 --max-panels 2

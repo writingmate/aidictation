@@ -104,6 +104,14 @@ internal fun bubbleNeedsKeyboard(
     panelOpen: Boolean
 ): Boolean = recordingState == OverlayRecordingState.Idle && !workflowActive && !panelOpen
 
+/**
+ * Snoozing or hiding the bubble keeps it away while idle. A dictation that is under way
+ * (for example one started from the shortcut while snoozed) still shows its bubble, so
+ * there is always something on screen to stop it with.
+ */
+internal fun suppressionHidesBubble(suppressed: Boolean, workflowActive: Boolean): Boolean =
+    suppressed && !workflowActive
+
 internal fun shouldShowWandButton(
     recordingState: OverlayRecordingState,
     workflowActive: Boolean,
@@ -499,7 +507,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         keyboardVisible: Boolean = isKeyboardVisible()
     ): Boolean {
         if (!hasEditableDictationTarget(source, node, keyboardVisible)) return false
-        if (isBubbleSuppressed()) return false
+        if (suppressionHidesBubble(isBubbleSuppressed(), hasOverlayWorkflow())) return false
         // The IME window may disappear briefly while it animates or switches, so this
         // is never acted on immediately: hides go through scheduleDeferredHide's grace.
         if (!keyboardVisible && bubbleNeedsKeyboard(recordingState, hasOverlayWorkflow(), rewriteSession != null)) {
@@ -940,6 +948,11 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
         // The wand is mid-absorb into the panel; let that animation finish.
         if (wandAbsorbing) return
+        // Dragging to the dismiss zones hides the wand until the bubble is dropped.
+        if (isDismissActionsAttached) {
+            hideCommandActions()
+            return
+        }
 
         val workflowActive = hasOverlayWorkflow()
         // The panel counts as open until its window is gone: the session is cleared when
@@ -1009,6 +1022,14 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         } finally {
             isCommandActionsAttached = false
             actions.alpha = 1f
+            // Cancelling the absorb drops its end action, so undo what it would have done.
+            // Otherwise wandAbsorbing stays set and the wand never shows again.
+            wandAbsorbing = false
+            wandButton?.apply {
+                scaleX = 1f
+                scaleY = 1f
+                alpha = 1f
+            }
         }
     }
 
@@ -1257,6 +1278,8 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                             null -> {
                                 hideDismissActions()
                                 snapBubbleToNearestHorizontalEdge(params.x, params.y)
+                                // Revealing the zones hid the wand; show it again if it applies.
+                                refreshOverlayVisibility(null)
                             }
                         }
                     } else {
@@ -1505,6 +1528,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         // processing/loading state to the user.
         recordingState = OverlayRecordingState.Recording
         updateBubbleUi()
+        // From the shortcut the bubble may not be showing (keyboard down, or snoozed).
+        // A running dictation always gets a bubble to stop it with.
+        refreshOverlayVisibility(null)
 
         audioWorkflowJob = serviceScope.launch {
             try {
@@ -2280,7 +2306,9 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
      * own working copy until the user applies or closes it.
      */
     private fun openRewritePanel() {
-        if (rewriteSession != null || !isBubbleAttached) return
+        // The session clears when close or apply starts, but the old panel stays on screen
+        // until its animation ends; opening now would stack a second panel window.
+        if (rewriteSession != null || isRewritePanelAttached || !isBubbleAttached) return
         if (!canStartSelectionCommand(recordingState, hasOverlayWorkflow())) return
 
         val target = resolveSelectionCommandTarget()
@@ -2384,10 +2412,12 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
             .setInterpolator(AccelerateInterpolator())
             .withEndAction {
                 wandAbsorbing = false
-                hideCommandActions()
                 wand.scaleX = 1f
                 wand.scaleY = 1f
                 wand.alpha = 1f
+                // Usually the panel is open and this hides the wand. If the panel already
+                // closed during the absorb, the wand comes back while a selection remains.
+                updateCommandActionsVisibility(resolveFocusedEditableNode(null))
             }
             .start()
     }

@@ -188,10 +188,10 @@ bubble, the wand, the rewrite panel and the dismiss zones) against
 [`docs/android-overlay-button-states.md`](../docs/android-overlay-button-states.md).
 
 ```bash
-python3 formal/android_overlay_model.py --self-test        # every seeded bug must be caught
-python3 formal/android_overlay_model.py --check-findings   # each open finding still reproduces
-python3 formal/android_overlay_model.py --fix all          # the proposed fixes satisfy every property
-python3 formal/android_overlay_model.py                    # the current Kotlin: prints the first finding
+python3 formal/android_overlay_model.py --self-test           # every seeded bug must be caught
+python3 formal/android_overlay_model.py --check-regressions   # reverting any fix brings its bug back
+python3 formal/android_overlay_model.py                       # the current Kotlin: every property holds
+python3 formal/android_overlay_model.py --revert all          # the code before the fixes
 ```
 
 ### What is modeled
@@ -220,7 +220,7 @@ timing fact is kept because ignoring it produced impossible traces: a hide
 timer armed during the 220 ms wand absorb waits at least 250 ms, so it fires
 after the absorb ends. Panel buttons are touchable as soon as the panel is
 added (alpha 0 views still take touches), so taps during the bloom are
-explored; findings 5 and 6 depend on such fast taps.
+explored; bugs 6 and 7 below depend on such fast taps.
 
 Each rewrite panel is its own window. The close and apply end actions call
 `removeRewritePanel()`, which removes whichever panel is current, exactly as
@@ -252,60 +252,45 @@ dictation keeps the panel open, keyboard close ends dictation, sticky focus
 survives the keyboard closing). Each one must be caught by the expected
 property.
 
-### Open findings in the current Kotlin
+### Bugs found and fixed
 
-Each fix is a switch (`--fix NAME`). `--check-findings` confirms that, in the
-model, leaving any one out breaks its property. It reads only this model,
-not the Kotlin. **Whenever the overlay's Kotlin changes, update the model to
-match.** When a finding is fixed in Kotlin, make its fix the model's default
-behaviour and remove it from `FINDINGS`; otherwise CI keeps describing the
-old code.
+The checker found these in `OverlayDictationAccessibilityService`; all are
+fixed in the Kotlin, and the model's default is the fixed code. Each fix is
+named, and `--check-regressions` requires that reverting any one of them
+(`--revert NAME`) brings its bug back. **Whenever the overlay's Kotlin
+changes, update the model to match**: the checks read only this model.
 
-1. **The wand can disappear for the rest of the session** (`absorb`,
-   `SettledNotAbsorbing`). `absorbWandButton()` clears `wandAbsorbing` only
-   in `withEndAction`, and `removeCommandActionsView()` cancels the wand's
-   animation, which drops that end action. Anything that removes the wand
-   during the 220 ms absorb leaves the flag set, and
-   `updateCommandActionsVisibility()` then returns early for good. The
-   checker finds three triggers: `onInterrupt()`; a dictation shortcut tap
-   that was already pending; a deferred hide armed before the wand tap
-   (for example by a keyboard flap) that fires after the field lost focus.
-   Fix: reset `wandAbsorbing` and the wand's scale and alpha in
-   `removeCommandActionsView()`.
-2. **A shortcut-started dictation can run with no bubble**
-   (`start-refresh`, `SettledBubbleVisibility`). `startRecording()` sets
-   `recordingState` but never refreshes visibility. Starting from the
-   shortcut while the keyboard is down leaves the recording invisible until
-   some other accessibility event arrives. Fix: call
-   `refreshOverlayVisibility(null)` once recording starts. Related product
-   decision (`--fix suppressed-start`, not required by any property): with
-   the bubble snoozed, that refresh cancels the new dictation right away.
-   The alternative is for the shortcut to refuse while snoozed.
-3. **Dragging toward the dismiss zones loses the wand** (`drop-refresh`,
-   `SettledWandVisibility`). Revealing the zones hides the wand, but a drop
-   outside them only snaps the bubble, so the wand stays away until the
-   selection changes. Fix: refresh visibility after the snap.
-4. **A refresh during a drag brings the wand back over the zones**
-   (`drag-hides-wand`, `DragHidesWand`). `updateCommandActionsVisibility()`
-   doesn't know a drag is under way. Fix: keep the wand hidden while the
+1. **The wand could disappear for the rest of the session** (`absorb`,
+   `SettledNotAbsorbing`). `wandAbsorbing` was cleared only in the absorb's
+   `withEndAction`, which a cancel drops, so removing the wand during the
+   220 ms absorb left it set and the wand never showed again. Triggers:
+   `onInterrupt()`, a pending shortcut tap, a deferred hide armed by a
+   keyboard hide. Fix: `removeCommandActionsView()` clears the flag and
+   resets the wand's scale and alpha.
+2. **A shortcut-started dictation could run with no bubble**
+   (`start-refresh`, `SettledBubbleVisibility`). Fix: `startRecording()`
+   refreshes visibility once it is recording.
+3. **Snoozing hid a running dictation** (`show-dictation-when-snoozed`,
+   `DictationSurvivesKeyboardClose`). A shortcut dictation behind a snoozed
+   bubble was cancelled by the first deferred hide. Fix:
+   `suppressionHidesBubble()` keeps the bubble for a dictation under way; a
+   snooze still hides the idle bubble, and dropping on a dismiss zone still
+   ends dictation.
+4. **Dragging toward the dismiss zones and back lost the wand**
+   (`drop-refresh`, `SettledWandVisibility`). Fix: a drop outside the zones
+   refreshes visibility.
+5. **A refresh during a drag brought the wand back over the zones**
+   (`drag-hides-wand`, `DragHidesWand`). Fix: the wand stays hidden while the
    dismiss zones are attached.
-5. **Closing the panel during the absorb loses the wand**
-   (`absorb-end-refresh`, `SettledWandVisibility`). If × or ✓ is tapped
-   within the 220 ms absorb and the close finishes first, its refresh skips
-   the wand (still absorbing), and the absorb end action then just hides it,
-   though the selection remains. Fix: the absorb end action re-evaluates the
-   wand instead of hiding it.
-6. **A second panel can open over a withering one** (`open-guards-panel-window`,
-   `SinglePanel`). `openRewritePanel()` checks only `rewriteSession`, which
-   close and apply clear before their animation. Tapping the still-absorbing
-   wand in that window adds a second panel and replaces `rewritePanel`. The
-   first panel's end action then removes the second one, and the first
-   panel's window stays attached with the bubble shown beneath it. Fix: also
-   refuse while `isRewritePanelAttached`. Needs three taps inside 220 ms, so
-   it is unlikely by hand, but the guard is one line.
+6. **Closing the panel during the absorb lost the wand**
+   (`absorb-end-refresh`, `SettledWandVisibility`). Fix: the absorb end
+   action re-evaluates the wand instead of hiding it.
+7. **A second panel could open over a withering one**
+   (`open-guards-panel-window`, `SinglePanel`). Fix: `openRewritePanel()`
+   also refuses while `isRewritePanelAttached`.
 
-With all six fixes, every property holds: two dictations and two panel
-sessions (233,024 states, run in CI) and three of each (746,952 states).
+The current code satisfies every property for two dictations and two panel
+sessions (299,440 states, run in CI).
 
 ### Defense-in-depth observation
 

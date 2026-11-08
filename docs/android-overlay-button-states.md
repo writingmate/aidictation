@@ -44,7 +44,9 @@ The bubble takes no part in text editing: selection commands live entirely in th
 wand and its panel.
 
 **Visibility.** The bubble shows while an editable field has input focus and the
-keyboard is up. When the keyboard closes it leaves after a short debounce, unless
+keyboard is up. Snoozing or hiding it from the dismiss zones keeps it away while idle,
+but a dictation that is under way (for example one started from the shortcut) always
+shows its bubble so it can be stopped. When the keyboard closes it leaves after a short debounce, unless
 dictation is recording, processing or delivering, or the edit panel is open. The
 sticky-focus fallback that bridges WebView tree rebuilds applies only while the keyboard
 is still up; a closed keyboard or a password field ends it (`bubbleNeedsKeyboard`).

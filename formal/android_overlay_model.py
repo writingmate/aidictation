@@ -54,11 +54,17 @@ F_IDLE, F_AUDIO, F_DELIVERY = "IDLE", "AUDIO", "DELIVERY"
 BUBBLE, WAND, PANEL, ZONES = "bubble", "wand", "panel", "zones"
 
 
+def fx(cfg: "Cfg") -> frozenset:
+    return frozenset(FIXES) if cfg.fixes is None else cfg.fixes
+
+
 class Cfg(NamedTuple):
     max_dictations: int = 2
     max_sessions: int = 2
     mutant: Optional[str] = None
-    fixes: frozenset = frozenset()   # proposed fixes to model, see FIXES
+    # Fixes the Kotlin has. Leaving one out models the code before it (see
+    # FIXES and REGRESSIONS); the default is the current code.
+    fixes: Optional[frozenset] = None
 
 
 class S(NamedTuple):
@@ -159,7 +165,8 @@ def has_editable_target(cfg: Cfg, s: S) -> Tuple[S, bool]:
 
 def should_show_bubble(cfg: Cfg, s: S) -> Tuple[S, bool]:
     s, target = has_editable_target(cfg, s)
-    if not target or s.suppressed:
+    # suppressionHidesBubble: a snooze hides an idle bubble, never a running dictation.
+    if not target or (s.suppressed and not (workflow(s) and "show-dictation-when-snoozed" in fx(cfg))):
         return s, False
     if not s.kb and bubble_needs_keyboard(cfg, s.rec, workflow(s), s.session != 0):
         return s, False
@@ -197,7 +204,7 @@ def remove_wand(cfg: Cfg, s: S) -> S:
     if not attached(s, WAND):
         return s
     s = drop_pending(s, lambda p: p[0] == "absorb_end")
-    if "absorb" in cfg.fixes:
+    if "absorb" in fx(cfg):
         s = s._replace(absorbing=False)
     return remove_window(s, WAND)
 
@@ -216,8 +223,8 @@ def update_wand(cfg: Cfg, s: S) -> S:
         return remove_wand(cfg, s)
     if s.absorbing:
         return s
-    if "drag-hides-wand" in cfg.fixes and attached(s, ZONES):
-        return remove_wand(cfg, s)  # proposed: the wand stays hidden while dragging
+    if "drag-hides-wand" in fx(cfg) and attached(s, ZONES):
+        return remove_wand(cfg, s)  # fix: the wand stays hidden while dragging
     wf = workflow(s)
     panel_open = s.session != 0 or (attached(s, PANEL) and cfg.mutant != "wand-ignores-panel-window")
     has_sel = not panel_open and can_start_selection_command(s.rec, wf) and node_present(s) and s.sel
@@ -329,8 +336,6 @@ def start_recording(cfg: Cfg, s: S) -> Optional[S]:
     s = remove_wand(cfg, s)
     if not node_present(s) and not s.sticky:
         return s  # "Focus a text field first"
-    if "suppressed-start" in cfg.fixes and s.suppressed:
-        return s  # proposed: the shortcut does not record behind a snoozed bubble
     if s.dictations >= cfg.max_dictations:
         return None  # bound of the model, not of the app
     # cancelDeliveryForReplacement: the old delivery's finally is fenced out.
@@ -340,8 +345,8 @@ def start_recording(cfg: Cfg, s: S) -> Optional[S]:
                    dictations=s.dictations + 1)
     s = set_rec(cfg, s, RECORDING)
     s = add_pending(s, ("start", token))
-    if "start-refresh" in cfg.fixes:
-        s = refresh(cfg, s)  # proposed: show the bubble for the dictation just started
+    if "start-refresh" in fx(cfg):
+        s = refresh(cfg, s)  # fix: show the bubble for the dictation just started
     return s
 
 
@@ -373,8 +378,8 @@ def on_bubble_tapped(cfg: Cfg, s: S) -> Optional[S]:
 def open_panel(cfg: Cfg, s: S) -> Optional[S]:
     if s.session != 0 or not attached(s, BUBBLE):
         return s
-    if "open-guards-panel-window" in cfg.fixes and attached(s, PANEL):
-        return s  # proposed: never open over a panel that is still withering
+    if "open-guards-panel-window" in fx(cfg) and attached(s, PANEL):
+        return s  # fix: never open over a panel that is still withering
     if not can_start_selection_command(s.rec, workflow(s)):
         return s
     if not (node_present(s) and s.sel):
@@ -471,7 +476,7 @@ def user_actions(cfg: Cfg, s: S) -> Succ:
         yield "user: drag bubble into the dismiss area", add_window(t, ZONES)._replace(dragging=True)
     if s.dragging:
         base = remove_window(s, ZONES)._replace(dragging=False)
-        if "drop-refresh" in cfg.fixes:
+        if "drop-refresh" in fx(cfg):
             yield "user: drop bubble outside the zones", refresh(cfg, base)
         else:
             yield "user: drop bubble outside the zones", base
@@ -529,8 +534,8 @@ def system_actions(cfg: Cfg, s: S) -> Succ:
             t = rest._replace(absorbing=False)
             if cfg.mutant == "absorb-end-keeps-wand":
                 pass
-            elif "absorb-end-refresh" in cfg.fixes:
-                t = update_wand(cfg, t)  # proposed: re-evaluate instead of hiding
+            elif "absorb-end-refresh" in fx(cfg):
+                t = update_wand(cfg, t)  # fix: re-evaluate instead of hiding
             else:
                 t = remove_wand(cfg, t)
             yield "anim: wand absorb ends", t
@@ -692,12 +697,13 @@ def inv_settled_dictation_visible(cfg: Cfg, s: S) -> bool:
 
 
 def act_dictation_survives_keyboard_close(cfg: Cfg, s: S, name: str, t: S) -> bool:
-    """A keyboard that hides mid-task never tears the task down: the deferred
-    hide may cancel a dictation only when its field is gone or the bubble was
-    dismissed, never while the field still has focus."""
+    """A keyboard that hides mid-task never tears the task down, and neither
+    does a snooze: the deferred hide may cancel a dictation only when its field
+    is gone, never while the field still has focus. (Dropping the bubble on a
+    dismiss zone ends dictation on purpose; that is a separate path.)"""
     if name != "timer: deferred hide":
         return True
-    return not (workflow(s) and node_present(s) and not s.suppressed)
+    return not (workflow(s) and node_present(s))
 
 
 ACTION_PROPERTIES: Dict[str, Callable[[Cfg, S, str, S], bool]] = {
@@ -725,21 +731,22 @@ INVARIANTS: Dict[str, Callable[[Cfg, S], bool]] = {
 FIXES: Dict[str, str] = {
     "absorb": "removeCommandActionsView also clears wandAbsorbing and resets the wand",
     "start-refresh": "startRecording refreshes overlay visibility once it is recording",
-    "suppressed-start": "startRecording refuses while the bubble is snoozed or hidden",
+    "show-dictation-when-snoozed": "suppressionHidesBubble: a snooze never hides a running dictation",
     "drop-refresh": "dropping the bubble outside the zones re-evaluates the wand",
     "drag-hides-wand": "updateCommandActionsVisibility keeps the wand hidden while the zones show",
     "absorb-end-refresh": "the absorb end action re-evaluates the wand instead of hiding it",
     "open-guards-panel-window": "openRewritePanel also refuses while a panel window is attached",
 }
 
-# Open findings in the current Kotlin: removing the fix must break the property.
-FINDINGS: Dict[str, str] = {
+# Regression guard: reverting any one fix must bring its bug back.
+REGRESSIONS: Dict[str, str] = {
     "absorb": "SettledNotAbsorbing",
     "start-refresh": "SettledBubbleVisibility",
     "drop-refresh": "SettledWandVisibility",
     "drag-hides-wand": "DragHidesWand",
     "absorb-end-refresh": "SettledWandVisibility",
     "open-guards-panel-window": "SinglePanel",
+    "show-dictation-when-snoozed": "DictationSurvivesKeyboardClose",
 }
 
 MUTANTS: Dict[str, Tuple[str, str]] = {
@@ -854,7 +861,8 @@ def describe(s: S) -> str:
 
 def run(cfg: Cfg, label: str) -> Result:
     print(f"==> {label}: dictations<={cfg.max_dictations} panels<={cfg.max_sessions}"
-          + (f" fixes={','.join(sorted(cfg.fixes))}" if cfg.fixes else "") + (f" mutant={cfg.mutant}" if cfg.mutant else ""))
+          + (f" reverted={','.join(sorted(set(FIXES) - fx(cfg)))}" if fx(cfg) != set(FIXES) else "")
+          + (f" mutant={cfg.mutant}" if cfg.mutant else ""))
     res = check(cfg)
     print(f"    {res.states:,} distinct states, {res.transitions:,} transitions, {res.seconds:.1f}s")
     return res
@@ -864,19 +872,18 @@ def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--max-dictations", type=int, default=2)
     ap.add_argument("--max-panels", type=int, default=2)
-    ap.add_argument("--fix", action="append", default=[], choices=sorted(FIXES) + ["all"],
-                    help="model a proposed fix (repeatable; 'all' for every fix)")
+    ap.add_argument("--revert", action="append", default=[], choices=sorted(FIXES) + ["all"],
+                    help="model the code without a fix (repeatable; 'all' for the pre-fix code)")
     ap.add_argument("--mutant", choices=sorted(MUTANTS))
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("--check-findings", action="store_true",
-                    help="each open finding must reproduce when its fix is left out")
+    ap.add_argument("--check-regressions", action="store_true",
+                    help="reverting any one fix must bring its bug back")
     args = ap.parse_args(argv)
 
     if args.self_test:
         bad = 0
         for name, (desc, expected) in sorted(MUTANTS.items()):
-            res = run(Cfg(max_dictations=1, max_sessions=1, mutant=name,
-                          fixes=frozenset(FIXES)),
+            res = run(Cfg(max_dictations=1, max_sessions=1, mutant=name),
                       f"mutant: {desc}")
             got = res.violation[0] if res.violation else None
             if got == expected:
@@ -888,29 +895,29 @@ def main(argv: List[str]) -> int:
               else f"self-test failed: {bad} mutant(s) not caught as expected")
         return 1 if bad else 0
 
-    if args.check_findings:
+    if args.check_regressions:
         bad = 0
-        for fix, expected in sorted(FINDINGS.items()):
-            fixes = frozenset(FINDINGS) - {fix}
-            res = run(Cfg(max_dictations=1, max_sessions=2, fixes=fixes), f"finding without fix {fix}")
+        for fix, expected in sorted(REGRESSIONS.items()):
+            fixes = frozenset(FIXES) - {fix}
+            res = run(Cfg(max_dictations=1, max_sessions=2, fixes=fixes), f"without fix {fix}")
             got = res.violation[0] if res.violation else None
             if got == expected:
-                print(f"    reproduces as {got} (trace length {len(res.violation[1])})")
+                print(f"    bug returns as {got} (trace length {len(res.violation[1])})")
             else:
                 print(f"    FAIL: expected {expected}, got {got}")
                 bad += 1
-        res = run(Cfg(max_dictations=1, max_sessions=2), "current Kotlin, no fixes")
+        res = run(Cfg(max_dictations=1, max_sessions=2, fixes=frozenset()), "code before the fixes")
         if res.violation is None:
-            print("    FAIL: the current code is expected to show the open findings")
+            print("    FAIL: the pre-fix code is expected to fail")
             bad += 1
         else:
             print(f"    fails as expected ({res.violation[0]})")
-        print("findings check passed" if not bad else f"findings check failed: {bad}")
+        print("regression check passed" if not bad else f"regression check failed: {bad}")
         return 1 if bad else 0
 
     cfg = Cfg(max_dictations=args.max_dictations, max_sessions=args.max_panels,
               mutant=args.mutant,
-              fixes=frozenset(FIXES) if "all" in args.fix else frozenset(args.fix))
+              fixes=frozenset() if "all" in args.revert else frozenset(FIXES) - set(args.revert))
     res = run(cfg, "Android overlay")
     if res.violation:
         name, tr = res.violation

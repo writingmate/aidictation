@@ -1338,6 +1338,23 @@ class AppState: ObservableObject {
         transcriptionTasks[recording.id] = task
     }
 
+    /// History's Offline choice: whether this Mac can re-transcribe a saved
+    /// recording with its offline model right now.
+    var offlineRetranscribeOption: OfflineRetranscribeOption {
+        OfflineRetranscribeOption(
+            runtimeSupported: TranscriptionMode.local.isAvailable,
+            modelDownloaded: ParakeetTranscriptionService.shared.isModelDownloaded
+        )
+    }
+
+    /// Re-transcribe a saved recording with the offline model on this Mac.
+    /// Works without internet. Refuses when the model is not downloaded, so a
+    /// retry never starts a model download.
+    func retranscribeOffline(recording: Recording) {
+        guard offlineRetranscribeOption.isEnabled else { return }
+        retranscribe(recording: recording, mode: .local)
+    }
+
     private func runRetranscription(
         recording: Recording,
         attemptID: UUID,

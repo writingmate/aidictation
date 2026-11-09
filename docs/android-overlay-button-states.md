@@ -51,6 +51,15 @@ dictation is recording, processing or delivering, or the edit panel is open. The
 sticky-focus fallback that bridges WebView tree rebuilds applies only while the keyboard
 is still up; a closed keyboard or a password field ends it (`bubbleNeedsKeyboard`).
 
+**Service lifecycle.** The overlay windows belong to the accessibility connection, and
+the system removes them when it ends. `onUnbind` therefore ends a dictation under way
+and forgets the windows, and a second `onServiceConnected` on the same instance does the
+same before starting afresh, so the bubble is always added again in the idle state. The
+dictation shortcut never leaves the service started (a started instance would outlive its
+connection); a shortcut tap that arrives before the connection waits up to 5 s for it
+(`OverlayServiceConnection`). `onInterrupt` changes nothing: it asks for spoken feedback
+to stop, the overlay gives none, and any app can send one.
+
 **Keyboard signal.** Two sources, in order of preference:
 
 1. `KeyboardProbeWindow`: when "display over other apps" is granted, the service keeps

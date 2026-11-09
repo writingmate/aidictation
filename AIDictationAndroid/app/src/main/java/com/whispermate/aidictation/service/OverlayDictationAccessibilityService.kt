@@ -15,6 +15,7 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -131,6 +132,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         private const val TAG = "OverlayDictationSvc"
         private const val MIN_RECORDING_MS = 500L
         private const val ACCESS_CHECK_TIMEOUT_MS = 15_000L
+        /** Lets the shortcut's activity finish so focus returns to the app being dictated into. */
+        private const val SHORTCUT_START_DELAY_MS = 300L
+        /** How long a shortcut tap waits for the accessibility connection before it is dropped. */
+        private const val SHORTCUT_MAX_WAIT_MS = 5_000L
         private const val SETTINGS_SNAPSHOT_TIMEOUT_MS = 5_000L
         /** Whole bubble window while idle: the 55 dp circle plus its shadow margin on every side. */
         private const val BUBBLE_SIZE_DP = OverlayMicButtonView.IDLE_SIZE_DP
@@ -268,6 +273,10 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     private var overlayRefreshJob: Job? = null
     private var focusRecoveryJob: Job? = null
     private var isServiceDestroyed = false
+    private val connection = OverlayServiceConnection(SHORTCUT_MAX_WAIT_MS)
+    /** Work that lives exactly as long as one accessibility connection. */
+    private var connectionJob: Job? = null
+    private var shortcutJob: Job? = null
     private var stickyEditableFocusArmed = false
     private var dictationTargetNode: AccessibilityNodeInfo? = null
     private var wandButton: ImageView? = null
@@ -289,15 +298,22 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // The system can connect the same instance again. The old connection's windows went
+        // with it, so forget them and end the dictation they showed before starting afresh.
+        if (connection.connect()) tearDownOverlay("Dictation service restarted")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         keyboardProbe = KeyboardProbeWindow(this, windowManager, ::onKeyboardProbeChanged).also { it.attach() }
 
-        serviceScope.launch {
+        val connectionScope = CoroutineScope(
+            serviceScope.coroutineContext + SupervisorJob(serviceScope.coroutineContext[Job])
+        )
+        connectionJob = connectionScope.coroutineContext[Job]
+        connectionScope.launch {
             appPreferences.autoStopOnSilenceEnabled.collectLatest { enabled ->
                 autoStopOnSilenceEnabled = enabled
             }
         }
-        serviceScope.launch {
+        connectionScope.launch {
             audioProcessingCoordinator.failureEvents.collect { event ->
                 val failedToken = overlayWorkflowFence.currentToken()
                 if (event.matches(
@@ -321,18 +337,53 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         prewarmCapturePath()
         refreshOverlayVisibility(null)
         scheduleFocusRecoveryIfNeeded(force = true)
+        if (connection.takePendingShortcut(SystemClock.elapsedRealtime())) startDictationFromShortcut()
+        // A shortcut that arrived before the connection left the service started.
+        stopSelf()
     }
 
+    /**
+     * Only the dictation shortcut starts this service. It must not stay started: a started
+     * instance outlives its accessibility connection, and the system then reconnects that
+     * same instance with its windows gone but its flags and dictation state left behind.
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_START_DICTATION) {
-            // We add a delay to ensure that the ShortcutActivity (if any) has 
-            // finished and focus has returned to the previously active app.
-            serviceScope.launch {
-                delay(300)
-                onBubbleTapped()
+            if (connection.requestShortcut(SystemClock.elapsedRealtime())) {
+                startDictationFromShortcut()
+            } else {
+                serviceScope.launch {
+                    delay(SHORTCUT_MAX_WAIT_MS)
+                    if (!connection.isConnected) stopSelf(startId)
+                }
+                return START_NOT_STICKY
             }
         }
-        return START_STICKY
+        stopSelf(startId)
+        return START_NOT_STICKY
+    }
+
+    private fun startDictationFromShortcut() {
+        shortcutJob?.cancel()
+        shortcutJob = serviceScope.launch {
+            delay(SHORTCUT_START_DELAY_MS)
+            shortcutJob = null
+            if (connection.isConnected) onBubbleTapped()
+        }
+    }
+
+    /**
+     * The accessibility connection ended (the service was turned off or the system is
+     * rebinding it). Its overlay windows are already gone, so the dictation they showed
+     * ends here rather than recording on with nothing on screen to stop it.
+     */
+    override fun onUnbind(intent: Intent?): Boolean {
+        if (connection.isConnected) {
+            connection.disconnect()
+            tearDownOverlay("Dictation service stopped")
+        }
+        stopSelf()
+        return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -380,47 +431,68 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() {
-        cancelOverlayAudio("Dictation was interrupted")
-        dictationTargetNode = null
-        dismissRewritePanel()
-        hideBubble()
-        hideCommandActions()
-        hideDismissActions()
-        stopBubbleAnimation()
+    /**
+     * An interrupt asks a service to stop the spoken or audible feedback it is giving. The
+     * overlay gives none, and any app can send one at any time, so the bubble and a
+     * dictation under way carry on.
+     */
+    override fun onInterrupt() = Unit
+
+    override fun onDestroy() {
+        isServiceDestroyed = true
+        connection.disconnect()
+        super.onDestroy()
+        tearDownOverlay("Dictation service stopped")
+        serviceScope.cancel()
+    }
+
+    /**
+     * Ends the dictation and removes every overlay window. Used when the accessibility
+     * connection that owns the windows ends, and when the service is destroyed.
+     */
+    private fun tearDownOverlay(reason: String) {
+        connectionJob?.cancel()
+        connectionJob = null
+        shortcutJob?.cancel()
+        shortcutJob = null
         overlayRefreshJob?.cancel()
         overlayRefreshJob = null
         focusRecoveryJob?.cancel()
         focusRecoveryJob = null
-    }
 
-    override fun onDestroy() {
-        isServiceDestroyed = true
-        super.onDestroy()
         val workflowToken = overlayWorkflowFence.currentToken()
         workflowToken?.let(overlayWorkflowFence::finish)
         audioProcessingCoordinator.cancelCaptureFromLifecycle(
             AndroidAudioAttemptOwner.OVERLAY,
-            "Dictation service stopped",
+            reason,
             expectedLease = audioWorkflowLease,
             expectedWorkflowToken = workflowToken
         )
-        serviceScope.cancel()
+        audioWorkflowJob?.cancel()
+        audioWorkflowJob = null
+        deliveryJob?.cancel(CancellationException(reason))
+        deliveryJob = null
+        vadJob?.cancel()
+        vadJob = null
+        audioWorkflowLease = null
+        stopRequestedDuringStart = false
+        recordingState = OverlayRecordingState.Idle
         dictationTargetNode = null
+
         dismissRewritePanel()
         hideBubble()
         hideCommandActions()
         hideDismissActions()
         stopBubbleAnimation()
-        focusRecoveryJob?.cancel()
-        focusRecoveryJob = null
+        // The next bubble, in a new connection, starts from the idle presentation.
+        updateBubbleUi()
         keyboardProbe?.detach()
         keyboardProbe = null
     }
 
     /** The probe saw the keyboard appear or leave: refresh at once, no coalescing. */
     private fun onKeyboardProbeChanged() {
-        if (isServiceDestroyed) return
+        if (isServiceDestroyed || !connection.isConnected) return
         overlayRefreshJob?.cancel()
         overlayRefreshJob = null
         refreshOverlayVisibility(null)
@@ -439,7 +511,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
-        if (isServiceDestroyed) return
+        if (isServiceDestroyed || !connection.isConnected) return
         // Resolve the focused field once per pass; the bubble and the wand both decide
         // from the same node.
         val node = resolveFocusedEditableNode(source)
@@ -2724,6 +2796,13 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 restackAboveBubble()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to update bubble overlay size", e)
+                // If the re-add failed the bubble is off screen. Saying so lets the next
+                // refresh add it again, in the current recording state, instead of
+                // treating it as shown.
+                if (bubble.parent == null) {
+                    isBubbleAttached = false
+                    hideCommandActions()
+                }
             }
         }
     }

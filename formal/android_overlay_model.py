@@ -90,6 +90,8 @@ class S(NamedTuple):
     stop_requested: bool    # stopRequestedDuringStart
     dragging: bool
     interrupted: bool       # onInterrupt tore the overlay down; no refresh since
+    connected: bool         # the accessibility connection that owns the windows
+    shortcut_waiting: bool  # a shortcut tap that arrived without a connection
     # pending main-thread callbacks and background completions
     pending: frozenset
     dictations: int
@@ -164,6 +166,8 @@ def has_editable_target(cfg: Cfg, s: S) -> Tuple[S, bool]:
 
 
 def should_show_bubble(cfg: Cfg, s: S) -> Tuple[S, bool]:
+    if not s.connected:
+        return s, False  # no windows and no accessibility tree without a connection
     s, target = has_editable_target(cfg, s)
     # suppressionHidesBubble: a snooze hides an idle bubble, never a running dictation.
     if not target or (s.suppressed and not (workflow(s) and "show-dictation-when-snoozed" in fx(cfg))):
@@ -291,6 +295,8 @@ def schedule_deferred_hide(s: S) -> S:
 
 def refresh(cfg: Cfg, s: S) -> S:
     """refreshOverlayVisibility(null) + scheduleFocusRecoveryIfNeeded()"""
+    if not s.connected:
+        return s
     s = s._replace(interrupted=False)
     s, show = should_show_bubble(cfg, s)
     if show:
@@ -427,6 +433,28 @@ def apply_panel(cfg: Cfg, s: S) -> S:
     return add_pending(s, ("apply_job", sid))
 
 
+def connection_ends(cfg: Cfg, s: S) -> S:
+    """onUnbind. The system removes the connection's windows with it."""
+    s = s._replace(connected=False, shortcut_waiting=False, stack=(), bubble_invisible=False,
+                   dragging=False)
+    if "unbind-tears-down" not in fx(cfg):
+        return s  # the service kept its flags and its dictation
+    # tearDownOverlay: ends the dictation and cancels the connection's work. The apply
+    # job is not the connection's; its refresh is a no-op until the next connection.
+    s = drop_pending(s, lambda p: p[0] != "apply_job")
+    return s._replace(fence=F_IDLE, token=0, lease=False, stop_requested=False, rec=IDLE,
+                      absorbing=False, session=0, session_running=False,
+                      session_changed=False, panel=0, sticky=False)
+
+
+def connection_starts(cfg: Cfg, s: S) -> S:
+    """onServiceConnected, then a shortcut tap that waited for it."""
+    waiting = s.shortcut_waiting
+    s = s._replace(connected=True, shortcut_waiting=False)
+    s = schedule_focus_recovery(cfg, refresh(cfg, s), force=True)
+    return add_pending(s, ("shortcut",)) if waiting else s
+
+
 # --------------------------------------------------------------------------
 # Transition relation
 # --------------------------------------------------------------------------
@@ -450,16 +478,26 @@ def env_actions(cfg: Cfg, s: S) -> Succ:
         yield "env: capture fails", reset_after_recording(cfg, s, s.token)
         # auto-stop on silence
         yield "env: silence auto-stop", stop_recording(cfg, s, False)
-    if not any(p[0] == "shortcut" for p in s.pending):
+    if not s.connected:
+        if not s.shortcut_waiting:
+            yield "env: dictation shortcut", s._replace(shortcut_waiting=True)
+    elif not any(p[0] == "shortcut" for p in s.pending):
         yield "env: dictation shortcut", add_pending(s, ("shortcut",))
+    if s.connected:
+        yield "env: accessibility connection ends", connection_ends(cfg, s)
+    else:
+        yield "env: accessibility connection starts", connection_starts(cfg, s)
     # onInterrupt
-    t = cancel_overlay_audio(cfg, s)
-    t = dismiss_panel(cfg, t)
-    t = hide_bubble(cfg, t)
-    t = remove_wand(cfg, t)
-    t = remove_window(t, ZONES)._replace(dragging=False)
-    t = drop_pending(t, lambda p: p[0] in ("refresh", "recovery"))
-    yield "env: onInterrupt", t._replace(interrupted=True)
+    if "interrupt-keeps-overlay" in fx(cfg):
+        yield "env: onInterrupt", s
+    else:
+        t = cancel_overlay_audio(cfg, s)
+        t = dismiss_panel(cfg, t)
+        t = hide_bubble(cfg, t)
+        t = remove_wand(cfg, t)
+        t = remove_window(t, ZONES)._replace(dragging=False)
+        t = drop_pending(t, lambda p: p[0] in ("refresh", "recovery"))
+        yield "env: onInterrupt", t._replace(interrupted=True)
 
 
 def user_actions(cfg: Cfg, s: S) -> Succ:
@@ -527,6 +565,9 @@ def system_actions(cfg: Cfg, s: S) -> Succ:
                 else:
                     yield "timer: focus recovery gives up", t
         elif kind == "shortcut":
+            if not rest.connected:
+                yield "timer: shortcut finds no connection", rest
+                continue
             t = on_bubble_tapped(cfg, rest)
             # Past the model's dictation bound the tap drains as a no-op.
             yield "timer: shortcut taps bubble", t if t is not None else rest
@@ -591,8 +632,8 @@ def initial(cfg: Cfg) -> S:
           bubble_invisible=False, sticky=False, absorbing=False, session=0,
           session_running=False, session_changed=False, panel=0, rec=IDLE,
           fence=F_IDLE, token=0, lease=False, stop_requested=False,
-          dragging=False, interrupted=False, pending=frozenset(), dictations=0,
-          sessions=0)
+          dragging=False, interrupted=False, connected=True, shortcut_waiting=False,
+          pending=frozenset(), dictations=0, sessions=0)
     # onServiceConnected
     return schedule_focus_recovery(cfg, refresh(cfg, s), force=True)
 
@@ -706,8 +747,23 @@ def act_dictation_survives_keyboard_close(cfg: Cfg, s: S, name: str, t: S) -> bo
     return not (workflow(s) and node_present(s))
 
 
+def act_interrupt_keeps_overlay(cfg: Cfg, s: S, name: str, t: S) -> bool:
+    """An interrupt asks for spoken feedback to stop. The overlay gives none, and any
+    app can send one, so it never ends a dictation or takes the bubble away."""
+    if name != "env: onInterrupt":
+        return True
+    return not (workflow(s) and not workflow(t)) and (not attached(s, BUBBLE) or attached(t, BUBBLE))
+
+
+def inv_no_dictation_while_disconnected(cfg: Cfg, s: S) -> bool:
+    """Without its connection the overlay has no windows, so no dictation runs that
+    nothing on screen could stop."""
+    return s.connected or (not workflow(s) and s.rec == IDLE and not s.stack)
+
+
 ACTION_PROPERTIES: Dict[str, Callable[[Cfg, S, str, S], bool]] = {
     "DictationSurvivesKeyboardClose": act_dictation_survives_keyboard_close,
+    "InterruptKeepsOverlay": act_interrupt_keeps_overlay,
 }
 
 
@@ -725,6 +781,7 @@ INVARIANTS: Dict[str, Callable[[Cfg, S], bool]] = {
     "SettledWandVisibility": inv_settled_wand,
     "SettledNotAbsorbing": inv_settled_not_absorbing,
     "SettledDictationVisible": inv_settled_dictation_visible,
+    "NoDictationWhileDisconnected": inv_no_dictation_while_disconnected,
 }
 
 
@@ -736,17 +793,21 @@ FIXES: Dict[str, str] = {
     "drag-hides-wand": "updateCommandActionsVisibility keeps the wand hidden while the zones show",
     "absorb-end-refresh": "the absorb end action re-evaluates the wand instead of hiding it",
     "open-guards-panel-window": "openRewritePanel also refuses while a panel window is attached",
+    "interrupt-keeps-overlay": "onInterrupt leaves the bubble and a running dictation alone",
+    "unbind-tears-down": "onUnbind ends the dictation and forgets the windows the connection took",
 }
 
 # Regression guard: reverting any one fix must bring its bug back.
 REGRESSIONS: Dict[str, str] = {
-    "absorb": "SettledNotAbsorbing",
+    "absorb": "SettledWandVisibility",
     "start-refresh": "SettledBubbleVisibility",
     "drop-refresh": "SettledWandVisibility",
     "drag-hides-wand": "DragHidesWand",
     "absorb-end-refresh": "SettledWandVisibility",
     "open-guards-panel-window": "SinglePanel",
     "show-dictation-when-snoozed": "DictationSurvivesKeyboardClose",
+    "interrupt-keeps-overlay": "InterruptKeepsOverlay",
+    "unbind-tears-down": "NoDictationWhileDisconnected",
 }
 
 MUTANTS: Dict[str, Tuple[str, str]] = {
@@ -856,7 +917,7 @@ def describe(s: S) -> str:
     return (f"windows=[{' < '.join(s.stack) or '-'}] focus={s.focus} kb={s.kb} sel={s.sel} "
             f"rec={s.rec} fence={s.fence} session={s.session} panel={s.panel} "
             f"absorbing={s.absorbing} hiddenByPanel={s.bubble_invisible} "
-            f"suppressed={s.suppressed} sticky={s.sticky} pending={pend}")
+            f"suppressed={s.suppressed} sticky={s.sticky} connected={s.connected} pending={pend}")
 
 
 def run(cfg: Cfg, label: str) -> Result:

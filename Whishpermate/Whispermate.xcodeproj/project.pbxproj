@@ -27,6 +27,10 @@
 		AA10000000000000000008 /* MobileAudioLaunchRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */; };
 		RVP100012F11000100000001 /* ReviewPromptPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVP100012F11000100000003 /* ReviewPromptPolicyTests.swift */; };
 		RVP100012F11000100000002 /* ReviewPromptPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = RVP100012F11000100000004 /* ReviewPromptPolicy.swift */; };
+		CRP100012F11000100000001 /* MacCaptureRecoveryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRP100012F11000100000003 /* MacCaptureRecoveryPolicyTests.swift */; };
+		CRP100012F11000100000002 /* MacCaptureRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRP100012F11000100000004 /* MacCaptureRecoveryPolicy.swift */; };
+		ASR100012F11000100000001 /* AuthSessionRestorePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ASR100012F11000100000003 /* AuthSessionRestorePolicyTests.swift */; };
+		ASR100012F11000100000002 /* AuthSessionRestorePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = ASR100012F11000100000004 /* AuthSessionRestorePolicy.swift */; };
 		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -188,6 +192,10 @@
 		AA10000000000000000007 /* MobileAudioLaunchRecoveryPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAudioLaunchRecoveryPolicy.swift; path = WhisperMateShared/Services/MobileAudioLaunchRecoveryPolicy.swift; sourceTree = SOURCE_ROOT; };
 		RVP100012F11000100000003 /* ReviewPromptPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewPromptPolicyTests.swift; sourceTree = "<group>"; };
 		RVP100012F11000100000004 /* ReviewPromptPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ReviewPromptPolicy.swift; path = WhisperMateShared/Services/ReviewPromptPolicy.swift; sourceTree = SOURCE_ROOT; };
+		CRP100012F11000100000003 /* MacCaptureRecoveryPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacCaptureRecoveryPolicyTests.swift; sourceTree = "<group>"; };
+		CRP100012F11000100000004 /* MacCaptureRecoveryPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacCaptureRecoveryPolicy.swift; sourceTree = "<group>"; };
+		ASR100012F11000100000003 /* AuthSessionRestorePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthSessionRestorePolicyTests.swift; sourceTree = "<group>"; };
+		ASR100012F11000100000004 /* AuthSessionRestorePolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AuthSessionRestorePolicy.swift; path = WhisperMateShared/Services/AuthSessionRestorePolicy.swift; sourceTree = SOURCE_ROOT; };
 		56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatterTests.swift; sourceTree = "<group>"; };
 		5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolver.swift; sourceTree = "<group>"; };
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -372,6 +380,9 @@
 				18D7395E9700499AAA143432 /* TranscriptionOutputFilterTests.swift */,
 				BB3000012FA0000100000003 /* TranscriptionCleanupGuardTests.swift */,
 				F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */,
+				CRP100012F11000100000003 /* MacCaptureRecoveryPolicyTests.swift */,
+				ASR100012F11000100000003 /* AuthSessionRestorePolicyTests.swift */,
+				ASR100012F11000100000004 /* AuthSessionRestorePolicy.swift */,
 			);
 			name = WhispermateTests;
 			path = WhispermateTests;
@@ -397,6 +408,7 @@
 				5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */,
 				7F88B49998F76BE514F77D63 /* TranscriptionOutputFilter.swift */,
 				D12CA068C799386D2BF9EA4A /* MacAsyncDeadline.swift */,
+				CRP100012F11000100000004 /* MacCaptureRecoveryPolicy.swift */,
 			);
 			name = WhispermateTestsSources;
 			path = Whispermate/Services;
@@ -861,6 +873,10 @@
 				AA10000000000000000008 /* MobileAudioLaunchRecoveryPolicy.swift in Sources */,
 				RVP100012F11000100000001 /* ReviewPromptPolicyTests.swift in Sources */,
 				RVP100012F11000100000002 /* ReviewPromptPolicy.swift in Sources */,
+				CRP100012F11000100000001 /* MacCaptureRecoveryPolicyTests.swift in Sources */,
+				CRP100012F11000100000002 /* MacCaptureRecoveryPolicy.swift in Sources */,
+				ASR100012F11000100000001 /* AuthSessionRestorePolicyTests.swift in Sources */,
+				ASR100012F11000100000002 /* AuthSessionRestorePolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

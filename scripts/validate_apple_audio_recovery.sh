@@ -94,10 +94,25 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Services/RealtimeTranscriptionSupport.swift \
+  Whishpermate/Whispermate/Services/MacCaptureRecoveryPolicy.swift \
   Whishpermate/Whispermate/Services/RealtimeTranscriptionFinishGate.swift \
   scripts/validate_macos_realtime_finalization.swift \
   -o "$work_dir/validate-macos-realtime-finalization"
 "$work_dir/validate-macos-realtime-finalization"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
+  Whishpermate/Whispermate/Services/MacCaptureRecoveryPolicy.swift \
+  scripts/validate_macos_capture_route_recovery.swift \
+  -o "$work_dir/validate-macos-capture-route-recovery"
+"$work_dir/validate-macos-capture-route-recovery"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/Services/AuthSessionRestorePolicy.swift \
+  scripts/validate_auth_session_restore.swift \
+  -o "$work_dir/validate-auth-session-restore"
+"$work_dir/validate-auth-session-restore"
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \

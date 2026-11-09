@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- macOS: a recording keeps going when the microphone changes mid-recording (AirPods connecting, a mic unplugged); capture recovery now waits long enough for the new input to come up instead of giving up after half a second.
+- macOS and iOS: a paid plan no longer shows as Free after a relaunch or while the keychain is locked; the last known plan stays on screen while the session restores.
 - iOS keyboard: second and later mic taps record from the background again; the record session reuses the standby audio session instead of asking iOS to reconfigure it.
 - iOS keyboard: Cancel button while recording or transcribing.
 - iOS keyboard: start failures show a status instead of silently returning to idle.

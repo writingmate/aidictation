@@ -189,6 +189,15 @@ public class AuthManager: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        // Show the last known plan from the first frame. Until the network restore finishes,
+        // `currentUser` would otherwise be nil and every plan display reads "Free".
+        let launchState = AuthSessionRestorePolicy.launchState(
+            hasPersistedSession: supabase.client != nil && supabase.hasPersistedSession,
+            cachedProfile: loadCachedUserProfile()
+        )
+        currentUser = launchState.profile
+        isAuthenticated = launchState.isAuthenticated
+        isSessionRestorePending = launchState.isRestorePending
         observeSessionRestoreTriggers()
         Task {
             await checkSession()

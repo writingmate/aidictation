@@ -265,8 +265,15 @@ for (const prior of submissions.data ?? []) {
     console.log(`  item ${item.id} appStoreVersion=${linkedVersion ?? "none"} state=${item.attributes?.state}`);
     if (linkedVersion !== version.id) continue;
     if (prior.attributes.state === "READY_FOR_REVIEW") continue;
-    await api("DELETE", `reviewSubmissionItems/${item.id}`);
-    console.log(`removed ${VERSION} from submission ${prior.id} (${prior.attributes.state})`);
+    try {
+      await api("DELETE", `reviewSubmissionItems/${item.id}`);
+      console.log(`removed ${VERSION} from submission ${prior.id} (${prior.attributes.state})`);
+    } catch (error) {
+      if (!String(error.message).includes("already submitted")) throw error;
+      await api("DELETE", `reviewSubmissions/${prior.id}`);
+      console.log(`canceled submitted review ${prior.id} (${prior.attributes.state})`);
+      break;
+    }
   }
 }
 

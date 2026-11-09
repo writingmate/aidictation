@@ -1,1 +1,1 @@
-Setup asks you to rate AI Dictation before you finish. You can also rate it from Settings.
+The floating mic stays with a dictation already in progress, including while snoozed. The rewrite button comes back after you move it or interrupt it.

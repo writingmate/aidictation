@@ -150,15 +150,23 @@ async function listDistributionCertificates() {
 }
 
 async function profileCertificateIds() {
-  const response = await request("GET", "/v1/profiles?limit=200&fields[profiles]=name,uuid,profileType,certificates");
+  // include=certificates is required. A sparse fieldset without it comes back
+  // with empty relationships, and every certificate then looks unused.
+  const response = await request("GET", "/v1/profiles?limit=200&include=certificates");
+  const profiles = response.data || [];
   const ids = new Set();
-  for (const profile of response.data || []) {
+  for (const profile of profiles) {
     const certificates = profile.relationships &&
       profile.relationships.certificates &&
       profile.relationships.certificates.data;
     for (const certificate of certificates || []) {
       ids.add(certificate.id);
     }
+  }
+  if (profiles.length > 0 && ids.size === 0) {
+    throw new Error(
+      `Refusing to delete distribution certificates; ${profiles.length} provisioning profiles did not list any certificates`
+    );
   }
   return ids;
 }

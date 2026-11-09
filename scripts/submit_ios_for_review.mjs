@@ -161,16 +161,28 @@ if (!app) throw new Error(`No app found for bundle id ${BUNDLE_ID}`);
 console.log(`app: ${app.attributes.name} (${app.id})`);
 
 // The upload step finishes well before Apple finishes processing, so poll for a usable build.
+function buildNumber(build) {
+  const parsed = Number.parseInt(build?.attributes?.version, 10);
+  return Number.isFinite(parsed) ? parsed : -1;
+}
+
 async function processedBuild() {
   const builds = await api(
     "GET",
-    `builds?filter[app]=${app.id}&limit=20&sort=-uploadedDate&include=preReleaseVersion`
+    `builds?filter[app]=${app.id}&limit=200&sort=-uploadedDate&include=preReleaseVersion`
   );
   const matching = (builds.data ?? []).filter((build) => {
     const pre = builds.included?.find((i) => i.id === build.relationships?.preReleaseVersion?.data?.id);
     return pre?.attributes?.version === VERSION;
   });
-  return matching[0] ?? null;
+  matching.sort((left, right) => buildNumber(right) - buildNumber(left));
+  const candidate = matching[0] ?? null;
+  if (candidate) {
+    console.log(
+      `newest build of ${VERSION} is ${candidate.attributes.version} (${candidate.attributes.processingState})`
+    );
+  }
+  return candidate;
 }
 
 let build = null;

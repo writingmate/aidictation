@@ -55,10 +55,40 @@ jobs:
             exit 1
           fi
 
+  release-mode:
+    name: Choose archive or resubmit
+    runs-on: ubuntu-latest
+    outputs:
+      archive: ${{ steps.mode.outputs.archive }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+
+      - name: Decide whether to archive
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive=true
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.submit_version }}" ]; then
+            archive=false
+          fi
+          # A commit that only resubmits an uploaded build says so in its message.
+          # Archiving again would delete the certificate that signed that build.
+          if git log -1 --format=%B | grep -q 'submit-existing-ios'; then
+            archive=false
+          fi
+          echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
+          echo "Archive: ${archive}"
+
   archive-and-upload:
     name: Archive and upload
-    needs: provenance
-    if: github.event_name != 'workflow_dispatch' || inputs.submit_version == ''
+    needs: [provenance, release-mode]
+    if: needs.release-mode.outputs.archive == 'true'
     environment: release
     runs-on: macos-26
     timeout-minutes: 90
@@ -313,12 +343,13 @@ jobs:
 
   submit-for-review:
     name: Submit for App Review
-    needs: [provenance, archive-and-upload]
+    needs: [provenance, release-mode, archive-and-upload]
     # A tagged release goes to review. A manual dispatch submits an existing
     # version only when submit_version is set; otherwise it stops at TestFlight.
     if: >-
       always() &&
       needs.provenance.result == 'success' &&
+      needs.release-mode.result == 'success' &&
       (needs.archive-and-upload.result == 'success' || needs.archive-and-upload.result == 'skipped') &&
       (startsWith(github.ref, 'refs/tags/ios-v') || inputs.submit_version != '')
     environment: release

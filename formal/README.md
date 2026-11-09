@@ -207,13 +207,16 @@ The service runs on the main thread, so each handler is one atomic step:
 | `startRecording`, `stopRecording`, capture start/stop, delivery, `ReplaceableDeliveryFence` | the recording state, fence phase and token, and pending jobs |
 | `openRewritePanel`, `runRewriteAction`, `applyRewritePanel`, `closeRewritePanel`, `dismissRewritePanel` | the rewrite session and panel |
 | `updateBubbleLayoutSize` + `restackAboveBubble` | re-adding the bubble on a size change, then the wand and panel |
-| `onInterrupt` | tears the overlay down until the next event |
+| `onInterrupt` | leaves everything as it is (it used to tear the overlay down until the next event) |
+| `onUnbind` + `tearDownOverlay`, `onServiceConnected` | the connection ending (the system takes its windows) and starting again |
+| `onStartCommand` + `OverlayServiceConnection` | a shortcut tap without a connection waits for it |
 
 The environment changes focus (none, editable field, password field), the
 keyboard, the selection and snooze expiry, and can fail a capture or
 auto-stop it on silence. The user taps the bubble, its cancel and accept
 targets, the wand and the panel buttons, drags the bubble into the dismiss
-area, and can use the dictation shortcut.
+area, and can use the dictation shortcut. The accessibility connection can
+end and start again at any time.
 
 Pending callbacks fire in any order, which over-approximates timing. One
 timing fact is kept because ignoring it produced impossible traces: a hide
@@ -244,6 +247,8 @@ the code).
 | `SettledNotAbsorbing` | the absorb is transient |
 | `SettledDictationVisible` | a running dictation always has a visible bubble to stop it |
 | `DictationSurvivesKeyboardClose` | a keyboard that hides mid-task never tears the task down |
+| `InterruptKeepsOverlay` | an interrupt never ends a dictation or takes the bubble away |
+| `NoDictationWhileDisconnected` | without its connection the overlay shows nothing and records nothing |
 | `AlwaysSettles` (liveness) | with no further input from the user or the environment, every run of timers, animation ends and job completions terminates, and ends settled. Checked as: no cycle among states with pending work, every such state can step, and no run ends mid-absorb |
 
 `--self-test` runs six mutants (absorb end leaves the wand, the wand returns
@@ -261,11 +266,11 @@ named, and `--check-regressions` requires that reverting any one of them
 changes, update the model to match**: the checks read only this model.
 
 1. **The wand could disappear for the rest of the session** (`absorb`,
-   `SettledNotAbsorbing`). `wandAbsorbing` was cleared only in the absorb's
+   `SettledWandVisibility`, with `SettledNotAbsorbing` behind it). `wandAbsorbing` was cleared only in the absorb's
    `withEndAction`, which a cancel drops, so removing the wand during the
    220 ms absorb left it set and the wand never showed again. Triggers:
-   `onInterrupt()`, a pending shortcut tap, a deferred hide armed by a
-   keyboard hide. Fix: `removeCommandActionsView()` clears the flag and
+   a pending shortcut tap, a deferred hide armed by a keyboard hide (and,
+   before bug 8 was fixed, `onInterrupt()`). Fix: `removeCommandActionsView()` clears the flag and
    resets the wand's scale and alpha.
 2. **A shortcut-started dictation could run with no bubble**
    (`start-refresh`, `SettledBubbleVisibility`). Fix: `startRecording()`
@@ -288,9 +293,24 @@ changes, update the model to match**: the checks read only this model.
 7. **A second panel could open over a withering one**
    (`open-guards-panel-window`, `SinglePanel`). Fix: `openRewritePanel()`
    also refuses while `isRewritePanelAttached`.
+8. **Any app could end a dictation and take the bubble away**
+   (`interrupt-keeps-overlay`, `InterruptKeepsOverlay`). `onInterrupt()`
+   cancelled the dictation and removed every window, and an interrupt is
+   something any app can send with `AccessibilityManager.interrupt()`. Fix:
+   `onInterrupt()` does nothing; the overlay gives no spoken feedback to stop.
+9. **A dictation could outlive the connection that showed it**
+   (`unbind-tears-down`, `NoDictationWhileDisconnected`). The shortcut started
+   the service with `START_STICKY`, so the instance outlived its accessibility
+   connection. The system removed the overlay windows with the connection but
+   the service kept recording, with nothing on screen to stop it, and kept
+   believing the bubble was attached, so the reconnected service never added
+   it again. Fix: the service no longer stays started, `onUnbind()` ends the
+   dictation and forgets the windows, a second `onServiceConnected()` does
+   the same for a connection that was never torn down, and a shortcut tap
+   that arrives before the connection waits for it (`OverlayServiceConnection`).
 
 The current code satisfies every property for two dictations and two panel
-sessions (299,440 states, run in CI).
+sessions (298,544 states, run in CI).
 
 ### Defense-in-depth observation
 

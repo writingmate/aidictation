@@ -253,19 +253,20 @@ console.log("attached build to version");
 // can be added to a review submission.
 await declareNoSocialMedia(app.id, version.id);
 
-const blockedStates = "WAITING_FOR_REVIEW,IN_REVIEW,UNRESOLVED_ISSUES";
-const blocked = await api(
-  "GET",
-  `reviewSubmissions?filter[app]=${app.id}&filter[state]=${blockedStates}&limit=10`
-);
-for (const blockedSubmission of blocked.data ?? []) {
-  const blockedItems = await api("GET", `reviewSubmissions/${blockedSubmission.id}/items?limit=50`);
-  for (const item of blockedItems.data ?? []) {
-    if (item.relationships?.appStoreVersion?.data?.id !== version.id) continue;
+const submissions = await api("GET", `reviewSubmissions?filter[app]=${app.id}&limit=20`);
+for (const prior of submissions.data ?? []) {
+  console.log(`review submission ${prior.id} state=${prior.attributes.state}`);
+  const priorItems = await api(
+    "GET",
+    `reviewSubmissions/${prior.id}/items?include=appStoreVersion&limit=50`
+  );
+  for (const item of priorItems.data ?? []) {
+    const linkedVersion = item.relationships?.appStoreVersion?.data?.id;
+    console.log(`  item ${item.id} appStoreVersion=${linkedVersion ?? "none"} state=${item.attributes?.state}`);
+    if (linkedVersion !== version.id) continue;
+    if (prior.attributes.state === "READY_FOR_REVIEW") continue;
     await api("DELETE", `reviewSubmissionItems/${item.id}`);
-    console.log(
-      `removed ${VERSION} from submission ${blockedSubmission.id} (${blockedSubmission.attributes.state})`
-    );
+    console.log(`removed ${VERSION} from submission ${prior.id} (${prior.attributes.state})`);
   }
 }
 

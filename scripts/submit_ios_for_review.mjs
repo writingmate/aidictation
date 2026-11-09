@@ -270,7 +270,13 @@ for (const prior of submissions.data ?? []) {
       console.log(`removed ${VERSION} from submission ${prior.id} (${prior.attributes.state})`);
     } catch (error) {
       if (!String(error.message).includes("already submitted")) throw error;
-      await api("DELETE", `reviewSubmissions/${prior.id}`);
+      await api("PATCH", `reviewSubmissions/${prior.id}`, {
+        data: {
+          type: "reviewSubmissions",
+          id: prior.id,
+          attributes: { canceled: true },
+        },
+      });
       console.log(`canceled submitted review ${prior.id} (${prior.attributes.state})`);
       break;
     }
@@ -297,9 +303,9 @@ if (submission) {
   console.log(`created review submission ${submission.id}`);
 }
 
-const items = await api("GET", `reviewSubmissions/${submission.id}/items?limit=50`);
+const items = await api("GET", `reviewSubmissions/${submission.id}/items?include=appStoreVersion&limit=50`);
 if (!items.data?.some((i) => i.relationships?.appStoreVersion?.data?.id === version.id)) {
-  await api("POST", "reviewSubmissionItems", {
+  const itemBody = {
     data: {
       type: "reviewSubmissionItems",
       relationships: {
@@ -307,8 +313,18 @@ if (!items.data?.some((i) => i.relationships?.appStoreVersion?.data?.id === vers
         appStoreVersion: { data: { type: "appStoreVersions", id: version.id } },
       },
     },
-  });
-  console.log(`added ${VERSION} to the submission`);
+  };
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    try {
+      await api("POST", "reviewSubmissionItems", itemBody);
+      console.log(`added ${VERSION} to the submission`);
+      break;
+    } catch (error) {
+      if (!String(error.message).includes("already added") || attempt === 8) throw error;
+      console.log(`version is still on the previous review; retrying (${attempt}/8)`);
+      await sleep(5000);
+    }
+  }
 }
 
 if (submission.attributes.state === "READY_FOR_REVIEW") {

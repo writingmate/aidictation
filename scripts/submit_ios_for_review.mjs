@@ -253,9 +253,27 @@ console.log("attached build to version");
 // can be added to a review submission.
 await declareNoSocialMedia(app.id, version.id);
 
-const openStates = "READY_FOR_REVIEW,WAITING_FOR_REVIEW,IN_REVIEW,UNRESOLVED_ISSUES";
-const existing = await api("GET", `reviewSubmissions?filter[app]=${app.id}&filter[state]=${openStates}&limit=10`);
-let submission = existing.data?.[0];
+const blockedStates = "WAITING_FOR_REVIEW,IN_REVIEW,UNRESOLVED_ISSUES";
+const blocked = await api(
+  "GET",
+  `reviewSubmissions?filter[app]=${app.id}&filter[state]=${blockedStates}&limit=10`
+);
+for (const blockedSubmission of blocked.data ?? []) {
+  const blockedItems = await api("GET", `reviewSubmissions/${blockedSubmission.id}/items?limit=50`);
+  for (const item of blockedItems.data ?? []) {
+    if (item.relationships?.appStoreVersion?.data?.id !== version.id) continue;
+    await api("DELETE", `reviewSubmissionItems/${item.id}`);
+    console.log(
+      `removed ${VERSION} from submission ${blockedSubmission.id} (${blockedSubmission.attributes.state})`
+    );
+  }
+}
+
+const ready = await api(
+  "GET",
+  `reviewSubmissions?filter[app]=${app.id}&filter[state]=READY_FOR_REVIEW&limit=10`
+);
+let submission = ready.data?.[0];
 if (submission) {
   console.log(`reusing review submission ${submission.id} (${submission.attributes.state})`);
 } else {

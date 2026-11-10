@@ -867,8 +867,10 @@ class AudioRecorder: NSObject, ObservableObject {
                     return
                 }
 
-                self.lastAudioBufferAt = Date()
+                // startRecordingWatchdog() clears lastAudioBufferAt, so seed it afterwards. Without a
+                // timestamp a rebuilt engine that never delivers buffers would never be detected as stalled.
                 self.startRecordingWatchdog()
+                self.lastAudioBufferAt = Date()
                 SentryTelemetry.recordAudioEngineEvent("capture_recovery_engine_started")
             }
         }

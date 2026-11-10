@@ -195,6 +195,10 @@ private struct CaptureRouteRecoveryValidator {
             "AudioRecorder must wait the policy's delay before each rebuild"
         )
         try require(
+            recorderSource.contains("self.startRecordingWatchdog()\n                self.lastAudioBufferAt = Date()"),
+            "AudioRecorder must seed lastAudioBufferAt after restarting the watchdog so a silent rebuilt engine is detected"
+        )
+        try require(
             recorderSource.contains("MacCaptureRecoveryPolicy.isUsableInputFormat("),
             "AudioRecorder must reject a still-switching input format before rebuilding"
         )

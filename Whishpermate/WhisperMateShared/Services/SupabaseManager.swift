@@ -170,16 +170,29 @@ enum AuthKeychain {
         }
     }
 
-    /// True when any session item is present, regardless of whether it can be decoded.
+    /// True when any session item is present, regardless of whether it can be decoded or read
+    /// right now.
     static func hasStoredSession() -> Bool {
         for dataProtection in [dataProtectionEnabled, false] {
             var query = baseQuery(dataProtection: dataProtection)
             query[kSecMatchLimit as String] = kSecMatchLimitOne
-            if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
+            let lookup = sessionLookup(for: SecItemCopyMatching(query as CFDictionary, nil))
+            if AuthSessionRestorePolicy.indicatesStoredSession(lookup) {
                 return true
             }
         }
         return false
+    }
+
+    private static func sessionLookup(for status: OSStatus) -> AuthSessionRestorePolicy.KeychainLookup {
+        switch status {
+        case errSecSuccess:
+            return .found
+        case errSecInteractionNotAllowed:
+            return .temporarilyUnreadable
+        default:
+            return .notFound
+        }
     }
 }
 

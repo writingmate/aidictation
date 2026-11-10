@@ -11,7 +11,6 @@ class AudioRecorder: NSObject, ObservableObject {
     private enum Constants {
         static let recordingWatchdogInterval: TimeInterval = 1.0
         static let recordingBufferStallThreshold: TimeInterval = 2.5
-        static let captureRecoveryDelays: [TimeInterval] = [0.15, 0.5]
         static let recordingPreparationTimeout: TimeInterval = 5.0
         static let recordingFinalizationTimeout: TimeInterval = 5.0
 
@@ -827,10 +826,10 @@ class AudioRecorder: NSObject, ObservableObject {
         precondition(Thread.isMainThread)
         guard activeCapture === session, isRecording else { return }
         guard let recoveryAttempt = session.beginRecovery(
-            maximumAttempts: Constants.captureRecoveryDelays.count
+            maximumAttempts: MacCaptureRecoveryPolicy.maximumAttempts
         ) else {
             if session.recoveryAttemptsExhausted(
-                maximumAttempts: Constants.captureRecoveryDelays.count
+                maximumAttempts: MacCaptureRecoveryPolicy.maximumAttempts
             ) {
                 session.retire()
                 reportCaptureFailure(
@@ -842,7 +841,7 @@ class AudioRecorder: NSObject, ObservableObject {
         }
 
         stopRecordingWatchdog()
-        let delay = Constants.captureRecoveryDelays[recoveryAttempt - 1]
+        let delay = MacCaptureRecoveryPolicy.delay(forAttempt: recoveryAttempt)
         DebugLog.warning(
             "Recovering microphone capture attempt=\(recoveryAttempt) reason=\(reason)",
             context: "AudioRecorder LOG"
@@ -868,8 +867,10 @@ class AudioRecorder: NSObject, ObservableObject {
                     return
                 }
 
-                self.lastAudioBufferAt = Date()
+                // startRecordingWatchdog() clears lastAudioBufferAt, so seed it afterwards. Without a
+                // timestamp a rebuilt engine that never delivers buffers would never be detected as stalled.
                 self.startRecordingWatchdog()
+                self.lastAudioBufferAt = Date()
                 SentryTelemetry.recordAudioEngineEvent("capture_recovery_engine_started")
             }
         }
@@ -883,7 +884,10 @@ class AudioRecorder: NSObject, ObservableObject {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0 else {
+        guard MacCaptureRecoveryPolicy.isUsableInputFormat(
+            sampleRate: inputFormat.sampleRate,
+            channelCount: inputFormat.channelCount
+        ) else {
             return "microphone format is unavailable"
         }
 

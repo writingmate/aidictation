@@ -644,7 +644,8 @@ struct ValidateMacOSRealtimeFinalization {
                 && retirePosition! < recorderDrainPosition!
         )
         precondition(recorderSource.contains("realtimeDeliveryLease.failCoverage()"))
-        precondition(recorderSource.contains("captureRecoveryDelays: [TimeInterval] = [0.15, 0.5]"))
+        precondition(recorderSource.contains("MacCaptureRecoveryPolicy.delay(forAttempt: recoveryAttempt)"))
+        precondition(MacCaptureRecoveryPolicy.retryDelays.first == 0.15)
         precondition(recorderSource.contains("session.replaceEngine(engine)"))
         precondition(recorderSource.contains("session.accepts(engine: engine, generation: replacement.generation)"))
         precondition(recorderSource.contains("self.attemptCaptureRecovery(session, reason: \"recovery start failed\")"))

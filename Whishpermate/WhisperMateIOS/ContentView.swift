@@ -2320,6 +2320,17 @@ private struct TranscriptionModeSelectionView: View {
                 Text("Cloud mode sends your voice recording and transcript to AIDictation's cloud transcription service after you allow cloud transcription. Offline mode keeps transcription on this device.")
             }
 
+            Section {
+                Toggle("AI Cleanup", isOn: Binding(
+                    get: { transcriptionProviderManager.cleanupEnabled },
+                    set: { transcriptionProviderManager.setCleanupEnabled($0) }
+                ))
+            } header: {
+                Text("Cleanup")
+            } footer: {
+                Text("Polishes your text in the cloud. Off keeps the raw transcript.")
+            }
+
             if transcriptionProviderManager.transcriptionMode != .cloud {
                 Section("Offline Model") {
                     Button(action: prepareOfflineModel) {

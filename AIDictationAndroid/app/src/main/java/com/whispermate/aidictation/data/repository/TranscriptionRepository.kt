@@ -92,9 +92,10 @@ class TranscriptionRepository @Inject constructor(
         val transcriptionConfig = ApiConfigManager.instance?.getTranscriptionConfig()
         val provider = transcriptionConfig?.provider ?: ApiProvider.WRITINGMATE
         val useLocalRecognition = !requiresCloud && onDeviceRequested
-        // Cleanup remains core infrastructure after both local and cloud recognition. If its
-        // separately bounded request is unavailable, preserveRawOnCleanupFailure returns raw text.
-        val cleanupEnabled = true
+        // The Cleanup setting decides whether the transcript is sent to the cloud cleanup
+        // pass, in every transcription mode. If that separately bounded request is
+        // unavailable, preserveRawOnCleanupFailure returns raw text.
+        val cleanupEnabled = appPreferences.postProcessingEnabled.first()
         val languageNames = languages.mapNotNull { WhisperLanguages.getName(it) }
         val cleanupLanguageNames = if (useLocalRecognition) {
             languages

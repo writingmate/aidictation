@@ -186,8 +186,21 @@ class TranscriptionProviderManager: ObservableObject {
     @Published var customTransport: TranscriptionTransport = .batch
     @Published var enableLLMPostProcessing: Bool = false
     @Published var postProcessingProvider: PostProcessingProvider = .aidictation
+    /// Whether transcript text is sent to the cloud cleanup pass in Online
+    /// and Auto modes. On by default.
+    @Published private(set) var onlineCleanupEnabled: Bool = true
+    /// Whether transcript text is sent to the cloud cleanup pass in Offline
+    /// mode. Off by default so Offline keeps text on this Mac.
+    @Published private(set) var offlineCleanupEnabled: Bool = false
+
+    /// The Cleanup setting for the current transcription mode.
+    var cleanupEnabled: Bool {
+        cleanupEnabled(for: transcriptionMode)
+    }
 
     private enum Keys {
+        static let onlineCleanupEnabled = "aiCleanupEnabled"
+        static let offlineCleanupEnabled = "aiCleanupEnabledOffline"
         static let selectedProvider = "transcriptionProvider"
         static let selectedOnlineProvider = "onlineTranscriptionProvider"
         static let transcriptionMode = "transcriptionMode"
@@ -243,12 +256,31 @@ class TranscriptionProviderManager: ObservableObject {
 
         enableLLMPostProcessing = false
         postProcessingProvider = .aidictation
+        onlineCleanupEnabled = AppDefaults.shared.object(forKey: Keys.onlineCleanupEnabled) as? Bool ?? true
+        offlineCleanupEnabled = AppDefaults.shared.object(forKey: Keys.offlineCleanupEnabled) as? Bool ?? false
         if let savedTransport = AppDefaults.shared.string(forKey: Keys.customTransport),
            let transport = TranscriptionTransport(rawValue: savedTransport)
         {
             customTransport = transport
         }
         DebugLog.info("Loaded: \(selectedProvider.displayName), mode: \(transcriptionMode.displayName), transport: \(effectiveTransport.rawValue), LLM post-processing: \(enableLLMPostProcessing), post-processor: \(postProcessingProvider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    func cleanupEnabled(for mode: TranscriptionMode) -> Bool {
+        mode == .local ? offlineCleanupEnabled : onlineCleanupEnabled
+    }
+
+    /// Stores the Cleanup setting for the current transcription mode. Offline
+    /// keeps its own setting so choosing Offline never inherits cloud cleanup.
+    func setCleanupEnabled(_ enabled: Bool) {
+        if transcriptionMode == .local {
+            offlineCleanupEnabled = enabled
+            AppDefaults.shared.set(enabled, forKey: Keys.offlineCleanupEnabled)
+        } else {
+            onlineCleanupEnabled = enabled
+            AppDefaults.shared.set(enabled, forKey: Keys.onlineCleanupEnabled)
+        }
+        DebugLog.info("Cleanup enabled: \(enabled), mode: \(transcriptionMode.displayName)", context: "TranscriptionProviderManager")
     }
 
     func setTranscriptionMode(_ mode: TranscriptionMode) {

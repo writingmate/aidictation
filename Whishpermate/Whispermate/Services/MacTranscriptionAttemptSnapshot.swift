@@ -104,6 +104,9 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
     let customRealtimeEndpoint: URL?
     let customRealtimeModel: String?
     let llmPostProcessingEnabled: Bool
+    /// The user's Cleanup setting. When off, the transcript is never sent to
+    /// a cleanup endpoint and the raw recognized text is used.
+    let cleanupEnabled: Bool
     let postProcessingProvider: PostProcessingProvider
     let llmEndpoint: String
     let llmModel: String
@@ -209,6 +212,7 @@ nonisolated struct MacTranscriptionAttemptSnapshot: @unchecked Sendable {
             customRealtimeEndpoint: customRealtimeEndpoint,
             customRealtimeModel: customRealtimeModel,
             llmPostProcessingEnabled: llmPostProcessingEnabled,
+            cleanupEnabled: cleanupEnabled,
             postProcessingProvider: postProcessingProvider,
             llmEndpoint: llmEndpoint,
             llmModel: llmModel,

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -94,6 +95,8 @@ fun SettingsScreen(
     onDeviceTranscriptionEnabled: Boolean = false,
     onDeviceModelState: OnDeviceModelUiState = OnDeviceModelUiState(),
     onOnDeviceTranscriptionToggled: (Boolean) -> Unit = {},
+    cleanupEnabled: Boolean = true,
+    onCleanupToggled: (Boolean) -> Unit = {},
     usageStatus: UsageStatus,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
@@ -221,12 +224,12 @@ fun SettingsScreen(
                 icon = Icons.Default.Settings,
                 title = stringResource(R.string.transcription_dictionary),
                 onClick = { onNavigateToPostProcessingSettings(0) },
-                enabled = !onDeviceTranscriptionEnabled,
+                enabled = !onDeviceTranscriptionEnabled || cleanupEnabled,
                 trailingContent = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (!onDeviceTranscriptionEnabled || cleanupEnabled) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     )
                 }
@@ -238,17 +241,46 @@ fun SettingsScreen(
                 icon = Icons.Default.Translate,
                 title = stringResource(R.string.transcription_shortcuts),
                 onClick = { onNavigateToPostProcessingSettings(2) },
-                enabled = !onDeviceTranscriptionEnabled,
+                enabled = !onDeviceTranscriptionEnabled || cleanupEnabled,
                 trailingContent = {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
-                        tint = if (!onDeviceTranscriptionEnabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = if (!onDeviceTranscriptionEnabled || cleanupEnabled) MaterialTheme.colorScheme.onSurfaceVariant
                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     )
                 }
             )
         }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        SectionHeader(stringResource(R.string.settings_cleanup))
+        Card(
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            SettingsItem(
+                icon = Icons.Default.AutoAwesome,
+                title = stringResource(R.string.settings_cleanup_toggle),
+                onClick = { onCleanupToggled(!cleanupEnabled) },
+                trailingContent = {
+                    Switch(
+                        checked = cleanupEnabled,
+                        onCheckedChange = onCleanupToggled
+                    )
+                }
+            )
+        }
+        Text(
+            text = stringResource(R.string.settings_cleanup_description),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, top = 8.dp, end = 4.dp)
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 

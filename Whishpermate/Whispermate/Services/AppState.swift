@@ -2358,7 +2358,10 @@ class AppState: ObservableObject {
             }
             try await session.beginCleanup()
             let result: String
-            if realtimeResult == nil || snapshot.provider == .soniox {
+            if !snapshot.cleanupEnabled {
+                // Cleanup is off: the transcript never goes to a cleanup endpoint.
+                result = transcriptWithoutStandaloneFillers(rawResult)
+            } else if realtimeResult == nil || snapshot.provider == .soniox {
                 let cleanupStartedAt = CFAbsoluteTimeGetCurrent()
                 result = try await applyLLMPassWithFallback(
                     rawText: rawResult,
@@ -3193,6 +3196,7 @@ class AppState: ObservableObject {
             customRealtimeEndpoint: configuredCustomRealtimeEndpoint(),
             customRealtimeModel: configuredCustomRealtimeModel(),
             llmPostProcessingEnabled: transcriptionProviderManager.enableLLMPostProcessing,
+            cleanupEnabled: transcriptionProviderManager.cleanupEnabled(for: mode),
             postProcessingProvider: transcriptionProviderManager.postProcessingProvider,
             llmEndpoint: llmProviderManager.effectiveEndpoint,
             llmModel: llmProviderManager.effectiveModel,

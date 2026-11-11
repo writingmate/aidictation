@@ -127,8 +127,10 @@ public class TranscriptionProviderManager: ObservableObject {
 
     private let providerKey = "selected_transcription_provider"
     private let modeKey = "selected_transcription_mode"
-    private let onlineCleanupEnabledKey = "ai_cleanup_enabled"
-    private let offlineCleanupEnabledKey = "ai_cleanup_enabled_offline"
+    private enum Keys {
+        static let onlineCleanupEnabled = "ai_cleanup_enabled"
+        static let offlineCleanupEnabled = "ai_cleanup_enabled_offline"
+    }
     private let endpointKey = "transcription_custom_endpoint"
     private let modelKey = "transcription_custom_model"
 
@@ -166,8 +168,8 @@ public class TranscriptionProviderManager: ObservableObject {
 
         customEndpoint = AppDefaults.shared.string(forKey: endpointKey) ?? ""
         customModel = AppDefaults.shared.string(forKey: modelKey) ?? ""
-        onlineCleanupEnabled = AppDefaults.shared.object(forKey: onlineCleanupEnabledKey) as? Bool ?? true
-        offlineCleanupEnabled = AppDefaults.shared.object(forKey: offlineCleanupEnabledKey) as? Bool ?? false
+        onlineCleanupEnabled = AppDefaults.shared.object(forKey: Keys.onlineCleanupEnabled) as? Bool ?? true
+        offlineCleanupEnabled = AppDefaults.shared.object(forKey: Keys.offlineCleanupEnabled) as? Bool ?? false
         DebugLog.info("Loaded: \(selectedProvider.displayName)", context: "TranscriptionProviderManager")
     }
 
@@ -187,10 +189,10 @@ public class TranscriptionProviderManager: ObservableObject {
     public func setCleanupEnabled(_ enabled: Bool) {
         if transcriptionMode == .offline {
             offlineCleanupEnabled = enabled
-            AppDefaults.shared.set(enabled, forKey: offlineCleanupEnabledKey)
+            AppDefaults.shared.set(enabled, forKey: Keys.offlineCleanupEnabled)
         } else {
             onlineCleanupEnabled = enabled
-            AppDefaults.shared.set(enabled, forKey: onlineCleanupEnabledKey)
+            AppDefaults.shared.set(enabled, forKey: Keys.onlineCleanupEnabled)
         }
     }
 

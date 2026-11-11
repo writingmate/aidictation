@@ -2360,7 +2360,7 @@ class AppState: ObservableObject {
             let result: String
             if !snapshot.cleanupEnabled {
                 // Cleanup is off: the transcript never goes to a cleanup endpoint.
-                result = transcriptWithoutStandaloneFillers(rawResult)
+                result = rawResult
             } else if realtimeResult == nil || snapshot.provider == .soniox {
                 let cleanupStartedAt = CFAbsoluteTimeGetCurrent()
                 result = try await applyLLMPassWithFallback(

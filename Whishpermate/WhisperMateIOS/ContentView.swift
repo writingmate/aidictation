@@ -2303,6 +2303,7 @@ private struct TranscriptionModeSelectionView: View {
     @ObservedObject var transcriptionProviderManager: TranscriptionProviderManager
     @ObservedObject var parakeetService: SharedParakeetTranscriptionService
     @State private var showCloudTranscriptionConsent = false
+    @State private var showCleanupConsent = false
     let offlineModelStatusText: String
     let offlineModelStatusIcon: String
     let offlineModelTrailingIcon: String
@@ -2323,7 +2324,15 @@ private struct TranscriptionModeSelectionView: View {
             Section {
                 Toggle("AI Cleanup", isOn: Binding(
                     get: { transcriptionProviderManager.cleanupEnabled },
-                    set: { transcriptionProviderManager.setCleanupEnabled($0) }
+                    set: { enabled in
+                        // Cleanup sends text to the cloud, so it needs the same
+                        // permission as cloud transcription before it can turn on.
+                        guard !enabled || CloudTranscriptionConsent.isGranted else {
+                            showCleanupConsent = true
+                            return
+                        }
+                        transcriptionProviderManager.setCleanupEnabled(enabled)
+                    }
                 ))
             } header: {
                 Text("Cleanup")
@@ -2377,6 +2386,15 @@ private struct TranscriptionModeSelectionView: View {
             Button("Not Now", role: .cancel) {}
         } message: {
             Text(CloudTranscriptionConsent.disclosureMessage)
+        }
+        .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCleanupConsent) {
+            Button("Allow") {
+                CloudTranscriptionConsent.grant()
+                transcriptionProviderManager.setCleanupEnabled(true)
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text(CloudTranscriptionConsent.cleanupDisclosureMessage)
         }
     }
 

@@ -93,6 +93,14 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
   -module-cache-path "$module_cache" \
+  Whishpermate/WhisperMateShared/Networking/AppleAudioHTTPRecovery.swift \
+  Whishpermate/Whispermate/Services/CloudOutageFallback.swift \
+  scripts/validate_macos_cloud_outage_fallback.swift \
+  -o "$work_dir/validate-macos-cloud-outage-fallback"
+"$work_dir/validate-macos-cloud-outage-fallback"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+  -module-cache-path "$module_cache" \
   Whishpermate/WhisperMateShared/Services/RealtimeTranscriptionSupport.swift \
   Whishpermate/Whispermate/Services/MacCaptureRecoveryPolicy.swift \
   Whishpermate/Whispermate/Services/RealtimeTranscriptionFinishGate.swift \

@@ -84,6 +84,8 @@ class AppState: ObservableObject {
         request: RealtimeTranscriptionFinishRequest
     )?
     private var realtimeTranscript: String = ""
+    /// Auto mode stays on the offline model for a while after a cloud outage.
+    private var cloudOutageCooldown = CloudOutageCooldown()
     private let diarizationTimeoutSeconds: UInt64 = 75
     private let llmPostProcessingTimeoutSeconds: UInt64 = 45
     private let commandDeliveryTimeoutSeconds: UInt64 = 45
@@ -2309,7 +2311,7 @@ class AppState: ObservableObject {
                 && snapshot.usesShortRealtimeRecovery(isLiveRecording: isLiveRecording)
                 ? realtimeFallbackTimeoutSeconds(for: recording.duration)
                 : recognitionTimeoutSeconds(for: recording.duration)
-            let rawResult = try await withTimeout(seconds: recognitionTimeout) {
+            let recognition: @Sendable () async throws -> String = {
                 if realtimeResult == nil, snapshot.vadEnabled {
                     do {
                         let hasSpeech = try await VoiceActivityDetector.hasSpeech(
@@ -2356,6 +2358,71 @@ class AppState: ObservableObject {
                     }
                 )
             }
+
+            // Auto mode: when the cloud is unavailable, transcribe with the
+            // offline model instead of failing. During the cooldown after an
+            // outage, skip the cloud's retries and go straight to it.
+            let rawResult: String
+            var transcribedOffline = false
+            if realtimeResult == nil,
+               canTranscribeOffline(
+                   snapshot: snapshot,
+                   cloudUnavailable: true,
+                   recognitionTextSaved: false
+               ),
+               cloudOutageCooldown.prefersOffline(at: Date())
+            {
+                DebugLog.info("Cloud outage cooldown active; transcribing offline", context: "AppState")
+                rawResult = try await transcribeOfflineAfterCloudOutage(
+                    recording: recording,
+                    audioURL: audioURL,
+                    session: session
+                )
+                transcribedOffline = true
+            } else {
+                do {
+                    rawResult = try await withTimeout(
+                        seconds: recognitionTimeout,
+                        operation: recognition
+                    )
+                } catch {
+                    let recognitionTextSaved = await session.hasSavedRecognitionText
+                    let failure = Self.cloudUploadFailure(in: error)
+                    guard realtimeResult == nil,
+                          canTranscribeOffline(
+                              snapshot: snapshot,
+                              cloudUnavailable: CloudOutageFallback.isCloudUnavailable(
+                                  failure: failure,
+                                  recognitionTimedOut: Self.isRecognitionTimeout(error),
+                                  networkWasConnected: snapshot.networkWasConnected
+                              ),
+                              recognitionTextSaved: recognitionTextSaved
+                          )
+                    else { throw error }
+                    cloudOutageCooldown.recordOutage(at: Date())
+                    let reason = failure.map { String(describing: $0) } ?? "timed out"
+                    DebugLog.warning(
+                        "Cloud transcription unavailable (\(reason)); transcribing offline",
+                        context: "AppState"
+                    )
+                    CrashReporter.captureError(
+                        "Cloud transcription unavailable; transcribed offline",
+                        context: "AppState",
+                        feature: "transcription"
+                    )
+                    rawResult = try await transcribeOfflineAfterCloudOutage(
+                        recording: recording,
+                        audioURL: audioURL,
+                        session: session,
+                        cloudError: error
+                    )
+                    transcribedOffline = true
+                }
+            }
+            if !transcribedOffline, usedCloudRecognition(snapshot: snapshot, realtimeResult: realtimeResult) {
+                cloudOutageCooldown.recordCloudSuccess()
+            }
+
             try await session.beginCleanup()
             let result: String
             if realtimeResult == nil || snapshot.provider == .soniox {
@@ -2741,6 +2808,92 @@ class AppState: ObservableObject {
             recognitionTimeoutSeconds(for: duration),
             max(20, UInt64(max(0, duration ?? 0)) + 5)
         )
+    }
+
+    /// The cloud upload failure behind a batch transcription error, if any.
+    private static func cloudUploadFailure(in error: Error) -> AppleAudioHTTPRecovery.Failure? {
+        if let openAIError = error as? OpenAIError,
+           case .transcriptionFailure(let failure) = openAIError
+        {
+            return failure
+        }
+        return error as? AppleAudioHTTPRecovery.Failure
+    }
+
+    /// Whether an error is `withTimeout` giving up on the recognition deadline.
+    private static func isRecognitionTimeout(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "AppState" && nsError.code == -1001
+    }
+
+    /// Whether this attempt may use the offline model in place of the cloud.
+    private func canTranscribeOffline(
+        snapshot: MacTranscriptionAttemptSnapshot,
+        cloudUnavailable: Bool,
+        recognitionTextSaved: Bool
+    ) -> Bool {
+        CloudOutageFallback.shouldTranscribeOffline(
+            isAutoMode: snapshot.mode == .auto && !snapshot.provider.isOnDevice,
+            cloudUnavailable: cloudUnavailable,
+            runtimeSupported: ParakeetTranscriptionService.isRuntimeSupported,
+            modelDownloaded: ParakeetTranscriptionService.shared.isModelDownloaded,
+            recognitionTextSaved: recognitionTextSaved,
+            usesSpeakerLabels: snapshot.transcriptionOptions.diarization
+        )
+    }
+
+    /// Whether the cloud produced this attempt's transcript: the live stream,
+    /// or an upload that Auto mode did not send to the offline model because
+    /// the Mac was offline.
+    private func usedCloudRecognition(
+        snapshot: MacTranscriptionAttemptSnapshot,
+        realtimeResult: String?
+    ) -> Bool {
+        if realtimeResult != nil { return true }
+        return !snapshot.provider.isOnDevice
+            && snapshot.networkWasConnected
+            && !snapshot.transcriptionOptions.diarization
+    }
+
+    /// Transcribes a recording with the offline model after the cloud failed,
+    /// or while the cooldown after an outage is active. The cloud attempt may
+    /// have used up most of the recognition deadline, so the stored attempt
+    /// and the offline run both get a fresh one.
+    ///
+    /// - Parameter cloudError: The cloud failure being replaced. When the
+    ///   attempt cannot be extended, the user sees this error, as before.
+    private func transcribeOfflineAfterCloudOutage(
+        recording: Recording,
+        audioURL: URL,
+        session: MacStoreTranscriptionSession,
+        cloudError: Error? = nil
+    ) async throws -> String {
+        let offlineTimeout = recognitionTimeoutSeconds(for: recording.duration)
+        do {
+            try await session.extendRecognition(
+                until: Date().addingTimeInterval(
+                    TimeInterval(offlineTimeout + recordingPreparationStoreDeadlineSeconds)
+                )
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw cloudError ?? error
+        }
+        let text = try await withTimeout(seconds: offlineTimeout) {
+            try await ParakeetTranscriptionService.shared.transcribe(audioURL: audioURL)
+        }
+        let durableRaw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !durableRaw.isEmpty else {
+            throw NSError(
+                domain: "AppState",
+                code: -7,
+                userInfo: [NSLocalizedDescriptionKey: "No speech was recognized. Your recording was kept."]
+            )
+        }
+        try await session.checkpoint(durableRaw)
+        try await session.markRawResultReady(durableRaw)
+        return durableRaw
     }
 
     private func finishOverlayAfterRecording() {
@@ -3870,6 +4023,9 @@ private actor MacStoreTranscriptionSession {
     private let store: MacAudioProcessingStore
     private var mutation: MacAudioProcessingStore.Mutation
     private let attemptIsCurrent: @MainActor @Sendable () -> Bool
+    /// Some recognition text is saved for this attempt. Later text must extend
+    /// it, so an independent offline transcript can no longer replace it.
+    private(set) var hasSavedRecognitionText = false
 
     init(
         store: MacAudioProcessingStore,
@@ -3893,6 +4049,14 @@ private actor MacStoreTranscriptionSession {
             mutation.lease,
             partialText: text
         )
+        hasSavedRecognitionText = true
+        try await requireCurrentAttempt()
+        mutation = next
+    }
+
+    func extendRecognition(until deadline: Date) async throws {
+        try await requireCurrentAttempt()
+        let next = try await store.extendRecognition(mutation.lease, deadline: deadline)
         try await requireCurrentAttempt()
         mutation = next
     }
@@ -3900,6 +4064,7 @@ private actor MacStoreTranscriptionSession {
     func markRawResultReady(_ text: String) async throws {
         try await requireCurrentAttempt()
         let next = try await store.markRawResultReady(mutation.lease, rawText: text)
+        hasSavedRecognitionText = true
         try await requireCurrentAttempt()
         mutation = next
     }

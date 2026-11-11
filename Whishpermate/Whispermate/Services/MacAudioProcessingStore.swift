@@ -1135,6 +1135,25 @@ actor MacAudioProcessingStore {
         )
     }
 
+    /// Gives a recognizing attempt a new deadline before a second recognizer
+    /// runs on the same audio, such as Auto mode's offline model after the
+    /// cloud failed. Only an attempt that has saved no recognition text, and
+    /// whose current deadline has not passed, can be extended.
+    func extendRecognition(_ lease: Lease, deadline: Date) async throws -> Mutation {
+        guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
+        let current = try currentRecord(for: lease)
+        guard current.stage == .recognizing, current.rawText == nil else {
+            throw StoreError.invalidTransition
+        }
+        return try await transition(
+            lease,
+            from: .recognizing,
+            to: .recognizing,
+            deadline: deadline,
+            durability: .ordered
+        )
+    }
+
     /// Durably checkpoints complete raw recognition before optional cleanup.
     /// Cleanup may never replace or erase this value.
     func markRawResultReady(_ lease: Lease, rawText: String) async throws -> Mutation {

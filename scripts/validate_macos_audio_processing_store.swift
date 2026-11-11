@@ -1602,6 +1602,81 @@ private func testCaptureAndFinalizationUseDistinctDeadlines() async throws {
     }
 }
 
+private func testRecognitionExtensionForSecondRecognizer() async throws {
+    let root = try temporaryRoot("recognition-extension")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let clock = TestClock()
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        testHooks: .init(now: { clock.now() })
+    )
+
+    func recognizing(deadlineIn seconds: TimeInterval) async throws -> MacAudioProcessingStore.Mutation {
+        let recordingID = UUID()
+        var mutation = try await store.prepare(
+            recordingID: recordingID,
+            attemptID: UUID(),
+            deadline: clock.now().addingTimeInterval(600)
+        )
+        try writeValidAudio(to: store.partialURL(for: recordingID))
+        mutation = try await store.markRecording(
+            mutation.lease,
+            captureDeadline: clock.now().addingTimeInterval(600)
+        )
+        mutation = try await store.beginFinalization(
+            mutation.lease,
+            deadline: clock.now().addingTimeInterval(600)
+        )
+        mutation = try await finishValidatedAudio(in: store, mutation: mutation)
+        return try await store.beginRecognition(
+            recordingID: recordingID,
+            attemptID: UUID(),
+            expectedRevision: mutation.record.revision,
+            deadline: clock.now().addingTimeInterval(seconds)
+        )
+    }
+
+    // A second recognizer gets a fresh deadline and can save its text after
+    // the first deadline would have passed.
+    let first = try await recognizing(deadlineIn: 37)
+    clock.advance(30)
+    let extendedDeadline = clock.now().addingTimeInterval(100)
+    let extended = try await store.extendRecognition(first.lease, deadline: extendedDeadline)
+    try require(
+        extended.record.stage == .recognizing
+            && extended.record.deadline == extendedDeadline
+            && extended.record.rawText == nil,
+        "extending recognition did not keep the attempt recognizing with the new deadline"
+    )
+    clock.advance(60)
+    let checkpointed = try await store.checkpointRecognition(extended.lease, partialText: "offline text")
+    let raw = try await store.markRawResultReady(checkpointed.lease, rawText: "offline text")
+    try require(raw.record.stage == .rawResultReady, "text after an extension was not accepted")
+    try await requireStoreError(.invalidTransition, "a finished recognition was extended") {
+        _ = try await store.extendRecognition(raw.lease, deadline: clock.now().addingTimeInterval(100))
+    }
+
+    // Saved text belongs to the first recognizer. A second one cannot start.
+    let partial = try await recognizing(deadlineIn: 37)
+    let saved = try await store.checkpointRecognition(partial.lease, partialText: "cloud leaf one")
+    try await requireStoreError(.invalidTransition, "an attempt with saved text was extended") {
+        _ = try await store.extendRecognition(saved.lease, deadline: clock.now().addingTimeInterval(100))
+    }
+
+    // An attempt whose deadline already passed stays expired.
+    let expired = try await recognizing(deadlineIn: 37)
+    clock.advance(37.001)
+    try await requireStoreError(.invalidDeadline, "an expired recognition was extended") {
+        _ = try await store.extendRecognition(expired.lease, deadline: clock.now().addingTimeInterval(100))
+    }
+
+    // The new deadline must be in the future.
+    let pastDeadline = try await recognizing(deadlineIn: 37)
+    try await requireStoreError(.invalidDeadline, "recognition was extended to a past deadline") {
+        _ = try await store.extendRecognition(pastDeadline.lease, deadline: clock.now())
+    }
+}
+
 private func makeInterruptedFinalSource(
     root: URL
 ) async throws -> (recordingID: UUID, failed: MacAudioProcessingStore.Record) {
@@ -2065,6 +2140,8 @@ private struct MacAudioProcessingStoreValidator {
             try await testSourceDurabilityFailuresNeverBecomeReady()
             print("test: stage deadlines")
             try await testCaptureAndFinalizationUseDistinctDeadlines()
+            print("test: recognition extension")
+            try await testRecognitionExtensionForSecondRecognizer()
             print("test: blocked validation/restart")
             try await testBlockedDeepValidationDeadlineAndPromptRestart()
             print("test: corrupt")

@@ -353,7 +353,7 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(source.contains("guard let transcriptionApiKey = batchRoute.apiKey,"))
         precondition(!source.contains("transcriptionApiKey != \"not-needed\""))
         precondition(!attemptSource.contains("applyLLMPassWithFallback("))
-        guard let recognitionEnd = source.range(of: "            let rawResult = try await withTimeout"),
+        guard let recognitionEnd = source.range(of: "rawResult = try await withTimeout("),
               let cleanupAfterRecognition = source.range(
                 of: "            try await session.beginCleanup()",
                 range: recognitionEnd.upperBound..<source.endIndex

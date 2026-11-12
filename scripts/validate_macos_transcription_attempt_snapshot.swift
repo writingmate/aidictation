@@ -13,6 +13,7 @@ struct TranscriptionOptions: Equatable {
 enum TranscriptionMode {
     case auto
     case cloud
+    case local
 }
 
 enum TranscriptionProvider {
@@ -49,6 +50,8 @@ private struct MutableAttemptSettings {
 
 private func capture(
     _ settings: MutableAttemptSettings,
+    mode: TranscriptionMode = .cloud,
+    cleanupEnabled: Bool = true,
     provider: TranscriptionProvider = .custom,
     transport: TranscriptionTransport = .batch,
     networkWasConnected: Bool = true
@@ -56,7 +59,7 @@ private func capture(
     MacTranscriptionAttemptSnapshot(
         outputMode: .dictation,
         transcriptionOptions: .init(diarization: false),
-        mode: .cloud,
+        mode: mode,
         provider: provider,
         transport: transport,
         transcriptionEndpoint: settings.endpoint,
@@ -69,6 +72,7 @@ private func capture(
         // Custom-provider controls historically leave this hidden toggle off.
         // A two-stage raw path must still run core cleanup with this snapshot.
         llmPostProcessingEnabled: false,
+        cleanupEnabled: cleanupEnabled,
         postProcessingProvider: .customLLM,
         llmEndpoint: settings.llmEndpoint,
         llmModel: settings.llmModel,
@@ -126,6 +130,13 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
     static func main() throws {
         var settings = MutableAttemptSettings()
         let snapshot = capture(settings)
+        precondition(snapshot.cleanupEnabled, "Cleanup must be on by default")
+        precondition(capture(settings, mode: .local).cleanupEnabled)
+        let cleanupOff = capture(settings, mode: .local, cleanupEnabled: false)
+        precondition(
+            !cleanupOff.withContext(appContext: nil, screenContext: nil).cleanupEnabled,
+            "Context resolution dropped the user's Cleanup setting"
+        )
         var sonioxSettings = settings
         sonioxSettings.apiKey = "not-needed"
         let realtime = capture(sonioxSettings, provider: .soniox, transport: .realtime)
@@ -347,6 +358,18 @@ struct ValidateMacOSTranscriptionAttemptSnapshot {
         precondition(source.contains("try await session.checkpoint(realtimeResult)"))
         precondition(source.contains("try await session.markRawResultReady(realtimeResult)"))
         precondition(source.contains("try await session.beginCleanup()"))
+        guard let offlineGate = source.range(of: "if !snapshot.cleanupEnabled {"),
+              let gatedCleanup = source.range(
+                of: "result = try await applyLLMPassWithFallback(",
+                range: offlineGate.upperBound..<source.endIndex
+              ) else {
+            preconditionFailure("Turning Cleanup off no longer skips the cleanup pass")
+        }
+        precondition(
+            !source[offlineGate.upperBound..<gatedCleanup.lowerBound]
+                .contains("applyLLMPass"),
+            "Cleanup off still sends the transcript to cleanup"
+        )
         precondition(source.contains("return realtimeResult"))
         precondition(source.contains("snapshot.usesShortRealtimeRecovery(isLiveRecording: isLiveRecording)"))
         precondition(source.contains("rawText: rawResult,"))

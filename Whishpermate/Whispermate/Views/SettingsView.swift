@@ -1253,6 +1253,29 @@ struct SettingsView: View {
             }
 
             SettingsCard {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Cleanup")
+                            .dsFont(.body)
+                            .foregroundStyle(Color.dsForeground)
+                        Text("Polishes your text in the cloud. Off keeps the raw transcript.")
+                            .dsFont(.label)
+                            .foregroundStyle(Color.dsMutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { transcriptionProviderManager.cleanupEnabled },
+                        set: { transcriptionProviderManager.setCleanupEnabled($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                }
+                .padding(.vertical, 2)
+            }
+
+            SettingsCard {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {

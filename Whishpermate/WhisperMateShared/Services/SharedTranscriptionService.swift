@@ -95,7 +95,11 @@ public enum SharedTranscriptionService {
             return RequestSnapshot(
                 useOnDeviceRecognition: useOnDevice,
                 cloud: cloud,
-                cleanup: captureCleanupConfiguration(),
+                // With the Cleanup setting off, no transcript text is sent to
+                // a cleanup endpoint and the raw recognized text is used.
+                cleanup: providerManager.cleanupEnabled
+                    ? captureCleanupConfiguration()
+                    : nil,
                 realtime: realtime,
                 outputMode: selectedOutputMode,
                 transcriptionOptions: transcriptionOptions,

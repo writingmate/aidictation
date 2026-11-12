@@ -85,6 +85,7 @@ fun MainScreen(
     val recordingState by viewModel.recordingState.collectAsState()
     val error by viewModel.error.collectAsState()
     val onDeviceTranscriptionEnabled by viewModel.onDeviceTranscriptionEnabled.collectAsState()
+    val cleanupEnabled by viewModel.postProcessingEnabled.collectAsState()
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
@@ -236,6 +237,8 @@ fun MainScreen(
                 onDeviceTranscriptionEnabled = onDeviceTranscriptionEnabled,
                 onDeviceModelState = onDeviceModelState,
                 onOnDeviceTranscriptionToggled = { viewModel.setOnDeviceTranscriptionEnabled(it) },
+                cleanupEnabled = cleanupEnabled,
+                onCleanupToggled = { viewModel.setPostProcessingEnabled(it) },
                 usageStatus = usageStatus,
                 onSignInWithGoogle = if (viewModel.isGoogleSignInConfigured) {
                     { viewModel.signInWithGoogle(context) }

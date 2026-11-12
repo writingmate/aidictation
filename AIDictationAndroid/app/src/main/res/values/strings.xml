@@ -145,6 +145,9 @@
     <string name="referral_code_hint">Invite code</string>
     <string name="referral_apply">Apply</string>
     <string name="settings_transcription">Transcription</string>
+    <string name="settings_cleanup">Cleanup</string>
+    <string name="settings_cleanup_toggle">AI cleanup</string>
+    <string name="settings_cleanup_description">Polishes your text in the cloud. Off keeps the raw transcript.</string>
     <string name="settings_on_device_transcription">Transcription mode</string>
     <string name="settings_on_device_cloud">Cloud</string>
     <string name="settings_on_device_ready">Ready</string>

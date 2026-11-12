@@ -995,7 +995,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_LIVE_ACTIVITY_APPSTORE_PROFILE_NAME)";
@@ -1088,7 +1088,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.liveactivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1250,7 +1250,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(AIDICTATION_MACOS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(AIDICTATION_MACOS_PRODUCT_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -1296,7 +1296,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(AIDICTATION_MACOS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(AIDICTATION_MACOS_PRODUCT_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -1423,7 +1423,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1461,7 +1461,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_APPSTORE_PROFILE_NAME)";
@@ -1495,7 +1495,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1528,7 +1528,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.0.110;
+				MARKETING_VERSION = 0.0.111;
 				PRODUCT_BUNDLE_IDENTIFIER = com.whispermate.ios.keyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(IOS_KEYBOARD_APPSTORE_PROFILE_NAME)";

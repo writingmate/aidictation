@@ -11,6 +11,7 @@ import com.whispermate.aidictation.data.preferences.AppPreferences
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +30,7 @@ class TranscriptionModeSelectionTest {
         val repository = TranscriptionRepository(preferences, ParakeetTranscriber(ParakeetModelAssets(context)))
         preferences.saveSelectedLanguages(listOf("en"))
         preferences.setOnDeviceTranscriptionEnabled(false)
+        preferences.setPostProcessingEnabled(true)
 
         val cloud = repository.captureAttemptConfiguration()
         assertFalse("${BuildConfig.PARAKEET_RUNTIME} overrode cloud mode", cloud.useLocalRecognition)
@@ -50,12 +52,18 @@ class TranscriptionModeSelectionTest {
         preferences.setOnDeviceTranscriptionEnabled(true)
         val offline = repository.captureAttemptConfiguration()
         assertTrue(offline.useLocalRecognition)
-        assertTrue(offline.cleanupEnabled)
+        assertFalse("Offline mode must not send text to cloud cleanup by default", offline.cleanupEnabled)
+        assertNull(offline.postProcessingPrompt)
+
+        preferences.setPostProcessingEnabled(true)
+        assertTrue("Offline cleanup is an explicit opt-in", repository.captureAttemptConfiguration().cleanupEnabled)
+        preferences.setPostProcessingEnabled(false)
 
         preferences.setOnDeviceTranscriptionEnabled(false)
         val cloud = repository.captureAttemptConfiguration()
         assertFalse(cloud.useLocalRecognition)
         assertTrue("The active recording keeps its captured mode", offline.useLocalRecognition)
-        assertEquals(offline.postProcessingPrompt, cloud.postProcessingPrompt)
+        assertTrue("Cloud mode keeps its own cleanup setting, on by default", cloud.cleanupEnabled)
+        assertFalse("The active recording keeps its captured cleanup choice", offline.cleanupEnabled)
     }
 }

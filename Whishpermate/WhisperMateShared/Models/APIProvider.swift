@@ -111,11 +111,26 @@ public enum TranscriptionMode: String, CaseIterable, Identifiable {
 public class TranscriptionProviderManager: ObservableObject {
     @Published public var selectedProvider: TranscriptionProvider = .custom
     @Published public var transcriptionMode: TranscriptionMode = .cloud
+    /// Whether transcript text is sent to the cloud cleanup pass in Cloud
+    /// and Automatic modes. On by default.
+    @Published public private(set) var onlineCleanupEnabled: Bool = true
+    /// Whether transcript text is sent to the cloud cleanup pass in Offline
+    /// mode. Off by default so Offline keeps text on this device.
+    @Published public private(set) var offlineCleanupEnabled: Bool = false
+
+    /// The Cleanup setting for the current transcription mode.
+    public var cleanupEnabled: Bool {
+        transcriptionMode == .offline ? offlineCleanupEnabled : onlineCleanupEnabled
+    }
     @Published public var customEndpoint: String = ""
     @Published public var customModel: String = ""
 
     private let providerKey = "selected_transcription_provider"
     private let modeKey = "selected_transcription_mode"
+    private enum Keys {
+        static let onlineCleanupEnabled = "ai_cleanup_enabled"
+        static let offlineCleanupEnabled = "ai_cleanup_enabled_offline"
+    }
     private let endpointKey = "transcription_custom_endpoint"
     private let modelKey = "transcription_custom_model"
 
@@ -153,6 +168,8 @@ public class TranscriptionProviderManager: ObservableObject {
 
         customEndpoint = AppDefaults.shared.string(forKey: endpointKey) ?? ""
         customModel = AppDefaults.shared.string(forKey: modelKey) ?? ""
+        onlineCleanupEnabled = AppDefaults.shared.object(forKey: Keys.onlineCleanupEnabled) as? Bool ?? true
+        offlineCleanupEnabled = AppDefaults.shared.object(forKey: Keys.offlineCleanupEnabled) as? Bool ?? false
         DebugLog.info("Loaded: \(selectedProvider.displayName)", context: "TranscriptionProviderManager")
     }
 
@@ -167,6 +184,16 @@ public class TranscriptionProviderManager: ObservableObject {
         transcriptionMode = provider == .onDevice ? .offline : .cloud
         AppDefaults.shared.set(transcriptionMode.rawValue, forKey: modeKey)
         DebugLog.info("Set provider: \(provider.displayName)", context: "TranscriptionProviderManager")
+    }
+
+    public func setCleanupEnabled(_ enabled: Bool) {
+        if transcriptionMode == .offline {
+            offlineCleanupEnabled = enabled
+            AppDefaults.shared.set(enabled, forKey: Keys.offlineCleanupEnabled)
+        } else {
+            onlineCleanupEnabled = enabled
+            AppDefaults.shared.set(enabled, forKey: Keys.onlineCleanupEnabled)
+        }
     }
 
     public func setTranscriptionMode(_ mode: TranscriptionMode) {

@@ -40,7 +40,8 @@ class AppPreferences @Inject constructor(
         val API_KEY = stringPreferencesKey("api_key")
         val SELECTED_LANGUAGES = stringPreferencesKey("selected_languages")
         val MULTILINGUAL_ENABLED = booleanPreferencesKey("multilingual_enabled")
-        val POST_PROCESSING_ENABLED = booleanPreferencesKey("post_processing_enabled")
+        val POST_PROCESSING_ENABLED = booleanPreferencesKey("ai_cleanup_enabled")
+        val OFFLINE_POST_PROCESSING_ENABLED = booleanPreferencesKey("ai_cleanup_enabled_offline")
         val ON_DEVICE_TRANSCRIPTION_ENABLED = booleanPreferencesKey("on_device_transcription_enabled")
         val AUTO_STOP_ON_SILENCE_ENABLED = booleanPreferencesKey("auto_stop_on_silence_enabled")
         val LOCAL_TRIAL_WORD_COUNT = intPreferencesKey("local_monthly_word_count")
@@ -77,13 +78,26 @@ class AppPreferences @Inject constructor(
         }
     }
 
+    /**
+     * The Cleanup setting for the current transcription mode. Cloud mode defaults to on.
+     * Offline mode keeps its own setting, off by default, so choosing offline never sends
+     * transcript text to the cloud unless the user turns cleanup on there.
+     */
     val postProcessingEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[Keys.POST_PROCESSING_ENABLED] ?: true
+        if (preferences[Keys.ON_DEVICE_TRANSCRIPTION_ENABLED] == true) {
+            preferences[Keys.OFFLINE_POST_PROCESSING_ENABLED] ?: false
+        } else {
+            preferences[Keys.POST_PROCESSING_ENABLED] ?: true
+        }
     }
 
     suspend fun setPostProcessingEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
-            preferences[Keys.POST_PROCESSING_ENABLED] = enabled
+            if (preferences[Keys.ON_DEVICE_TRANSCRIPTION_ENABLED] == true) {
+                preferences[Keys.OFFLINE_POST_PROCESSING_ENABLED] = enabled
+            } else {
+                preferences[Keys.POST_PROCESSING_ENABLED] = enabled
+            }
         }
     }
 

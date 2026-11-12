@@ -5,6 +5,8 @@ public enum CloudTranscriptionConsent {
     public static let alertTitle = "Cloud Transcription Permission"
     public static let disclosureMessage = "Before using cloud mode, please allow AIDictation to send your voice recording and transcript to AIDictation's cloud service to create and format the transcript. Offline mode keeps transcription on this device."
 
+    public static let cleanupDisclosureMessage = "Cleanup sends your transcript text to AIDictation's cloud service to polish it."
+
     private static let consentKey = "cloud_transcription_consent_granted"
 
     public static var isGranted: Bool {

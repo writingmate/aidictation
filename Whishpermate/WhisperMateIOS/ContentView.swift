@@ -2303,6 +2303,7 @@ private struct TranscriptionModeSelectionView: View {
     @ObservedObject var transcriptionProviderManager: TranscriptionProviderManager
     @ObservedObject var parakeetService: SharedParakeetTranscriptionService
     @State private var showCloudTranscriptionConsent = false
+    @State private var showCleanupConsent = false
     let offlineModelStatusText: String
     let offlineModelStatusIcon: String
     let offlineModelTrailingIcon: String
@@ -2318,6 +2319,25 @@ private struct TranscriptionModeSelectionView: View {
                 }
             } footer: {
                 Text("Cloud mode sends your voice recording and transcript to AIDictation's cloud transcription service after you allow cloud transcription. Offline mode keeps transcription on this device.")
+            }
+
+            Section {
+                Toggle("AI Cleanup", isOn: Binding(
+                    get: { transcriptionProviderManager.cleanupEnabled },
+                    set: { enabled in
+                        // Cleanup sends text to the cloud, so it needs the same
+                        // permission as cloud transcription before it can turn on.
+                        guard !enabled || CloudTranscriptionConsent.isGranted else {
+                            showCleanupConsent = true
+                            return
+                        }
+                        transcriptionProviderManager.setCleanupEnabled(enabled)
+                    }
+                ))
+            } header: {
+                Text("Cleanup")
+            } footer: {
+                Text("Polishes your text in the cloud. Off keeps the raw transcript.")
             }
 
             if transcriptionProviderManager.transcriptionMode != .cloud {
@@ -2366,6 +2386,15 @@ private struct TranscriptionModeSelectionView: View {
             Button("Not Now", role: .cancel) {}
         } message: {
             Text(CloudTranscriptionConsent.disclosureMessage)
+        }
+        .alert(CloudTranscriptionConsent.alertTitle, isPresented: $showCleanupConsent) {
+            Button("Allow") {
+                CloudTranscriptionConsent.grant()
+                transcriptionProviderManager.setCleanupEnabled(true)
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text(CloudTranscriptionConsent.cleanupDisclosureMessage)
         }
     }
 

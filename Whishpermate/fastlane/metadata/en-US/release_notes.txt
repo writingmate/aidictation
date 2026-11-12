@@ -1,2 +1,2 @@
-• Setup asks you to rate AI Dictation before you finish.
-• You can also rate AI Dictation from Settings whenever you want.
+• New Cleanup setting in Transcription settings.
+• Offline mode now keeps your text on your iPhone unless you turn Cleanup on.

@@ -882,7 +882,7 @@ private func validateSharedRequestSnapshotAndCleanupContract() throws {
         "public struct RequestSnapshot: Sendable",
         "public static func capture(",
         "request: RequestSnapshot",
-        "cleanup: captureCleanupConfiguration()",
+        "cleanup: providerManager.cleanupEnabled\n                    ? captureCleanupConfiguration()\n                    : nil,",
         "serverPostProcessingEnabledByDefault: false",
         "postProcessingEnabled: !cloud.isOneStage",
         "onMergedRawTranscript: { mergedRaw in",

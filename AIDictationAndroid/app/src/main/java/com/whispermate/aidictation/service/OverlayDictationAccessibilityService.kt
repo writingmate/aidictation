@@ -16,6 +16,7 @@ import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.InputType
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -112,6 +113,38 @@ internal fun bubbleNeedsKeyboard(
  */
 internal fun suppressionHidesBubble(suppressed: Boolean, workflowActive: Boolean): Boolean =
     suppressed && !workflowActive
+
+/**
+ * The keyboard is up when either signal says so. The probe window and the accessibility
+ * window list each miss keyboards the other sees (the probe gets no keyboard insets in
+ * some apps and on some Android versions, the list lags and flaps), so neither may veto
+ * the other; a wrong "hidden" from one source used to keep the bubble away.
+ */
+internal fun keyboardShowing(probeVisible: Boolean?, inputMethodWindowVisible: Boolean): Boolean =
+    probeVisible == true || inputMethodWindowVisible
+
+/**
+ * A field that shows its hint and reports no caret is not always an idle one: every empty
+ * native text field (a chat composer showing "Message") reports exactly that, because the
+ * platform only reports a selection for non-empty text. Only address bars are rejected in
+ * this state: Chrome's omnibox keeps reporting input focus this way while the user is
+ * actually editing web page content.
+ */
+internal fun isIdleHintOnlyField(showingHint: Boolean, hasCaret: Boolean, uriField: Boolean): Boolean =
+    showingHint && !hasCaret && uriField
+
+/**
+ * Whether a node is a field dictation can be written into: editable, enabled, not a
+ * password, and not an idle address bar. Visibility and focus flags are not checked; they
+ * are unreliable on foldable cover screens and while an overlay is starting up.
+ */
+internal fun AccessibilityNodeInfo.isDictationTarget(): Boolean {
+    if (!isEditable || !isEnabled || isPassword) return false
+    val hasCaret = textSelectionStart != -1 || textSelectionEnd != -1
+    val uriField = inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT &&
+        inputType and InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_URI
+    return !isIdleHintOnlyField(isShowingHintText, hasCaret, uriField)
+}
 
 internal fun shouldShowWandButton(
     recordingState: OverlayRecordingState,
@@ -410,14 +443,17 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
 
         // The keyboard window coming or going is the one window change the bubble must
         // follow at once; other window bursts still wait for the coalesced pass.
-        if (eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED && keyboardProbe?.keyboardVisible == null) {
+        if (eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             val inputMethodVisible = inputMethodBounds() != null
             if (inputMethodVisible != lastInputMethodWindowVisible) {
                 lastInputMethodWindowVisible = inputMethodVisible
                 overlayRefreshJob?.cancel()
                 overlayRefreshJob = null
                 refreshOverlayVisibility(null)
-                scheduleFocusRecoveryIfNeeded()
+                // A keyboard that just came up means a field is being edited even when no
+                // focus event named it (apps that focus their composer on open) or its
+                // tree is not readable yet, so keep looking for it.
+                scheduleFocusRecoveryIfNeeded(force = inputMethodVisible)
                 return
             }
         }
@@ -496,18 +532,15 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         overlayRefreshJob?.cancel()
         overlayRefreshJob = null
         refreshOverlayVisibility(null)
-        scheduleFocusRecoveryIfNeeded()
+        scheduleFocusRecoveryIfNeeded(force = keyboardProbe?.keyboardVisible == true)
     }
 
-    /**
-     * Whether the keyboard is showing: the probe window when it has proven itself on this
-     * device, else the accessibility window list.
-     */
+    /** Whether the keyboard is showing, by the probe window or the accessibility window list. */
     private fun isKeyboardVisible(): Boolean {
         val probe = keyboardProbe
         // The permission can be granted after the service connected; attach lazily.
         if (probe != null && !probe.isAttached) probe.attach()
-        return probe?.keyboardVisible ?: (inputMethodBounds() != null)
+        return keyboardShowing(probe?.keyboardVisible, inputMethodBounds() != null)
     }
 
     private fun refreshOverlayVisibility(source: AccessibilityNodeInfo?) {
@@ -774,20 +807,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun isEligibleEditableNode(node: AccessibilityNodeInfo): Boolean {
-        if (!node.isEditable) return false
-        // isVisibleToUser and isFocused can be unreliable on foldable cover screens
-        // or when an overlay/routine is starting up.
-        if (!node.isEnabled) return false
-        if (node.isPassword) return false
-        // A field showing its hint with no caret is not an active edit target. Chrome's
-        // omnibox keeps reporting input focus in this state while the user is actually
-        // editing web page content.
-        if (node.isShowingHintText && node.textSelectionStart == -1 && node.textSelectionEnd == -1) {
-            return false
-        }
-        return true
-    }
+    private fun isEligibleEditableNode(node: AccessibilityNodeInfo): Boolean = node.isDictationTarget()
 
     private fun refreshNode(node: AccessibilityNodeInfo): Boolean {
         return try {

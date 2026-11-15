@@ -1,1 +1,1 @@
-New Cleanup setting. Offline mode now keeps your text on your device unless you turn Cleanup on.
+The floating mic now appears in empty message boxes, such as a new chat in Messenger, and no longer goes missing while the keyboard is up.

@@ -72,6 +72,9 @@
     <string name="onboarding_paywall_cta">Get Pro</string>
     <string name="onboarding_paywall_continue_free">Continue with the trial</string>
     <string name="onboarding_paywall_refund">30-day refund on paid plans. Checkout opens in your browser.</string>
+    <string name="onboarding_paywall_play_terms">Billed through Google Play. Cancel anytime in Play subscriptions.</string>
+    <string name="onboarding_paywall_price_monthly">%1$s / month</string>
+    <string name="onboarding_paywall_price_annual">%1$s / year</string>
     <string name="onboarding_on_device_title">Choose transcription mode</string>
     <string name="onboarding_on_device_subtitle">Cloud is more accurate. Offline never sends audio anywhere.</string>
     <string name="onboarding_transcription_cloud_title">Cloud</string>
@@ -129,6 +132,10 @@
     <string name="account_sign_out">Sign out</string>
     <string name="account_signed_in">Signed in</string>
     <string name="account_upgrade">Upgrade to Pro</string>
+    <string name="account_restore_purchases">Restore purchases</string>
+    <string name="purchase_failed">The purchase did not go through. You have not been charged.</string>
+    <string name="purchase_restored">Pro is restored on this device.</string>
+    <string name="purchase_nothing_to_restore">No Pro purchase was found for this Google Play account.</string>
     <string name="account_continue_with_google">Continue with Google</string>
     <string name="account_google_not_configured">Google sign-in is not configured</string>
     <string name="account_google_no_account">No Google account is available on this device</string>

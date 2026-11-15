@@ -197,6 +197,9 @@ android {
         // that the auth backend's Google provider is configured with; blank hides the
         // "Continue with Google" entry point.
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", buildConfigString(configValue("GOOGLE_WEB_CLIENT_ID")))
+        // RevenueCat public SDK key for Google Play (starts with "goog_"). Blank keeps the
+        // browser checkout; set, the app sells through Play Billing instead.
+        buildConfigField("String", "REVENUECAT_API_KEY", buildConfigString(configValue("REVENUECAT_API_KEY")))
         buildConfigField("String", "STRIPE_PAYMENT_LINK", buildConfigString(stripePaymentLink))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", buildConfigString(stripePaymentLinkAnnual))
@@ -320,6 +323,7 @@ dependencies {
     implementation(libs.onnx.runtime)
     implementation(libs.play.asset.delivery)
     implementation(libs.play.review)
+    implementation(libs.revenuecat.purchases)
     implementation(libs.litert)
 
     // Debug

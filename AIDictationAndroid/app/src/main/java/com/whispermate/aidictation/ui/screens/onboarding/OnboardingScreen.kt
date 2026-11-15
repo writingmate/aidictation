@@ -230,7 +230,10 @@ fun OnboardingScreen(
     isSigningIn: Boolean = false,
     onSignInWithGoogle: (Context) -> Unit = {},
     paywallAvailable: Boolean = false,
-    onUpgrade: (PaymentPlan) -> Unit = {}
+    /** Store prices per plan when Pro is sold in the app; a missing plan shows the list price. */
+    planPrices: Map<PaymentPlan, String> = emptyMap(),
+    sellsInApp: Boolean = false,
+    onUpgrade: (PaymentPlan, Activity?) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -398,6 +401,7 @@ fun OnboardingScreen(
                     OnboardingStep.SignIn -> SignInStep(signedInEmail = signedInEmail)
                     OnboardingStep.Paywall -> PaywallStep(
                         selectedPlan = selectedPlan,
+                        planPrices = planPrices,
                         onSelectPlan = { selectedPlan = it }
                     )
                 }
@@ -454,7 +458,7 @@ fun OnboardingScreen(
             )
         } else if (currentOnboardingStep == OnboardingStep.Paywall) {
             Button(
-                onClick = { onUpgrade(selectedPlan) },
+                onClick = { onUpgrade(selectedPlan, context.findActivity()) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -470,7 +474,9 @@ fun OnboardingScreen(
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = stringResource(R.string.onboarding_paywall_refund),
+                text = stringResource(
+                    if (sellsInApp) R.string.onboarding_paywall_play_terms else R.string.onboarding_paywall_refund
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -1347,6 +1353,7 @@ private fun RatingRow(
 @Composable
 private fun PaywallStep(
     selectedPlan: PaymentPlan,
+    planPrices: Map<PaymentPlan, String>,
     onSelectPlan: (PaymentPlan) -> Unit
 ) {
     val colors = onboardingColors()
@@ -1375,15 +1382,20 @@ private fun PaywallStep(
 
         PlanChoiceCard(
             title = stringResource(R.string.onboarding_paywall_annual),
-            price = stringResource(R.string.onboarding_paywall_annual_price),
-            badge = stringResource(R.string.onboarding_paywall_annual_badge),
+            price = planPrices[PaymentPlan.Annual]
+                ?.let { stringResource(R.string.onboarding_paywall_price_annual, it) }
+                ?: stringResource(R.string.onboarding_paywall_annual_price),
+            // The saving is only known for the list prices.
+            badge = stringResource(R.string.onboarding_paywall_annual_badge).takeIf { planPrices.isEmpty() },
             selected = selectedPlan == PaymentPlan.Annual,
             onClick = { onSelectPlan(PaymentPlan.Annual) }
         )
         Spacer(modifier = Modifier.height(10.dp))
         PlanChoiceCard(
             title = stringResource(R.string.onboarding_paywall_monthly),
-            price = stringResource(R.string.onboarding_paywall_monthly_price),
+            price = planPrices[PaymentPlan.Monthly]
+                ?.let { stringResource(R.string.onboarding_paywall_price_monthly, it) }
+                ?: stringResource(R.string.onboarding_paywall_monthly_price),
             badge = null,
             selected = selectedPlan == PaymentPlan.Monthly,
             onClick = { onSelectPlan(PaymentPlan.Monthly) }

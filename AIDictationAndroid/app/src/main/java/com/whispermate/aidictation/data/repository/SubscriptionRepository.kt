@@ -1,6 +1,13 @@
 package com.whispermate.aidictation.data.repository
 
+import android.app.Activity
 import android.content.Context
+import android.widget.Toast
+import com.whispermate.aidictation.R
+import com.whispermate.aidictation.data.billing.PurchaseOutcome
+import com.whispermate.aidictation.data.billing.PurchasesManager
+import com.whispermate.aidictation.domain.model.SubscriptionTier
+import kotlinx.coroutines.withContext
 import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Intent
 import android.util.Log
@@ -31,25 +38,31 @@ class SubscriptionRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val appPreferences: AppPreferences,
     private val authRepository: AuthRepository,
-    private val recordingRepository: RecordingRepository
+    private val recordingRepository: RecordingRepository,
+    private val purchasesManager: PurchasesManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val usageDispatchMutex = Mutex()
 
     val usageStatus: StateFlow<UsageStatus> = combine(
         appPreferences.localUsage,
-        authRepository.authState
-    ) { localUsage, authState ->
+        authRepository.authState,
+        purchasesManager.hasProEntitlement
+    ) { localUsage, authState, hasProEntitlement ->
         val user = authState.user
         if (user == null) {
             UsageStatus(
                 used = localUsage.wordCount,
                 limit = FREE_TRIAL_WORD_LIMIT,
-                isPro = false,
-                isAuthenticated = false
+                // A Play purchase made without an account still unlocks this device.
+                isPro = hasProEntitlement,
+                isAuthenticated = false,
+                tierName = (if (hasProEntitlement) SubscriptionTier.Pro else SubscriptionTier.Free).displayName
             )
         } else {
-            val tier = user.subscriptionTier
+            // The account's plan (web checkout, lifetime codes) or an in-app purchase.
+            val tier = user.subscriptionTier.takeIf { it.isPaid }
+                ?: if (hasProEntitlement) SubscriptionTier.Pro else SubscriptionTier.Free
             UsageStatus(
                 used = user.monthlyWordCount,
                 limit = user.effectiveWordLimit,
@@ -95,6 +108,7 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun checkCanTranscribe(): Result<Unit> {
+        if (purchasesManager.hasProEntitlement.value) return Result.success(Unit)
         val user = authRepository.authState.value.user
         if (user != null) {
             if (user.subscriptionTier.isPaid || !user.hasReachedLimit) return Result.success(Unit)
@@ -183,11 +197,44 @@ class SubscriptionRepository @Inject constructor(
     suspend fun signInWithGoogle(activityContext: Context): Boolean =
         authRepository.signInWithGoogle(activityContext)
 
-    fun openUpgrade(plan: PaymentPlan? = null) {
-        authRepository.openUpgrade(context, plan)
+    /** Store-formatted prices for the plans sold in the app; empty with browser checkout. */
+    val planPrices: StateFlow<Map<PaymentPlan, String>> = purchasesManager.planPrices
+
+    /** Whether Pro is bought inside the app (Google Play) rather than in the browser. */
+    val sellsInApp: Boolean
+        get() = purchasesManager.isConfigured
+
+    /**
+     * Starts an upgrade to [plan]. With in-app purchases configured and an [activity] to
+     * show the Play sheet from, the purchase happens in the app; otherwise checkout opens
+     * in the browser.
+     */
+    fun openUpgrade(plan: PaymentPlan? = null, activity: Activity? = null) {
+        if (!purchasesManager.isConfigured || activity == null) {
+            authRepository.openUpgrade(context, plan)
+            return
+        }
+        scope.launch {
+            val outcome = withContext(Dispatchers.Main) {
+                purchasesManager.purchase(activity, plan ?: PaymentPlan.Annual)
+            }
+            if (outcome == PurchaseOutcome.Failed) showToast(R.string.purchase_failed)
+        }
     }
 
-    fun hasPaymentLinks(): Boolean = authRepository.hasPaymentLinks()
+    /** Re-reads the Play account's purchases, for a new phone or a reinstall. */
+    fun restorePurchases() {
+        scope.launch {
+            val restored = purchasesManager.restore()
+            showToast(if (restored) R.string.purchase_restored else R.string.purchase_nothing_to_restore)
+        }
+    }
+
+    fun hasPaymentLinks(): Boolean = purchasesManager.isConfigured || authRepository.hasPaymentLinks()
+
+    private suspend fun showToast(messageRes: Int) = withContext(Dispatchers.Main) {
+        Toast.makeText(context, messageRes, Toast.LENGTH_LONG).show()
+    }
 
     suspend fun signOut() {
         authRepository.signOut()

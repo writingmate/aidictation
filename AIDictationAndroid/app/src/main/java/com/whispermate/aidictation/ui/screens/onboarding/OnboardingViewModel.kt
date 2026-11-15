@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.UsageStatus
+import android.app.Activity
 import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Context
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,9 +66,17 @@ class OnboardingViewModel @Inject constructor(
     val hasPaymentLinks: Boolean
         get() = subscriptionRepository.hasPaymentLinks()
 
-    /** Opens Stripe checkout for [plan] in the browser; the user comes back to finish onboarding. */
-    fun openUpgrade(plan: PaymentPlan) {
-        subscriptionRepository.openUpgrade(plan)
+    val planPrices: StateFlow<Map<PaymentPlan, String>> = subscriptionRepository.planPrices
+
+    val sellsInApp: Boolean
+        get() = subscriptionRepository.sellsInApp
+
+    /**
+     * Buys [plan] in the app from [activity] when in-app purchases are configured, else
+     * opens checkout in the browser; either way the user comes back to finish onboarding.
+     */
+    fun openUpgrade(plan: PaymentPlan, activity: Activity?) {
+        subscriptionRepository.openUpgrade(plan, activity)
     }
 
     private val _isSigningIn = MutableStateFlow(false)

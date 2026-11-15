@@ -246,7 +246,12 @@ fun MainScreen(
                     null
                 },
                 onSignOut = { viewModel.signOut() },
-                onUpgrade = { viewModel.openUpgrade() },
+                onUpgrade = { viewModel.openUpgrade(context.findActivity()) },
+                onRestorePurchases = if (viewModel.sellsInApp) {
+                    { viewModel.restorePurchases() }
+                } else {
+                    null
+                },
                 modifier = Modifier.padding(paddingValues)
             )
         }

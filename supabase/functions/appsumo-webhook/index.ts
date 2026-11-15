@@ -274,7 +274,23 @@ serve(async (req) => {
             .select("id", { count: "exact", head: true })
             .eq("redeemed_by", userId);
 
-          if ((otherLicenses ?? 0) === 0 && (promoCodes ?? 0) === 0) {
+          // An in-app purchase (RevenueCat) on the same account keeps it paid.
+          const { data: storeProfile } = await supabaseClient
+            .from("profiles")
+            .select("revenuecat_expires_at")
+            .eq("user_id", userId)
+            .maybeSingle();
+          const storeActive = !!storeProfile?.revenuecat_expires_at &&
+            new Date(storeProfile.revenuecat_expires_at).getTime() > Date.now();
+
+          if (storeActive) {
+            await supabaseClient
+              .from("profiles")
+              .update({ subscription_status: "pro" })
+              .eq("user_id", userId);
+
+            logStep("User moved to pro (store subscription remains)", { userId });
+          } else if ((otherLicenses ?? 0) === 0 && (promoCodes ?? 0) === 0) {
             await supabaseClient
               .from("profiles")
               .update({ subscription_status: "free" })

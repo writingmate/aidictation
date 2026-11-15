@@ -68,6 +68,7 @@ runs, matching the local-developer layout described in
 | `AIDICTATION_POST_PROCESSING_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/chat/completions`. |
 | `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
 | `STRIPE_PAYMENT_LINK` | Optional default Stripe checkout link. |
+| `REVENUECAT_ANDROID_API_KEY` | Optional. RevenueCat public SDK key for the Google Play app (`goog_…`), written to `local.properties` as `REVENUECAT_API_KEY`. When set, Pro is sold in the app through Google Play Billing and the Stripe links are not used. |
 | `STRIPE_PAYMENT_LINK_MONTHLY` | Optional monthly checkout link. |
 | `STRIPE_PAYMENT_LINK_ANNUAL` | Optional annual checkout link. |
 | `STRIPE_PAYMENT_LINK_LIFETIME` | Optional lifetime checkout link. |
@@ -121,3 +122,17 @@ gh secret set ANDROID_KEY_PASSWORD      --repo writingmate/aidictation
 
 base64 -w0 google-play-service-account.json | gh secret set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64 --repo writingmate/aidictation
 ```
+
+## In-app purchases (RevenueCat)
+
+With `REVENUECAT_API_KEY` set, `PurchasesManager` sells Pro through Google Play Billing:
+
+- Entitlement identifier: `pro`.
+- The current offering's `$rc_monthly` and `$rc_annual` packages are the Monthly and
+  Annual plans on the paywall; their prices come from the store.
+- The signed-in account's user id is the RevenueCat app user id, so the
+  `supabase/functions/revenuecat-webhook` function can write the plan to that profile.
+  A purchase made before sign-in unlocks the device and moves to the account on sign-in.
+- Settings shows "Restore purchases" for a new phone or a reinstall.
+
+Without the key the app keeps the browser checkout and nothing else changes.

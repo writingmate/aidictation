@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
@@ -100,6 +101,7 @@ fun SettingsScreen(
     usageStatus: UsageStatus,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
+    onRestorePurchases: (() -> Unit)? = null,
     onSignInWithGoogle: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -147,7 +149,8 @@ fun SettingsScreen(
             usageStatus = usageStatus,
             onSignInWithGoogle = onSignInWithGoogle,
             onSignOut = onSignOut,
-            onUpgrade = onUpgrade
+            onUpgrade = onUpgrade,
+            onRestorePurchases = onRestorePurchases
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -383,7 +386,8 @@ private fun AccountSettingsSection(
     usageStatus: UsageStatus,
     onSignInWithGoogle: (() -> Unit)?,
     onSignOut: () -> Unit,
-    onUpgrade: () -> Unit
+    onUpgrade: () -> Unit,
+    onRestorePurchases: (() -> Unit)?
 ) {
     SectionHeader(stringResource(R.string.settings_account))
     Card(
@@ -427,6 +431,15 @@ private fun AccountSettingsSection(
             )
 
             SettingsRowGap()
+            if (onRestorePurchases != null) {
+                SettingsItem(
+                    icon = Icons.Default.Restore,
+                    title = stringResource(R.string.account_restore_purchases),
+                    onClick = onRestorePurchases
+                )
+
+                SettingsRowGap()
+            }
         }
 
         if (usageStatus.isAuthenticated) {

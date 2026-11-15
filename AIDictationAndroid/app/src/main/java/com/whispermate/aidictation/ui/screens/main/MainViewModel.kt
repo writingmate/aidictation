@@ -504,8 +504,16 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun openUpgrade() {
-        subscriptionRepository.openUpgrade()
+    val sellsInApp: Boolean
+        get() = subscriptionRepository.sellsInApp
+
+    /** [activity] hosts the Play purchase sheet when Pro is sold in the app. */
+    fun openUpgrade(activity: android.app.Activity?) {
+        subscriptionRepository.openUpgrade(activity = activity)
+    }
+
+    fun restorePurchases() {
+        subscriptionRepository.restorePurchases()
     }
 
     fun signOut() {

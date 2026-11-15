@@ -60,15 +60,22 @@ connection); a shortcut tap that arrives before the connection waits up to 5 s f
 (`OverlayServiceConnection`). `onInterrupt` changes nothing: it asks for spoken feedback
 to stop, the overlay gives none, and any app can send one.
 
-**Keyboard signal.** Two sources, in order of preference:
+**Dictation target.** Any enabled, non-password editable field with input focus counts,
+including an empty one showing its hint: every empty native field reports its hint and no
+caret. Only an address bar in that state is skipped (`isIdleHintOnlyField`), because
+Chrome's omnibox keeps reporting input focus while web page content is being edited. A
+keyboard that has just appeared also starts the short focus search, so a field that
+focused itself without a focus event is still found.
+
+**Keyboard signal.** Two sources; the keyboard counts as up when either reports it
+(`keyboardShowing`), so a source that misses the keyboard cannot hide the bubble:
 
 1. `KeyboardProbeWindow`: when "display over other apps" is granted, the service keeps
    a hidden 1 px-wide, full-height application overlay window. The window manager
    resizes it above the keyboard and (Android 11+) dispatches the keyboard insets to
    it, so keyboard show, hide and top edge arrive as layout events with no polling and
-   no accessibility round trips. The probe's reports are used only once it has seen the
-   keyboard at least once on the device, so it can never make things worse than the
-   fallback. Hides then use the normal 250 ms debounce.
+   no accessibility round trips. Its "hidden" reports count only once it has seen the
+   keyboard at least once on the device, and only shorten the hide debounce to 250 ms.
 2. The accessibility window list: an input-method window with non-empty bounds counts
    as a keyboard. Keyboards are never active or focused windows and many expose no
    accessibility tree (incognito and password modes, floating layouts, some third-party

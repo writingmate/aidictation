@@ -167,4 +167,26 @@ class OverlayRecordingPresentationTest {
         assertFalse(suppressionHidesBubble(suppressed = true, workflowActive = true))
         assertFalse(suppressionHidesBubble(suppressed = false, workflowActive = true))
     }
+
+    @Test
+    fun `an empty field showing its hint is a dictation target`() {
+        // Every empty native text field reports its hint and no caret.
+        assertFalse(isIdleHintOnlyField(showingHint = true, hasCaret = false, uriField = false))
+    }
+
+    @Test
+    fun `only an address bar showing its hint with no caret is skipped`() {
+        assertTrue(isIdleHintOnlyField(showingHint = true, hasCaret = false, uriField = true))
+        assertFalse(isIdleHintOnlyField(showingHint = true, hasCaret = true, uriField = true))
+        assertFalse(isIdleHintOnlyField(showingHint = false, hasCaret = false, uriField = true))
+    }
+
+    @Test
+    fun `neither keyboard signal can veto the other`() {
+        assertTrue(keyboardShowing(probeVisible = false, inputMethodWindowVisible = true))
+        assertTrue(keyboardShowing(probeVisible = true, inputMethodWindowVisible = false))
+        assertTrue(keyboardShowing(probeVisible = null, inputMethodWindowVisible = true))
+        assertFalse(keyboardShowing(probeVisible = false, inputMethodWindowVisible = false))
+        assertFalse(keyboardShowing(probeVisible = null, inputMethodWindowVisible = false))
+    }
 }

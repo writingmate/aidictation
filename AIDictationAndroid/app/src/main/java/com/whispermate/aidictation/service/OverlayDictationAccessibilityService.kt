@@ -133,6 +133,19 @@ internal fun keyboardShowing(probeVisible: Boolean?, inputMethodWindowVisible: B
 internal fun isIdleHintOnlyField(showingHint: Boolean, hasCaret: Boolean, uriField: Boolean): Boolean =
     showingHint && !hasCaret && uriField
 
+/**
+ * Whether a node is a field dictation can be written into: editable, enabled, not a
+ * password, and not an idle address bar. Visibility and focus flags are not checked; they
+ * are unreliable on foldable cover screens and while an overlay is starting up.
+ */
+internal fun AccessibilityNodeInfo.isDictationTarget(): Boolean {
+    if (!isEditable || !isEnabled || isPassword) return false
+    val hasCaret = textSelectionStart != -1 || textSelectionEnd != -1
+    val uriField = inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT &&
+        inputType and InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_URI
+    return !isIdleHintOnlyField(isShowingHintText, hasCaret, uriField)
+}
+
 internal fun shouldShowWandButton(
     recordingState: OverlayRecordingState,
     workflowActive: Boolean,
@@ -794,17 +807,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun isEligibleEditableNode(node: AccessibilityNodeInfo): Boolean {
-        if (!node.isEditable) return false
-        // isVisibleToUser and isFocused can be unreliable on foldable cover screens
-        // or when an overlay/routine is starting up.
-        if (!node.isEnabled) return false
-        if (node.isPassword) return false
-        val hasCaret = node.textSelectionStart != -1 || node.textSelectionEnd != -1
-        val uriField = node.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_TEXT &&
-            node.inputType and InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_URI
-        return !isIdleHintOnlyField(node.isShowingHintText, hasCaret, uriField)
-    }
+    private fun isEligibleEditableNode(node: AccessibilityNodeInfo): Boolean = node.isDictationTarget()
 
     private fun refreshNode(node: AccessibilityNodeInfo): Boolean {
         return try {

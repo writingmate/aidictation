@@ -64,7 +64,6 @@ import com.whispermate.aidictation.domain.model.PaymentPlan
 import com.whispermate.aidictation.review.ReviewPromptStore
 import com.whispermate.aidictation.review.findActivity
 import com.whispermate.aidictation.review.launchPlayReview
-import com.whispermate.aidictation.review.openPlayListing
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -88,6 +87,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.pluralStringResource
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -200,17 +202,50 @@ private fun OnboardingSmallIcon(
     SettingsIconTile(icon = icon, modifier = modifier)
 }
 
-private enum class OnboardingStep {
+/** How long the rating step is on screen before Play's card is requested. */
+private const val REVIEW_CARD_DELAY_MILLIS = 900L
+
+internal enum class OnboardingStep {
     Welcome,
     Languages,
     OnDeviceTranscription,
     Microphone,
     ButtonDemo,
-    OverlayPermissions,
     Review,
+    OverlayPermissions,
     SignIn,
     Paywall
 }
+
+/**
+ * The onboarding steps in order. The rating step exists only when the demo
+ * dictation produced text, and comes straight after it: that is the one moment
+ * the user has seen the app work, and nobody is asked to rate what they have
+ * not tried.
+ */
+internal fun onboardingStepOrder(
+    demoProducedText: Boolean,
+    signInAvailable: Boolean,
+    paywallAvailable: Boolean
+): List<OnboardingStep> = buildList {
+    add(OnboardingStep.Welcome)
+    add(OnboardingStep.Languages)
+    add(OnboardingStep.OnDeviceTranscription)
+    // Only the microphone before the demo; the overlay permissions come after
+    // the user has seen the floating mic, so they know what they are allowing.
+    add(OnboardingStep.Microphone)
+    add(OnboardingStep.ButtonDemo)
+    if (demoProducedText) add(OnboardingStep.Review)
+    add(OnboardingStep.OverlayPermissions)
+    // Last, once everything is authorised: sign in so the account follows the user.
+    if (signInAvailable) add(OnboardingStep.SignIn)
+    // The paywall closes onboarding; it drops out once the account is already Pro.
+    if (paywallAvailable) add(OnboardingStep.Paywall)
+}
+
+/** Words in the demo dictation, for the line under the quote on the rating step. */
+internal fun dictatedWordCount(text: String): Int =
+    text.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
 
 @Composable
 fun OnboardingScreen(
@@ -240,30 +275,17 @@ fun OnboardingScreen(
     var showAccessibilityDisclosure by remember { mutableStateOf(false) }
     var demoLaunchRequested by remember { mutableStateOf(false) }
     var onboardingReviewStarted by remember { mutableStateOf(false) }
-    var didOpenPlayListing by remember { mutableStateOf(false) }
+    // What the demo typed, kept after the demo state moves on: the rating step quotes it.
+    var demoDictation by remember { mutableStateOf<String?>(null) }
     val reviewPromptStore = remember { ReviewPromptStore(context.applicationContext) }
     val colors = onboardingColors()
 
     OnboardingSystemBars()
 
     var selectedPlan by remember { mutableStateOf(PaymentPlan.Annual) }
-    val onboardingSteps = remember(signInAvailable, paywallAvailable) {
-        buildList {
-            add(OnboardingStep.Welcome)
-            add(OnboardingStep.Languages)
-            add(OnboardingStep.OnDeviceTranscription)
-            // Only the microphone before the demo; the overlay permissions come after
-            // the user has seen the floating mic, so they know what they are allowing.
-            add(OnboardingStep.Microphone)
-            add(OnboardingStep.ButtonDemo)
-            add(OnboardingStep.OverlayPermissions)
-            // After setup, before account and plan: everyone sees the rating ask.
-            add(OnboardingStep.Review)
-            // Last, once everything is authorised: sign in so the account follows the user.
-            if (signInAvailable) add(OnboardingStep.SignIn)
-            // The paywall closes onboarding; it drops out once the account is already Pro.
-            if (paywallAvailable) add(OnboardingStep.Paywall)
-        }
+    val demoProducedText = demoDictation != null
+    val onboardingSteps = remember(demoProducedText, signInAvailable, paywallAvailable) {
+        onboardingStepOrder(demoProducedText, signInAvailable, paywallAvailable)
     }
     val isLastStep = currentStep >= onboardingSteps.lastIndex
     val currentOnboardingStep = onboardingSteps[currentStep.coerceAtMost(onboardingSteps.lastIndex)]
@@ -285,12 +307,24 @@ fun OnboardingScreen(
         }
     }
 
+    LaunchedEffect(demoState.resultText) {
+        demoState.resultText?.takeIf { it.isNotBlank() }?.let { demoDictation = it }
+    }
+
     LaunchedEffect(currentOnboardingStep) {
         if (currentOnboardingStep != OnboardingStep.Review || onboardingReviewStarted) return@LaunchedEffect
         val activity = context.findActivity() ?: return@LaunchedEffect
         onboardingReviewStarted = true
-        if (!reviewPromptStore.beginOnboardingPrompt()) return@LaunchedEffect
-        launchPlayReview(activity)
+        // Let the step be read first; Play's card then arrives on its own. No button
+        // opens it: Play may decline to show it, and a button would then do nothing.
+        delay(REVIEW_CARD_DELAY_MILLIS)
+        if (!reviewPromptStore.tryBeginOnboardingPrompt()) return@LaunchedEffect
+        try {
+            reviewPromptStore.finishPrompt(launchPlayReview(activity))
+        } catch (cancelled: CancellationException) {
+            reviewPromptStore.abandonPrompt()
+            throw cancelled
+        }
     }
 
     LaunchedEffect(onboardingSteps.size) {
@@ -394,7 +428,7 @@ fun OnboardingScreen(
                         onStopRecording = onStopDemoRecording,
                         onCancelRecording = onCancelDemoRecording
                     )
-                    OnboardingStep.Review -> ReviewStep()
+                    OnboardingStep.Review -> ReviewStep(dictation = demoDictation.orEmpty())
                     OnboardingStep.SignIn -> SignInStep(signedInEmail = signedInEmail)
                     OnboardingStep.Paywall -> PaywallStep(
                         selectedPlan = selectedPlan,
@@ -482,41 +516,6 @@ fun OnboardingScreen(
             ) {
                 Text(stringResource(R.string.onboarding_paywall_continue_free))
             }
-        } else if (currentOnboardingStep == OnboardingStep.Review) {
-            Button(
-                onClick = {
-                    if (didOpenPlayListing) {
-                        if (isLastStep) finishOnboarding() else goToNextStep()
-                    } else {
-                        didOpenPlayListing = true
-                        openPlayListing(context)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colors.primary,
-                    contentColor = colors.onPrimary
-                )
-            ) {
-                Text(
-                    text = stringResource(
-                        if (didOpenPlayListing) {
-                            if (isLastStep) R.string.onboarding_get_started else R.string.onboarding_continue
-                        } else {
-                            R.string.settings_rate
-                        }
-                    ),
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-            TextButton(
-                onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.onboarding_rate_not_now))
-            }
         } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
             // The Google button is the one action here; finishing without an account stays possible.
             GoogleSignInButton(
@@ -575,7 +574,9 @@ private fun permissionsHintText(state: PermissionsState): Int = when (permission
 }
 
 @Composable
-private fun ReviewStep() {
+private fun ReviewStep(dictation: String) {
+    val colors = onboardingColors()
+    val wordCount = dictatedWordCount(dictation)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         OnboardingHeroIcon(icon = Icons.Default.Star)
 
@@ -596,6 +597,31 @@ private fun ReviewStep() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // The proof is the user's own result, not a claim about other people.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 18.dp, vertical = 16.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.onboarding_rate_quote, dictation.trim()),
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.onSurface,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = pluralStringResource(R.plurals.onboarding_rate_words, wordCount, wordCount),
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.onSurfaceVariant
+            )
+        }
     }
 }
 

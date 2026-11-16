@@ -1,5 +1,4 @@
 import AVFoundation
-import StoreKit
 import SwiftUI
 import WhisperMateShared
 
@@ -10,14 +9,11 @@ struct OnboardingView: View {
     @State private var refreshTrigger = false
     @State private var lastStep: OnboardingStep
     @State private var errorDialog: OnboardingErrorDialog?
-    @State private var didRequestOnboardingReview = false
-    @State private var didOpenWriteReview = false
 
     enum OnboardingStep {
         case welcome
         case microphone
         case keyboardSetup
-        case rate
 
         static var initialStep: OnboardingStep {
             #if DEBUG
@@ -33,7 +29,6 @@ struct OnboardingView: View {
             case .welcome: return "waveform"
             case .microphone: return "mic.fill"
             case .keyboardSetup: return "keyboard"
-            case .rate: return "star.fill"
             }
         }
 
@@ -42,7 +37,6 @@ struct OnboardingView: View {
             case .welcome: return 44
             case .microphone: return 40
             case .keyboardSetup: return 38
-            case .rate: return 40
             }
         }
 
@@ -51,7 +45,6 @@ struct OnboardingView: View {
             case .welcome: return 0
             case .microphone: return 1
             case .keyboardSetup: return 2
-            case .rate: return 3
             }
         }
     }
@@ -111,10 +104,6 @@ struct OnboardingView: View {
             } else {
                 stopMicrophoneCheck()
             }
-
-            if newStep == .rate {
-                requestOnboardingReview()
-            }
         }
     }
 
@@ -141,8 +130,6 @@ struct OnboardingView: View {
             microphoneStep
         case .keyboardSetup:
             keyboardSetupStep
-        case .rate:
-            rateStep
         }
     }
 
@@ -269,29 +256,6 @@ struct OnboardingView: View {
         .padding(.top, 8)
     }
 
-    private var rateStep: some View {
-        VStack(spacing: 20) {
-            VStack(spacing: 10) {
-                Text("Rate AI Dictation")
-                    .font(.system(size: 28, weight: .bold))
-                    .multilineTextAlignment(.center)
-
-                Text("A rating helps other people find voice dictation.")
-                    .font(.system(size: 16))
-                    .lineSpacing(2)
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 4)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 10)
-        .onAppear {
-            requestOnboardingReview()
-        }
-    }
-
     @ViewBuilder
     private var bottomButton: some View {
         VStack(spacing: 8) {
@@ -301,16 +265,6 @@ struct OnboardingView: View {
                         .id(bottomButtonTitle)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
-            }
-
-            if currentStep == .rate {
-                Button("Not now") {
-                    onboardingManager.completeOnboarding()
-                }
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
             }
         }
     }
@@ -322,9 +276,7 @@ struct OnboardingView: View {
         case .microphone:
             return microphoneButtonTitle
         case .keyboardSetup:
-            return "Continue"
-        case .rate:
-            return didOpenWriteReview ? "Get Started" : "Rate AI Dictation"
+            return "Get Started"
         }
     }
 
@@ -345,15 +297,8 @@ struct OnboardingView: View {
                 requestMicrophonePermission()
             }
         case .keyboardSetup:
-            advance(to: .rate)
-        case .rate:
-            if didOpenWriteReview {
-                onboardingManager.completeOnboarding()
-            } else {
-                requestOnboardingReview()
-                didOpenWriteReview = true
-                openWriteReview()
-            }
+            // No rating ask here: people rate after they have used dictation, not before.
+            onboardingManager.completeOnboarding()
         }
     }
 
@@ -426,29 +371,6 @@ struct OnboardingView: View {
 
     private func openKeyboardSettings() {
         openAppSettings()
-    }
-
-    private func openWriteReview() {
-        guard let url = URL(string: "https://apps.apple.com/app/id6754910103?action=write-review") else { return }
-        UIApplication.shared.open(url)
-    }
-
-    private func requestOnboardingReview() {
-        guard !didRequestOnboardingReview else { return }
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else {
-            return
-        }
-        guard ReviewPromptStore.beginOnboardingReview() else {
-            didRequestOnboardingReview = true
-            return
-        }
-        didRequestOnboardingReview = true
-        if #available(iOS 18.0, *) {
-            AppStore.requestReview(in: scene)
-        } else {
-            SKStoreReviewController.requestReview(in: scene)
-        }
     }
 
     private func openAppSettings() {

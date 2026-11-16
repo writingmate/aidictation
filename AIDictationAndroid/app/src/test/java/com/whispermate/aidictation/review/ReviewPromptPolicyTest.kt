@@ -104,4 +104,23 @@ class ReviewPromptPolicyTest {
     private fun note(record: ReviewPromptRecord, text: String, at: Long): ReviewPromptRecord {
         return ReviewPromptPolicy.notingDictation(record, text, at, zone)
     }
+
+    @Test
+    fun onboardingMayAskOnceTheFirstDictationWorkedWithoutUsageThresholds() {
+        assertTrue(ReviewPromptPolicy.mayAskDuringOnboarding(ReviewPromptRecord(), atMillis = 1_700_000_000_000L))
+    }
+
+    @Test
+    fun onboardingRespectsTheCooldownAndTheAttemptCap() {
+        val asked = 1_700_000_000_000L
+        val recent = ReviewPromptPolicy.notingPromptAttempt(ReviewPromptRecord(), asked)
+
+        assertFalse(ReviewPromptPolicy.mayAskDuringOnboarding(recent, asked + ReviewPromptPolicy.cooldownMillis - 1))
+        assertTrue(ReviewPromptPolicy.mayAskDuringOnboarding(recent, asked + ReviewPromptPolicy.cooldownMillis))
+
+        val exhausted = recent.copy(promptAttempts = ReviewPromptPolicy.maximumPromptAttempts)
+        assertFalse(
+            ReviewPromptPolicy.mayAskDuringOnboarding(exhausted, asked + 10 * ReviewPromptPolicy.cooldownMillis)
+        )
+    }
 }

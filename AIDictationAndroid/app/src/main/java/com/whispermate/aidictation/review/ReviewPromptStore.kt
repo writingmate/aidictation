@@ -61,18 +61,16 @@ class ReviewPromptStore @Inject constructor(
     }
 
     /**
-     * The onboarding step always shows the ask. This only decides whether the
-     * Play dialog may be presented again, and records that it was.
+     * Claims the Play card for the onboarding rating step. Follow with
+     * [finishPrompt], which records an attempt only if Play started its flow, or
+     * [abandonPrompt] if the step went away first.
      */
-    fun beginOnboardingPrompt(atMillis: Long = System.currentTimeMillis()): Boolean {
+    fun tryBeginOnboardingPrompt(atMillis: Long = System.currentTimeMillis()): Boolean {
+        if (unavailableThisProcess) return false
         synchronized(lock) {
-            val record = loadLocked()
-            if (record.promptAttempts >= ReviewPromptPolicy.maximumPromptAttempts) return false
-            val lastPrompt = record.lastPromptAttemptAtMillis
-            if (lastPrompt != null && atMillis - lastPrompt < ReviewPromptPolicy.cooldownMillis) {
-                return false
-            }
-            saveLocked(ReviewPromptPolicy.notingPromptAttempt(record, atMillis))
+            if (launchInProgress) return false
+            if (!ReviewPromptPolicy.mayAskDuringOnboarding(loadLocked(), atMillis)) return false
+            launchInProgress = true
             return true
         }
     }

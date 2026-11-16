@@ -74,6 +74,17 @@ object ReviewPromptPolicy {
         )
     }
 
+    /**
+     * Whether the onboarding rating step may ask Play for its card. The step only
+     * exists once the first dictation has worked, so the usage thresholds do not
+     * apply; the attempt cap and the cooldown still do.
+     */
+    fun mayAskDuringOnboarding(record: ReviewPromptRecord, atMillis: Long): Boolean {
+        if (record.promptAttempts >= maximumPromptAttempts) return false
+        val lastPrompt = record.lastPromptAttemptAtMillis
+        return lastPrompt == null || atMillis - lastPrompt >= cooldownMillis
+    }
+
     fun shouldRequestReview(
         record: ReviewPromptRecord,
         atMillis: Long,

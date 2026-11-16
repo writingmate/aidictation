@@ -413,56 +413,55 @@ private fun AccountSettingsSection(
 
         UsageSummary(usageStatus = usageStatus)
 
-        // Google is the only way in. Upgrading needs an account, so an anonymous user
-        // sees the Google button where a signed-in free user sees Upgrade. The button
-        // is the card's last element and carries its own outline, so no rule around it.
-        if (!usageStatus.isAuthenticated) {
-            if (onSignInWithGoogle != null) {
-                GoogleSignInButton(
-                    onClick = onSignInWithGoogle,
+        // The Google button is the card's last element and carries its own outline, so it
+        // gets padding where the other rows get a rule.
+        accountActions(
+            usageStatus = usageStatus,
+            sellsInApp = onRestorePurchases != null,
+            canSignIn = onSignInWithGoogle != null
+        ).forEach { action ->
+            when (action) {
+                AccountAction.Upgrade -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.Default.AutoAwesome,
+                        title = stringResource(R.string.account_upgrade),
+                        onClick = onUpgrade,
+                        iconTint = MaterialTheme.colorScheme.primary,
+                        titleColor = MaterialTheme.colorScheme.primary
+                    )
+                }
+                AccountAction.RestorePurchases -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.Default.Restore,
+                        title = stringResource(R.string.account_restore_purchases),
+                        onClick = { onRestorePurchases?.invoke() }
+                    )
+                }
+                AccountAction.ManagePurchase -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.Default.ManageAccounts,
+                        title = stringResource(R.string.account_manage_purchase),
+                        onClick = { onManagePurchase?.invoke() }
+                    )
+                }
+                AccountAction.SignIn -> GoogleSignInButton(
+                    onClick = { onSignInWithGoogle?.invoke() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
+                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)
                 )
+                AccountAction.SignOut -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.AutoMirrored.Filled.Logout,
+                        title = stringResource(R.string.account_sign_out),
+                        onClick = onSignOut
+                    )
+                }
             }
-        } else if (!usageStatus.isPro) {
-            SettingsRowGap()
-            SettingsItem(
-                icon = Icons.Default.AutoAwesome,
-                title = stringResource(R.string.account_upgrade),
-                onClick = onUpgrade,
-                iconTint = MaterialTheme.colorScheme.primary,
-                titleColor = MaterialTheme.colorScheme.primary
-            )
-
-            SettingsRowGap()
-            if (onRestorePurchases != null) {
-                SettingsItem(
-                    icon = Icons.Default.Restore,
-                    title = stringResource(R.string.account_restore_purchases),
-                    onClick = onRestorePurchases
-                )
-
-                SettingsRowGap()
-            }
-        }
-
-        if (onManagePurchase != null) {
-            SettingsRowGap()
-            SettingsItem(
-                icon = Icons.Default.ManageAccounts,
-                title = stringResource(R.string.account_manage_purchase),
-                onClick = onManagePurchase
-            )
-        }
-
-        if (usageStatus.isAuthenticated) {
-            if (usageStatus.isPro) SettingsRowGap()
-            SettingsItem(
-                icon = Icons.AutoMirrored.Filled.Logout,
-                title = stringResource(R.string.account_sign_out),
-                onClick = onSignOut
-            )
         }
     }
 }

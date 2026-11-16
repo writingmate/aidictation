@@ -11,7 +11,6 @@ class SubscriptionPlanRulesTest {
     @Test
     fun storePurchaseUnlocksAnAccountWithNoPlan() {
         assertEquals(SubscriptionTier.Pro, effectiveTier(SubscriptionTier.Free, SubscriptionTier.Pro))
-        assertEquals(SubscriptionTier.Lifetime, effectiveTier(SubscriptionTier.Free, SubscriptionTier.Lifetime))
         assertEquals(SubscriptionTier.Free, effectiveTier(SubscriptionTier.Free, SubscriptionTier.Free))
     }
 
@@ -22,8 +21,7 @@ class SubscriptionPlanRulesTest {
     }
 
     @Test
-    fun lifetimeOutranksASubscriptionFromEitherSide() {
-        assertEquals(SubscriptionTier.Lifetime, effectiveTier(SubscriptionTier.Pro, SubscriptionTier.Lifetime))
+    fun accountLifetimeStandsBesideAStoreSubscription() {
         assertEquals(SubscriptionTier.Lifetime, effectiveTier(SubscriptionTier.Lifetime, SubscriptionTier.Pro))
     }
 

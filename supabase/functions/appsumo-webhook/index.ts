@@ -1,7 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
 import { tierToSeats } from "../_shared/appsumo-tiers.ts";
-import { isLifetimeProduct } from "../_shared/revenuecat-plan.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -278,15 +277,13 @@ serve(async (req) => {
           // An in-app purchase (RevenueCat) on the same account keeps it paid.
           const { data: storeProfile } = await supabaseClient
             .from("profiles")
-            .select("revenuecat_expires_at, revenuecat_product_id")
+            .select("revenuecat_expires_at")
             .eq("user_id", userId)
             .maybeSingle();
           const storeActive = !!storeProfile?.revenuecat_expires_at &&
             new Date(storeProfile.revenuecat_expires_at).getTime() > Date.now();
 
-          if (isLifetimeProduct(storeProfile?.revenuecat_product_id)) {
-            logStep("User keeps lifetime (store purchase remains)", { userId });
-          } else if (storeActive) {
+          if (storeActive) {
             await supabaseClient
               .from("profiles")
               .update({ subscription_status: "pro" })

@@ -229,7 +229,11 @@ class SubscriptionRepository @Inject constructor(
             val outcome = withContext(Dispatchers.Main) {
                 purchasesManager.purchase(activity, plan)
             }
-            if (outcome == PurchaseOutcome.Failed) showToast(R.string.purchase_failed)
+            when (outcome) {
+                PurchaseOutcome.Failed -> showToast(R.string.purchase_failed)
+                PurchaseOutcome.Unconfirmed -> showToast(R.string.purchase_unconfirmed)
+                PurchaseOutcome.Purchased, PurchaseOutcome.Cancelled -> Unit
+            }
         }
     }
 
@@ -275,16 +279,11 @@ class SubscriptionRepository @Inject constructor(
 }
 
 /**
- * The plan shown for an account: its own paid plan (web checkout, lifetime codes) unless
- * the store holds a higher one, and the store's plan when the account has none.
+ * The plan shown for an account: its own paid plan (web checkout, lifetime codes), and the
+ * store subscription when the account has none.
  */
 internal fun effectiveTier(accountTier: SubscriptionTier, storeTier: SubscriptionTier): SubscriptionTier =
-    when {
-        accountTier == SubscriptionTier.Lifetime || storeTier == SubscriptionTier.Lifetime ->
-            SubscriptionTier.Lifetime
-        accountTier.isPaid -> accountTier
-        else -> storeTier
-    }
+    if (accountTier.isPaid) accountTier else storeTier
 
 /** The RevenueCat paywall answers a word-limit block, and only when Pro is sold in the app. */
 internal fun shouldOfferPaywall(error: Throwable, sellsInApp: Boolean): Boolean =

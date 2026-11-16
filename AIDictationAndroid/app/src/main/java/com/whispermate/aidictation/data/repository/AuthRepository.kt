@@ -608,7 +608,7 @@ class AuthRepository @Inject constructor(
     private fun paymentLinkFor(plan: PaymentPlan?): String = when (plan) {
         PaymentPlan.Monthly -> BuildConfig.STRIPE_PAYMENT_LINK_MONTHLY
         PaymentPlan.Annual -> BuildConfig.STRIPE_PAYMENT_LINK_ANNUAL
-        PaymentPlan.Lifetime, null -> ""
+        null -> ""
     }
 
     private fun preferredPaymentLink(): String {

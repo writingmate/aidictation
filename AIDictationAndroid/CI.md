@@ -129,18 +129,17 @@ With `REVENUECAT_API_KEY` set, `PurchasesManager` sells Pro through RevenueCat
 (SDK 11.x, `purchases` and `purchases-ui`):
 
 - Entitlement identifier: `pro`.
-- Products: `monthly`, `yearly` (subscriptions) and `lifetime` (one-time purchase). The
-  current offering's `$rc_monthly`, `$rc_annual` and `$rc_lifetime` packages are used; a
-  package in a custom slot is found by its product id.
+- Products: `monthly` and `yearly` subscriptions. The current offering's `$rc_monthly`
+  and `$rc_annual` packages are used; a package in a custom slot is found by its
+  product id.
 - The onboarding paywall step shows the plans with store prices. Settings "Upgrade to Pro"
   and a dictation blocked by the word limit open the RevenueCat paywall for the current
   offering (design it in the RevenueCat dashboard).
-- Settings shows "Restore purchases", and "Manage purchase" (RevenueCat Customer
+- Settings shows "Restore purchases", and "Manage subscription" (RevenueCat Customer
   Center) once the store entitlement is active.
 - The signed-in account's user id is the RevenueCat app user id, so the
-  `supabase/functions/revenuecat-webhook` function can write the plan to that profile:
-  `pro` for a subscription, `lifetime` for the one-time purchase. A purchase made before
-  sign-in unlocks the device and moves to the account on sign-in.
+  `supabase/functions/revenuecat-webhook` function can write the plan to that profile.
+  A purchase made before sign-in unlocks the device and moves to the account on sign-in.
 - A Test Store key (`test_...`) is for debug builds. Release builds drop it at build time
   (`verifyReleaseRevenueCatKey` fails the build if one gets through) and keep the browser
   checkout, because the SDK refuses to start with a Test Store key outside a debuggable build.

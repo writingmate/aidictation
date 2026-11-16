@@ -2,11 +2,8 @@ package com.whispermate.aidictation.domain.model
 
 const val FREE_TRIAL_WORD_LIMIT = 5_000
 
-/**
- * A way to pay for Pro. Monthly and Annual are subscriptions; Lifetime is a one-time
- * purchase, sold only in the app (it has no browser checkout link).
- */
-enum class PaymentPlan { Monthly, Annual, Lifetime }
+/** A Pro subscription the app can sell: in the app's store, or through a Stripe payment link. */
+enum class PaymentPlan { Monthly, Annual }
 
 /** Dictation is blocked because the free word allowance is used up. */
 class WordLimitReachedException(message: String) : Exception(message)

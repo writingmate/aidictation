@@ -454,7 +454,6 @@ private fun AccountSettingsSection(
                 title = stringResource(R.string.account_manage_purchase),
                 onClick = onManagePurchase
             )
-            if (!usageStatus.isAuthenticated) SettingsRowGap()
         }
 
         if (usageStatus.isAuthenticated) {
@@ -532,10 +531,10 @@ private fun UsageSummary(usageStatus: UsageStatus) {
         )
 
         Text(
-            text = if (usageStatus.isAuthenticated) {
-                stringResource(R.string.account_authenticated_hint)
-            } else {
-                stringResource(R.string.account_anonymous_hint)
+            text = when {
+                usageStatus.isAuthenticated -> stringResource(R.string.account_authenticated_hint)
+                usageStatus.isPro -> stringResource(R.string.account_anonymous_pro_hint)
+                else -> stringResource(R.string.account_anonymous_hint)
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant

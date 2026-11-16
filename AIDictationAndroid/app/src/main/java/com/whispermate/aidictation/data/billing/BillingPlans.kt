@@ -1,7 +1,6 @@
 package com.whispermate.aidictation.data.billing
 
 import com.whispermate.aidictation.domain.model.PaymentPlan
-import com.whispermate.aidictation.domain.model.SubscriptionTier
 
 /** The RevenueCat entitlement that unlocks unlimited dictation. */
 const val PRO_ENTITLEMENT = "pro"
@@ -14,7 +13,6 @@ val PaymentPlan.storeProductId: String
     get() = when (this) {
         PaymentPlan.Monthly -> "monthly"
         PaymentPlan.Annual -> "yearly"
-        PaymentPlan.Lifetime -> "lifetime"
     }
 
 /**
@@ -43,14 +41,3 @@ fun <T> packageForPlan(
     packages: List<T>,
     productIdOf: (T) -> String
 ): T? = standardSlot ?: packages.firstOrNull { isProductForPlan(productIdOf(it), plan) }
-
-/**
- * The plan a `pro` entitlement stands for. A one-time Lifetime purchase never expires;
- * a subscription always carries an expiry date.
- */
-fun storeTier(isActive: Boolean, productId: String?, hasExpiry: Boolean): SubscriptionTier = when {
-    !isActive -> SubscriptionTier.Free
-    !hasExpiry || (productId != null && isProductForPlan(productId, PaymentPlan.Lifetime)) ->
-        SubscriptionTier.Lifetime
-    else -> SubscriptionTier.Pro
-}

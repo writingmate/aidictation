@@ -10,6 +10,7 @@ import com.revenuecat.purchases.Package
 import com.revenuecat.purchases.PurchaseParams
 import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
+import com.revenuecat.purchases.PurchasesErrorCode
 import com.revenuecat.purchases.PurchasesTransactionException
 import com.revenuecat.purchases.awaitCustomerInfo
 import com.revenuecat.purchases.awaitLogIn
@@ -36,8 +37,12 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
-/** How an in-app purchase attempt ended. */
-enum class PurchaseOutcome { Purchased, Cancelled, Failed }
+/**
+ * How an in-app purchase attempt ended. Unconfirmed means the connection dropped before
+ * the result was known: the store may have taken the payment, and the entitlement then
+ * arrives on its own once the device is back online.
+ */
+enum class PurchaseOutcome { Purchased, Cancelled, Unconfirmed, Failed }
 
 /**
  * Manages in-app purchases through RevenueCat: the Pro entitlement, the plans on offer
@@ -59,10 +64,7 @@ class PurchasesManager @Inject constructor(
     /** Whether this build can sell in the app at all. */
     val isConfigured: Boolean = apiKey.isNotBlank()
 
-    /**
-     * The plan the store account or signed-in user holds through the `pro` entitlement:
-     * Pro for a subscription, Lifetime for the one-time purchase, Free for neither.
-     */
+    /** Pro while the store account or signed-in user holds the `pro` entitlement, else Free. */
     val storeTier: StateFlow<SubscriptionTier> = _storeTier.asStateFlow()
 
     /** Store-formatted price per plan, for the plans the current offering contains. */
@@ -97,11 +99,11 @@ class PurchasesManager @Inject constructor(
             scope.launch { authRepository.refreshUser() }
             PurchaseOutcome.Purchased
         } catch (e: PurchasesTransactionException) {
-            if (e.userCancelled) {
-                PurchaseOutcome.Cancelled
-            } else {
-                Log.w(TAG, "Purchase failed: ${e.message}")
-                PurchaseOutcome.Failed
+            Log.w(TAG, "Purchase did not complete: ${e.message}")
+            when {
+                e.userCancelled -> PurchaseOutcome.Cancelled
+                e.code == PurchasesErrorCode.NetworkError -> PurchaseOutcome.Unconfirmed
+                else -> PurchaseOutcome.Failed
             }
         } catch (e: Exception) {
             Log.w(TAG, "Purchase failed", e)
@@ -167,12 +169,8 @@ class PurchasesManager @Inject constructor(
     }
 
     private fun onCustomerInfo(info: CustomerInfo) {
-        val entitlement = info.entitlements[PRO_ENTITLEMENT]
-        _storeTier.value = storeTier(
-            isActive = entitlement?.isActive == true,
-            productId = entitlement?.productIdentifier,
-            hasExpiry = entitlement?.expirationDate != null
-        )
+        val active = info.entitlements[PRO_ENTITLEMENT]?.isActive == true
+        _storeTier.value = if (active) SubscriptionTier.Pro else SubscriptionTier.Free
     }
 
     private fun onOfferings(loaded: Offerings) {
@@ -190,7 +188,6 @@ class PurchasesManager @Inject constructor(
         standardSlot = when (plan) {
             PaymentPlan.Monthly -> monthly
             PaymentPlan.Annual -> annual
-            PaymentPlan.Lifetime -> lifetime
         },
         packages = availablePackages,
         productIdOf = { it.product.id }

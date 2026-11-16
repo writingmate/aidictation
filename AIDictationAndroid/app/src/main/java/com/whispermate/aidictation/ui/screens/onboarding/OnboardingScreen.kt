@@ -76,6 +76,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -326,6 +327,16 @@ fun OnboardingScreen(
     fun finishOnboarding() {
         onSaveContextRules(contextRulesEnabled.toList())
         onComplete()
+    }
+
+    // The paywall leaves the step list once the account is Pro. When that happens while the
+    // user is on it, they have just bought: onboarding is over, not back at an earlier step.
+    val reachedPaywall = remember { booleanArrayOf(false) }
+    SideEffect {
+        if (currentOnboardingStep == OnboardingStep.Paywall) reachedPaywall[0] = true
+    }
+    LaunchedEffect(paywallAvailable) {
+        if (!paywallAvailable && reachedPaywall[0]) finishOnboarding()
     }
 
     Column(

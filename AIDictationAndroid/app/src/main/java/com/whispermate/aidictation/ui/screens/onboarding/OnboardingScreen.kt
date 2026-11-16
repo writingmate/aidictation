@@ -307,8 +307,8 @@ fun OnboardingScreen(
         }
     }
 
-    LaunchedEffect(demoState.resultText) {
-        demoState.resultText?.takeIf { it.isNotBlank() }?.let { demoDictation = it }
+    LaunchedEffect(demoState.dictatedText) {
+        demoState.dictatedText?.let { demoDictation = it }
     }
 
     LaunchedEffect(currentOnboardingStep) {

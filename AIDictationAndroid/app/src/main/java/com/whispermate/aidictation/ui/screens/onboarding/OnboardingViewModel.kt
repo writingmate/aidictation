@@ -41,6 +41,8 @@ data class OnboardingDemoUiState(
     val isRecording: Boolean = false,
     val isProcessing: Boolean = false,
     val resultText: String? = null,
+    /** What the demo actually transcribed; null when [resultText] is only a retry hint. */
+    val dictatedText: String? = null,
     val errorMessage: String? = null,
     val audioLevel: Float = 0f,
     val frequencyBands: FloatArray = FloatArray(6)
@@ -333,7 +335,10 @@ class OnboardingViewModel @Inject constructor(
             demoCaptureLease = null
             _demoState.value = result.fold(
                 onSuccess = { processed ->
-                    OnboardingDemoUiState(resultText = processed.text.ifBlank { "I did not catch that. Try again." })
+                    OnboardingDemoUiState(
+                        resultText = processed.text.ifBlank { "I did not catch that. Try again." },
+                        dictatedText = processed.text.takeIf { it.isNotBlank() }
+                    )
                 },
                 onFailure = { error ->
                     OnboardingDemoUiState(errorMessage = error.message ?: "Transcription failed. Try again.")

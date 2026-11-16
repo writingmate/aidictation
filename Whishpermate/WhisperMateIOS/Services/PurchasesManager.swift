@@ -79,9 +79,10 @@ final class PurchasesManager: ObservableObject {
         observeAccount()
     }
 
-    /// Whether there is a paywall to show: purchases are on and Pro is not yet active.
+    /// Whether there is a paywall to show: purchases are on, Pro is not yet active, and the
+    /// account is not already paid (Pro or an existing Lifetime plan).
     var canShowPaywall: Bool {
-        isConfigured && !isProActive
+        isConfigured && !isProActive && authManager.currentUser?.subscriptionTier.isPaid != true
     }
 
     /// Asks the main screen for the paywall after dictation was blocked by the word limit.

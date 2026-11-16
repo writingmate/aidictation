@@ -90,6 +90,7 @@ fun MainScreen(
     val cleanupEnabled by viewModel.postProcessingEnabled.collectAsState()
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
+    val sellsInApp by viewModel.sellsInApp.collectAsState()
     val context = LocalContext.current
     // RevenueCat's Customer Center: manage, cancel or ask for a refund of a store purchase.
     val customerCenterLauncher = rememberLauncherForActivityResult(ShowCustomerCenter()) {
@@ -253,12 +254,12 @@ fun MainScreen(
                 },
                 onSignOut = { viewModel.signOut() },
                 onUpgrade = { viewModel.openUpgrade() },
-                onRestorePurchases = if (viewModel.sellsInApp) {
+                onRestorePurchases = if (sellsInApp) {
                     { viewModel.restorePurchases() }
                 } else {
                     null
                 },
-                onManagePurchase = if (viewModel.sellsInApp && usageStatus.hasStorePurchase) {
+                onManagePurchase = if (usageStatus.hasStorePurchase) {
                     { customerCenterLauncher.launch(Unit) }
                 } else {
                     null

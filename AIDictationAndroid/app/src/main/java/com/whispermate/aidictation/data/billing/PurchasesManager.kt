@@ -29,6 +29,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,8 +62,16 @@ class PurchasesManager @Inject constructor(
     private val _storeTier = MutableStateFlow(SubscriptionTier.Free)
     private val _planPrices = MutableStateFlow<Map<PaymentPlan, String>>(emptyMap())
 
-    /** Whether this build can sell in the app at all. */
+    private val _canSell = MutableStateFlow(false)
+
+    /** Whether this build has a usable RevenueCat key. Having one does not mean it can sell. */
     val isConfigured: Boolean = apiKey.isNotBlank()
+
+    /**
+     * Whether Pro can be bought in the app right now: configured, and the current offering
+     * has a plan the store can sell. False keeps the browser checkout.
+     */
+    val canSell: StateFlow<Boolean> = _canSell.asStateFlow()
 
     /** Pro while the store account or signed-in user holds the `pro` entitlement, else Free. */
     val storeTier: StateFlow<SubscriptionTier> = _storeTier.asStateFlow()
@@ -143,9 +152,16 @@ class PurchasesManager @Inject constructor(
         Purchases.sharedInstance.updatedCustomerInfoListener =
             UpdatedCustomerInfoListener { info -> onCustomerInfo(info) }
 
+        // Offerings decide whether the app can sell at all, so a failed load is retried.
         scope.launch {
-            runCatching { onOfferings(Purchases.sharedInstance.awaitOfferings()) }
-                .onFailure { Log.w(TAG, "Could not load offerings", it) }
+            for (retryDelayMs in OFFERINGS_RETRY_DELAYS_MS) {
+                delay(retryDelayMs)
+                val loaded = runCatching { Purchases.sharedInstance.awaitOfferings() }
+                    .onFailure { Log.w(TAG, "Could not load offerings", it) }
+                    .getOrNull() ?: continue
+                onOfferings(loaded)
+                break
+            }
         }
         // The purchase follows the account: the signed-in user id is the RevenueCat user id,
         // so the backend can match a purchase to a profile and other devices can see it.
@@ -181,6 +197,7 @@ class PurchasesManager @Inject constructor(
                 current?.packageFor(plan)?.let { put(plan, it.product.price.formatted) }
             }
         }
+        _canSell.value = canSellInApp(isConfigured, _planPrices.value.keys)
     }
 
     private fun Offering.packageFor(plan: PaymentPlan): Package? = packageForPlan(
@@ -195,6 +212,9 @@ class PurchasesManager @Inject constructor(
 
     private companion object {
         const val TAG = "PurchasesManager"
+
+        /** Waits before each attempt to load offerings; the first attempt is immediate. */
+        val OFFERINGS_RETRY_DELAYS_MS = longArrayOf(0, 5_000, 30_000, 120_000)
 
         val apiKey: String = usableRevenueCatKey(BuildConfig.REVENUECAT_API_KEY, BuildConfig.DEBUG)
     }

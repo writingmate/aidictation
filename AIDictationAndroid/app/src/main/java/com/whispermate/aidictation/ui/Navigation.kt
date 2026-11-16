@@ -52,6 +52,7 @@ fun AIDictationNavHost(
     val onboardingUsageStatus by onboardingViewModel.usageStatus.collectAsState()
     val onboardingIsSigningIn by onboardingViewModel.isSigningIn.collectAsState()
     val onboardingPlanPrices by onboardingViewModel.planPrices.collectAsState()
+    val onboardingSellsInApp by onboardingViewModel.sellsInApp.collectAsState()
 
     val startDestination = if (hasCompletedOnboarding) Screen.Main.route else Screen.Onboarding.route
 
@@ -98,7 +99,7 @@ fun AIDictationNavHost(
                     onSignInWithGoogle = onboardingViewModel::signInWithGoogle,
                     paywallAvailable = onboardingViewModel.hasPaymentLinks && !onboardingUsageStatus.isPro,
                     planPrices = onboardingPlanPrices,
-                    sellsInApp = onboardingViewModel.sellsInApp,
+                    sellsInApp = onboardingSellsInApp,
                     onUpgrade = onboardingViewModel::openUpgrade
                 )
             }

@@ -66,4 +66,21 @@ class BillingPlansTest {
     fun aPlanTheOfferingLacksHasNoPackage() {
         assertNull(packageForPlan(PaymentPlan.Annual, null, listOf("monthly", "lifetime")) { it })
     }
+
+    @Test
+    fun aKeyWithNothingToSellKeepsTheBrowserCheckout() {
+        assertFalse(canSellInApp(configured = true, purchasablePlans = emptySet()))
+    }
+
+    @Test
+    fun aKeyWithAPurchasablePlanSellsInApp() {
+        assertTrue(canSellInApp(configured = true, purchasablePlans = setOf(PaymentPlan.Monthly)))
+        assertTrue(canSellInApp(configured = true, purchasablePlans = PaymentPlan.entries.toSet()))
+    }
+
+    @Test
+    fun noKeyNeverSellsInApp() {
+        assertFalse(canSellInApp(configured = false, purchasablePlans = emptySet()))
+        assertFalse(canSellInApp(configured = false, purchasablePlans = setOf(PaymentPlan.Annual)))
+    }
 }

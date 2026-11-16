@@ -97,4 +97,16 @@ class AccountActionsTest {
             accountActions(status(signedIn = true, pro = true), sellsInApp = false, canSignIn = true)
         )
     }
+
+    @Test
+    fun aStorePurchaseStaysManageableWhenNothingCanBeSold() {
+        assertEquals(
+            listOf(ManagePurchase, SignOut),
+            accountActions(
+                status(signedIn = true, pro = true, storePurchase = true),
+                sellsInApp = false,
+                canSignIn = true
+            )
+        )
+    }
 }

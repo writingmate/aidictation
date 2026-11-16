@@ -20,7 +20,8 @@ internal fun accountActions(
         if (usageStatus.isAuthenticated || sellsInApp) add(AccountAction.Upgrade)
         if (sellsInApp) add(AccountAction.RestorePurchases)
     }
-    if (sellsInApp && usageStatus.hasStorePurchase) add(AccountAction.ManagePurchase)
+    // An existing store purchase stays manageable even when nothing can be sold right now.
+    if (usageStatus.hasStorePurchase) add(AccountAction.ManagePurchase)
     if (usageStatus.isAuthenticated) {
         add(AccountAction.SignOut)
     } else if (canSignIn) {

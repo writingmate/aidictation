@@ -205,8 +205,7 @@ class SubscriptionRepository @Inject constructor(
     val planPrices: StateFlow<Map<PaymentPlan, String>> = purchasesManager.planPrices
 
     /** Whether Pro is bought inside the app (Google Play) rather than in the browser. */
-    val sellsInApp: Boolean
-        get() = purchasesManager.isConfigured
+    val sellsInApp: StateFlow<Boolean> = purchasesManager.canSell
 
     /** Whether the RevenueCat paywall should be on screen; the activity shows it. */
     val paywallRequested: StateFlow<Boolean> = _paywallRequested.asStateFlow()
@@ -217,7 +216,7 @@ class SubscriptionRepository @Inject constructor(
      * opens in the browser.
      */
     fun openUpgrade(plan: PaymentPlan? = null, activity: Activity? = null) {
-        if (!purchasesManager.isConfigured) {
+        if (!purchasesManager.canSell.value) {
             authRepository.openUpgrade(context, plan)
             return
         }
@@ -242,7 +241,7 @@ class SubscriptionRepository @Inject constructor(
      * limit and Pro is sold in the app. Returns whether the paywall was requested.
      */
     fun requestPaywallIfLimitReached(error: Throwable): Boolean {
-        if (!shouldOfferPaywall(error, purchasesManager.isConfigured)) return false
+        if (!shouldOfferPaywall(error, purchasesManager.canSell.value)) return false
         requestPaywall()
         return true
     }
@@ -267,7 +266,7 @@ class SubscriptionRepository @Inject constructor(
         }
     }
 
-    fun hasPaymentLinks(): Boolean = purchasesManager.isConfigured || authRepository.hasPaymentLinks()
+    fun hasPaymentLinks(): Boolean = purchasesManager.canSell.value || authRepository.hasPaymentLinks()
 
     private suspend fun showToast(messageRes: Int) = withContext(Dispatchers.Main) {
         Toast.makeText(context, messageRes, Toast.LENGTH_LONG).show()

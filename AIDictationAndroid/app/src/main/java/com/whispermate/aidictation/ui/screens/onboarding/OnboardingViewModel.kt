@@ -70,8 +70,7 @@ class OnboardingViewModel @Inject constructor(
 
     val planPrices: StateFlow<Map<PaymentPlan, String>> = subscriptionRepository.planPrices
 
-    val sellsInApp: Boolean
-        get() = subscriptionRepository.sellsInApp
+    val sellsInApp: StateFlow<Boolean> = subscriptionRepository.sellsInApp
 
     /**
      * Buys [plan] in the app from [activity] when in-app purchases are configured, else

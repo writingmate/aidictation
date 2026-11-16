@@ -509,8 +509,7 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    val sellsInApp: Boolean
-        get() = subscriptionRepository.sellsInApp
+    val sellsInApp: StateFlow<Boolean> = subscriptionRepository.sellsInApp
 
     /** Opens the RevenueCat paywall when Pro is sold in the app, else browser checkout. */
     fun openUpgrade() {

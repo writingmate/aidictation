@@ -41,3 +41,12 @@ fun <T> packageForPlan(
     packages: List<T>,
     productIdOf: (T) -> String
 ): T? = standardSlot ?: packages.firstOrNull { isProductForPlan(productIdOf(it), plan) }
+
+/**
+ * Whether Pro can actually be bought in the app right now: a usable key is not enough, the
+ * current offering must also hold at least one plan the store can sell. Until it does (no
+ * store products yet, or offerings could not be loaded) the app keeps the browser checkout,
+ * exactly as if no key were set, so there is always a way to buy.
+ */
+fun canSellInApp(configured: Boolean, purchasablePlans: Set<PaymentPlan>): Boolean =
+    configured && purchasablePlans.isNotEmpty()

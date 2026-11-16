@@ -541,7 +541,8 @@ fun OnboardingScreen(
                 enabled = when (currentOnboardingStep) {
                     OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
                     OnboardingStep.ButtonDemo ->
-                        !demoLaunchRequested && !demoState.isRecording && !demoState.isProcessing
+                        !demoLaunchRequested && !demoState.isRecording && !demoState.isStarting &&
+                            !demoState.isProcessing
                     else -> true
                 },
                 colors = ButtonDefaults.buttonColors(
@@ -583,7 +584,17 @@ private fun permissionsHintText(state: PermissionsState): Int = when (permission
 @Composable
 private fun ReviewStep() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        OnboardingHeroIcon(icon = Icons.Default.Star)
+        // Five stars say "rating" at a glance; a single star reads as a one-star score.
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(5) {
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -737,7 +748,8 @@ private fun ButtonDemoStep(
     var demoStage by remember { mutableIntStateOf(0) }
     val audioLevel = demoState.audioLevel
     val frequencyBands = demoState.frequencyBands
-    val isRecording = demoState.isRecording
+    // Listening as far as the user can tell: recording, or the microphone still opening.
+    val isRecording = demoState.isRecording || demoState.isStarting
     val previewState = when {
         demoState.isProcessing -> OverlayMicButtonView.State.Processing
         isRecording -> OverlayMicButtonView.State.Recording
@@ -761,7 +773,7 @@ private fun ButtonDemoStep(
 
     fun handleDemoMicTap() {
         when {
-            demoState.isProcessing -> Unit
+            demoState.isProcessing || demoState.isStarting -> Unit
             isRecording -> stopDemoRecording()
             demoStage >= 1 -> {
                 demoStage = 2

@@ -40,6 +40,8 @@ data class OnboardingOnDeviceModelState(
 
 data class OnboardingDemoUiState(
     val isRecording: Boolean = false,
+    /** The microphone is being opened after a tap; the button already looks like listening. */
+    val isStarting: Boolean = false,
     val isProcessing: Boolean = false,
     val resultText: String? = null,
     val errorMessage: String? = null,
@@ -162,7 +164,7 @@ class OnboardingViewModel @Inject constructor(
                         demoCaptureLease,
                         token
                     ) &&
-                    (_demoState.value.isRecording || _demoState.value.isProcessing)
+                    (_demoState.value.isRecording || _demoState.value.isStarting || _demoState.value.isProcessing)
                 ) {
                     token ?: return@collect
                     if (demoFence.finish(token)) {
@@ -259,9 +261,11 @@ class OnboardingViewModel @Inject constructor(
     }
 
     fun startDemoRecording() {
-        if (_demoState.value.isRecording || _demoState.value.isProcessing) return
+        if (_demoState.value.isRecording || _demoState.value.isStarting || _demoState.value.isProcessing) return
         val token = demoFence.reserve() ?: return
-        _demoState.value = OnboardingDemoUiState(isProcessing = true)
+        // A tap goes straight from waiting to listening: opening the microphone is not a
+        // step the user should see, so it never shows the processing state.
+        _demoState.value = OnboardingDemoUiState(isStarting = true)
         viewModelScope.launch {
             val result = audioProcessingCoordinator.startCapture(
                 owner = AndroidAudioAttemptOwner.ONBOARDING,

@@ -68,7 +68,7 @@ runs, matching the local-developer layout described in
 | `AIDICTATION_POST_PROCESSING_ENDPOINT` | Optional override. Defaults to `https://writingmate.ai/api/openai/v1/chat/completions`. |
 | `AIDICTATION_POST_PROCESSING_MODEL` | Optional override. Defaults to `openai/gpt-oss-20b`. |
 | `STRIPE_PAYMENT_LINK` | Optional default Stripe checkout link. |
-| `REVENUECAT_ANDROID_API_KEY` | Optional. RevenueCat public SDK key for the Google Play app (`goog_…`), written to `local.properties` as `REVENUECAT_API_KEY`. When set, Pro is sold in the app through Google Play Billing and the Stripe links are not used. |
+| `REVENUECAT_ANDROID_API_KEY` | Optional. RevenueCat public SDK key for the Google Play app (`goog_…`), written to `local.properties` as `REVENUECAT_API_KEY`. When set, Pro is sold in the app through Google Play Billing and the Stripe links are not used. A Test Store key (`test_…`) is ignored by release builds. |
 | `STRIPE_PAYMENT_LINK_MONTHLY` | Optional monthly checkout link. |
 | `STRIPE_PAYMENT_LINK_ANNUAL` | Optional annual checkout link. |
 | `STRIPE_PAYMENT_LINK_LIFETIME` | Optional lifetime checkout link. |
@@ -125,14 +125,24 @@ base64 -w0 google-play-service-account.json | gh secret set GOOGLE_PLAY_SERVICE_
 
 ## In-app purchases (RevenueCat)
 
-With `REVENUECAT_API_KEY` set, `PurchasesManager` sells Pro through Google Play Billing:
+With `REVENUECAT_API_KEY` set, `PurchasesManager` sells Pro through RevenueCat
+(SDK 11.x, `purchases` and `purchases-ui`):
 
 - Entitlement identifier: `pro`.
-- The current offering's `$rc_monthly` and `$rc_annual` packages are the Monthly and
-  Annual plans on the paywall; their prices come from the store.
+- Products: `monthly`, `yearly` (subscriptions) and `lifetime` (one-time purchase). The
+  current offering's `$rc_monthly`, `$rc_annual` and `$rc_lifetime` packages are used; a
+  package in a custom slot is found by its product id.
+- The onboarding paywall step shows the plans with store prices. Settings "Upgrade to Pro"
+  and a dictation blocked by the word limit open the RevenueCat paywall for the current
+  offering (design it in the RevenueCat dashboard).
+- Settings shows "Restore purchases", and "Manage purchase" (RevenueCat Customer
+  Center) once the store entitlement is active.
 - The signed-in account's user id is the RevenueCat app user id, so the
-  `supabase/functions/revenuecat-webhook` function can write the plan to that profile.
-  A purchase made before sign-in unlocks the device and moves to the account on sign-in.
-- Settings shows "Restore purchases" for a new phone or a reinstall.
+  `supabase/functions/revenuecat-webhook` function can write the plan to that profile:
+  `pro` for a subscription, `lifetime` for the one-time purchase. A purchase made before
+  sign-in unlocks the device and moves to the account on sign-in.
+- A Test Store key (`test_...`) is for debug builds. Release builds drop it at build time
+  (`verifyReleaseRevenueCatKey` fails the build if one gets through) and keep the browser
+  checkout, because the SDK refuses to start with a Test Store key outside a debuggable build.
 
 Without the key the app keeps the browser checkout and nothing else changes.

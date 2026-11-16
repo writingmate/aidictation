@@ -60,6 +60,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whispermate.aidictation.R
+import com.revenuecat.purchases.ui.revenuecatui.customercenter.ShowCustomerCenter
+import androidx.activity.compose.rememberLauncherForActivityResult
 import com.whispermate.aidictation.review.findActivity
 import com.whispermate.aidictation.review.launchPlayReview
 import com.whispermate.aidictation.ui.components.groupedItemShape
@@ -89,6 +91,10 @@ fun MainScreen(
     val onDeviceModelState by viewModel.onDeviceModelState.collectAsState()
     val usageStatus by viewModel.usageStatus.collectAsState()
     val context = LocalContext.current
+    // RevenueCat's Customer Center: manage, cancel or ask for a refund of a store purchase.
+    val customerCenterLauncher = rememberLauncherForActivityResult(ShowCustomerCenter()) {
+        viewModel.onCustomerCenterClosed()
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     val audioLevel by viewModel.audioLevel.collectAsState()
@@ -246,9 +252,14 @@ fun MainScreen(
                     null
                 },
                 onSignOut = { viewModel.signOut() },
-                onUpgrade = { viewModel.openUpgrade(context.findActivity()) },
+                onUpgrade = { viewModel.openUpgrade() },
                 onRestorePurchases = if (viewModel.sellsInApp) {
                     { viewModel.restorePurchases() }
+                } else {
+                    null
+                },
+                onManagePurchase = if (viewModel.sellsInApp && usageStatus.hasStorePurchase) {
+                    { customerCenterLauncher.launch(Unit) }
                 } else {
                     null
                 },

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -102,6 +103,8 @@ fun SettingsScreen(
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
     onRestorePurchases: (() -> Unit)? = null,
+    /** Opens the store's subscription management; null when Pro is not a store purchase. */
+    onManagePurchase: (() -> Unit)? = null,
     onSignInWithGoogle: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -150,7 +153,8 @@ fun SettingsScreen(
             onSignInWithGoogle = onSignInWithGoogle,
             onSignOut = onSignOut,
             onUpgrade = onUpgrade,
-            onRestorePurchases = onRestorePurchases
+            onRestorePurchases = onRestorePurchases,
+            onManagePurchase = onManagePurchase
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -387,7 +391,8 @@ private fun AccountSettingsSection(
     onSignInWithGoogle: (() -> Unit)?,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
-    onRestorePurchases: (() -> Unit)?
+    onRestorePurchases: (() -> Unit)?,
+    onManagePurchase: (() -> Unit)?
 ) {
     SectionHeader(stringResource(R.string.settings_account))
     Card(
@@ -440,6 +445,16 @@ private fun AccountSettingsSection(
 
                 SettingsRowGap()
             }
+        }
+
+        if (onManagePurchase != null) {
+            SettingsRowGap()
+            SettingsItem(
+                icon = Icons.Default.ManageAccounts,
+                title = stringResource(R.string.account_manage_purchase),
+                onClick = onManagePurchase
+            )
+            if (!usageStatus.isAuthenticated) SettingsRowGap()
         }
 
         if (usageStatus.isAuthenticated) {

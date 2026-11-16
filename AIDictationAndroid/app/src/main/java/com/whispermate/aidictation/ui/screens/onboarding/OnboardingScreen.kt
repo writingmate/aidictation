@@ -1400,6 +1400,17 @@ private fun PaywallStep(
             selected = selectedPlan == PaymentPlan.Monthly,
             onClick = { onSelectPlan(PaymentPlan.Monthly) }
         )
+        // Lifetime is a store product only, so it appears once the store has priced it.
+        planPrices[PaymentPlan.Lifetime]?.let { lifetimePrice ->
+            Spacer(modifier = Modifier.height(10.dp))
+            PlanChoiceCard(
+                title = stringResource(R.string.onboarding_paywall_lifetime),
+                price = stringResource(R.string.onboarding_paywall_price_lifetime, lifetimePrice),
+                badge = null,
+                selected = selectedPlan == PaymentPlan.Lifetime,
+                onClick = { onSelectPlan(PaymentPlan.Lifetime) }
+            )
+        }
     }
 }
 

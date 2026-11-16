@@ -37,8 +37,9 @@ AUTH_WEB_URL=https://aidictation.com/auth
 # Native Google sign-in: the Web application OAuth client ID from Google Cloud that the
 # auth backend's Google provider trusts. Leave empty to hide "Continue with Google".
 GOOGLE_WEB_CLIENT_ID=
-# RevenueCat public SDK key for the Google Play app (starts with "goog_"). When set, Pro is
-# sold through Google Play Billing in the app and the Stripe links below are not used.
+# RevenueCat public SDK key. When set, Pro is sold in the app and the Stripe links below
+# are not used. "goog_..." is the Google Play key. "test_..." is a Test Store key: it works
+# in debug builds only, and release builds ignore it and keep the Stripe links.
 REVENUECAT_API_KEY=
 STRIPE_PAYMENT_LINK=
 STRIPE_PAYMENT_LINK_MONTHLY=

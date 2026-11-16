@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.res.ColorStateList
 import android.content.Intent
+import com.whispermate.aidictation.MainActivity
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -1884,6 +1885,16 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
         resetAfterRecording(token)
     }
 
+    /** Brings the app forward; its activity shows the paywall that was just requested. */
+    private fun openAppForPaywall() {
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            )
+        }.onFailure { Log.w(TAG, "Could not open the app for the paywall", it) }
+    }
+
     private suspend fun processRecording(finalized: FinalizedAndroidCapture, token: Long) {
         val access = checkAccessForFinalizedRecording(finalized)
         access.onFailure { error ->
@@ -1897,6 +1908,7 @@ class OverlayDictationAccessibilityService : AccessibilityService() {
                 error.message ?: getString(R.string.usage_limit_reached),
                 Toast.LENGTH_LONG
             ).show()
+            if (subscriptionRepository.requestPaywallIfLimitReached(error)) openAppForPaywall()
             return
         }
 

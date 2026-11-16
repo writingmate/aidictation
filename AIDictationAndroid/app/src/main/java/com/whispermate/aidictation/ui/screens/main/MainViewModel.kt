@@ -344,7 +344,10 @@ class MainViewModel @Inject constructor(
                 activeCaptureLease = null
                 activeCaptureWorkflowToken = null
                 reviewPromptStore.recordFailedDictation()
-                _error.value = error.message
+                // The paywall says why dictation stopped; the snackbar is for other failures.
+                if (!subscriptionRepository.requestPaywallIfLimitReached(error)) {
+                    _error.value = error.message
+                }
                 return@launch
             }
 
@@ -407,7 +410,9 @@ class MainViewModel @Inject constructor(
                     subscriptionRepository.checkCanTranscribe()
                 } ?: Result.failure(IllegalStateException("Access check timed out. Try again."))
                 access.onFailure { error ->
-                    _error.value = error.message
+                    if (!subscriptionRepository.requestPaywallIfLimitReached(error)) {
+                        _error.value = error.message
+                    }
                     return@launch
                 }
                 val rules = try {
@@ -507,9 +512,14 @@ class MainViewModel @Inject constructor(
     val sellsInApp: Boolean
         get() = subscriptionRepository.sellsInApp
 
-    /** [activity] hosts the Play purchase sheet when Pro is sold in the app. */
-    fun openUpgrade(activity: android.app.Activity?) {
-        subscriptionRepository.openUpgrade(activity = activity)
+    /** Opens the RevenueCat paywall when Pro is sold in the app, else browser checkout. */
+    fun openUpgrade() {
+        subscriptionRepository.openUpgrade()
+    }
+
+    /** The Customer Center closed; a cancellation or refund there changes the plan. */
+    fun onCustomerCenterClosed() {
+        subscriptionRepository.onStoreScreenClosed()
     }
 
     fun restorePurchases() {

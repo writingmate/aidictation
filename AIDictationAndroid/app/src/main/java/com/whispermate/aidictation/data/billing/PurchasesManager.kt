@@ -4,11 +4,14 @@ import android.app.Activity
 import android.content.Context
 import android.util.Log
 import com.revenuecat.purchases.CustomerInfo
+import com.revenuecat.purchases.Offering
 import com.revenuecat.purchases.Offerings
+import com.revenuecat.purchases.Package
 import com.revenuecat.purchases.PurchaseParams
 import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
 import com.revenuecat.purchases.PurchasesTransactionException
+import com.revenuecat.purchases.awaitCustomerInfo
 import com.revenuecat.purchases.awaitLogIn
 import com.revenuecat.purchases.awaitLogOut
 import com.revenuecat.purchases.awaitOfferings
@@ -18,6 +21,7 @@ import com.revenuecat.purchases.interfaces.UpdatedCustomerInfoListener
 import com.whispermate.aidictation.BuildConfig
 import com.whispermate.aidictation.data.repository.AuthRepository
 import com.whispermate.aidictation.domain.model.PaymentPlan
+import com.whispermate.aidictation.domain.model.SubscriptionTier
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -36,46 +40,55 @@ import kotlinx.coroutines.launch
 enum class PurchaseOutcome { Purchased, Cancelled, Failed }
 
 /**
- * Manages in-app purchases through RevenueCat (Google Play Billing underneath): the Pro
- * entitlement, the plans on offer with their store prices, buying and restoring.
+ * Manages in-app purchases through RevenueCat: the Pro entitlement, the plans on offer
+ * with their store prices, buying and restoring.
  *
- * It is inert when no RevenueCat key is built in; the app then keeps its browser checkout.
+ * It is inert when no usable RevenueCat key is built in; the app then keeps its browser
+ * checkout.
  */
 @Singleton
 class PurchasesManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // MARK: - Published Properties
 
-    private val _hasProEntitlement = MutableStateFlow(false)
+    private val _storeTier = MutableStateFlow(SubscriptionTier.Free)
     private val _planPrices = MutableStateFlow<Map<PaymentPlan, String>>(emptyMap())
-    private var offerings: Offerings? = null
 
     /** Whether this build can sell in the app at all. */
-    val isConfigured: Boolean = BuildConfig.REVENUECAT_API_KEY.isNotBlank()
+    val isConfigured: Boolean = apiKey.isNotBlank()
 
-    /** Whether the store account or signed-in user holds an active Pro entitlement. */
-    val hasProEntitlement: StateFlow<Boolean> = _hasProEntitlement.asStateFlow()
+    /**
+     * The plan the store account or signed-in user holds through the `pro` entitlement:
+     * Pro for a subscription, Lifetime for the one-time purchase, Free for neither.
+     */
+    val storeTier: StateFlow<SubscriptionTier> = _storeTier.asStateFlow()
 
     /** Store-formatted price per plan, for the plans the current offering contains. */
     val planPrices: StateFlow<Map<PaymentPlan, String>> = _planPrices.asStateFlow()
+
+    // MARK: - Private Properties
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var offerings: Offerings? = null
+
+    // MARK: - Initialization
 
     init {
         if (isConfigured) start()
     }
 
+    // MARK: - Public API
+
     /**
-     * Starts the Play purchase sheet for [plan] from [activity] and waits for it to end.
+     * Starts the store purchase sheet for [plan] from [activity] and waits for it to end.
      */
     suspend fun purchase(activity: Activity, plan: PaymentPlan): PurchaseOutcome {
         if (!isConfigured) return PurchaseOutcome.Failed
         return try {
             val current = (offerings ?: Purchases.sharedInstance.awaitOfferings().also(::onOfferings)).current
-            val storePackage = when (plan) {
-                PaymentPlan.Monthly -> current?.monthly
-                PaymentPlan.Annual -> current?.annual
-            } ?: return PurchaseOutcome.Failed
+            val storePackage = current?.packageFor(plan) ?: return PurchaseOutcome.Failed
             val result = Purchases.sharedInstance.awaitPurchase(
                 PurchaseParams.Builder(activity, storePackage).build()
             )
@@ -101,17 +114,30 @@ class PurchasesManager @Inject constructor(
         if (!isConfigured) return false
         return try {
             onCustomerInfo(Purchases.sharedInstance.awaitRestore())
-            _hasProEntitlement.value
+            _storeTier.value.isPaid
         } catch (e: Exception) {
             Log.w(TAG, "Restore failed", e)
             false
         }
     }
 
+    /**
+     * Re-reads the entitlement after a RevenueCat screen (paywall, Customer Center) closes,
+     * where a purchase, a cancellation or a refund may have happened.
+     */
+    fun refresh() {
+        if (!isConfigured) return
+        scope.launch {
+            runCatching { onCustomerInfo(Purchases.sharedInstance.awaitCustomerInfo()) }
+                .onFailure { Log.w(TAG, "Could not refresh the entitlement", it) }
+            authRepository.refreshUser()
+        }
+    }
+
+    // MARK: - Private Methods
+
     private fun start() {
-        Purchases.configure(
-            PurchasesConfiguration.Builder(context, BuildConfig.REVENUECAT_API_KEY).build()
-        )
+        Purchases.configure(PurchasesConfiguration.Builder(context, apiKey).build())
         Purchases.sharedInstance.updatedCustomerInfoListener =
             UpdatedCustomerInfoListener { info -> onCustomerInfo(info) }
 
@@ -141,22 +167,38 @@ class PurchasesManager @Inject constructor(
     }
 
     private fun onCustomerInfo(info: CustomerInfo) {
-        _hasProEntitlement.value = info.entitlements[PRO_ENTITLEMENT]?.isActive == true
+        val entitlement = info.entitlements[PRO_ENTITLEMENT]
+        _storeTier.value = storeTier(
+            isActive = entitlement?.isActive == true,
+            productId = entitlement?.productIdentifier,
+            hasExpiry = entitlement?.expirationDate != null
+        )
     }
 
     private fun onOfferings(loaded: Offerings) {
         offerings = loaded
         val current = loaded.current
         _planPrices.value = buildMap {
-            current?.monthly?.let { put(PaymentPlan.Monthly, it.product.price.formatted) }
-            current?.annual?.let { put(PaymentPlan.Annual, it.product.price.formatted) }
+            PaymentPlan.entries.forEach { plan ->
+                current?.packageFor(plan)?.let { put(plan, it.product.price.formatted) }
+            }
         }
     }
+
+    private fun Offering.packageFor(plan: PaymentPlan): Package? = packageForPlan(
+        plan = plan,
+        standardSlot = when (plan) {
+            PaymentPlan.Monthly -> monthly
+            PaymentPlan.Annual -> annual
+            PaymentPlan.Lifetime -> lifetime
+        },
+        packages = availablePackages,
+        productIdOf = { it.product.id }
+    )
 
     private companion object {
         const val TAG = "PurchasesManager"
 
-        /** The RevenueCat entitlement that unlocks unlimited dictation. */
-        const val PRO_ENTITLEMENT = "pro"
+        val apiKey: String = usableRevenueCatKey(BuildConfig.REVENUECAT_API_KEY, BuildConfig.DEBUG)
     }
 }

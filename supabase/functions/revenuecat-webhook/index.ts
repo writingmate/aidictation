@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
+import {
+  lifetimeGrantUpdate,
+  planAction,
+  revokeUpdate,
+  subscriptionGrantUpdate,
+} from "../_shared/revenuecat-plan.ts";
 
 // RevenueCat webhook: keeps profiles.subscription_status in step with in-app purchases
 // (Google Play, App Store). The apps identify to RevenueCat with the profile's user_id,
@@ -8,19 +14,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.2";
 // Configure in RevenueCat > Integrations > Webhooks with this function's URL and an
 // Authorization header value equal to the REVENUECAT_WEBHOOK_AUTH secret.
 
-const PRO_ENTITLEMENT = "pro";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Events after which the entitlement is active until expiration_at_ms.
-const GRANTING_EVENTS = new Set([
-  "INITIAL_PURCHASE",
-  "RENEWAL",
-  "UNCANCELLATION",
-  "NON_RENEWING_PURCHASE",
-  "PRODUCT_CHANGE",
-  "SUBSCRIPTION_EXTENDED",
-  "TEMPORARY_ENTITLEMENT_GRANT",
-]);
 
 const logStep = (step: string, details?: unknown) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
@@ -85,20 +79,24 @@ serve(async (req) => {
         .filter((id): id is string => typeof id === "string" && UUID_PATTERN.test(id))
       : [];
 
-    const entitlementIds = Array.isArray(event.entitlement_ids) ? event.entitlement_ids : [];
-    const expiresAtMs = typeof event.expiration_at_ms === "number" ? event.expiration_at_ms : null;
-    const grantsPro = (GRANTING_EVENTS.has(type) && entitlementIds.includes(PRO_ENTITLEMENT)) ||
-      type === "TRANSFER";
-    const active = grantsPro && (expiresAtMs === null || expiresAtMs > Date.now());
-
-    if (active) {
-      for (const userId of userIds) await grantPro(supabaseClient, userId, event, expiresAtMs);
-      for (const userId of lostIds) await revokePro(supabaseClient, userId);
-    } else if (type === "EXPIRATION") {
-      for (const userId of userIds) await revokePro(supabaseClient, userId);
-    } else {
-      // CANCELLATION and BILLING_ISSUE leave the entitlement active until EXPIRATION.
-      logStep("No plan change for event", { type });
+    const action = planAction(event, Date.now());
+    switch (action) {
+      case "grant_lifetime":
+      case "grant_subscription":
+        for (const userId of userIds) await grant(supabaseClient, userId, event, action === "grant_lifetime");
+        break;
+      case "transfer":
+        // A transfer names no product, so the receiving account gets Pro with no end
+        // date recorded; a later renewal or expiration event carries the product.
+        for (const userId of userIds) await grant(supabaseClient, userId, event, false);
+        for (const userId of lostIds) await revoke(supabaseClient, userId, true);
+        break;
+      case "revoke_subscription":
+      case "revoke_lifetime":
+        for (const userId of userIds) await revoke(supabaseClient, userId, action === "revoke_lifetime");
+        break;
+      default:
+        logStep("No plan change for event", { type });
     }
 
     return jsonResponse({ success: true }, 200);
@@ -111,53 +109,47 @@ serve(async (req) => {
 });
 
 // deno-lint-ignore no-explicit-any
-async function grantPro(client: any, userId: string, event: Record<string, unknown>, expiresAtMs: number | null) {
-  const { data: profile, error: readError } = await client
+async function readProfile(client: any, userId: string) {
+  const { data: profile, error } = await client
     .from("profiles")
-    .select("subscription_status")
+    .select("subscription_status, stripe_subscription_id, revenuecat_product_id")
     .eq("user_id", userId)
     .maybeSingle();
-  if (readError) throw new Error(readError.message);
+  if (error) throw new Error(error.message);
+  return profile;
+}
+
+// deno-lint-ignore no-explicit-any
+async function grant(client: any, userId: string, event: Record<string, unknown>, lifetime: boolean) {
+  const profile = await readProfile(client, userId);
   if (!profile) {
     logStep("No profile for user, ignoring", { userId });
     return;
   }
 
-  const update: Record<string, unknown> = {
-    revenuecat_expires_at: expiresAtMs === null ? null : new Date(expiresAtMs).toISOString(),
-    revenuecat_product_id: typeof event.product_id === "string" ? event.product_id : null,
-    revenuecat_store: typeof event.store === "string" ? event.store : null,
-  };
-  // A lifetime plan outranks a subscription and is never overwritten by one.
-  if (profile.subscription_status !== "lifetime") update.subscription_status = "pro";
-
-  const { error } = await client.from("profiles").update(update).eq("user_id", userId);
-  if (error) throw new Error(error.message);
-  logStep("Pro granted", { userId, type: event.type });
-}
-
-// deno-lint-ignore no-explicit-any
-async function revokePro(client: any, userId: string) {
-  const { data: profile, error: readError } = await client
-    .from("profiles")
-    .select("subscription_status, stripe_subscription_id")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (readError) throw new Error(readError.message);
-  if (!profile) return;
-
-  const update: Record<string, unknown> = {
-    revenuecat_expires_at: null,
-    revenuecat_product_id: null,
-    revenuecat_store: null,
-  };
-  // Only a plan that came from the store purchase ends here: a lifetime plan or a
-  // Stripe subscription on the same account keeps the account paid.
-  if (profile.subscription_status === "pro" && !profile.stripe_subscription_id) {
-    update.subscription_status = "free";
+  const update = lifetime ? lifetimeGrantUpdate(profile, event) : subscriptionGrantUpdate(profile, event);
+  if (!update) {
+    logStep("Plan already covers the purchase", { userId, type: event.type });
+    return;
   }
 
   const { error } = await client.from("profiles").update(update).eq("user_id", userId);
   if (error) throw new Error(error.message);
-  logStep("Store entitlement ended", { userId, downgraded: update.subscription_status === "free" });
+  logStep(lifetime ? "Lifetime granted" : "Pro granted", { userId, type: event.type });
+}
+
+// deno-lint-ignore no-explicit-any
+async function revoke(client: any, userId: string, lifetimeToo: boolean) {
+  const profile = await readProfile(client, userId);
+  if (!profile) return;
+
+  const update = revokeUpdate(profile, lifetimeToo);
+  if (!update) {
+    logStep("Lifetime plan kept", { userId });
+    return;
+  }
+
+  const { error } = await client.from("profiles").update(update).eq("user_id", userId);
+  if (error) throw new Error(error.message);
+  logStep("Store entitlement ended", { userId, plan: update.subscription_status ?? "unchanged" });
 }

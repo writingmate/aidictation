@@ -1,19 +1,19 @@
 [versions]
 agp = "8.10.1"
-kotlin = "2.0.21"
+kotlin = "2.2.21"
 coreKtx = "1.15.0"
 lifecycleRuntimeKtx = "2.8.7"
 activityCompose = "1.9.3"
-composeBom = "2024.11.00"
+composeBom = "2026.06.01"
 navigationCompose = "2.8.4"
-hilt = "2.52"
+hilt = "2.57.2"
 hiltNavigationCompose = "1.2.0"
-room = "2.6.1"
+room = "2.7.2"
 datastore = "1.1.1"
 retrofit = "2.11.0"
 okhttp = "4.12.0"
 moshi = "1.15.1"
-ksp = "2.0.21-1.0.27"
+ksp = "2.2.21-2.0.5"
 coroutines = "1.9.0"
 coil = "2.7.0"
 securityCrypto = "1.1.0-alpha06"
@@ -22,7 +22,7 @@ googleId = "1.1.1"
 onnxRuntime = "1.25.1"
 playAssetDelivery = "2.3.0"
 playReview = "2.0.2"
-revenuecat = "9.29.1"
+revenuecat = "11.3.0"
 litert = "2.0.3"
 gradlePlayPublisher = "3.13.0"
 sentry = "8.33.0"
@@ -79,6 +79,7 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 onnx-runtime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxRuntime" }
 play-asset-delivery = { group = "com.google.android.play", name = "asset-delivery", version.ref = "playAssetDelivery" }
 revenuecat-purchases = { group = "com.revenuecat.purchases", name = "purchases", version.ref = "revenuecat" }
+revenuecat-purchases-ui = { group = "com.revenuecat.purchases", name = "purchases-ui", version.ref = "revenuecat" }
 play-review = { group = "com.google.android.play", name = "review-ktx", version.ref = "playReview" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 

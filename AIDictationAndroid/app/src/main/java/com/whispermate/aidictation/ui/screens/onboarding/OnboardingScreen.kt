@@ -432,6 +432,14 @@ fun OnboardingScreen(
                 )
             }
         } else if (currentOnboardingStep == OnboardingStep.OverlayPermissions) {
+            Text(
+                text = stringResource(permissionsHintText(permissions)),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = { goToNextStep() },
                 modifier = Modifier
@@ -448,15 +456,17 @@ fun OnboardingScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
             }
-            Spacer(modifier = Modifier.height(6.dp))
+        } else if (currentOnboardingStep == OnboardingStep.Paywall) {
             Text(
-                text = stringResource(permissionsHintText(permissions)),
+                text = stringResource(
+                    if (sellsInApp) R.string.onboarding_paywall_play_terms else R.string.onboarding_paywall_refund
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
-        } else if (currentOnboardingStep == OnboardingStep.Paywall) {
+            Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = { onUpgrade(selectedPlan, context.findActivity()) },
                 modifier = Modifier
@@ -471,22 +481,6 @@ fun OnboardingScreen(
                     text = stringResource(R.string.onboarding_paywall_cta),
                     style = MaterialTheme.typography.titleMedium
                 )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = stringResource(
-                    if (sellsInApp) R.string.onboarding_paywall_play_terms else R.string.onboarding_paywall_refund
-                ),
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-            TextButton(
-                onClick = { finishOnboarding() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.onboarding_paywall_continue_free))
             }
         } else if (currentOnboardingStep == OnboardingStep.Review) {
             Button(
@@ -516,12 +510,6 @@ fun OnboardingScreen(
                     ),
                     style = MaterialTheme.typography.titleMedium
                 )
-            }
-            TextButton(
-                onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.onboarding_rate_not_now))
             }
         } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
             // The Google button is the one action here; finishing without an account stays possible.
@@ -558,6 +546,31 @@ fun OnboardingScreen(
                     },
                     style = MaterialTheme.typography.titleMedium
                 )
+            }
+        }
+
+        // The slot under the main button is the same height on every step, used or not,
+        // so the button never moves from one step to the next. Messages go above it.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            when (currentOnboardingStep) {
+                OnboardingStep.Paywall -> TextButton(
+                    onClick = { finishOnboarding() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.onboarding_paywall_continue_free))
+                }
+                OnboardingStep.Review -> TextButton(
+                    onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.onboarding_rate_not_now))
+                }
+                else -> Unit
             }
         }
     }

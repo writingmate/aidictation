@@ -13,6 +13,7 @@ struct WhisperMateApp: App {
 
     init() {
         SentryTelemetry.start()
+        PurchasesManager.shared.start()
         Task { @MainActor in MobileInstallationAnalytics.start() }
     }
 

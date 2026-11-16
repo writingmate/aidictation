@@ -70,6 +70,7 @@ put_secret "STRIPE_PAYMENT_LINK" "$(value_from_env STRIPE_PAYMENT_LINK)"
 put_secret "STRIPE_PAYMENT_LINK_MONTHLY" "$(value_from_env STRIPE_PAYMENT_LINK_MONTHLY)"
 put_secret "STRIPE_PAYMENT_LINK_ANNUAL" "$(value_from_env STRIPE_PAYMENT_LINK_ANNUAL)"
 put_secret "STRIPE_PAYMENT_LINK_LIFETIME" "$(value_from_env STRIPE_PAYMENT_LINK_LIFETIME)"
+put_secret "REVENUECAT_API_KEY" "$(value_from_env REVENUECAT_API_KEY)"
 
 if [ "$secret_count" -eq 0 ]; then
   if [ "${AIDICTATION_REQUIRE_SECRETS:-0}" = "1" ]; then

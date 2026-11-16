@@ -45,6 +45,8 @@
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
 		E1A200012F90000100000004 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = E1A200012F90000100000002 /* Sentry */; };
 		E1A200012F90000100000005 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = E1A200012F90000100000003 /* Sentry */; };
+		F1A300012FA0000100000004 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = F1A300012FA0000100000002 /* RevenueCat */; };
+		F1A300012FA0000100000005 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = F1A300012FA0000100000003 /* RevenueCatUI */; };
 		C3D3AA06BB367CC2B12D382D /* TextInsertionFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */; };
 		D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
@@ -323,6 +325,8 @@
 			files = (
 				B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */,
 				E1A200012F90000100000005 /* Sentry in Frameworks */,
+				F1A300012FA0000100000004 /* RevenueCat in Frameworks */,
+				F1A300012FA0000100000005 /* RevenueCatUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -623,6 +627,8 @@
 			name = WhisperMateIOS;
 			packageProductDependencies = (
 				E1A200012F90000100000003 /* Sentry */,
+				F1A300012FA0000100000002 /* RevenueCat */,
+				F1A300012FA0000100000003 /* RevenueCatUI */,
 			);
 			productName = WhisperMateIOS;
 			productReference = C1CE64402ED8417000D24235 /* WhisperMateIOS.app */;
@@ -727,6 +733,7 @@
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
 				E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C18566CA2EA0D31000B46F55;
@@ -1764,6 +1771,14 @@
 				minimumVersion = 8.36.0;
 			};
 		};
+		F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.103.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1811,6 +1826,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
+		};
+		F1A300012FA0000100000002 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+		F1A300012FA0000100000003 /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCatUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

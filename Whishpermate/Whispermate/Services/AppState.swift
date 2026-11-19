@@ -2191,6 +2191,11 @@ class AppState: ObservableObject {
                         attemptID: recognitionAttemptID,
                         isLiveRecording: true
                     ) ?? false
+                },
+                attemptMayFinalizeAfterRelease: { @MainActor [weak self] in
+                    self?.liveAttemptMayFinalizeAfterRelease(
+                        attemptID: recognitionAttemptID
+                    ) ?? false
                 }
             )
             guard let snapshot = activeTranscriptionSnapshot else {
@@ -2498,8 +2503,14 @@ class AppState: ObservableObject {
         if historyWasPersisted, isLiveRecording {
             Task { [weak self] in
                 do {
+                    // This task runs after the synchronous code below releases
+                    // recording ownership, so it cannot require the attempt to
+                    // still be current. Without this, no live dictation was
+                    // ever marked succeeded in-session, and every one was left
+                    // for the next launch's reconciliation to finish.
                     if let claimed = try await session.markSucceededAndClaimUsage(
-                        wordCount: usageWordCount
+                        wordCount: usageWordCount,
+                        afterOwnershipRelease: true
                     ) {
                         DictationStopwatch.mark("usage claimed (off critical path)")
                         MacInstallationAnalytics.transcriptionCompleted(recordingID: recording.id, words: claimed)
@@ -2656,6 +2667,13 @@ class AppState: ObservableObject {
         if copyResultRecordingID == recording.id {
             copyResultRecordingID = nil
         }
+    }
+
+    /// A live attempt that has released recording ownership may still record
+    /// its durable success, unless the app is quitting. Startup reconciliation
+    /// finishes any record a quit leaves behind.
+    private func liveAttemptMayFinalizeAfterRelease(attemptID: UUID) -> Bool {
+        !terminationBarrierActive && processingAttemptFence.allows(attemptID)
     }
 
     private func isCurrentAttempt(
@@ -3874,15 +3892,23 @@ private actor MacStoreTranscriptionSession {
     private let store: MacAudioProcessingStore
     private var mutation: MacAudioProcessingStore.Mutation
     private let attemptIsCurrent: @MainActor @Sendable () -> Bool
+    private let attemptMayFinalizeAfterRelease: @MainActor @Sendable () -> Bool
 
+    /// - Parameter attemptMayFinalizeAfterRelease: Whether the attempt may
+    ///   still record its durable success after it has handed back recording
+    ///   ownership. A live dictation records success off the critical path,
+    ///   after `releaseActiveRecordingOwnership`, so `attemptIsCurrent` is
+    ///   already false by then. Defaults to `attemptIsCurrent`.
     init(
         store: MacAudioProcessingStore,
         mutation: MacAudioProcessingStore.Mutation,
-        attemptIsCurrent: @escaping @MainActor @Sendable () -> Bool
+        attemptIsCurrent: @escaping @MainActor @Sendable () -> Bool,
+        attemptMayFinalizeAfterRelease: (@MainActor @Sendable () -> Bool)? = nil
     ) {
         self.store = store
         self.mutation = mutation
         self.attemptIsCurrent = attemptIsCurrent
+        self.attemptMayFinalizeAfterRelease = attemptMayFinalizeAfterRelease ?? attemptIsCurrent
     }
 
     private func requireCurrentAttempt() async throws {
@@ -3923,20 +3949,37 @@ private actor MacStoreTranscriptionSession {
         return mutation
     }
 
-    func markSucceededAndClaimUsage(wordCount: Int) async throws -> Int? {
-        try await requireCurrentAttempt()
+    /// - Parameter afterOwnershipRelease: The caller runs after the attempt
+    ///   released recording ownership, as a live dictation's off-critical-path
+    ///   task does. The store's lease still rejects a recording that was
+    ///   deleted or cleared in the meantime.
+    func markSucceededAndClaimUsage(
+        wordCount: Int,
+        afterOwnershipRelease: Bool = false
+    ) async throws -> Int? {
+        try await requireAttempt(afterOwnershipRelease: afterOwnershipRelease)
         let next = try await store.markSucceeded(
             mutation.lease,
             pendingUsageWordCount: wordCount > 0 ? wordCount : nil
         )
-        try await requireCurrentAttempt()
+        try await requireAttempt(afterOwnershipRelease: afterOwnershipRelease)
         mutation = next
         let claimed = try await store.claimPendingUsage(
             recordingID: next.record.recordingID,
             expectedRevision: next.record.revision
         )
-        try await requireCurrentAttempt()
+        try await requireAttempt(afterOwnershipRelease: afterOwnershipRelease)
         return claimed
+    }
+
+    private func requireAttempt(afterOwnershipRelease: Bool) async throws {
+        if afterOwnershipRelease {
+            guard await attemptMayFinalizeAfterRelease() else {
+                throw CancellationError()
+            }
+        } else {
+            try await requireCurrentAttempt()
+        }
     }
 
     func fail(_ message: String) async throws -> MacAudioProcessingStore.Mutation {

@@ -135,6 +135,15 @@ class AppState: ObservableObject {
               retranscriptionAttemptIDs.isEmpty,
               !terminationBarrierActive else {
             DebugLog.info("⚠️ Already in state: \(recordingState)", context: "AppState")
+            if recordingState == .idle {
+                // Idle but blocked means a retry or a refused Quit still owns
+                // the app. The user gets no feedback here, so report it.
+                CrashReporter.captureError(
+                    "Recording start blocked while idle retries=\(retranscriptionAttemptIDs.count) terminationBarrier=\(terminationBarrierActive)",
+                    context: "AppState",
+                    feature: "recording"
+                )
+            }
             return
         }
 
@@ -2479,7 +2488,24 @@ class AppState: ObservableObject {
                     }
                 }
             } catch {
+                // The transcript is already in History. Release the retry's
+                // ownership before returning: a retry ID left behind blocks
+                // every later recording (startRecording requires an empty
+                // retranscriptionAttemptIDs) until the app is quit.
                 errorMessage = "The transcript is safe, but its retry status couldn’t be finalized."
+                if isCurrentAttempt(
+                    recordingID: recording.id,
+                    attemptID: attemptID,
+                    isLiveRecording: isLiveRecording
+                ) {
+                    isProcessing = false
+                    transcriptionTasks.removeValue(forKey: recording.id)
+                    retranscriptionAttemptIDs.removeValue(forKey: recording.id)
+                    historyManager.unregisterActiveRecording(id: recording.id)
+                    if copyResultRecordingID == recording.id {
+                        copyResultRecordingID = nil
+                    }
+                }
                 return
             }
         }
@@ -3784,9 +3810,15 @@ class AppState: ObservableObject {
 
         DebugLog.info("Command mode: \(hasTargetText ? "transformation" : "generation") complete", context: "AppState")
 
-        // Paste result
-        await MainActor.run {
+        // Paste result. This attempt released ownership before the command ran,
+        // so a newer recording may have started meanwhile. Never overwrite its
+        // state: that strands the new capture and blocks every later start.
+        let ownsIdleState = await MainActor.run { () -> Bool in
+            guard self.activeRecordingID == nil, self.recordingState == .idle else {
+                return false
+            }
             self.recordingState = .pasting
+            return true
         }
 
         // Only replace selected text if Accessibility captured a selection.
@@ -3805,7 +3837,9 @@ class AppState: ObservableObject {
         // Update state
         await MainActor.run {
             self.lastOutputText = resultText
-            self.recordingState = .idle
+            if ownsIdleState, self.recordingState == .pasting {
+                self.recordingState = .idle
+            }
         }
 
         // Reset command mode
@@ -3815,6 +3849,9 @@ class AppState: ObservableObject {
     /// Reset command mode state and hide overlay
     private func resetCommandModeState() async {
         await MainActor.run {
+            // A recording started while the command ran owns the overlay and
+            // command state now; leave both to it.
+            guard self.activeRecordingID == nil else { return }
             self.overlayManager.transition(to: .hidden)
             CommandModeManager.shared.reset()
         }

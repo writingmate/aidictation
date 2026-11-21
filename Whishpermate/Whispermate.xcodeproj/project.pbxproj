@@ -30,7 +30,9 @@
 		CRP100012F11000100000001 /* MacCaptureRecoveryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRP100012F11000100000003 /* MacCaptureRecoveryPolicyTests.swift */; };
 		CRP100012F11000100000002 /* MacCaptureRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRP100012F11000100000004 /* MacCaptureRecoveryPolicy.swift */; };
 		ASR100012F11000100000001 /* AuthSessionRestorePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ASR100012F11000100000003 /* AuthSessionRestorePolicyTests.swift */; };
+		STT100012F11000100000001 /* SubscriptionTierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STT100012F11000100000003 /* SubscriptionTierTests.swift */; };
 		ASR100012F11000100000002 /* AuthSessionRestorePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = ASR100012F11000100000004 /* AuthSessionRestorePolicy.swift */; };
+		STT100012F11000100000002 /* SubscriptionTier.swift in Sources */ = {isa = PBXBuildFile; fileRef = STT100012F11000100000004 /* SubscriptionTier.swift */; };
 		AFB68FC6D50BD0CA71C7AFBC /* FnKeyGestureResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53994ACF59112AC03573BA2A /* FnKeyGestureResolverTests.swift */; };
 		B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; };
 		B2D5E0022F9BF00100000002 /* WhisperMateShared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C1E7D2AD2EBA925200A07338 /* WhisperMateShared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -45,6 +47,8 @@
 		C2A100012F2B000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C2A100032F2B000000000003 /* Sparkle */; };
 		E1A200012F90000100000004 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = E1A200012F90000100000002 /* Sentry */; };
 		E1A200012F90000100000005 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = E1A200012F90000100000003 /* Sentry */; };
+		F1A300012FA0000100000004 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = F1A300012FA0000100000002 /* RevenueCat */; };
+		F1A300012FA0000100000005 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = F1A300012FA0000100000003 /* RevenueCatUI */; };
 		C3D3AA06BB367CC2B12D382D /* TextInsertionFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB2F5B03832E9122A26BFEE /* TextInsertionFormatter.swift */; };
 		D0A4AD5DA19BF16932846DE7 /* KeyboardDictationLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19C94026FCE18679208F5DF4 /* KeyboardDictationLiveActivity.swift */; };
 		D1A1F1002F65000100000003 /* PermissionFlow in Frameworks */ = {isa = PBXBuildFile; productRef = D1A1F1002F65000100000002 /* PermissionFlow */; };
@@ -195,7 +199,9 @@
 		CRP100012F11000100000003 /* MacCaptureRecoveryPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacCaptureRecoveryPolicyTests.swift; sourceTree = "<group>"; };
 		CRP100012F11000100000004 /* MacCaptureRecoveryPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacCaptureRecoveryPolicy.swift; sourceTree = "<group>"; };
 		ASR100012F11000100000003 /* AuthSessionRestorePolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuthSessionRestorePolicyTests.swift; sourceTree = "<group>"; };
+		STT100012F11000100000003 /* SubscriptionTierTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SubscriptionTierTests.swift; sourceTree = "<group>"; };
 		ASR100012F11000100000004 /* AuthSessionRestorePolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AuthSessionRestorePolicy.swift; path = WhisperMateShared/Services/AuthSessionRestorePolicy.swift; sourceTree = SOURCE_ROOT; };
+		STT100012F11000100000004 /* SubscriptionTier.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SubscriptionTier.swift; path = WhisperMateShared/Models/SubscriptionTier.swift; sourceTree = SOURCE_ROOT; };
 		56334D9AC285442AC331E6B8 /* TextInsertionFormatterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextInsertionFormatterTests.swift; sourceTree = "<group>"; };
 		5938666BED2167FFA779E1C5 /* HotkeyGestureResolver.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HotkeyGestureResolver.swift; sourceTree = "<group>"; };
 		5D82849D268DF9E045FAFE3E /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -323,6 +329,8 @@
 			files = (
 				B2D5E0012F9BF00100000001 /* WhisperMateShared.framework in Frameworks */,
 				E1A200012F90000100000005 /* Sentry in Frameworks */,
+				F1A300012FA0000100000004 /* RevenueCat in Frameworks */,
+				F1A300012FA0000100000005 /* RevenueCatUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -382,7 +390,9 @@
 				F12A69AC985379B2F47628B4 /* MacAsyncDeadlineTests.swift */,
 				CRP100012F11000100000003 /* MacCaptureRecoveryPolicyTests.swift */,
 				ASR100012F11000100000003 /* AuthSessionRestorePolicyTests.swift */,
+				STT100012F11000100000003 /* SubscriptionTierTests.swift */,
 				ASR100012F11000100000004 /* AuthSessionRestorePolicy.swift */,
+				STT100012F11000100000004 /* SubscriptionTier.swift */,
 			);
 			name = WhispermateTests;
 			path = WhispermateTests;
@@ -623,6 +633,8 @@
 			name = WhisperMateIOS;
 			packageProductDependencies = (
 				E1A200012F90000100000003 /* Sentry */,
+				F1A300012FA0000100000002 /* RevenueCat */,
+				F1A300012FA0000100000003 /* RevenueCatUI */,
 			);
 			productName = WhisperMateIOS;
 			productReference = C1CE64402ED8417000D24235 /* WhisperMateIOS.app */;
@@ -727,6 +739,7 @@
 				C2A100022F2B000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				D1A1F1002F65000100000001 /* XCRemoteSwiftPackageReference "PermissionFlow" */,
 				E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C18566CA2EA0D31000B46F55;
@@ -876,7 +889,9 @@
 				CRP100012F11000100000001 /* MacCaptureRecoveryPolicyTests.swift in Sources */,
 				CRP100012F11000100000002 /* MacCaptureRecoveryPolicy.swift in Sources */,
 				ASR100012F11000100000001 /* AuthSessionRestorePolicyTests.swift in Sources */,
+				STT100012F11000100000001 /* SubscriptionTierTests.swift in Sources */,
 				ASR100012F11000100000002 /* AuthSessionRestorePolicy.swift in Sources */,
+				STT100012F11000100000002 /* SubscriptionTier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1764,6 +1779,14 @@
 				minimumVersion = 8.36.0;
 			};
 		};
+		F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.103.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1811,6 +1834,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E1A200012F90000100000001 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
 			productName = Sentry;
+		};
+		F1A300012FA0000100000002 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+		F1A300012FA0000100000003 /* RevenueCatUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F1A300012FA0000100000001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCatUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

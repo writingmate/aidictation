@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.domain.model.UsageStatus
+import android.app.Activity
 import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Context
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +40,8 @@ data class OnboardingOnDeviceModelState(
 
 data class OnboardingDemoUiState(
     val isRecording: Boolean = false,
+    /** The microphone is being opened after a tap; the button already looks like listening. */
+    val isStarting: Boolean = false,
     val isProcessing: Boolean = false,
     val resultText: String? = null,
     val errorMessage: String? = null,
@@ -65,9 +68,16 @@ class OnboardingViewModel @Inject constructor(
     val hasPaymentLinks: Boolean
         get() = subscriptionRepository.hasPaymentLinks()
 
-    /** Opens Stripe checkout for [plan] in the browser; the user comes back to finish onboarding. */
-    fun openUpgrade(plan: PaymentPlan) {
-        subscriptionRepository.openUpgrade(plan)
+    val planPrices: StateFlow<Map<PaymentPlan, String>> = subscriptionRepository.planPrices
+
+    val sellsInApp: StateFlow<Boolean> = subscriptionRepository.sellsInApp
+
+    /**
+     * Buys [plan] in the app from [activity] when in-app purchases are configured, else
+     * opens checkout in the browser; either way the user comes back to finish onboarding.
+     */
+    fun openUpgrade(plan: PaymentPlan, activity: Activity?) {
+        subscriptionRepository.openUpgrade(plan, activity)
     }
 
     private val _isSigningIn = MutableStateFlow(false)
@@ -153,7 +163,7 @@ class OnboardingViewModel @Inject constructor(
                         demoCaptureLease,
                         token
                     ) &&
-                    (_demoState.value.isRecording || _demoState.value.isProcessing)
+                    (_demoState.value.isRecording || _demoState.value.isStarting || _demoState.value.isProcessing)
                 ) {
                     token ?: return@collect
                     if (demoFence.finish(token)) {
@@ -250,9 +260,11 @@ class OnboardingViewModel @Inject constructor(
     }
 
     fun startDemoRecording() {
-        if (_demoState.value.isRecording || _demoState.value.isProcessing) return
+        if (_demoState.value.isRecording || _demoState.value.isStarting || _demoState.value.isProcessing) return
         val token = demoFence.reserve() ?: return
-        _demoState.value = OnboardingDemoUiState(isProcessing = true)
+        // A tap goes straight from waiting to listening: opening the microphone is not a
+        // step the user should see, so it never shows the processing state.
+        _demoState.value = OnboardingDemoUiState(isStarting = true)
         viewModelScope.launch {
             val result = audioProcessingCoordinator.startCapture(
                 owner = AndroidAudioAttemptOwner.ONBOARDING,

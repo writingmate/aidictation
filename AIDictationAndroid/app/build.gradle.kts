@@ -134,6 +134,11 @@ val stripePaymentLink = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK")
 val stripePaymentLinkMonthly = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_MONTHLY"))
     .ifBlank { stripePaymentLink }
 val stripePaymentLinkAnnual = productionPaymentLink(configValue("STRIPE_PAYMENT_LINK_ANNUAL"))
+// A RevenueCat Test Store key ("test_...") makes the SDK crash on purpose in a build that
+// is not debuggable, Play internal tracks included. Release builds drop such a key and keep
+// the browser checkout.
+val revenueCatApiKey = configValue("REVENUECAT_API_KEY").trim()
+val revenueCatReleaseApiKey = revenueCatApiKey.takeUnless { it.startsWith("test_") }.orEmpty()
 val transcriptionModel = normalizedTranscriptionModel(configValue("TRANSCRIPTION_MODEL"))
 val authWebUrl = normalizedAuthWebUrl(configValue("AUTH_WEB_URL"))
 val authApiUrl = normalizedAuthApiUrl(configValue("SUPABASE_URL"), authWebUrl)
@@ -197,6 +202,10 @@ android {
         // that the auth backend's Google provider is configured with; blank hides the
         // "Continue with Google" entry point.
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", buildConfigString(configValue("GOOGLE_WEB_CLIENT_ID")))
+        // RevenueCat public SDK key: "goog_..." for Google Play, "test_..." for the Test
+        // Store (debug builds only). Blank keeps the browser checkout; set, Pro is sold in
+        // the app instead.
+        buildConfigField("String", "REVENUECAT_API_KEY", buildConfigString(revenueCatApiKey))
         buildConfigField("String", "STRIPE_PAYMENT_LINK", buildConfigString(stripePaymentLink))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_MONTHLY", buildConfigString(stripePaymentLinkMonthly))
         buildConfigField("String", "STRIPE_PAYMENT_LINK_ANNUAL", buildConfigString(stripePaymentLinkAnnual))
@@ -220,14 +229,12 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "REVENUECAT_API_KEY", buildConfigString(revenueCatReleaseApiKey))
         }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -247,6 +254,30 @@ android {
         // Play-delivered on-device model pack for Parakeet.
         assetPacks.add(":parakeetpack")
     }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+// Fails the build if a Test Store key reaches the release BuildConfig.
+val verifyReleaseRevenueCatKey = tasks.register("verifyReleaseRevenueCatKey") {
+    val generated = layout.buildDirectory.file(
+        "generated/source/buildConfig/release/com/whispermate/aidictation/BuildConfig.java"
+    )
+    inputs.file(generated)
+    doLast {
+        val keyLine = generated.get().asFile.readLines().firstOrNull { "REVENUECAT_API_KEY" in it }
+            ?: throw GradleException("REVENUECAT_API_KEY is missing from the release BuildConfig")
+        if ("\"test_" in keyLine) {
+            throw GradleException("A RevenueCat Test Store key is built into the release variant")
+        }
+    }
+}
+tasks.matching { it.name == "generateReleaseBuildConfig" }.configureEach {
+    finalizedBy(verifyReleaseRevenueCatKey)
 }
 
 play {
@@ -320,6 +351,8 @@ dependencies {
     implementation(libs.onnx.runtime)
     implementation(libs.play.asset.delivery)
     implementation(libs.play.review)
+    implementation(libs.revenuecat.purchases)
+    implementation(libs.revenuecat.purchases.ui)
     implementation(libs.litert)
 
     // Debug
@@ -328,6 +361,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("androidx.test:core-ktx:1.6.1")
-    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("androidx.room:room-testing:${libs.versions.room.get()}")
     testImplementation("org.robolectric:robolectric:4.13")
 }

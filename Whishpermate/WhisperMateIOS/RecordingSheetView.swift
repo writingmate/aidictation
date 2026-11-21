@@ -18,6 +18,7 @@ struct RecordingSheetView: View {
     @State private var sheetState: SheetState = .idle
     @State private var transcription = ""
     @State private var errorMessage = ""
+    @State private var showPaywall = false
     @State private var recordingStartTime: Date?
     @State private var showShareSheet = false
     @State private var currentRecording: Recording?
@@ -340,6 +341,7 @@ struct RecordingSheetView: View {
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [transcription])
         }
+        .proPaywall(isPresented: $showPaywall)
     }
 
     // MARK: - Actions
@@ -388,6 +390,7 @@ struct RecordingSheetView: View {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             errorMessage = access.reason ?? "Log in to continue transcribing."
+            showPaywall = PurchasesManager.shared.canShowPaywall
             return
         }
 
@@ -490,6 +493,7 @@ struct RecordingSheetView: View {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             errorMessage = access.reason ?? "Log in to continue transcribing."
+            showPaywall = PurchasesManager.shared.canShowPaywall
             sheetState = .viewing
             return
         }
@@ -912,6 +916,7 @@ struct RecordingSheetView: View {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             let message = access.reason ?? "Log in to continue transcribing."
+            showPaywall = PurchasesManager.shared.canShowPaywall
             let terminalResult = await processingStore.commitTerminalState(
                 .failed(message: message, integrity: .complete),
                 lease: lease,

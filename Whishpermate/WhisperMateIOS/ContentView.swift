@@ -5,6 +5,7 @@ import AVFoundation
 import Combine
 import MediaPlayer
 import StoreKit
+import RevenueCatUI
 import SwiftUI
 import UIKit
 import WhisperMateShared
@@ -25,9 +26,12 @@ struct ContentView: View {
     @StateObject private var shortcutManager = ShortcutManager.shared
     @StateObject private var authManager = AuthManager.shared
     @StateObject private var subscriptionManager = SubscriptionManager.shared
+    @StateObject private var purchasesManager = PurchasesManager.shared
     @StateObject private var transcriptionProviderManager = TranscriptionProviderManager()
     @StateObject private var parakeetService = SharedParakeetTranscriptionService.shared
     @StateObject private var inlineRecording = InlineRecordingCoordinator()
+    @State private var showSettingsPaywall = false
+    @State private var showCustomerCenter = false
     @State private var showRecordingSheet = false
     @State private var showSettings = false
     @State private var showShortcutsUnavailable = false
@@ -133,6 +137,7 @@ struct ContentView: View {
                 pickUpRequest: pickUpQuickDictationRequest,
                 retryStart: startPendingQuickDictationIfPossible
             ))
+            .proPaywall(isPresented: $purchasesManager.isPaywallRequested)
             .alert("Login Unavailable", isPresented: $showLoginConfigurationAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -723,6 +728,29 @@ struct ContentView: View {
                         subscriptionTier: authManager.currentUser?.subscriptionTier
                     )
 
+                    if purchasesManager.isConfigured {
+                        if purchasesManager.isProActive {
+                            Button {
+                                showCustomerCenter = true
+                            } label: {
+                                Label("Manage Subscription", systemImage: "creditcard")
+                            }
+                        } else if !subscriptionManager.getUsageStatus().isPro {
+                            Button {
+                                showSettingsPaywall = true
+                            } label: {
+                                Label("Upgrade to Pro", systemImage: "sparkles")
+                            }
+                        }
+
+                        Button {
+                            Task { await purchasesManager.restorePurchases() }
+                        } label: {
+                            Label("Restore Purchases", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(purchasesManager.isRestoring)
+                    }
+
                     if authManager.isAuthenticated {
                         Button(role: .destructive) {
                             Task {
@@ -865,6 +893,18 @@ struct ContentView: View {
         // view cannot present while this sheet is already showing.
         .sheet(isPresented: $showLoginSheet) {
             AccountLoginView(authManager: authManager)
+        }
+        .proPaywall(isPresented: $showSettingsPaywall)
+        .sheet(isPresented: $showCustomerCenter) {
+            CustomerCenterView()
+        }
+        .alert("Purchases", isPresented: Binding(
+            get: { purchasesManager.userMessage != nil },
+            set: { if !$0 { purchasesManager.userMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(purchasesManager.userMessage ?? "")
         }
         .alert("Shortcuts Unavailable", isPresented: $showShortcutsUnavailable) {
             Button("OK", role: .cancel) {}
@@ -2046,7 +2086,11 @@ private struct UsageSummaryView: View {
     }
 
     private var planLabel: String {
-        subscriptionTier?.displayName ?? (usage.isPro ? "Pro" : "Free")
+        if usage.isPro, subscriptionTier?.isPaid != true {
+            // Pro through an in-app purchase; the account tier catches up via the webhook.
+            return SubscriptionTier.pro.displayName
+        }
+        return subscriptionTier?.displayName ?? "Free"
     }
 
     var body: some View {
@@ -2069,7 +2113,7 @@ private struct UsageSummaryView: View {
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-            } else if !isAuthenticated {
+            } else if !isAuthenticated, !usage.isPro {
                 Text("Log in when you need more words.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
@@ -3232,6 +3276,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
             let message = access.reason ?? "Log in to continue transcribing."
             publishKeyboardStartFailure(identity: keyboardIdentity, message: message)
             showError(message)
+            PurchasesManager.shared.requestPaywall()
             return
         }
 
@@ -3690,6 +3735,7 @@ private final class InlineRecordingCoordinator: ObservableObject {
         let access = subscriptionManager.checkCanTranscribe()
         guard access.canTranscribe else {
             let message = access.reason ?? "Log in to continue transcribing."
+            PurchasesManager.shared.requestPaywall()
             let terminalResult = await processingStore.commitTerminalState(
                 .failed(message: message, integrity: .complete),
                 lease: lease,

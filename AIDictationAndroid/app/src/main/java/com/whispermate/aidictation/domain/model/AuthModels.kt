@@ -2,8 +2,11 @@ package com.whispermate.aidictation.domain.model
 
 const val FREE_TRIAL_WORD_LIMIT = 5_000
 
-/** A Stripe payment link the app can open; each maps to one STRIPE_PAYMENT_LINK_* build value. */
+/** A Pro subscription the app can sell: in the app's store, or through a Stripe payment link. */
 enum class PaymentPlan { Monthly, Annual }
+
+/** Dictation is blocked because the free word allowance is used up. */
+class WordLimitReachedException(message: String) : Exception(message)
 const val REFERRAL_BONUS_WORDS = 2_000
 
 enum class SubscriptionTier {
@@ -78,7 +81,9 @@ data class UsageStatus(
     val avatarUrl: String? = null,
     val tierName: String = SubscriptionTier.Free.displayName,
     val referralCode: String? = null,
-    val referralBonusWords: Int = 0
+    val referralBonusWords: Int = 0,
+    /** Pro comes from a purchase in the app's store, so the store can manage it. */
+    val hasStorePurchase: Boolean = false
 ) {
     val remaining: Int
         get() = if (isPro) Int.MAX_VALUE else (limit - used).coerceAtLeast(0)

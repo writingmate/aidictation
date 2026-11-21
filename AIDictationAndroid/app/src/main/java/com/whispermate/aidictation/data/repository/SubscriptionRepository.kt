@@ -1,6 +1,13 @@
 package com.whispermate.aidictation.data.repository
 
+import android.app.Activity
 import android.content.Context
+import android.widget.Toast
+import com.whispermate.aidictation.R
+import com.whispermate.aidictation.data.billing.PurchaseOutcome
+import com.whispermate.aidictation.data.billing.PurchasesManager
+import com.whispermate.aidictation.domain.model.SubscriptionTier
+import kotlinx.coroutines.withContext
 import com.whispermate.aidictation.domain.model.PaymentPlan
 import android.content.Intent
 import android.util.Log
@@ -10,6 +17,7 @@ import com.whispermate.aidictation.domain.model.FREE_TRIAL_WORD_LIMIT
 import com.whispermate.aidictation.domain.model.REFERRAL_BONUS_WORDS
 import com.whispermate.aidictation.domain.model.UsageClaimDestination
 import com.whispermate.aidictation.domain.model.UsageStatus
+import com.whispermate.aidictation.domain.model.WordLimitReachedException
 import com.whispermate.aidictation.domain.model.countUsageWords
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -17,7 +25,9 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -31,25 +41,31 @@ class SubscriptionRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val appPreferences: AppPreferences,
     private val authRepository: AuthRepository,
-    private val recordingRepository: RecordingRepository
+    private val recordingRepository: RecordingRepository,
+    private val purchasesManager: PurchasesManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val usageDispatchMutex = Mutex()
+    private val _paywallRequested = MutableStateFlow(false)
 
     val usageStatus: StateFlow<UsageStatus> = combine(
         appPreferences.localUsage,
-        authRepository.authState
-    ) { localUsage, authState ->
+        authRepository.authState,
+        purchasesManager.storeTier
+    ) { localUsage, authState, storeTier ->
         val user = authState.user
         if (user == null) {
             UsageStatus(
                 used = localUsage.wordCount,
                 limit = FREE_TRIAL_WORD_LIMIT,
-                isPro = false,
-                isAuthenticated = false
+                // A store purchase made without an account still unlocks this device.
+                isPro = storeTier.isPaid,
+                isAuthenticated = false,
+                tierName = storeTier.displayName,
+                hasStorePurchase = storeTier.isPaid
             )
         } else {
-            val tier = user.subscriptionTier
+            val tier = effectiveTier(user.subscriptionTier, storeTier)
             UsageStatus(
                 used = user.monthlyWordCount,
                 limit = user.effectiveWordLimit,
@@ -59,7 +75,8 @@ class SubscriptionRepository @Inject constructor(
                 avatarUrl = authState.avatarUrl,
                 tierName = tier.displayName,
                 referralCode = user.referralCode,
-                referralBonusWords = user.referralBonusWords
+                referralBonusWords = user.referralBonusWords,
+                hasStorePurchase = storeTier.isPaid
             )
         }
     }.stateIn(
@@ -95,14 +112,15 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun checkCanTranscribe(): Result<Unit> {
+        if (purchasesManager.storeTier.value.isPaid) return Result.success(Unit)
         val user = authRepository.authState.value.user
         if (user != null) {
             if (user.subscriptionTier.isPaid || !user.hasReachedLimit) return Result.success(Unit)
-            return Result.failure(Exception("You've used all ${user.effectiveWordLimit} trial words. Unlimited is \$8.49/month or \$84.99/year."))
+            return Result.failure(WordLimitReachedException("You've used all ${user.effectiveWordLimit} trial words. Unlimited is \$8.49/month or \$84.99/year."))
         }
 
         return if (appPreferences.hasReachedLocalFreeLimit()) {
-            Result.failure(Exception("You've dictated 5,000 words. Unlimited is \$8.49/month or \$84.99/year."))
+            Result.failure(WordLimitReachedException("You've dictated 5,000 words. Unlimited is \$8.49/month or \$84.99/year."))
         } else {
             Result.success(Unit)
         }
@@ -183,15 +201,89 @@ class SubscriptionRepository @Inject constructor(
     suspend fun signInWithGoogle(activityContext: Context): Boolean =
         authRepository.signInWithGoogle(activityContext)
 
-    fun openUpgrade(plan: PaymentPlan? = null) {
-        authRepository.openUpgrade(context, plan)
+    /** Store-formatted prices for the plans sold in the app; empty with browser checkout. */
+    val planPrices: StateFlow<Map<PaymentPlan, String>> = purchasesManager.planPrices
+
+    /** Whether Pro is bought inside the app (Google Play) rather than in the browser. */
+    val sellsInApp: StateFlow<Boolean> = purchasesManager.canSell
+
+    /** Whether the RevenueCat paywall should be on screen; the activity shows it. */
+    val paywallRequested: StateFlow<Boolean> = _paywallRequested.asStateFlow()
+
+    /**
+     * Starts an upgrade. With in-app purchases configured, a chosen [plan] is bought from
+     * [activity] directly and no plan opens the RevenueCat paywall; otherwise checkout
+     * opens in the browser.
+     */
+    fun openUpgrade(plan: PaymentPlan? = null, activity: Activity? = null) {
+        if (!purchasesManager.canSell.value) {
+            authRepository.openUpgrade(context, plan)
+            return
+        }
+        if (plan == null || activity == null) {
+            requestPaywall()
+            return
+        }
+        scope.launch {
+            val outcome = withContext(Dispatchers.Main) {
+                purchasesManager.purchase(activity, plan)
+            }
+            when (outcome) {
+                PurchaseOutcome.Failed -> showToast(R.string.purchase_failed)
+                PurchaseOutcome.Unconfirmed -> showToast(R.string.purchase_unconfirmed)
+                PurchaseOutcome.Purchased, PurchaseOutcome.Cancelled -> Unit
+            }
+        }
     }
 
-    fun hasPaymentLinks(): Boolean = authRepository.hasPaymentLinks()
+    /**
+     * Asks for the paywall after [error] blocked a dictation, when the block is the word
+     * limit and Pro is sold in the app. Returns whether the paywall was requested.
+     */
+    fun requestPaywallIfLimitReached(error: Throwable): Boolean {
+        if (!shouldOfferPaywall(error, purchasesManager.canSell.value)) return false
+        requestPaywall()
+        return true
+    }
+
+    private fun requestPaywall() {
+        // The paywall never opens for a holder of the entitlement, so it could not be
+        // closed either and would surface later, when the entitlement lapses.
+        if (!purchasesManager.storeTier.value.isPaid) _paywallRequested.value = true
+    }
+
+    /** The paywall or Customer Center closed; whatever happened there is picked up now. */
+    fun onStoreScreenClosed() {
+        _paywallRequested.value = false
+        purchasesManager.refresh()
+    }
+
+    /** Re-reads the Play account's purchases, for a new phone or a reinstall. */
+    fun restorePurchases() {
+        scope.launch {
+            val restored = purchasesManager.restore()
+            showToast(if (restored) R.string.purchase_restored else R.string.purchase_nothing_to_restore)
+        }
+    }
+
+    fun hasPaymentLinks(): Boolean = purchasesManager.canSell.value || authRepository.hasPaymentLinks()
+
+    private suspend fun showToast(messageRes: Int) = withContext(Dispatchers.Main) {
+        Toast.makeText(context, messageRes, Toast.LENGTH_LONG).show()
+    }
 
     suspend fun signOut() {
         authRepository.signOut()
     }
-
-
 }
+
+/**
+ * The plan shown for an account: its own paid plan (web checkout, lifetime codes), and the
+ * store subscription when the account has none.
+ */
+internal fun effectiveTier(accountTier: SubscriptionTier, storeTier: SubscriptionTier): SubscriptionTier =
+    if (accountTier.isPaid) accountTier else storeTier
+
+/** The RevenueCat paywall answers a word-limit block, and only when Pro is sold in the app. */
+internal fun shouldOfferPaywall(error: Throwable, sellsInApp: Boolean): Boolean =
+    sellsInApp && error is WordLimitReachedException

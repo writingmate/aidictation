@@ -18,6 +18,12 @@ public class SubscriptionManager: ObservableObject {
 
     private enum Keys {
         static let localWordCount = "localWordCount"
+        static let storeEntitlementActive = "storeProEntitlementActive"
+    }
+
+    private enum Constants {
+        /// App group shared with the keyboard extension, which runs in its own process.
+        static let appGroupIdentifier = "group.com.whispermate.shared"
     }
 
     // MARK: - Published Properties
@@ -26,9 +32,20 @@ public class SubscriptionManager: ObservableObject {
     @Published public var showSignupModal: Bool = false
     @Published public private(set) var usageVersion: Int = 0
 
+    /// Whether an in-app store purchase currently unlocks Pro. The platform purchase layer
+    /// reports it through `setStoreEntitlementActive(_:)`; it counts as paid for signed-in
+    /// and anonymous users alike.
+    @Published public private(set) var hasStoreEntitlement: Bool
+
     // MARK: - Private Properties
 
     private let authManager = AuthManager.shared
+
+    /// Storage the keyboard extension can read too. Falls back to the app's own defaults
+    /// where the app group is unavailable.
+    private static var entitlementDefaults: UserDefaults {
+        UserDefaults(suiteName: Constants.appGroupIdentifier) ?? AppDefaults.shared
+    }
 
     // MARK: - Local Word Tracking (for anonymous users)
 
@@ -40,6 +57,19 @@ public class SubscriptionManager: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        hasStoreEntitlement = Self.entitlementDefaults.bool(forKey: Keys.storeEntitlementActive)
+    }
+
+    // MARK: - Store Entitlement
+
+    /// Records whether an in-app store purchase unlocks Pro. Persisted so the limit check
+    /// gives the same answer at next launch, before the store has been reached.
+    public func setStoreEntitlementActive(_ isActive: Bool) {
+        guard hasStoreEntitlement != isActive else { return }
+        Self.entitlementDefaults.set(isActive, forKey: Keys.storeEntitlementActive)
+        hasStoreEntitlement = isActive
+        usageVersion += 1
+        DebugLog.info("Store entitlement active=\(isActive)", context: "SubscriptionManager")
     }
 
     // MARK: - Subscription
@@ -92,7 +122,7 @@ public class SubscriptionManager: ObservableObject {
 
     public func getUsageStatus() -> (used: Int, limit: Int, percentage: Double, isPro: Bool) {
         if let user = authManager.currentUser {
-            let isPaid = user.subscriptionTier.isPaid
+            let isPaid = user.subscriptionTier.isPaid || hasStoreEntitlement
             let limit = user.effectiveWordLimit
             let used = user.totalWordsUsed
             let percentage = isPaid ? 0.0 : user.usagePercentage
@@ -101,8 +131,8 @@ public class SubscriptionManager: ObservableObject {
             // Anonymous user - use local tracking
             let limit = UsageLimits.freeTrialWordLimit
             let used = localWordCount
-            let percentage = Double(used) / Double(limit)
-            return (used, limit, percentage, false)
+            let percentage = hasStoreEntitlement ? 0.0 : Double(used) / Double(limit)
+            return (used, limit, percentage, hasStoreEntitlement)
         }
     }
 
@@ -112,7 +142,7 @@ public class SubscriptionManager: ObservableObject {
         }
 
         // Don't show for paid users
-        if user.subscriptionTier.isPaid {
+        if user.subscriptionTier.isPaid || hasStoreEntitlement {
             return false
         }
 
@@ -142,6 +172,11 @@ public class SubscriptionManager: ObservableObject {
     /// Check if user can transcribe (works for both authenticated and anonymous users)
     public func checkCanTranscribe() -> (canTranscribe: Bool, reason: String?) {
         DebugLog.info("checkCanTranscribe: isAuthenticated=\(authManager.isAuthenticated), isLoading=\(authManager.isLoading), hasUser=\(authManager.currentUser != nil)", context: "SubscriptionManager")
+        if hasStoreEntitlement {
+            DebugLog.info("checkCanTranscribe: allowing, store entitlement is active", context: "SubscriptionManager")
+            return (true, nil)
+        }
+
         if authManager.isLoading {
             DebugLog.info("checkCanTranscribe: allowing while auth state is loading", context: "SubscriptionManager")
             return (true, nil)

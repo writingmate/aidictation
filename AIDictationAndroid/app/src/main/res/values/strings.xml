@@ -56,8 +56,8 @@
     <string name="permissions_hint_all_set">All set.</string>
     <string name="onboarding_open_settings">Open Settings</string>
     <string name="onboarding_get_started">Get Started</string>
-    <string name="onboarding_rate_title">Rate AI Dictation</string>
-    <string name="onboarding_rate_subtitle">A rating helps other people find voice dictation.</string>
+    <string name="onboarding_rate_title">Would you rate AI Dictation?</string>
+    <string name="onboarding_rate_subtitle">It takes a few seconds and helps other people find voice dictation.</string>
     <string name="onboarding_rate_not_now">Not now</string>
     <string name="onboarding_sign_in_title">Keep your account in sync</string>
     <string name="onboarding_sign_in_subtitle">Sign in to keep your plan and history when you switch phones.</string>
@@ -72,6 +72,9 @@
     <string name="onboarding_paywall_cta">Get Pro</string>
     <string name="onboarding_paywall_continue_free">Continue with the trial</string>
     <string name="onboarding_paywall_refund">30-day refund on paid plans. Checkout opens in your browser.</string>
+    <string name="onboarding_paywall_play_terms">Billed through Google Play. Cancel anytime in Play subscriptions.</string>
+    <string name="onboarding_paywall_price_monthly">%1$s / month</string>
+    <string name="onboarding_paywall_price_annual">%1$s / year</string>
     <string name="onboarding_on_device_title">Choose transcription mode</string>
     <string name="onboarding_on_device_subtitle">Cloud is more accurate. Offline never sends audio anywhere.</string>
     <string name="onboarding_transcription_cloud_title">Cloud</string>
@@ -129,6 +132,12 @@
     <string name="account_sign_out">Sign out</string>
     <string name="account_signed_in">Signed in</string>
     <string name="account_upgrade">Upgrade to Pro</string>
+    <string name="account_restore_purchases">Restore purchases</string>
+    <string name="account_manage_purchase">Manage subscription</string>
+    <string name="purchase_failed">The purchase did not go through. You have not been charged.</string>
+    <string name="purchase_unconfirmed">The purchase could not be confirmed. Check your connection: Pro unlocks once it goes through.</string>
+    <string name="purchase_restored">Pro is restored on this device.</string>
+    <string name="purchase_nothing_to_restore">No Pro purchase was found for this Google Play account.</string>
     <string name="account_continue_with_google">Continue with Google</string>
     <string name="account_google_not_configured">Google sign-in is not configured</string>
     <string name="account_google_no_account">No Google account is available on this device</string>
@@ -136,6 +145,7 @@
     <string name="account_usage_words">%1$d / %2$d trial words used</string>
     <string name="account_usage_unlimited">Unlimited words</string>
     <string name="account_anonymous_hint">Free to try. Sign in when you want more words or Pro.</string>
+    <string name="account_anonymous_pro_hint">Sign in to use Pro on your other devices.</string>
     <string name="account_authenticated_hint">Your word usage and purchases are linked to this account.</string>
     <string name="referral_title">Invite friends for more words</string>
     <string name="referral_description">Get 2,000 extra words when a friend joins.</string>

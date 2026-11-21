@@ -8,12 +8,18 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
+import com.revenuecat.purchases.ui.revenuecatui.PaywallDialog
+import com.revenuecat.purchases.ui.revenuecatui.PaywallDialogOptions
+import com.whispermate.aidictation.data.billing.PRO_ENTITLEMENT
 import com.whispermate.aidictation.data.repository.AuthRepository
+import com.whispermate.aidictation.data.repository.SubscriptionRepository
 import com.whispermate.aidictation.telemetry.InstallationAnalytics
 import com.whispermate.aidictation.service.OverlayDictationAccessibilityService
 import com.whispermate.aidictation.ui.AIDictationNavHost
@@ -26,6 +32,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     @Inject lateinit var authRepository: AuthRepository
     @Inject lateinit var installationAnalytics: InstallationAnalytics
+    @Inject lateinit var subscriptionRepository: SubscriptionRepository
 
     private var shouldStartRecording by mutableStateOf(false)
 
@@ -44,6 +51,19 @@ class MainActivity : ComponentActivity() {
                         shouldStartRecording = shouldStartRecording,
                         onRecordingStarted = { shouldStartRecording = false }
                     )
+                    val paywallRequested by subscriptionRepository.paywallRequested.collectAsState()
+                    if (paywallRequested) {
+                        // RevenueCat's paywall for the current offering. It stays closed for
+                        // an account that already holds the entitlement.
+                        PaywallDialog(
+                            remember {
+                                PaywallDialogOptions.Builder()
+                                    .setRequiredEntitlementIdentifier(PRO_ENTITLEMENT)
+                                    .setDismissRequest(subscriptionRepository::onStoreScreenClosed)
+                                    .build()
+                            }
+                        )
+                    }
                 }
             }
         }

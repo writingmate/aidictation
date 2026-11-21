@@ -31,8 +31,10 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -100,6 +102,9 @@ fun SettingsScreen(
     usageStatus: UsageStatus,
     onSignOut: () -> Unit,
     onUpgrade: () -> Unit,
+    onRestorePurchases: (() -> Unit)? = null,
+    /** Opens the store's subscription management; null when Pro is not a store purchase. */
+    onManagePurchase: (() -> Unit)? = null,
     onSignInWithGoogle: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -147,7 +152,9 @@ fun SettingsScreen(
             usageStatus = usageStatus,
             onSignInWithGoogle = onSignInWithGoogle,
             onSignOut = onSignOut,
-            onUpgrade = onUpgrade
+            onUpgrade = onUpgrade,
+            onRestorePurchases = onRestorePurchases,
+            onManagePurchase = onManagePurchase
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -383,7 +390,9 @@ private fun AccountSettingsSection(
     usageStatus: UsageStatus,
     onSignInWithGoogle: (() -> Unit)?,
     onSignOut: () -> Unit,
-    onUpgrade: () -> Unit
+    onUpgrade: () -> Unit,
+    onRestorePurchases: (() -> Unit)?,
+    onManagePurchase: (() -> Unit)?
 ) {
     SectionHeader(stringResource(R.string.settings_account))
     Card(
@@ -404,38 +413,55 @@ private fun AccountSettingsSection(
 
         UsageSummary(usageStatus = usageStatus)
 
-        // Google is the only way in. Upgrading needs an account, so an anonymous user
-        // sees the Google button where a signed-in free user sees Upgrade. The button
-        // is the card's last element and carries its own outline, so no rule around it.
-        if (!usageStatus.isAuthenticated) {
-            if (onSignInWithGoogle != null) {
-                GoogleSignInButton(
-                    onClick = onSignInWithGoogle,
+        // The Google button is the card's last element and carries its own outline, so it
+        // gets padding where the other rows get a rule.
+        accountActions(
+            usageStatus = usageStatus,
+            sellsInApp = onRestorePurchases != null,
+            canSignIn = onSignInWithGoogle != null
+        ).forEach { action ->
+            when (action) {
+                AccountAction.Upgrade -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.Default.AutoAwesome,
+                        title = stringResource(R.string.account_upgrade),
+                        onClick = onUpgrade,
+                        iconTint = MaterialTheme.colorScheme.primary,
+                        titleColor = MaterialTheme.colorScheme.primary
+                    )
+                }
+                AccountAction.RestorePurchases -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.Default.Restore,
+                        title = stringResource(R.string.account_restore_purchases),
+                        onClick = { onRestorePurchases?.invoke() }
+                    )
+                }
+                AccountAction.ManagePurchase -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.Default.ManageAccounts,
+                        title = stringResource(R.string.account_manage_purchase),
+                        onClick = { onManagePurchase?.invoke() }
+                    )
+                }
+                AccountAction.SignIn -> GoogleSignInButton(
+                    onClick = { onSignInWithGoogle?.invoke() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
+                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)
                 )
+                AccountAction.SignOut -> {
+                    SettingsRowGap()
+                    SettingsItem(
+                        icon = Icons.AutoMirrored.Filled.Logout,
+                        title = stringResource(R.string.account_sign_out),
+                        onClick = onSignOut
+                    )
+                }
             }
-        } else if (!usageStatus.isPro) {
-            SettingsRowGap()
-            SettingsItem(
-                icon = Icons.Default.AutoAwesome,
-                title = stringResource(R.string.account_upgrade),
-                onClick = onUpgrade,
-                iconTint = MaterialTheme.colorScheme.primary,
-                titleColor = MaterialTheme.colorScheme.primary
-            )
-
-            SettingsRowGap()
-        }
-
-        if (usageStatus.isAuthenticated) {
-            if (usageStatus.isPro) SettingsRowGap()
-            SettingsItem(
-                icon = Icons.AutoMirrored.Filled.Logout,
-                title = stringResource(R.string.account_sign_out),
-                onClick = onSignOut
-            )
         }
     }
 }
@@ -504,10 +530,10 @@ private fun UsageSummary(usageStatus: UsageStatus) {
         )
 
         Text(
-            text = if (usageStatus.isAuthenticated) {
-                stringResource(R.string.account_authenticated_hint)
-            } else {
-                stringResource(R.string.account_anonymous_hint)
+            text = when {
+                usageStatus.isAuthenticated -> stringResource(R.string.account_authenticated_hint)
+                usageStatus.isPro -> stringResource(R.string.account_anonymous_pro_hint)
+                else -> stringResource(R.string.account_anonymous_hint)
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -76,6 +76,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -230,7 +231,10 @@ fun OnboardingScreen(
     isSigningIn: Boolean = false,
     onSignInWithGoogle: (Context) -> Unit = {},
     paywallAvailable: Boolean = false,
-    onUpgrade: (PaymentPlan) -> Unit = {}
+    /** Store prices per plan when Pro is sold in the app; a missing plan shows the list price. */
+    planPrices: Map<PaymentPlan, String> = emptyMap(),
+    sellsInApp: Boolean = false,
+    onUpgrade: (PaymentPlan, Activity?) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -325,6 +329,16 @@ fun OnboardingScreen(
         onComplete()
     }
 
+    // The paywall leaves the step list once the account is Pro. When that happens while the
+    // user is on it, they have just bought: onboarding is over, not back at an earlier step.
+    val reachedPaywall = remember { booleanArrayOf(false) }
+    SideEffect {
+        if (currentOnboardingStep == OnboardingStep.Paywall) reachedPaywall[0] = true
+    }
+    LaunchedEffect(paywallAvailable) {
+        if (!paywallAvailable && reachedPaywall[0]) finishOnboarding()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -398,6 +412,7 @@ fun OnboardingScreen(
                     OnboardingStep.SignIn -> SignInStep(signedInEmail = signedInEmail)
                     OnboardingStep.Paywall -> PaywallStep(
                         selectedPlan = selectedPlan,
+                        planPrices = planPrices,
                         onSelectPlan = { selectedPlan = it }
                     )
                 }
@@ -428,6 +443,14 @@ fun OnboardingScreen(
                 )
             }
         } else if (currentOnboardingStep == OnboardingStep.OverlayPermissions) {
+            Text(
+                text = stringResource(permissionsHintText(permissions)),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = { goToNextStep() },
                 modifier = Modifier
@@ -444,17 +467,19 @@ fun OnboardingScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
             }
-            Spacer(modifier = Modifier.height(6.dp))
+        } else if (currentOnboardingStep == OnboardingStep.Paywall) {
             Text(
-                text = stringResource(permissionsHintText(permissions)),
+                text = stringResource(
+                    if (sellsInApp) R.string.onboarding_paywall_play_terms else R.string.onboarding_paywall_refund
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
-        } else if (currentOnboardingStep == OnboardingStep.Paywall) {
+            Spacer(modifier = Modifier.height(8.dp))
             Button(
-                onClick = { onUpgrade(selectedPlan) },
+                onClick = { onUpgrade(selectedPlan, context.findActivity()) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -467,20 +492,6 @@ fun OnboardingScreen(
                     text = stringResource(R.string.onboarding_paywall_cta),
                     style = MaterialTheme.typography.titleMedium
                 )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = stringResource(R.string.onboarding_paywall_refund),
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-            TextButton(
-                onClick = { finishOnboarding() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.onboarding_paywall_continue_free))
             }
         } else if (currentOnboardingStep == OnboardingStep.Review) {
             Button(
@@ -511,12 +522,6 @@ fun OnboardingScreen(
                     style = MaterialTheme.typography.titleMedium
                 )
             }
-            TextButton(
-                onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.onboarding_rate_not_now))
-            }
         } else if (currentOnboardingStep == OnboardingStep.SignIn && signedInEmail == null) {
             // The Google button is the one action here; finishing without an account stays possible.
             GoogleSignInButton(
@@ -535,7 +540,8 @@ fun OnboardingScreen(
                 enabled = when (currentOnboardingStep) {
                     OnboardingStep.OnDeviceTranscription -> !onDeviceModelState.isDownloading
                     OnboardingStep.ButtonDemo ->
-                        !demoLaunchRequested && !demoState.isRecording && !demoState.isProcessing
+                        !demoLaunchRequested && !demoState.isRecording && !demoState.isStarting &&
+                            !demoState.isProcessing
                     else -> true
                 },
                 colors = ButtonDefaults.buttonColors(
@@ -551,6 +557,31 @@ fun OnboardingScreen(
                     },
                     style = MaterialTheme.typography.titleMedium
                 )
+            }
+        }
+
+        // The slot under the main button is the same height on every step, used or not,
+        // so the button never moves from one step to the next. Messages go above it.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            when (currentOnboardingStep) {
+                OnboardingStep.Paywall -> TextButton(
+                    onClick = { finishOnboarding() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.onboarding_paywall_continue_free))
+                }
+                OnboardingStep.Review -> TextButton(
+                    onClick = { if (isLastStep) finishOnboarding() else goToNextStep() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.onboarding_rate_not_now))
+                }
+                else -> Unit
             }
         }
     }
@@ -577,7 +608,17 @@ private fun permissionsHintText(state: PermissionsState): Int = when (permission
 @Composable
 private fun ReviewStep() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        OnboardingHeroIcon(icon = Icons.Default.Star)
+        // Five stars say "rating" at a glance; a single star reads as a one-star score.
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(5) {
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -731,7 +772,8 @@ private fun ButtonDemoStep(
     var demoStage by remember { mutableIntStateOf(0) }
     val audioLevel = demoState.audioLevel
     val frequencyBands = demoState.frequencyBands
-    val isRecording = demoState.isRecording
+    // Listening as far as the user can tell: recording, or the microphone still opening.
+    val isRecording = demoState.isRecording || demoState.isStarting
     val previewState = when {
         demoState.isProcessing -> OverlayMicButtonView.State.Processing
         isRecording -> OverlayMicButtonView.State.Recording
@@ -755,7 +797,7 @@ private fun ButtonDemoStep(
 
     fun handleDemoMicTap() {
         when {
-            demoState.isProcessing -> Unit
+            demoState.isProcessing || demoState.isStarting -> Unit
             isRecording -> stopDemoRecording()
             demoStage >= 1 -> {
                 demoStage = 2
@@ -1347,6 +1389,7 @@ private fun RatingRow(
 @Composable
 private fun PaywallStep(
     selectedPlan: PaymentPlan,
+    planPrices: Map<PaymentPlan, String>,
     onSelectPlan: (PaymentPlan) -> Unit
 ) {
     val colors = onboardingColors()
@@ -1375,15 +1418,20 @@ private fun PaywallStep(
 
         PlanChoiceCard(
             title = stringResource(R.string.onboarding_paywall_annual),
-            price = stringResource(R.string.onboarding_paywall_annual_price),
-            badge = stringResource(R.string.onboarding_paywall_annual_badge),
+            price = planPrices[PaymentPlan.Annual]
+                ?.let { stringResource(R.string.onboarding_paywall_price_annual, it) }
+                ?: stringResource(R.string.onboarding_paywall_annual_price),
+            // The saving is only known for the list prices.
+            badge = stringResource(R.string.onboarding_paywall_annual_badge).takeIf { planPrices.isEmpty() },
             selected = selectedPlan == PaymentPlan.Annual,
             onClick = { onSelectPlan(PaymentPlan.Annual) }
         )
         Spacer(modifier = Modifier.height(10.dp))
         PlanChoiceCard(
             title = stringResource(R.string.onboarding_paywall_monthly),
-            price = stringResource(R.string.onboarding_paywall_monthly_price),
+            price = planPrices[PaymentPlan.Monthly]
+                ?.let { stringResource(R.string.onboarding_paywall_price_monthly, it) }
+                ?: stringResource(R.string.onboarding_paywall_monthly_price),
             badge = null,
             selected = selectedPlan == PaymentPlan.Monthly,
             onClick = { onSelectPlan(PaymentPlan.Monthly) }

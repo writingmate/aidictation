@@ -81,6 +81,7 @@ fun TranscriptionSettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val copiedMessage = stringResource(R.string.copied)
     val snackbarHostState = remember { SnackbarHostState() }
     val selectedPage = initialPage.coerceIn(0, 2)
 
@@ -133,7 +134,7 @@ fun TranscriptionSettingsScreen(
                         },
                         onCopy = { entry ->
                             copyToClipboard(context, buildDictionaryDetailText(entry))
-                            scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.copied)) }
+                            scope.launch { snackbarHostState.showSnackbar(copiedMessage) }
                         },
                         onDetail = { selectedDetail = PostProcessingDetail.Dictionary(it) },
                         onRestoreDefaults = { viewModel.restoreDefaultDictionaryEntries() }
@@ -154,7 +155,7 @@ fun TranscriptionSettingsScreen(
                         },
                         onCopy = { style ->
                             copyToClipboard(context, buildToneStyleDetailText(style))
-                            scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.copied)) }
+                            scope.launch { snackbarHostState.showSnackbar(copiedMessage) }
                         },
                         onDetail = { selectedDetail = PostProcessingDetail.ToneStyle(it) },
                         onRestoreDefaults = { viewModel.restoreDefaultToneStyles() }
@@ -175,7 +176,7 @@ fun TranscriptionSettingsScreen(
                         },
                         onCopy = { shortcut ->
                             copyToClipboard(context, buildShortcutDetailText(shortcut))
-                            scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.copied)) }
+                            scope.launch { snackbarHostState.showSnackbar(copiedMessage) }
                         },
                         onDetail = { selectedDetail = PostProcessingDetail.Shortcut(it) },
                         onRestoreDefaults = { viewModel.restoreDefaultShortcuts() }

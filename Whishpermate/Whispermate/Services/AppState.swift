@@ -2571,6 +2571,10 @@ class AppState: ObservableObject {
             } else {
                 await processDictationResult(transcription: trimmed)
             }
+            // Ownership was released before the result was delivered. A newer
+            // recording started meanwhile owns these fields; clearing them
+            // would turn its command into dictation and skip its paste.
+            guard activeRecordingID == nil else { return }
             recordingMode = .dictation
             shouldAutoPaste = false
             recordingStartTime = nil

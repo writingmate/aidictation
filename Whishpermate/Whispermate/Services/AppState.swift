@@ -1765,8 +1765,19 @@ class AppState: ObservableObject {
         finishOverlayAfterRecording()
     }
 
+    /// Brings History and usage up to date with the journal once per launch.
+    ///
+    /// This runs while the user may already be pressing the hotkey, so it must
+    /// not hold the journal or the main thread for long: History is written at
+    /// most once, and every finished result is settled in a single journal
+    /// write. It used to rewrite History once per journal row and commit twice
+    /// per unfinished result, which kept new recordings waiting for over a
+    /// minute after a launch that followed a long session.
     private func reconcileAudioProcessingStore() async {
         let store = await MacAudioProcessingStoreProvider.shared()
+        // A store that could not load in time at login gets a second chance
+        // here, before the first recording, instead of staying read-only.
+        await store.recoverIfNeeded()
         let view = await store.view()
         guard case .healthy = view.health else {
             errorMessage = "Saved recordings need attention. No files were changed."
@@ -1779,15 +1790,17 @@ class AppState: ObservableObject {
             return
         }
 
+        var projections: [Recording] = []
         let durableIDs = Set(view.records.map(\.recordingID))
         for cached in historyManager.recordings
             where cached.isInProgress && !durableIDs.contains(cached.id) {
             var failed = cached
             failed.status = .failed
             failed.errorMessage = "Processing was interrupted. Retry will safely import the saved recording."
-            _ = historyManager.upsertRecording(failed)
+            projections.append(failed)
         }
 
+        var acceptedResults: [MacAudioProcessingStore.AcceptedResult] = []
         for initialRecord in view.records {
             var record = initialRecord
             if record.stage == .rawResultReady || record.stage == .cleaning,
@@ -1819,7 +1832,7 @@ class AppState: ObservableObject {
             }
             let resultIsComplete = record.stage == .resultReady || record.stage == .succeeded
             let wordCount = (record.resultText ?? record.rawText)?.split(separator: " ").count
-            let projected = Recording(
+            projections.append(Recording(
                 id: record.recordingID,
                 timestamp: existing?.timestamp ?? record.updatedAt,
                 audioFileURL: sourceURL,
@@ -1836,38 +1849,41 @@ class AppState: ObservableObject {
                     ? .complete
                     : (record.source == .missing ? .knownIncomplete : .unfinalized),
                 legacyAudioFilePath: existing?.legacyAudioFilePath
-            )
-            guard historyManager.upsertRecording(projected) else {
-                historyManager.showUnsavedTerminalState(projected)
-                continue
-            }
+            ))
 
-            if record.stage == .resultReady {
-                let lease = MacAudioProcessingStore.Lease(
+            let hasUnclaimedUsage = record.stage == .succeeded
+                && record.usageWasClaimed != true
+                && (record.pendingUsageWordCount ?? 0) > 0
+            if record.stage == .resultReady || hasUnclaimedUsage {
+                acceptedResults.append(.init(
                     recordingID: record.recordingID,
-                    attemptID: record.attemptID,
-                    clearGeneration: record.clearGeneration,
-                    revision: record.revision
-                )
-                guard let success = try? await store.markSucceeded(
-                    lease,
-                    pendingUsageWordCount: wordCount
-                ) else { continue }
-                record = success.record
+                    expectedRevision: record.revision,
+                    wordCount: wordCount
+                ))
             }
-            if record.stage == .succeeded {
-                do {
-                    if let claimed = try await store.claimPendingUsage(
-                        recordingID: record.recordingID,
-                        expectedRevision: record.revision
-                    ) {
-                        MacInstallationAnalytics.transcriptionCompleted(recordingID: record.recordingID, words: claimed)
-                        await SubscriptionManager.shared.recordWords(claimed)
-                    }
-                } catch {
-                    // Leave the durable unclaimed event for the next launch.
-                }
+        }
+
+        // History must durably accept every terminal projection before its
+        // result can become succeeded and usage-eligible.
+        guard historyManager.upsertRecordings(projections) else {
+            for projection in projections {
+                historyManager.showUnsavedTerminalState(projection)
             }
+            return
+        }
+        guard !acceptedResults.isEmpty else { return }
+
+        do {
+            let claimed = try await store.settleAcceptedResults(acceptedResults)
+            for (recordingID, words) in claimed {
+                MacInstallationAnalytics.transcriptionCompleted(recordingID: recordingID, words: words)
+            }
+            let totalWords = claimed.values.reduce(0, +)
+            if totalWords > 0 {
+                await SubscriptionManager.shared.recordWords(totalWords)
+            }
+        } catch {
+            // Leave the durable unsettled results for the next launch.
         }
     }
 

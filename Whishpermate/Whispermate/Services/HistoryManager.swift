@@ -76,12 +76,29 @@ class HistoryManager: ObservableObject {
 
     @discardableResult
     func upsertRecording(_ recording: Recording) -> Bool {
+        upsertRecordings([recording])
+    }
+
+    /// Applies several projections with at most one write. A row that is
+    /// already identical costs nothing, and a row that has to be re-added is
+    /// placed by its own date rather than on top, so recovering an old
+    /// recording never makes it look like the newest one.
+    @discardableResult
+    func upsertRecordings(_ batch: [Recording]) -> Bool {
         let previous = recordings
-        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
-            recordings[index] = recording
-        } else {
-            recordings.insert(recording, at: 0)
+        var changed = false
+        for recording in batch {
+            if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+                guard recordings[index] != recording else { continue }
+                recordings[index] = recording
+            } else {
+                let position = recordings.firstIndex { $0.timestamp < recording.timestamp }
+                    ?? recordings.endIndex
+                recordings.insert(recording, at: position)
+            }
+            changed = true
         }
+        guard changed else { return persistenceIsHealthy }
 
         guard saveRecordings() else {
             recordings = previous
@@ -115,6 +132,7 @@ class HistoryManager: ObservableObject {
 
     @discardableResult
     func removeRecordingMetadata(id: UUID) -> Bool {
+        guard recordings.contains(where: { $0.id == id }) else { return persistenceIsHealthy }
         let previous = recordings
         recordings.removeAll { $0.id == id }
         guard saveRecordings() else {

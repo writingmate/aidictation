@@ -228,8 +228,27 @@ actor MacAudioProcessingStore {
     nonisolated let journalURL: URL
     private nonisolated let lockURL: URL
     private nonisolated let testHooks: TestHooks
-    private nonisolated let transientRoot: MacTransientWorkspaceRoot?
+    private var transientRoot: MacTransientWorkspaceRoot?
     private nonisolated let processID: UUID
+    private nonisolated let recoverInterruptedWork: Bool
+
+    /// Why a read-only store may become writable again without a relaunch.
+    ///
+    /// Read-only exists to stop mutation while the on-disk journal is unknown
+    /// or untrusted. Two of its causes are only temporarily unknown: a startup
+    /// load that ran out of time (a slow disk right after login, a held lock),
+    /// and a commit whose write was still running at its deadline. Both are
+    /// settled by re-reading the journal once nothing can still be writing it.
+    /// A journal that is corrupt or names audio it does not own stays read-only.
+    private enum PendingRecovery {
+        case none
+        /// Startup could not load the journal in time. No mutation has run in
+        /// this process, so the reload may also finish restart reconciliation.
+        case startupLoad
+        /// A commit's late write may still land. The reload runs behind it on
+        /// the same serial worker and only re-reads what is on disk.
+        case ambiguousCommit
+    }
     /// How hard a journal write is pushed toward the platter.
     ///
     /// `F_FULLFSYNC` asks the drive to flush its own write cache and waits for
@@ -278,6 +297,7 @@ actor MacAudioProcessingStore {
 
     private var journal: Journal
     private var health: Health
+    private var pendingRecovery: PendingRecovery = .none
     private var persistenceOperationID: UUID?
     private struct ClosedAudioValidation {
         let attemptID: UUID
@@ -327,68 +347,28 @@ actor MacAudioProcessingStore {
         self.lockURL = lockURL
         self.testHooks = testHooks
         self.processID = processID
+        self.recoverInterruptedWork = recoverInterruptedWork
 
         var loadedJournal = Journal.empty
         var loadedHealth = Health.healthy
         var loadedTransientRoot: MacTransientWorkspaceRoot?
+        var loadedRecovery = PendingRecovery.none
 
         do {
-            try Self.createDirectories(
-                storeDirectory: storeDirectory,
+            let loaded = try Self.loadDurableState(
+                rootDirectory: rootDirectory,
                 incomingDirectory: incomingDirectory,
                 recordingsDirectory: recordingsDirectory,
-                transientDirectory: transientDirectory
+                transientDirectory: transientDirectory,
+                journalURL: journalURL,
+                lockURL: lockURL,
+                existingTransientRoot: nil,
+                recoverInterruptedWork: recoverInterruptedWork,
+                deadline: Date().addingTimeInterval(testHooks.persistenceTimeout),
+                testHooks: testHooks
             )
-            let transientRoot = try MacTransientWorkspaceRoot(
-                rootDirectory: rootDirectory,
-                storeDirectory: storeDirectory,
-                transientDirectory: transientDirectory
-            )
-            try transientRoot.sweepAfterRestart()
-            loadedTransientRoot = transientRoot
-
-            let persistenceDeadline = Date().addingTimeInterval(testHooks.persistenceTimeout)
-            try Self.withExclusiveLock(at: lockURL, deadline: persistenceDeadline) {
-                if FileManager.default.fileExists(atPath: journalURL.path) {
-                    let data = try Data(contentsOf: journalURL)
-                    loadedJournal = try Self.makeDecoder().decode(Journal.self, from: data)
-                    try Self.validate(loadedJournal)
-                }
-
-                try Self.validateManagedSources(
-                    loadedJournal,
-                    incomingDirectory: incomingDirectory,
-                    recordingsDirectory: recordingsDirectory
-                )
-
-                if recoverInterruptedWork {
-                    let reconciliation = try Self.reconcileAfterRestart(
-                        loadedJournal,
-                        incomingDirectory: incomingDirectory,
-                        recordingsDirectory: recordingsDirectory
-                    )
-                    loadedJournal = reconciliation.journal
-
-                    if reconciliation.changed {
-                        try Self.persist(
-                            loadedJournal,
-                            to: journalURL,
-                            deadline: persistenceDeadline,
-                            testHooks: testHooks
-                        )
-                    }
-                }
-
-                // A durable tombstone always wins. Cleanup is deliberately best
-                // effort and is retried on every healthy restart.
-                for record in loadedJournal.records where record.stage == .deleted {
-                    _ = Self.removeSources(
-                        recordingID: record.recordingID,
-                        incomingDirectory: incomingDirectory,
-                        recordingsDirectory: recordingsDirectory
-                    )
-                }
-            }
+            loadedJournal = loaded.journal
+            loadedTransientRoot = loaded.transientRoot
         } catch {
             // Do not rename, truncate, repair, or delete anything when the
             // journal cannot be trusted. The caller can surface this health
@@ -397,11 +377,17 @@ actor MacAudioProcessingStore {
             loadedHealth = .readOnly(
                 message: "Saved recordings need attention. No files were changed."
             )
+            // A load that only ran out of time is retried on the next
+            // recording instead of disabling dictation until a relaunch.
+            if Self.isTransientLoadFailure(error) {
+                loadedRecovery = .startupLoad
+            }
         }
 
         self.journal = loadedJournal
         self.health = loadedHealth
         self.transientRoot = loadedTransientRoot
+        self.pendingRecovery = loadedRecovery
     }
 
     /// Read-only fallback used when provider initialization itself exceeds its
@@ -436,6 +422,7 @@ actor MacAudioProcessingStore {
         testHooks = .none
         transientRoot = nil
         processID = Self.currentProcessID
+        recoverInterruptedWork = false
         journal = .empty
         health = .readOnly(
             message: "Saved recordings need attention. No files were changed."
@@ -460,6 +447,83 @@ actor MacAudioProcessingStore {
 
     func record(for recordingID: UUID) -> Record? {
         journal.records.first { $0.recordingID == recordingID }
+    }
+
+    // MARK: - Recovery
+
+    /// Makes a store that went read-only for a transient reason writable again
+    /// by re-reading the journal from disk. Returns whether the store is
+    /// healthy afterwards.
+    ///
+    /// The reload is queued on the same serial worker as every journal write,
+    /// so it cannot start until a timed-out write has actually finished. If
+    /// that write is still stuck, the reload misses its deadline and the store
+    /// stays read-only; the next call tries again. Bounded by the persistence
+    /// timeout, so a key press never waits on it for long.
+    @discardableResult
+    func recoverIfNeeded() async -> Bool {
+        if case .healthy = health { return true }
+        let recovery = pendingRecovery
+        guard recovery != .none, persistenceOperationID == nil else { return false }
+
+        let operationID = UUID()
+        persistenceOperationID = operationID
+        defer {
+            if persistenceOperationID == operationID {
+                persistenceOperationID = nil
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(testHooks.persistenceTimeout)
+        let rootDirectory = rootDirectory
+        let incomingDirectory = incomingDirectory
+        let recordingsDirectory = recordingsDirectory
+        let transientDirectory = transientDirectory
+        let journalURL = journalURL
+        let lockURL = lockURL
+        let existingTransientRoot = transientRoot
+        let testHooks = testHooks
+        // Restart reconciliation terminalizes rows whose writer is gone. That is
+        // only true after a failed startup, when no attempt could have begun.
+        let reconcile = recovery == .startupLoad && recoverInterruptedWork
+        let loaded = MacStoreValueBox<LoadedDurableState>()
+        do {
+            try await Self.performBoundedPersistence(
+                deadline: deadline,
+                worker: persistenceWorker
+            ) {
+                loaded.set(
+                    try Self.loadDurableState(
+                        rootDirectory: rootDirectory,
+                        incomingDirectory: incomingDirectory,
+                        recordingsDirectory: recordingsDirectory,
+                        transientDirectory: transientDirectory,
+                        journalURL: journalURL,
+                        lockURL: lockURL,
+                        existingTransientRoot: existingTransientRoot,
+                        recoverInterruptedWork: reconcile,
+                        deadline: deadline,
+                        testHooks: testHooks
+                    )
+                )
+            }
+        } catch {
+            if !Self.isTransientLoadFailure(error), !(error is CancellationError) {
+                // The journal itself is now known to be untrustworthy.
+                pendingRecovery = .none
+            }
+            return false
+        }
+        guard let state = loaded.get(), persistenceOperationID == operationID else {
+            return false
+        }
+
+        journal = state.journal
+        transientRoot = state.transientRoot
+        closedAudioValidations.removeAll()
+        pendingRecovery = .none
+        health = .healthy
+        return true
     }
 
     nonisolated func partialURL(for recordingID: UUID) -> URL {
@@ -498,6 +562,10 @@ actor MacAudioProcessingStore {
     /// Persists the stable recording identity before creating the source file.
     /// The returned lease is the only owner allowed to advance this attempt.
     func prepare(recordingID: UUID, attemptID: UUID, deadline: Date) async throws -> Mutation {
+        // A store that went read-only because the disk was slow (at login, or
+        // during one save) gets its second chance on the next key press, not
+        // on the next app launch.
+        await recoverIfNeeded()
         // A finalize from the previous dictation is often still committing when
         // the next key press lands. Queue behind it instead of turning a normal
         // background save into a failed recording the user has to retry.
@@ -594,7 +662,7 @@ actor MacAudioProcessingStore {
         expectedClearGeneration: UInt64,
         deadline: Date
     ) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         guard recordingID != attemptID else { throw StoreError.invalidIdentity }
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
         guard expectedClearGeneration == journal.clearGeneration else {
@@ -710,9 +778,9 @@ actor MacAudioProcessingStore {
     }
 
     func beginFinalization(_ lease: Lease, deadline: Date) async throws -> Mutation {
+        guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
+        try await awaitWritable()
         let now = testHooks.now()
-        guard deadline > now else { throw StoreError.invalidDeadline }
-        try requireWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .recording else { throw StoreError.invalidTransition }
         // Scheduling at the exact capture boundary can arrive a fraction late.
@@ -745,7 +813,7 @@ actor MacAudioProcessingStore {
         _ lease: Lease,
         nativeCloseAttestation: NativeWriterCloseAttestation?
     ) async throws -> ClosedAudioProof {
-        try requireWritable()
+        try await awaitWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .finalizing else { throw StoreError.invalidTransition }
         let inspection = try await inspectManagedSource(
@@ -803,7 +871,7 @@ actor MacAudioProcessingStore {
         _ lease: Lease,
         proof: ClosedAudioProof
     ) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .finalizing else { throw StoreError.invalidTransition }
         guard proof.attemptID == lease.attemptID else { throw StoreError.staleLease }
@@ -854,7 +922,7 @@ actor MacAudioProcessingStore {
     /// ready. If the process stops between those operations, restart recovery
     /// recognizes `finalizing + final file` and completes the journal step.
     func finishFinalization(_ lease: Lease, proof: ClosedAudioProof) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == .finalizing else { throw StoreError.invalidTransition }
         guard proof.attemptID == lease.attemptID else { throw StoreError.staleLease }
@@ -1002,7 +1070,7 @@ actor MacAudioProcessingStore {
         expectedRevision: UInt64,
         deadline: Date
     ) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         guard recordingID != attemptID else { throw StoreError.invalidIdentity }
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
@@ -1236,7 +1304,7 @@ actor MacAudioProcessingStore {
         recordingID: UUID,
         expectedRevision: UInt64
     ) async throws -> Int? {
-        try requireWritable()
+        try await awaitWritable()
         guard let index = index(of: recordingID) else {
             throw StoreError.recordingNotFound
         }
@@ -1261,10 +1329,75 @@ actor MacAudioProcessingStore {
         return wordCount
     }
 
+    struct AcceptedResult: Equatable, Sendable {
+        let recordingID: UUID
+        let expectedRevision: UInt64
+        let wordCount: Int?
+    }
+
+    /// Startup counterpart of `markSucceeded` plus `claimPendingUsage` for many
+    /// recordings at once. Each listed record is a `resultReady` whose History
+    /// projection is already durable, or a `succeeded` one with an unclaimed
+    /// usage event. All of them advance to succeeded with usage claimed in a
+    /// single journal write, so the claim is durable before the caller reports
+    /// usage, exactly as the per-record path guarantees.
+    ///
+    /// Doing this one record at a time cost two full journal writes per
+    /// record, and the backlog of a long session kept every new recording
+    /// waiting behind it. A record whose revision or stage no longer matches is
+    /// skipped and left for the next launch.
+    ///
+    /// - Returns: The usage claimed per recording.
+    func settleAcceptedResults(_ results: [AcceptedResult]) async throws -> [UUID: Int] {
+        try await awaitWritable()
+        var proposed = journal
+        var claimed: [UUID: Int] = [:]
+        var changed = false
+        let now = Date()
+
+        for result in results {
+            guard let index = proposed.records.firstIndex(where: {
+                $0.recordingID == result.recordingID
+            }) else { continue }
+            let current = proposed.records[index]
+            guard current.revision == result.expectedRevision,
+                  current.clearGeneration == proposed.clearGeneration else { continue }
+
+            let wordCount: Int?
+            switch current.stage {
+            case .resultReady:
+                wordCount = result.wordCount.flatMap { $0 > 0 ? $0 : nil }
+            case .succeeded:
+                guard current.usageWasClaimed != true,
+                      let pending = current.pendingUsageWordCount,
+                      pending > 0 else { continue }
+                wordCount = pending
+            default:
+                continue
+            }
+
+            let revision = try nextRevision(after: proposed.revision)
+            proposed.revision = revision
+            proposed.records[index].stage = .succeeded
+            proposed.records[index].revision = revision
+            proposed.records[index].pendingUsageWordCount = wordCount
+            proposed.records[index].usageWasClaimed = wordCount == nil ? nil : true
+            proposed.records[index].updatedAt = now
+            if let wordCount {
+                claimed[result.recordingID] = wordCount
+            }
+            changed = true
+        }
+
+        guard changed else { return [:] }
+        try await commit(proposed)
+        return claimed
+    }
+
     /// Records a terminal failure while preserving every source file. This is
     /// also the correct operation for transport deadlines and cancellations.
     func fail(_ lease: Lease, message: String) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         let current = try currentRecord(for: lease)
         if current.stage == .rawResultReady || current.stage == .cleaning {
             return try await useRawResult(lease, message: message)
@@ -1310,7 +1443,7 @@ actor MacAudioProcessingStore {
         deadline: Date,
         nativeCloseAttestation: NativeWriterCloseAttestation? = nil
     ) async throws -> ClosedAudioProof {
-        try requireWritable()
+        try await awaitWritable()
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
         guard let current = record(for: recordingID) else { throw StoreError.recordingNotFound }
         guard current.stage != .deleted else { throw StoreError.recordingDeleted }
@@ -1354,7 +1487,7 @@ actor MacAudioProcessingStore {
         deadline: Date,
         nativeCloseAttestation: NativeWriterCloseAttestation? = nil
     ) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         guard deadline > testHooks.now() else { throw StoreError.invalidDeadline }
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
         let current = journal.records[index]
@@ -1422,7 +1555,7 @@ actor MacAudioProcessingStore {
         deadline: Date,
         proof: ClosedAudioProof
     ) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         guard salvageAttemptID != recordingID,
               salvageAttemptID != proof.attemptID else {
             throw StoreError.invalidIdentity
@@ -1502,7 +1635,7 @@ actor MacAudioProcessingStore {
     /// intentionally does not require the active lease: an explicit user delete
     /// must beat an in-flight callback.
     func tombstone(recordingID: UUID) async throws -> CleanupResult {
-        try requireWritable()
+        try await awaitWritable()
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
 
         if journal.records[index].stage != .deleted {
@@ -1532,7 +1665,7 @@ actor MacAudioProcessingStore {
     /// source deletion starts; recordings created afterward use the new
     /// generation and remain valid.
     func clearAll() async throws -> CleanupResult {
-        try requireWritable()
+        try await awaitWritable()
         let newGeneration = try nextRevision(after: journal.clearGeneration)
         var proposed = journal
         proposed.clearGeneration = newGeneration
@@ -1659,7 +1792,7 @@ actor MacAudioProcessingStore {
         resetsUsageClaim: Bool = false,
         durability: Durability = .hard
     ) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         let current = try currentRecord(for: lease)
         guard current.stage == expectedStage else { throw StoreError.invalidTransition }
         guard Self.isAllowedTransition(from: expectedStage, to: nextStage) else {
@@ -1712,7 +1845,7 @@ actor MacAudioProcessingStore {
     }
 
     private func failCurrentRecord(recordingID: UUID, message: String) async throws -> Mutation {
-        try requireWritable()
+        try await awaitWritable()
         guard let index = index(of: recordingID) else { throw StoreError.recordingNotFound }
         guard journal.records[index].stage != .deleted else { throw StoreError.recordingDeleted }
 
@@ -1771,6 +1904,20 @@ actor MacAudioProcessingStore {
     private func requireWritable() throws {
         guard case .healthy = health else { throw StoreError.readOnly }
         guard persistenceOperationID == nil else { throw StoreError.persistenceBusy }
+    }
+
+    /// `requireWritable` for callers that can wait. Journal writes are
+    /// serialized, so a transition that arrives while another recording's
+    /// save, or startup reconciliation, is committing queues behind it instead
+    /// of failing the user's recording with "still saving". Every caller reads
+    /// the journal only after this returns, so the wait cannot act on stale
+    /// state. Bounded by the persistence timeout.
+    private func awaitWritable() async throws {
+        guard case .healthy = health else { throw StoreError.readOnly }
+        try await awaitPersistenceIdle(
+            deadline: testHooks.now().addingTimeInterval(testHooks.persistenceTimeout)
+        )
+        try requireWritable()
     }
 
     private func nextRevision(after revision: UInt64) throws -> UInt64 {
@@ -1836,6 +1983,7 @@ actor MacAudioProcessingStore {
                 health = .readOnly(
                     message: "Saved recordings need attention. No files were changed."
                 )
+                pendingRecovery = .ambiguousCommit
                 throw StoreError.readOnly
             }
             persistenceOperationID = nil
@@ -1847,11 +1995,12 @@ actor MacAudioProcessingStore {
             if error == .persistenceTimedOut {
                 // A synchronous write/fsync/rename may still complete after the
                 // caller's deadline. Fail closed so no new in-process mutation
-                // can race that ambiguous late disk state. Restart recovery
-                // reloads the CAS state and terminalizes any active row.
+                // can race that ambiguous late disk state. `recoverIfNeeded`
+                // re-reads the journal once that write has finished.
                 health = .readOnly(
                     message: "Saved recordings need attention. No files were changed."
                 )
+                pendingRecovery = .ambiguousCommit
             }
             if error == .readOnly {
                 health = .readOnly(message: "Saved recordings need attention. No files were changed.")
@@ -1864,6 +2013,7 @@ actor MacAudioProcessingStore {
             health = .readOnly(
                 message: "Saved recordings need attention. No files were changed."
             )
+            pendingRecovery = .ambiguousCommit
             throw CancellationError()
         } catch {
             if persistenceOperationID == operationID {
@@ -1930,7 +2080,7 @@ actor MacAudioProcessingStore {
                 == partialURL(for: record.recordingID).standardizedFileURL.path
                 ? inspection.partialIdentity
                 : inspection.finalIdentity
-            try requireWritable()
+            try await awaitWritable()
             guard self.record(for: record.recordingID) == record,
                   identity == cached.fileIdentity else {
                 throw StoreError.staleLease
@@ -1951,7 +2101,7 @@ actor MacAudioProcessingStore {
             == partialURL(for: record.recordingID).standardizedFileURL.path
             ? inspection.partialIdentity
             : inspection.finalIdentity
-        try requireWritable()
+        try await awaitWritable()
         guard let refreshed = self.record(for: record.recordingID),
               refreshed == record,
               inspection.source != .missing,
@@ -2097,6 +2247,110 @@ actor MacAudioProcessingStore {
         try FileManager.default.createDirectory(at: incomingDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: transientDirectory, withIntermediateDirectories: true)
+    }
+
+    private struct LoadedDurableState: @unchecked Sendable {
+        let journal: Journal
+        let transientRoot: MacTransientWorkspaceRoot
+    }
+
+    /// Loads and validates the journal under the cross-process lock. Startup
+    /// and the bounded reload after a transient failure share this path, so a
+    /// recovered store has passed exactly the checks a fresh launch would.
+    private static func loadDurableState(
+        rootDirectory: URL,
+        incomingDirectory: URL,
+        recordingsDirectory: URL,
+        transientDirectory: URL,
+        journalURL: URL,
+        lockURL: URL,
+        existingTransientRoot: MacTransientWorkspaceRoot?,
+        recoverInterruptedWork: Bool,
+        deadline: Date,
+        testHooks: TestHooks
+    ) throws -> LoadedDurableState {
+        let storeDirectory = journalURL.deletingLastPathComponent()
+        let transientRoot: MacTransientWorkspaceRoot
+        if let existingTransientRoot {
+            transientRoot = existingTransientRoot
+        } else {
+            try createDirectories(
+                storeDirectory: storeDirectory,
+                incomingDirectory: incomingDirectory,
+                recordingsDirectory: recordingsDirectory,
+                transientDirectory: transientDirectory
+            )
+            transientRoot = try MacTransientWorkspaceRoot(
+                rootDirectory: rootDirectory,
+                storeDirectory: storeDirectory,
+                transientDirectory: transientDirectory
+            )
+            try transientRoot.sweepAfterRestart()
+        }
+
+        var loadedJournal = Journal.empty
+        try withExclusiveLock(at: lockURL, deadline: deadline) {
+            if FileManager.default.fileExists(atPath: journalURL.path) {
+                let data: Data
+                do {
+                    data = try Data(contentsOf: journalURL)
+                } catch {
+                    // An unreadable file is a storage fault, not a corrupt
+                    // journal: nothing was decoded, so a later read may work.
+                    throw StoreError.storageUnavailable
+                }
+                loadedJournal = try makeDecoder().decode(Journal.self, from: data)
+                try validate(loadedJournal)
+            }
+
+            try validateManagedSources(
+                loadedJournal,
+                incomingDirectory: incomingDirectory,
+                recordingsDirectory: recordingsDirectory
+            )
+
+            if recoverInterruptedWork {
+                let reconciliation = try reconcileAfterRestart(
+                    loadedJournal,
+                    incomingDirectory: incomingDirectory,
+                    recordingsDirectory: recordingsDirectory
+                )
+                loadedJournal = reconciliation.journal
+
+                if reconciliation.changed {
+                    try persist(
+                        loadedJournal,
+                        to: journalURL,
+                        deadline: deadline,
+                        testHooks: testHooks
+                    )
+                }
+            }
+
+            // A durable tombstone always wins. Cleanup is deliberately best
+            // effort and is retried on every healthy restart.
+            for record in loadedJournal.records where record.stage == .deleted {
+                _ = removeSources(
+                    recordingID: record.recordingID,
+                    incomingDirectory: incomingDirectory,
+                    recordingsDirectory: recordingsDirectory
+                )
+            }
+        }
+        return LoadedDurableState(journal: loadedJournal, transientRoot: transientRoot)
+    }
+
+    /// Failures that say nothing about the journal's contents: the lock was
+    /// held, the disk was too slow, or a read or write did not complete. A
+    /// decode, validation, or ownership failure is never transient.
+    private static func isTransientLoadFailure(_ error: Error) -> Bool {
+        guard let storeError = error as? StoreError else { return false }
+        switch storeError {
+        case .persistenceBusy, .persistenceTimedOut, .storageUnavailable:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func persist(
@@ -2561,6 +2815,20 @@ actor MacAudioProcessingStore {
         var changed: Bool
     }
 
+    /// Messages restart reconciliation writes for a recording whose process
+    /// ended mid-capture. Each one names what is actually on disk.
+    enum RestartMessage {
+        static let interruptedWithAudio = "Recording was interrupted. Any captured audio is saved."
+        static let savingInterruptedWithAudio = "Recording was interrupted while being saved. Any captured audio is preserved."
+        static let interruptedWithoutAudio = "Recording was interrupted before any audio was saved."
+
+        /// Restart messages that are only true while the source file exists.
+        static let promisingSavedAudio: Set<String> = [
+            interruptedWithAudio,
+            savingInterruptedWithAudio,
+        ]
+    }
+
     private static func reconcileAfterRestart(
         _ original: Journal,
         incomingDirectory: URL,
@@ -2600,7 +2868,9 @@ actor MacAudioProcessingStore {
             switch current.stage {
             case .preparing, .recording:
                 nextStage = .failed
-                nextMessage = "Recording was interrupted. Any captured audio is saved."
+                nextMessage = actualSource == .missing
+                    ? RestartMessage.interruptedWithoutAudio
+                    : RestartMessage.interruptedWithAudio
                 shouldChange = true
 
             case .finalizing:
@@ -2613,7 +2883,9 @@ actor MacAudioProcessingStore {
                     nextIntegrity = checkpointedIntegrity
                 } else {
                     nextStage = .failed
-                    nextMessage = "Recording was interrupted while being saved. Any captured audio is preserved."
+                    nextMessage = actualSource == .missing
+                        ? RestartMessage.interruptedWithoutAudio
+                        : RestartMessage.savingInterruptedWithAudio
                 }
                 shouldChange = true
 
@@ -2664,7 +2936,18 @@ actor MacAudioProcessingStore {
                 // can advance to succeeded and become usage-eligible.
                 break
 
-            case .succeeded, .failed:
+            case .failed:
+                // Earlier versions promised saved audio even when none was
+                // ever written. Correct only this store's own restart
+                // messages, and only when the audio is really gone.
+                if actualSource == .missing,
+                   let message = current.failureMessage,
+                   RestartMessage.promisingSavedAudio.contains(message) {
+                    nextMessage = RestartMessage.interruptedWithoutAudio
+                    shouldChange = true
+                }
+
+            case .succeeded:
                 break
 
             case .deleted:

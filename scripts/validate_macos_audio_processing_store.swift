@@ -2017,6 +2017,370 @@ private func testLegacyHistoryDeletionNeverTrustsDecodedPaths() throws {
     )
 }
 
+/// Blocks exactly one matching operation after `arm()`, so a test can hold a
+/// single commit in flight while later commits run normally.
+private final class ArmedBlockingHook: @unchecked Sendable {
+    private let lock = NSLock()
+    private let operation: MacAudioProcessingStore.TestOperation
+    private var armed = false
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+
+    init(operation: MacAudioProcessingStore.TestOperation) {
+        self.operation = operation
+    }
+
+    func arm() {
+        lock.lock()
+        armed = true
+        lock.unlock()
+    }
+
+    func before(_ operation: MacAudioProcessingStore.TestOperation) throws {
+        guard operation == self.operation else { return }
+        lock.lock()
+        let shouldBlock = armed
+        armed = false
+        lock.unlock()
+        guard shouldBlock else { return }
+        entered.signal()
+        release.wait()
+    }
+}
+
+private final class OperationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let operation: MacAudioProcessingStore.TestOperation
+    private var value = 0
+
+    init(operation: MacAudioProcessingStore.TestOperation) {
+        self.operation = operation
+    }
+
+    func before(_ operation: MacAudioProcessingStore.TestOperation) {
+        guard operation == self.operation else { return }
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+private func holdJournalLock(of store: MacAudioProcessingStore) throws -> Int32 {
+    let lockURL = store.journalURL.deletingLastPathComponent()
+        .appendingPathComponent(".journal.lock")
+    let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+    try require(descriptor >= 0, "validator could not open the macOS journal lock")
+    try require(flock(descriptor, LOCK_EX) == 0, "validator could not hold the macOS journal lock")
+    return descriptor
+}
+
+private func releaseJournalLock(_ descriptor: Int32) {
+    _ = flock(descriptor, LOCK_UN)
+    _ = Darwin.close(descriptor)
+}
+
+/// Regression: a recording's transition that arrived while another save was
+/// committing failed at once with "The previous recording is still saving",
+/// which is what a dictation right after relaunch hit while startup
+/// reconciliation was committing.
+private func testTransitionsQueueBehindInFlightCommit() async throws {
+    let root = try temporaryRoot("queued-transition")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let hook = ArmedBlockingHook(operation: .journalRename)
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        testHooks: .init(before: { try hook.before($0) })
+    )
+    let first = try await store.prepare(
+        recordingID: UUID(),
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    let second = try await store.prepare(
+        recordingID: UUID(),
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+
+    hook.arm()
+    let slowCommit = Task {
+        try await store.markRecording(first.lease, captureDeadline: futureDeadline())
+    }
+    try require(
+        waitSynchronously(for: hook.entered, timeout: .now() + 2) == .success,
+        "the first commit never reached its journal write"
+    )
+    let queued = Task {
+        try await store.markRecording(second.lease, captureDeadline: futureDeadline())
+    }
+    try await Task.sleep(nanoseconds: 100_000_000)
+    hook.release.signal()
+
+    let firstResult = try await slowCommit.value
+    let secondResult: MacAudioProcessingStore.Mutation
+    do {
+        secondResult = try await queued.value
+    } catch {
+        throw ValidationFailure.assertion(
+            "a transition behind an in-flight commit failed instead of waiting: \(error)"
+        )
+    }
+    try require(firstResult.record.stage == .recording, "the slow commit should land")
+    try require(secondResult.record.stage == .recording, "the queued commit should land")
+}
+
+/// Regression: a startup load that ran out of time (a held lock, a slow disk
+/// at login) left the store read-only until the app was relaunched, so every
+/// hotkey press failed before a recording could start.
+private func testTransientStartupLoadRecoversOnNextRecording() async throws {
+    let root = try temporaryRoot("startup-load-recovery")
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let previousProcess = MacAudioProcessingStore(rootDirectory: root, processID: UUID())
+    let interruptedID = UUID()
+    let interrupted = try await previousProcess.prepare(
+        recordingID: interruptedID,
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    _ = try await previousProcess.markRecording(
+        interrupted.lease,
+        captureDeadline: futureDeadline()
+    )
+
+    let descriptor = try holdJournalLock(of: previousProcess)
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        processID: UUID(),
+        testHooks: .init(persistenceTimeout: 0.5)
+    )
+    guard case .readOnly = await store.view().health else {
+        releaseJournalLock(descriptor)
+        throw ValidationFailure.assertion("a held lock at startup should leave the store read-only")
+    }
+    do {
+        _ = try await store.prepare(
+            recordingID: UUID(),
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+        releaseJournalLock(descriptor)
+        throw ValidationFailure.assertion("a recording started while the journal was still unreadable")
+    } catch let error as MacAudioProcessingStore.StoreError {
+        try require(error == .readOnly, "an unreadable journal should refuse the recording, got \(error)")
+    }
+    releaseJournalLock(descriptor)
+
+    let recovered = try await store.prepare(
+        recordingID: UUID(),
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    try require(recovered.record.stage == .preparing, "the next recording should start without a relaunch")
+    guard case .healthy = await store.view().health else {
+        throw ValidationFailure.assertion("the recovered store should be healthy")
+    }
+    let reconciled = await store.record(for: interruptedID)
+    try require(
+        reconciled?.stage == .failed,
+        "recovery after a failed startup should finish restart reconciliation"
+    )
+}
+
+/// A commit that timed out may still land on disk. Once that write has
+/// finished, the next recording re-reads the journal instead of waiting for a
+/// relaunch, and sees the late write.
+private func testAmbiguousCommitRecoversAfterLateWriteFinishes() async throws {
+    let root = try temporaryRoot("ambiguous-commit-recovery")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let hook = ArmedBlockingHook(operation: .journalDirectorySync)
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        testHooks: .init(before: { try hook.before($0) }, persistenceTimeout: 0.3)
+    )
+    let lateID = UUID()
+    hook.arm()
+    try await requireStoreError(.persistenceTimedOut, "the stalled commit should time out") {
+        _ = try await store.prepare(
+            recordingID: lateID,
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+    }
+    try await requireStoreError(
+        .readOnly,
+        "a recording must not start while the timed-out write can still land"
+    ) {
+        _ = try await store.prepare(
+            recordingID: UUID(),
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+    }
+
+    hook.release.signal()
+    try await Task.sleep(nanoseconds: 200_000_000)
+    let next = try await store.prepare(
+        recordingID: UUID(),
+        attemptID: UUID(),
+        deadline: futureDeadline()
+    )
+    try require(next.record.stage == .preparing, "the next recording should start once the late write finished")
+    let lateRecord = await store.record(for: lateID)
+    try require(
+        lateRecord != nil,
+        "recovery should re-read the journal, including the late write"
+    )
+}
+
+private func testCorruptJournalNeverRecoversOnItsOwn() async throws {
+    let root = try temporaryRoot("corrupt-no-recovery")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storeDirectory = root.appendingPathComponent("AudioProcessing", isDirectory: true)
+    try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
+    try Data("not a journal".utf8).write(
+        to: storeDirectory.appendingPathComponent("journal.json")
+    )
+    let store = MacAudioProcessingStore(rootDirectory: root)
+    let recovered = await store.recoverIfNeeded()
+    try require(!recovered, "a corrupt journal must stay read-only")
+    try await requireStoreError(.readOnly, "a corrupt journal must keep refusing mutation") {
+        _ = try await store.prepare(
+            recordingID: UUID(),
+            attemptID: UUID(),
+            deadline: futureDeadline()
+        )
+    }
+}
+
+private func makeResultReady(
+    in store: MacAudioProcessingStore,
+    text: String
+) async throws -> MacAudioProcessingStore.Mutation {
+    var mutation = try await beginRecognizing(in: store)
+    mutation = try await store.markRawResultReady(mutation.lease, rawText: text)
+    mutation = try await store.beginCleanup(mutation.lease)
+    return try await store.finishCleanup(mutation.lease, cleanedText: text)
+}
+
+/// Regression: startup settled each finished result with two full journal
+/// writes, which held the journal for over a minute after a long session.
+private func testSettlingAcceptedResultsIsOneWriteAndClaimsOnce() async throws {
+    let root = try temporaryRoot("settle-accepted-results")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let renames = OperationCounter(operation: .journalRename)
+    let store = MacAudioProcessingStore(
+        rootDirectory: root,
+        testHooks: .init(before: { renames.before($0) })
+    )
+    let three = try await makeResultReady(in: store, text: "three durable words")
+    let two = try await makeResultReady(in: store, text: "two words")
+    let silent = try await makeResultReady(in: store, text: "silence")
+    var alreadySucceeded = try await makeResultReady(in: store, text: "four words were here")
+    alreadySucceeded = try await store.markSucceeded(
+        alreadySucceeded.lease,
+        pendingUsageWordCount: 4
+    )
+    let stale = try await makeResultReady(in: store, text: "stale")
+
+    let writesBefore = renames.count
+    let claimed = try await store.settleAcceptedResults([
+        .init(recordingID: three.record.recordingID, expectedRevision: three.record.revision, wordCount: 3),
+        .init(recordingID: two.record.recordingID, expectedRevision: two.record.revision, wordCount: 2),
+        .init(recordingID: silent.record.recordingID, expectedRevision: silent.record.revision, wordCount: 0),
+        .init(
+            recordingID: alreadySucceeded.record.recordingID,
+            expectedRevision: alreadySucceeded.record.revision,
+            wordCount: nil
+        ),
+        .init(recordingID: stale.record.recordingID, expectedRevision: stale.record.revision - 1, wordCount: 1),
+    ])
+    try require(renames.count - writesBefore == 1, "settling a backlog should be one journal write")
+    try require(
+        claimed == [
+            three.record.recordingID: 3,
+            two.record.recordingID: 2,
+            alreadySucceeded.record.recordingID: 4,
+        ],
+        "each settled result should claim its own usage exactly once, got \(claimed)"
+    )
+    for recordingID in [three.record.recordingID, two.record.recordingID, silent.record.recordingID] {
+        let settled = try await requireRecord(recordingID, in: store)
+        try require(settled.stage == .succeeded, "an accepted result should become succeeded")
+    }
+    let silentRecord = try await requireRecord(silent.record.recordingID, in: store)
+    try require(
+        silentRecord.pendingUsageWordCount == nil && silentRecord.usageWasClaimed == nil,
+        "a result with no words should succeed without a usage event"
+    )
+    let staleRecord = try await requireRecord(stale.record.recordingID, in: store)
+    try require(
+        staleRecord.stage == .resultReady,
+        "a result whose revision moved on must be left for the next launch"
+    )
+
+    let restarted = MacAudioProcessingStore(rootDirectory: root, processID: UUID())
+    var again: [MacAudioProcessingStore.AcceptedResult] = []
+    for recordingID in [three.record.recordingID, alreadySucceeded.record.recordingID] {
+        let record = try await requireRecord(recordingID, in: restarted)
+        again.append(.init(recordingID: recordingID, expectedRevision: record.revision, wordCount: 3))
+    }
+    let duplicate = try await restarted.settleAcceptedResults(again)
+    try require(duplicate.isEmpty, "a restart must not claim settled usage twice")
+}
+
+private func requireRecord(
+    _ recordingID: UUID,
+    in store: MacAudioProcessingStore
+) async throws -> MacAudioProcessingStore.Record {
+    guard let record = await store.record(for: recordingID) else {
+        throw ValidationFailure.assertion("expected a journal record for \(recordingID)")
+    }
+    return record
+}
+
+/// Regression: a recording interrupted before any audio was written was shown
+/// as "Any captured audio is saved." although no file existed.
+private func testRestartMessagesMatchAudioOnDisk() async throws {
+    let root = try temporaryRoot("restart-message-audio")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let previous = MacAudioProcessingStore(rootDirectory: root, processID: UUID())
+    let withAudioID = UUID()
+    let withoutAudioID = UUID()
+    _ = try await previous.prepare(recordingID: withAudioID, attemptID: UUID(), deadline: futureDeadline())
+    _ = try await previous.prepare(recordingID: withoutAudioID, attemptID: UUID(), deadline: futureDeadline())
+    try FileManager.default.removeItem(at: previous.partialURL(for: withoutAudioID))
+
+    let restarted = MacAudioProcessingStore(rootDirectory: root, processID: UUID())
+    let withAudio = try await requireRecord(withAudioID, in: restarted)
+    let withoutAudio = try await requireRecord(withoutAudioID, in: restarted)
+    try require(
+        withAudio.failureMessage == MacAudioProcessingStore.RestartMessage.interruptedWithAudio,
+        "a recording with audio on disk should say the audio was kept"
+    )
+    try require(
+        withoutAudio.source == .missing
+            && withoutAudio.failureMessage == MacAudioProcessingStore.RestartMessage.interruptedWithoutAudio,
+        "a recording with no audio must not claim its audio was saved"
+    )
+
+    // A message written by an earlier version is corrected once its file is gone.
+    try FileManager.default.removeItem(at: restarted.partialURL(for: withAudioID))
+    let corrected = MacAudioProcessingStore(rootDirectory: root, processID: UUID())
+    let correctedRecord = try await requireRecord(withAudioID, in: corrected)
+    try require(
+        correctedRecord.source == .missing
+            && correctedRecord.failureMessage == MacAudioProcessingStore.RestartMessage.interruptedWithoutAudio,
+        "a stale saved-audio message should be corrected when the file is missing"
+    )
+}
+
 @main
 private struct MacAudioProcessingStoreValidator {
     static func main() async {
@@ -2079,6 +2443,18 @@ private struct MacAudioProcessingStoreValidator {
             try await testStartupSweepsOnlyManagedTransientChildren()
             print("test: legacy decoded path deletion")
             try testLegacyHistoryDeletionNeverTrustsDecodedPaths()
+            print("test: transitions queue behind a commit")
+            try await testTransitionsQueueBehindInFlightCommit()
+            print("test: startup load recovers without relaunch")
+            try await testTransientStartupLoadRecoversOnNextRecording()
+            print("test: ambiguous commit recovers after late write")
+            try await testAmbiguousCommitRecoversAfterLateWriteFinishes()
+            print("test: corrupt journal stays read-only")
+            try await testCorruptJournalNeverRecoversOnItsOwn()
+            print("test: settle accepted results in one write")
+            try await testSettlingAcceptedResultsIsOneWriteAndClaimsOnce()
+            print("test: restart messages match audio on disk")
+            try await testRestartMessagesMatchAudioOnDisk()
             print("PASS: macOS audio-processing journal recovery and fencing")
         } catch {
             fputs("FAIL: \(error)\n", stderr)
